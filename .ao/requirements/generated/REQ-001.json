@@ -20,9 +20,9 @@
     "workflows": []
   },
   "priority": "must",
-  "status": "em-review",
+  "status": "implemented",
   "tags": [],
   "title": "Document self-hosting workflow for ao-cli",
   "type": null,
-  "updated_at": "2026-02-24T17:26:05.835069Z"
+  "updated_at": "2026-02-24T17:27:17.441030Z"
 }
