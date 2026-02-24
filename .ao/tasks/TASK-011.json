@@ -23,9 +23,9 @@
     "created_at": "2026-02-24T20:06:42.993480Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-24T20:13:37.289431Z",
-    "updated_at": "2026-02-24T21:25:14.107788Z",
+    "updated_at": "2026-02-24T21:57:59.580401Z",
     "updated_by": "ao-cli",
-    "version": 14
+    "version": 25
   },
   "paused": false,
   "priority": "high",
