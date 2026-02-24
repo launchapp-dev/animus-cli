@@ -1133,4 +1133,100 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn ui_deep_links_return_spa_html_when_ui_enabled() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let context = Arc::new(WebApiContext {
+            hub,
+            project_root: "/tmp/project".to_string(),
+            app_version: "test-version".to_string(),
+        });
+        let api = orchestrator_web_api::WebApiService::new(context);
+        let app = build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: false,
+        });
+
+        let routes = [
+            "/dashboard",
+            "/daemon",
+            "/projects",
+            "/projects/proj-1",
+            "/projects/proj-1/requirements/REQ-1",
+            "/tasks",
+            "/tasks/TASK-1",
+            "/workflows",
+            "/workflows/wf-1",
+            "/workflows/wf-1/checkpoints/2",
+            "/events",
+            "/reviews/handoff",
+        ];
+
+        for route in routes {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(route)
+                        .body(Body::empty())
+                        .expect("request should be built"),
+                )
+                .await
+                .expect("request should succeed");
+
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "{route} should return SPA html"
+            );
+
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            assert!(
+                content_type.starts_with("text/html"),
+                "{route} should return text/html content type"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn api_only_mode_rejects_ui_deep_links() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let context = Arc::new(WebApiContext {
+            hub,
+            project_root: "/tmp/project".to_string(),
+            app_version: "test-version".to_string(),
+        });
+        let api = orchestrator_web_api::WebApiService::new(context);
+        let app = build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/events")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(false)));
+    }
 }

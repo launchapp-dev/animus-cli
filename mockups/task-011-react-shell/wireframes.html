@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-011 React Shell Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-011: React Shell + Route Architecture Wireframes</h1>
+      <p>
+        Concrete UI boards for desktop and mobile layouts, route hierarchy, and
+        deterministic loading/empty/error/action states over
+        <code>/api/v1</code> endpoints.
+      </p>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="desktop-wireframe-title">
+        <h2 class="board-title" id="desktop-wireframe-title">
+          Desktop Shell Wireframe (Persistent Nav + Context Header)
+        </h2>
+        <div class="desktop-shell">
+          <nav class="sidebar" aria-label="Primary">
+            <div class="brand">AO Web Console</div>
+            <ul class="nav-list">
+              <li><a class="nav-link" href="#">Dashboard</a></li>
+              <li><a class="nav-link" href="#">Daemon</a></li>
+              <li><a class="nav-link" href="#" aria-current="page">Projects</a></li>
+              <li><a class="nav-link" href="#">Tasks</a></li>
+              <li><a class="nav-link" href="#">Workflows</a></li>
+              <li><a class="nav-link" href="#">Events</a></li>
+              <li><a class="nav-link" href="#">Review Handoff</a></li>
+            </ul>
+          </nav>
+
+          <div class="shell-main">
+            <header class="top-bar">
+              <div class="top-bar-primary">
+                <div class="crumbs">
+                  Projects / alpha-launch / Requirements / REQ-019
+                </div>
+                <div class="scroll-policy">
+                  Section changes reset scroll; detail swaps preserve scroll where feasible.
+                </div>
+              </div>
+              <form class="project-context-controls" aria-label="Project context controls">
+                <label for="desktop-project-selector">Project context</label>
+                <div class="project-context-row">
+                  <select id="desktop-project-selector" class="project-context-select">
+                    <option>alpha-launch (route param)</option>
+                    <option>beta-hardening (cached selection)</option>
+                    <option>gamma-ops (server active)</option>
+                  </select>
+                  <div class="context-chip">Active Project: alpha-launch</div>
+                </div>
+                <p class="context-note">
+                  Precedence: route param -> cached selection -> <code>/api/v1/projects/active</code>.
+                </p>
+              </form>
+            </header>
+
+            <section class="content" aria-label="Route catalog and state samples">
+              <div class="banner info">
+                Route tree is shell-persistent: unknown routes render in-app 404
+                while keeping navigation/context visible.
+              </div>
+
+              <div class="route-grid">
+                <article class="route-card">
+                  <h3>Root Redirect</h3>
+                  <div class="route-path">/ -> /dashboard</div>
+                  <div class="chips">
+                    <span class="chip">deterministic bootstrap</span>
+                    <span class="chip">deep-link friendly</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Dashboard</h3>
+                  <div class="route-path">/dashboard</div>
+                  <div class="chips">
+                    <span class="chip loading">loading</span>
+                    <span class="chip empty">no-active-project</span>
+                    <span class="chip">summary cards</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Daemon</h3>
+                  <div class="route-path">/daemon</div>
+                  <div class="chips">
+                    <span class="chip pending">command pending</span>
+                    <span class="chip">health + logs</span>
+                    <span class="chip error">command error</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Projects</h3>
+                  <div class="route-path">/projects</div>
+                  <div class="chips">
+                    <span class="chip loading">loading</span>
+                    <span class="chip empty">empty list</span>
+                    <span class="chip">selection persisted</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Project Detail</h3>
+                  <div class="route-path">/projects/:projectId</div>
+                  <div class="chips">
+                    <span class="chip">summary panel</span>
+                    <span class="chip empty">no related items</span>
+                    <span class="chip error">fetch error</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Requirement Detail</h3>
+                  <div class="route-path">
+                    /projects/:projectId/requirements/:requirementId
+                  </div>
+                  <div class="chips">
+                    <span class="chip loading">loading</span>
+                    <span class="chip error">not found</span>
+                    <span class="chip">project-scoped context</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Tasks</h3>
+                  <div class="route-path">/tasks</div>
+                  <div class="chips">
+                    <span class="chip">prioritized + next</span>
+                    <span class="chip empty">empty queue</span>
+                    <span class="chip error">partial-data fallback</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Task Detail</h3>
+                  <div class="route-path">/tasks/:taskId</div>
+                  <div class="chips">
+                    <span class="chip pending">optimistic action</span>
+                    <span class="chip">checklist + dependency editor</span>
+                    <span class="chip error">envelope error mapped</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Workflows</h3>
+                  <div class="route-path">/workflows</div>
+                  <div class="chips">
+                    <span class="chip loading">loading</span>
+                    <span class="chip empty">empty list</span>
+                    <span class="chip pending">run pending</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Workflow Detail</h3>
+                  <div class="route-path">/workflows/:workflowId</div>
+                  <div class="chips">
+                    <span class="chip pending">resume/pause/cancel</span>
+                    <span class="chip">decision + checkpoint panes</span>
+                    <span class="chip error">transition conflict</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Checkpoint Detail</h3>
+                  <div class="route-path">
+                    /workflows/:workflowId/checkpoints/:checkpoint
+                  </div>
+                  <div class="chips">
+                    <span class="chip">checkpoint evidence</span>
+                    <span class="chip error">missing checkpoint</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Events</h3>
+                  <div class="route-path">/events</div>
+                  <div class="chips">
+                    <span class="chip loading">connecting</span>
+                    <span class="chip live">live</span>
+                    <span class="chip pending">reconnecting</span>
+                    <span class="chip error">disconnected</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Review Handoff</h3>
+                  <div class="route-path">/reviews/handoff</div>
+                  <div class="chips">
+                    <span class="chip">validated form</span>
+                    <span class="chip pending">submitting</span>
+                    <span class="chip error">submit error</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>In-App Not Found</h3>
+                  <div class="route-path">*</div>
+                  <div class="chips">
+                    <span class="chip error">404</span>
+                    <span class="chip">shell preserved</span>
+                    <span class="chip">return to dashboard</span>
+                  </div>
+                </article>
+              </div>
+
+              <div class="status-panel-grid">
+                <section class="status-panel">
+                  <h3>Daemon Action Safety Example</h3>
+                  <div class="banner warning">
+                    Stop daemon? This interrupts active agent runs.
+                  </div>
+                  <div class="action-row">
+                    <button class="action-btn" type="button">Cancel</button>
+                    <button class="action-btn" type="button">Confirm Stop</button>
+                  </div>
+                </section>
+
+                <section class="status-panel">
+                  <h3>Envelope Error Render Example</h3>
+                  <div class="banner error">
+                    <strong>code:</strong> unavailable | <strong>message:</strong>
+                    Runner socket timeout | <strong>exit:</strong> 5
+                  </div>
+                  <div class="action-row">
+                    <button class="action-btn" type="button">Retry</button>
+                    <button class="action-btn" type="button">Open Events</button>
+                  </div>
+                </section>
+
+                <section class="status-panel">
+                  <h3>SSE Continuity Example</h3>
+                  <p>
+                    Last event sequence: <code>2441</code>. Reconnect uses
+                    <code>Last-Event-ID: 2441</code> and resumes append-only feed.
+                  </p>
+                </section>
+
+                <section class="status-panel">
+                  <h3>Review Handoff Form Accessibility</h3>
+                  <form class="wireframe-form">
+                    <label for="review-task-id">Task ID</label>
+                    <input id="review-task-id" type="text" value="TASK-011" readonly />
+
+                    <label for="review-outcome">Outcome</label>
+                    <select id="review-outcome" aria-describedby="review-outcome-error">
+                      <option value="">Select outcome</option>
+                      <option>approved</option>
+                      <option>changes_requested</option>
+                    </select>
+                    <p class="form-error" id="review-outcome-error">
+                      Outcome is required before submit.
+                    </p>
+
+                    <label for="review-notes">Handoff notes</label>
+                    <textarea id="review-notes" rows="3">
+Blocked by checklist mismatch. Added remediation links.
+                    </textarea>
+                    <div class="action-row">
+                      <button class="action-btn" type="button">Submit Handoff</button>
+                      <button class="action-btn" type="button">Save Draft</button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-wireframe-title">
+        <h2 class="board-title" id="mobile-wireframe-title">
+          Mobile Wireframe (320px-First Navigation + Context Chip)
+        </h2>
+        <div class="mobile-board">
+          <article class="mobile-frame">
+            <header class="mobile-header">
+              <button class="mobile-menu-btn" type="button" aria-label="Open menu">
+                ≡
+              </button>
+              <h3 class="mobile-title">Tasks</h3>
+              <div class="context-chip">alpha-launch</div>
+            </header>
+            <div class="mobile-content">
+              <label for="mobile-project-selector">Project context</label>
+              <select id="mobile-project-selector" class="project-context-select">
+                <option>alpha-launch</option>
+                <option>beta-hardening</option>
+              </select>
+              <div
+                class="mobile-nav-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Navigation drawer preview"
+              >
+                <div class="mobile-nav-header">
+                  <strong>Menu</strong>
+                  <button class="mobile-menu-btn" type="button" aria-label="Close menu">
+                    ×
+                  </button>
+                </div>
+                <ul>
+                  <li>Dashboard</li>
+                  <li>Daemon</li>
+                  <li>Projects</li>
+                  <li class="active">Tasks</li>
+                  <li>Workflows</li>
+                  <li>Events</li>
+                  <li>Review Handoff</li>
+                </ul>
+              </div>
+              <div class="banner info">
+                Mobile behavior: same destinations as desktop sidebar, dismissible
+                drawer with focus trap + escape close, no horizontal scroll.
+              </div>
+              <section class="status-panel">
+                <h3>Task Detail Card Stack</h3>
+                <p>
+                  TASK-011 | In Progress | Owner: Agent A<br />
+                  Checklist + dependency controls use full-width touch targets.
+                </p>
+              </section>
+            </div>
+          </article>
+
+          <article class="mobile-frame">
+            <header class="mobile-header">
+              <button class="mobile-menu-btn" type="button" aria-label="Open menu">
+                ≡
+              </button>
+              <h3 class="mobile-title">Events</h3>
+              <div class="context-chip">Live</div>
+            </header>
+            <div class="mobile-content">
+              <div class="chips">
+                <span class="chip loading">connecting</span>
+                <span class="chip pending">reconnecting</span>
+                <span class="chip error">stream error</span>
+              </div>
+              <section class="status-panel" aria-live="polite" aria-atomic="false">
+                <h3>Event Feed (Polite Updates)</h3>
+                <p>
+                  seq 2440 daemon-event workflow resumed<br />
+                  seq 2441 daemon-event task status updated
+                </p>
+              </section>
+              <div class="action-row">
+                <button class="action-btn" type="button">Pause Autoscroll</button>
+                <button class="action-btn" type="button">Reconnect</button>
+              </div>
+            </div>
+          </article>
+        </div>
+        <div class="state-legend">
+          Focus-visible treatment is shown on nav/actions, controls target 44px
+          minimum touch size, and route changes preserve shell chrome/context badge.
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
