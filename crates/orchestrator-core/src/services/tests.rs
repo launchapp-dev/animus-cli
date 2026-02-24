@@ -889,16 +889,8 @@ async fn file_hub_persists_planning_artifacts() {
         .join("docs")
         .join("product-vision.md");
     let vision_json_path = temp.path().join(".ao").join("docs").join("vision.json");
-    let requirements_path = temp
-        .path()
-        .join(".ao")
-        .join("docs")
-        .join("requirements.json");
-    let tasks_path = temp.path().join(".ao").join("docs").join("tasks.json");
     assert!(vision_path.exists());
     assert!(vision_json_path.exists());
-    assert!(requirements_path.exists());
-    assert!(tasks_path.exists());
 }
 
 #[tokio::test]

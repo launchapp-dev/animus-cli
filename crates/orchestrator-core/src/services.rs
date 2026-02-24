@@ -562,20 +562,6 @@ impl FileServiceHub {
             std::fs::remove_file(&vision_json_path)?;
         }
 
-        let mut requirements: Vec<_> = snapshot.requirements.values().cloned().collect();
-        requirements.sort_by(|a, b| a.id.cmp(&b.id));
-        std::fs::write(
-            docs_dir.join("requirements.json"),
-            serde_json::to_string_pretty(&requirements)?,
-        )?;
-
-        let mut tasks: Vec<_> = snapshot.tasks.values().cloned().collect();
-        tasks.sort_by(|a, b| a.id.cmp(&b.id));
-        std::fs::write(
-            docs_dir.join("tasks.json"),
-            serde_json::to_string_pretty(&tasks)?,
-        )?;
-
         Self::write_requirement_files(path, snapshot)?;
         Self::write_task_files(path, snapshot)?;
 

@@ -227,14 +227,10 @@ fn vision_doc_path(project_root: &Path) -> PathBuf {
     planning_docs_dir(project_root).join("product-vision.md")
 }
 
-fn requirements_doc_path(project_root: &Path) -> PathBuf {
-    planning_docs_dir(project_root).join("requirements.json")
-}
-
 pub(super) fn write_planning_artifacts(
     project_root: &Path,
     vision: Option<&VisionDocument>,
-    requirements: &HashMap<String, RequirementItem>,
+    _requirements: &HashMap<String, RequirementItem>,
 ) -> Result<()> {
     let docs_dir = planning_docs_dir(project_root);
     std::fs::create_dir_all(&docs_dir)?;
@@ -245,13 +241,6 @@ pub(super) fn write_planning_artifacts(
             format!("{}\n", vision.markdown.trim()),
         )?;
     }
-
-    let mut requirement_list: Vec<_> = requirements.values().cloned().collect();
-    requirement_list.sort_by(|a, b| a.id.cmp(&b.id));
-    std::fs::write(
-        requirements_doc_path(project_root),
-        serde_json::to_string_pretty(&requirement_list)?,
-    )?;
 
     Ok(())
 }

@@ -44,6 +44,8 @@ temp/
 .ao/model-evals/
 .ao/tasks-archive-*.tar.gz
 .ao/requirements/contracts/
+.ao/docs/requirements.json
+.ao/docs/tasks.json
 .ao/requirements/index.json
 .ao/tasks/index.json
 

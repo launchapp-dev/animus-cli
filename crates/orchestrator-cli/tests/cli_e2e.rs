@@ -124,10 +124,10 @@ fn e2e_requirements_create_update_and_list() -> Result<()> {
         "second criterion should be appended"
     );
 
-    let requirements_doc_path = harness.project_root().join(".ao/docs/requirements.json");
+    let requirements_dir = harness.project_root().join(".ao/requirements/generated");
     assert!(
-        requirements_doc_path.exists(),
-        "requirements.json should be generated"
+        requirements_dir.exists(),
+        "requirements generated directory should exist"
     );
 
     Ok(())
