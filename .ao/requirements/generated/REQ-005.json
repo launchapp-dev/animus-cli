@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "CI runs cargo check for orchestrator-cli, orchestrator-core, agent-runner, llm-cli-wrapper, llm-mcp-server, and web server crates.",
-    "CI validates help/smoke commands for ao and llm-cli-wrapper."
+    "CI runs `cargo check` for `orchestrator-cli`, `orchestrator-core`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server` on every pull request.",
+    "CI includes smoke checks for `ao --help` and `llm-cli-wrapper --help` with non-zero failure on command regressions.",
+    "CI configuration explicitly avoids desktop-wrapper/Tauri dependencies and fails if prohibited dependencies are introduced.",
+    "At least one CI job executes targeted automated tests for runtime or integration surfaces touched by scoped crates.",
+    "CI results are visible as required status checks for merge in the default branch workflow."
   ],
-  "category": null,
+  "category": "quality",
   "comments": [],
   "created_at": "2026-02-24T17:24:44.632605Z",
-  "description": "Create CI coverage focused on the Rust-only workspace packages and smoke command execution.",
+  "description": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
   "id": "REQ-005",
   "legacy_id": null,
   "links": {
@@ -21,8 +24,15 @@
   },
   "priority": "must",
   "status": "draft",
-  "tags": [],
-  "title": "Establish CI checks for non-Tauri workspace",
-  "type": null,
-  "updated_at": "2026-02-24T17:26:09.515590Z"
+  "tags": [
+    "ci",
+    "lens-engineering",
+    "lens-ops",
+    "lens-product",
+    "quality-gates",
+    "rust-only"
+  ],
+  "title": "Establish Rust-only CI quality gates for workspace health",
+  "type": "technical",
+  "updated_at": "2026-02-24T19:21:21.013752Z"
 }

@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "Runner startup and shutdown behavior is covered by repeatable tests.",
-    "Runner health failure paths emit structured diagnostics."
+    "Automated tests cover normal startup, graceful shutdown, forced termination handling, and restart recovery scenarios.",
+    "Health-check failures emit structured diagnostics including failure category, timestamp, and actionable context.",
+    "Runner lifecycle events are observable through existing AO event/output pathways without requiring ad-hoc log parsing.",
+    "Repeated start/stop cycling (minimum 20 cycles in test) completes without orphaned runner processes.",
+    "Documented recovery steps exist for at least three failure modes: socket bind failure, dependency unavailability, and stale process state."
   ],
-  "category": null,
+  "category": "runtime",
   "comments": [],
   "created_at": "2026-02-24T17:24:43.242788Z",
-  "description": "Ensure runner startup, health checks, and shutdown paths are robust across local development workflows.",
+  "description": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
   "id": "REQ-003",
   "legacy_id": null,
   "links": {
@@ -21,8 +24,14 @@
   },
   "priority": "must",
   "status": "draft",
-  "tags": [],
-  "title": "Harden agent-runner lifecycle and observability",
-  "type": null,
-  "updated_at": "2026-02-24T17:26:07.318188Z"
+  "tags": [
+    "lens-engineering",
+    "lens-ops",
+    "observability",
+    "reliability",
+    "runner"
+  ],
+  "title": "Harden agent-runner lifecycle reliability and diagnostics",
+  "type": "non-functional",
+  "updated_at": "2026-02-24T19:21:21.007409Z"
 }

@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "Core command groups (project, requirements, task, workflow, execute) have concise and consistent help output.",
-    "Common user input errors return actionable messages with suggested fixes."
+    "Each core command group has a non-empty top-level help description and subcommand list with consistent structure and terminology.",
+    "At least 10 representative invalid-input scenarios return actionable errors that include both the failure reason and a concrete correction hint.",
+    "All `--json` error responses for invalid input conform to the `ao.cli.v1` envelope with `ok=false`, `error.code`, and `exit_code=2`.",
+    "Help output examples and command names in documentation match actual CLI behavior for the five scoped command groups.",
+    "Regression tests verify help output snapshots and error-shape consistency for the scoped groups."
   ],
-  "category": null,
+  "category": "usability",
   "comments": [],
   "created_at": "2026-02-24T17:24:42.443485Z",
-  "description": "Improve command discoverability, help text quality, and error messaging for the orchestrator-cli command groups used daily.",
+  "description": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
   "id": "REQ-002",
   "legacy_id": null,
   "links": {
@@ -21,8 +24,13 @@
   },
   "priority": "must",
   "status": "draft",
-  "tags": [],
-  "title": "Stabilize core CLI package ergonomics",
-  "type": null,
-  "updated_at": "2026-02-24T17:26:06.585246Z"
+  "tags": [
+    "cli",
+    "error-handling",
+    "lens-product",
+    "ux"
+  ],
+  "title": "Improve daily CLI ergonomics for core ao command groups",
+  "type": "functional",
+  "updated_at": "2026-02-24T19:21:21.003203Z"
 }

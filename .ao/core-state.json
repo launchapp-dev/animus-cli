@@ -1,7 +1,7 @@
 {
-  "daemon_status": "stopped",
+  "daemon_status": "running",
   "daemon_max_agents": null,
-  "runner_pid": null,
+  "runner_pid": 21673,
   "logs": [
     {
       "timestamp": "2026-02-24T17:23:54.768509Z",
@@ -32,6 +32,41 @@
       "timestamp": "2026-02-24T18:27:10.822739Z",
       "level": "info",
       "message": "vision drafted"
+    },
+    {
+      "timestamp": "2026-02-24T19:20:42.738451Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 21673)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:20.999291Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-001)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:21.003203Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-002)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:21.007409Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-003)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:21.010432Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-004)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:21.013752Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-005)"
+    },
+    {
+      "timestamp": "2026-02-24T19:21:21.017208Z",
+      "level": "info",
+      "message": "requirement upserted (REQ-006)"
     }
   ],
   "active_project_id": "d3e64ce6-19dc-428a-ac8d-f96c7ab91351",
@@ -81,17 +116,17 @@
     }
   },
   "tasks": {
-    "TASK-006": {
-      "id": "TASK-006",
-      "title": "Draft multi-binary release pipeline",
-      "description": "Define artifact matrix and automate build outputs for ao, agent-runner, llm-cli-wrapper, llm-mcp-server.",
-      "type": "chore",
-      "status": "backlog",
+    "TASK-001": {
+      "id": "TASK-001",
+      "title": "Write self-hosting docs and conventions",
+      "description": "Update root README and add AGENTS.md with operating rules for self-managed development.",
+      "type": "docs",
+      "status": "done",
       "blocked_reason": null,
       "blocked_at": null,
       "blocked_phase": null,
       "blocked_by": null,
-      "priority": "medium",
+      "priority": "high",
       "risk": "medium",
       "scope": "medium",
       "complexity": "medium",
@@ -101,13 +136,13 @@
       },
       "estimated_effort": null,
       "linked_requirements": [
-        "REQ-006"
+        "REQ-001"
       ],
       "dependencies": [],
       "checklist": [],
       "tags": [
-        "release",
-        "packaging"
+        "self-hosting",
+        "docs"
       ],
       "workflow_metadata": {
         "workflow_id": null,
@@ -120,8 +155,64 @@
       "worktree_path": null,
       "branch_name": null,
       "metadata": {
-        "created_at": "2026-02-24T17:25:46.402288Z",
-        "updated_at": "2026-02-24T17:25:46.402288Z",
+        "created_at": "2026-02-24T17:25:42.658460Z",
+        "updated_at": "2026-02-24T17:27:16.724507Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": "2026-02-24T17:26:10.916940Z",
+        "completed_at": "2026-02-24T17:27:16.724507Z",
+        "version": 3
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-003": {
+      "id": "TASK-003",
+      "title": "Add runner lifecycle regression tests",
+      "description": "Cover startup, health-check fallback, stale lock cleanup, and shutdown for agent-runner workflows.",
+      "type": "test",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-003"
+      ],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "runner",
+        "reliability"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:44.332649Z",
+        "updated_at": "2026-02-24T17:25:44.332649Z",
         "created_by": "ao-cli",
         "updated_by": "ao-cli",
         "started_at": null,
@@ -193,6 +284,62 @@
         "requires_network": true
       }
     },
+    "TASK-006": {
+      "id": "TASK-006",
+      "title": "Draft multi-binary release pipeline",
+      "description": "Define artifact matrix and automate build outputs for ao, agent-runner, llm-cli-wrapper, llm-mcp-server.",
+      "type": "chore",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-006"
+      ],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "release",
+        "packaging"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:46.402288Z",
+        "updated_at": "2026-02-24T17:25:46.402288Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
     "TASK-005": {
       "id": "TASK-005",
       "title": "Add CI workflow for Rust-only workspace",
@@ -239,118 +386,6 @@
         "started_at": null,
         "completed_at": null,
         "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-003": {
-      "id": "TASK-003",
-      "title": "Add runner lifecycle regression tests",
-      "description": "Cover startup, health-check fallback, stale lock cleanup, and shutdown for agent-runner workflows.",
-      "type": "test",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-003"
-      ],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "runner",
-        "reliability"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:44.332649Z",
-        "updated_at": "2026-02-24T17:25:44.332649Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-001": {
-      "id": "TASK-001",
-      "title": "Write self-hosting docs and conventions",
-      "description": "Update root README and add AGENTS.md with operating rules for self-managed development.",
-      "type": "docs",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-001"
-      ],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "self-hosting",
-        "docs"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:42.658460Z",
-        "updated_at": "2026-02-24T17:27:16.724507Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": "2026-02-24T17:26:10.916940Z",
-        "completed_at": "2026-02-24T17:27:16.724507Z",
-        "version": 3
       },
       "deadline": null,
       "paused": false,
@@ -454,182 +489,30 @@
     "updated_at": "2026-02-24T18:27:10.822739Z"
   },
   "requirements": {
-    "REQ-002": {
-      "id": "REQ-002",
-      "title": "Stabilize core CLI package ergonomics",
-      "description": "Improve command discoverability, help text quality, and error messaging for the orchestrator-cli command groups used daily.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Core command groups (project, requirements, task, workflow, execute) have concise and consistent help output.",
-        "Common user input errors return actionable messages with suggested fixes."
-      ],
-      "priority": "must",
-      "status": "planned",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-002"
-      ],
-      "created_at": "2026-02-24T17:24:42.443485Z",
-      "updated_at": "2026-02-24T17:26:06.585246Z"
-    },
-    "REQ-004": {
-      "id": "REQ-004",
-      "title": "Mature llm-cli-wrapper and llm-mcp-server integration",
-      "description": "Standardize wrapper <-> MCP server behavior for build, startup, endpoint resolution, and smoke validation.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Wrapper can build and start llm-mcp-server using documented commands.",
-        "Integration example validates health and agent endpoint responses."
-      ],
-      "priority": "should",
-      "status": "planned",
-      "source": "runtime",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-004"
-      ],
-      "created_at": "2026-02-24T17:24:43.920053Z",
-      "updated_at": "2026-02-24T17:26:08.772338Z"
-    },
-    "REQ-005": {
-      "id": "REQ-005",
-      "title": "Establish CI checks for non-Tauri workspace",
-      "description": "Create CI coverage focused on the Rust-only workspace packages and smoke command execution.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "CI runs cargo check for orchestrator-cli, orchestrator-core, agent-runner, llm-cli-wrapper, llm-mcp-server, and web server crates.",
-        "CI validates help/smoke commands for ao and llm-cli-wrapper."
-      ],
-      "priority": "must",
-      "status": "planned",
-      "source": "engineering",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-005"
-      ],
-      "created_at": "2026-02-24T17:24:44.632605Z",
-      "updated_at": "2026-02-24T17:26:09.515590Z"
-    },
-    "REQ-003": {
-      "id": "REQ-003",
-      "title": "Harden agent-runner lifecycle and observability",
-      "description": "Ensure runner startup, health checks, and shutdown paths are robust across local development workflows.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Runner startup and shutdown behavior is covered by repeatable tests.",
-        "Runner health failure paths emit structured diagnostics."
-      ],
-      "priority": "must",
-      "status": "planned",
-      "source": "runtime",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-003"
-      ],
-      "created_at": "2026-02-24T17:24:43.242788Z",
-      "updated_at": "2026-02-24T17:26:07.318188Z"
-    },
-    "REQ-006": {
-      "id": "REQ-006",
-      "title": "Add release packaging strategy for multi-binary workspace",
-      "description": "Define and implement reproducible build artifacts for ao, agent-runner, llm-cli-wrapper, and llm-mcp-server.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Release process documents artifact naming, target platforms, and verification steps.",
-        "At least one automated build path produces all required binaries."
-      ],
-      "priority": "should",
-      "status": "planned",
-      "source": "release",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-006"
-      ],
-      "created_at": "2026-02-24T17:24:45.301691Z",
-      "updated_at": "2026-02-24T17:26:10.223331Z"
-    },
     "REQ-001": {
       "id": "REQ-001",
-      "title": "Document self-hosting workflow for ao-cli",
-      "description": "Define how this repository uses ao to plan, track, and execute its own roadmap, including required commands and state files.",
-      "body": null,
+      "title": "Define and maintain the ao-cli self-hosting operating workflow",
+      "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
+      "body": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
       "legacy_id": null,
-      "category": null,
-      "type": null,
+      "category": "documentation",
+      "type": "product",
       "acceptance_criteria": [
-        "README contains an end-to-end self-hosting section with concrete ao commands.",
-        "AGENTS.md defines operating rules for agents contributing to this repo."
+        "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
+        "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
+        "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
+        "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
+        "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
       ],
-      "priority": "must",
-      "status": "done",
+      "priority": "should",
+      "status": "refined",
       "source": "self-hosting",
-      "tags": [],
+      "tags": [
+        "contributor-workflow",
+        "docs",
+        "lens-product",
+        "self-hosting"
+      ],
       "links": {
         "tasks": [],
         "workflows": [],
@@ -639,12 +522,216 @@
         "related_requirements": []
       },
       "comments": [],
-      "relative_path": null,
+      "relative_path": "generated/REQ-001.json",
       "linked_task_ids": [
         "TASK-001"
       ],
       "created_at": "2026-02-24T17:24:41.776781Z",
-      "updated_at": "2026-02-24T17:27:17.441030Z"
+      "updated_at": "2026-02-24T19:21:20.999291Z"
+    },
+    "REQ-003": {
+      "id": "REQ-003",
+      "title": "Harden agent-runner lifecycle reliability and diagnostics",
+      "description": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
+      "body": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
+      "legacy_id": null,
+      "category": "runtime",
+      "type": "non-functional",
+      "acceptance_criteria": [
+        "Automated tests cover normal startup, graceful shutdown, forced termination handling, and restart recovery scenarios.",
+        "Health-check failures emit structured diagnostics including failure category, timestamp, and actionable context.",
+        "Runner lifecycle events are observable through existing AO event/output pathways without requiring ad-hoc log parsing.",
+        "Repeated start/stop cycling (minimum 20 cycles in test) completes without orphaned runner processes.",
+        "Documented recovery steps exist for at least three failure modes: socket bind failure, dependency unavailability, and stale process state."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [
+        "lens-engineering",
+        "lens-ops",
+        "observability",
+        "reliability",
+        "runner"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-003.json",
+      "linked_task_ids": [
+        "TASK-003"
+      ],
+      "created_at": "2026-02-24T17:24:43.242788Z",
+      "updated_at": "2026-02-24T19:21:21.007409Z"
+    },
+    "REQ-002": {
+      "id": "REQ-002",
+      "title": "Improve daily CLI ergonomics for core ao command groups",
+      "description": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
+      "body": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
+      "legacy_id": null,
+      "category": "usability",
+      "type": "functional",
+      "acceptance_criteria": [
+        "Each core command group has a non-empty top-level help description and subcommand list with consistent structure and terminology.",
+        "At least 10 representative invalid-input scenarios return actionable errors that include both the failure reason and a concrete correction hint.",
+        "All `--json` error responses for invalid input conform to the `ao.cli.v1` envelope with `ok=false`, `error.code`, and `exit_code=2`.",
+        "Help output examples and command names in documentation match actual CLI behavior for the five scoped command groups.",
+        "Regression tests verify help output snapshots and error-shape consistency for the scoped groups."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "product",
+      "tags": [
+        "cli",
+        "error-handling",
+        "lens-product",
+        "ux"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-002.json",
+      "linked_task_ids": [
+        "TASK-002"
+      ],
+      "created_at": "2026-02-24T17:24:42.443485Z",
+      "updated_at": "2026-02-24T19:21:21.003203Z"
+    },
+    "REQ-005": {
+      "id": "REQ-005",
+      "title": "Establish Rust-only CI quality gates for workspace health",
+      "description": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
+      "body": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
+      "legacy_id": null,
+      "category": "quality",
+      "type": "technical",
+      "acceptance_criteria": [
+        "CI runs `cargo check` for `orchestrator-cli`, `orchestrator-core`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server` on every pull request.",
+        "CI includes smoke checks for `ao --help` and `llm-cli-wrapper --help` with non-zero failure on command regressions.",
+        "CI configuration explicitly avoids desktop-wrapper/Tauri dependencies and fails if prohibited dependencies are introduced.",
+        "At least one CI job executes targeted automated tests for runtime or integration surfaces touched by scoped crates.",
+        "CI results are visible as required status checks for merge in the default branch workflow."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "engineering",
+      "tags": [
+        "ci",
+        "lens-engineering",
+        "lens-ops",
+        "lens-product",
+        "quality-gates",
+        "rust-only"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-005.json",
+      "linked_task_ids": [
+        "TASK-005"
+      ],
+      "created_at": "2026-02-24T17:24:44.632605Z",
+      "updated_at": "2026-02-24T19:21:21.013752Z"
+    },
+    "REQ-006": {
+      "id": "REQ-006",
+      "title": "Define reproducible multi-binary release packaging process",
+      "description": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
+      "body": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
+      "legacy_id": null,
+      "category": "release",
+      "type": "technical",
+      "acceptance_criteria": [
+        "Release documentation defines artifact naming convention, supported target platforms, and checksum/verification procedure.",
+        "An automated release build path produces all four required binaries in one run.",
+        "Each produced artifact includes version metadata traceable to a git commit or tag.",
+        "Release outputs are organized in a deterministic directory structure suitable for scripted consumption.",
+        "A dry-run release can be executed locally or in CI to validate packaging without publishing."
+      ],
+      "priority": "could",
+      "status": "refined",
+      "source": "release",
+      "tags": [
+        "artifacts",
+        "lens-engineering",
+        "lens-ops",
+        "packaging",
+        "release"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-006.json",
+      "linked_task_ids": [
+        "TASK-006"
+      ],
+      "created_at": "2026-02-24T17:24:45.301691Z",
+      "updated_at": "2026-02-24T19:21:21.017208Z"
+    },
+    "REQ-004": {
+      "id": "REQ-004",
+      "title": "Standardize llm-cli-wrapper and llm-mcp-server integration contract",
+      "description": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
+      "body": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
+      "legacy_id": null,
+      "category": "integration",
+      "type": "technical",
+      "acceptance_criteria": [
+        "A documented integration contract specifies required startup inputs, endpoint discovery behavior, and expected health semantics.",
+        "A reproducible smoke test validates server startup plus at least one health and one agent-related endpoint interaction.",
+        "Wrapper behavior on MCP server unavailability returns deterministic, structured error output with clear remediation hint.",
+        "Build and startup commands used by the integration path are documented and executable from repository root.",
+        "Contract tests run in CI and fail on breaking changes to wrapper-to-server startup or endpoint resolution behavior."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [
+        "integration",
+        "lens-engineering",
+        "mcp",
+        "wrapper"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-004.json",
+      "linked_task_ids": [
+        "TASK-004"
+      ],
+      "created_at": "2026-02-24T17:24:43.920053Z",
+      "updated_at": "2026-02-24T19:21:21.010432Z"
     }
   }
 }

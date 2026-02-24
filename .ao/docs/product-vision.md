@@ -13,14 +13,12 @@ Manual orchestration of AI agents and CLI workflows is fragmented and unsafe, in
 - Provide a deterministic, local-first Rust AO CLI that unifies project planning, execution, review/QA, and audit trails under one control plane
 - Increase operator confidence through explicit safety gates, reproducible run artifacts, and auditable state transitions
 - Make AO fully machine-operable via structured JSON outputs for automation and policy enforcement
-- Define machine-actionable operational success criteria and keep evidence discoverable through AO history/run/artifact commands
 
 ## Constraints
 - Keep the project Rust-only with no desktop-wrapper (Tauri) dependency
 - Do not replace existing AO state files with non-machine-readable outputs
 - Deliver command safety through confirmations for destructive operations and controlled destructive flows
 - Ensure all runtime artifacts and history are traceable through `.ao/` state, run events, and task outputs
-- Make all high-risk actions auditable and reversible where practical, with explicit approval paths for state-changing operations
 
 ## Value Proposition
 AO provides a deterministic, inspectable, machine-friendly CLI control plane for orchestrating agent work from vision and requirements through execution and QA with auditable outcomes.

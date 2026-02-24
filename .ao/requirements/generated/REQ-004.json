@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "Wrapper can build and start llm-mcp-server using documented commands.",
-    "Integration example validates health and agent endpoint responses."
+    "A documented integration contract specifies required startup inputs, endpoint discovery behavior, and expected health semantics.",
+    "A reproducible smoke test validates server startup plus at least one health and one agent-related endpoint interaction.",
+    "Wrapper behavior on MCP server unavailability returns deterministic, structured error output with clear remediation hint.",
+    "Build and startup commands used by the integration path are documented and executable from repository root.",
+    "Contract tests run in CI and fail on breaking changes to wrapper-to-server startup or endpoint resolution behavior."
   ],
-  "category": null,
+  "category": "integration",
   "comments": [],
   "created_at": "2026-02-24T17:24:43.920053Z",
-  "description": "Standardize wrapper <-> MCP server behavior for build, startup, endpoint resolution, and smoke validation.",
+  "description": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
   "id": "REQ-004",
   "legacy_id": null,
   "links": {
@@ -21,8 +24,13 @@
   },
   "priority": "should",
   "status": "draft",
-  "tags": [],
-  "title": "Mature llm-cli-wrapper and llm-mcp-server integration",
-  "type": null,
-  "updated_at": "2026-02-24T17:26:08.772338Z"
+  "tags": [
+    "integration",
+    "lens-engineering",
+    "mcp",
+    "wrapper"
+  ],
+  "title": "Standardize llm-cli-wrapper and llm-mcp-server integration contract",
+  "type": "technical",
+  "updated_at": "2026-02-24T19:21:21.010432Z"
 }

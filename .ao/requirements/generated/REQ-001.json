@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "README contains an end-to-end self-hosting section with concrete ao commands.",
-    "AGENTS.md defines operating rules for agents contributing to this repo."
+    "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
+    "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
+    "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
+    "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
+    "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
   ],
-  "category": null,
+  "category": "documentation",
   "comments": [],
   "created_at": "2026-02-24T17:24:41.776781Z",
-  "description": "Define how this repository uses ao to plan, track, and execute its own roadmap, including required commands and state files.",
+  "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
   "id": "REQ-001",
   "legacy_id": null,
   "links": {
@@ -19,10 +22,15 @@
     "tests": [],
     "workflows": []
   },
-  "priority": "must",
-  "status": "implemented",
-  "tags": [],
-  "title": "Document self-hosting workflow for ao-cli",
-  "type": null,
-  "updated_at": "2026-02-24T17:27:17.441030Z"
+  "priority": "should",
+  "status": "draft",
+  "tags": [
+    "contributor-workflow",
+    "docs",
+    "lens-product",
+    "self-hosting"
+  ],
+  "title": "Define and maintain the ao-cli self-hosting operating workflow",
+  "type": "product",
+  "updated_at": "2026-02-24T19:21:20.999291Z"
 }

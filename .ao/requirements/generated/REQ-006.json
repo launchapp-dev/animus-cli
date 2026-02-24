@@ -1,12 +1,15 @@
 {
   "acceptance_criteria": [
-    "Release process documents artifact naming, target platforms, and verification steps.",
-    "At least one automated build path produces all required binaries."
+    "Release documentation defines artifact naming convention, supported target platforms, and checksum/verification procedure.",
+    "An automated release build path produces all four required binaries in one run.",
+    "Each produced artifact includes version metadata traceable to a git commit or tag.",
+    "Release outputs are organized in a deterministic directory structure suitable for scripted consumption.",
+    "A dry-run release can be executed locally or in CI to validate packaging without publishing."
   ],
-  "category": null,
+  "category": "release",
   "comments": [],
   "created_at": "2026-02-24T17:24:45.301691Z",
-  "description": "Define and implement reproducible build artifacts for ao, agent-runner, llm-cli-wrapper, and llm-mcp-server.",
+  "description": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
   "id": "REQ-006",
   "legacy_id": null,
   "links": {
@@ -19,10 +22,16 @@
     "tests": [],
     "workflows": []
   },
-  "priority": "should",
+  "priority": "could",
   "status": "draft",
-  "tags": [],
-  "title": "Add release packaging strategy for multi-binary workspace",
-  "type": null,
-  "updated_at": "2026-02-24T17:26:10.223331Z"
+  "tags": [
+    "artifacts",
+    "lens-engineering",
+    "lens-ops",
+    "packaging",
+    "release"
+  ],
+  "title": "Define reproducible multi-binary release packaging process",
+  "type": "technical",
+  "updated_at": "2026-02-24T19:21:21.017208Z"
 }
