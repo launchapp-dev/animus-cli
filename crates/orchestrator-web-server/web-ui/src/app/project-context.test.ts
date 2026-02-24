@@ -41,4 +41,17 @@ describe("resolveProjectContext", () => {
       source: "server-active",
     });
   });
+
+  it("returns none context when no source provides a project", () => {
+    const result = resolveProjectContext({
+      routeProjectId: null,
+      cachedProjectId: null,
+      serverActiveProjectId: null,
+    });
+
+    expect(result).toEqual({
+      activeProjectId: null,
+      source: "none",
+    });
+  });
 });
