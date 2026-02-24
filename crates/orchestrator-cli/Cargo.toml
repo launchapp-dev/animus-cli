@@ -1,0 +1,31 @@
+[package]
+name = "orchestrator-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ao"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+orchestrator-core = { path = "../orchestrator-core" }
+orchestrator-web-api = { path = "../orchestrator-web-api" }
+orchestrator-web-server = { path = "../orchestrator-web-server" }
+protocol = { path = "../protocol" }
+dirs = "5.0"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rmcp = { version = "0.15.0", features = ["transport-io"] }
+schemars = "1.0"
+fs2 = "0.4"
+sha2 = "0.10"
+webbrowser = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"

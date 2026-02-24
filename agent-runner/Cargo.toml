@@ -1,0 +1,25 @@
+[package]
+name = "agent-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+protocol = { path = "../crates/protocol" }
+cli-wrapper = { path = "../cli-wrapper" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+thiserror = "1.0"
+fs2 = "0.4"
+dirs = "5.0"
+once_cell = "1.19"
+chrono = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.54", features = ["Win32_System_Threading", "Win32_System_JobObjects", "Win32_Foundation"] }

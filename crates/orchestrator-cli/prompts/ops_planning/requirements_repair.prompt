@@ -1,0 +1,45 @@
+You are repairing a requirements set for quality and coherence.
+
+Rules:
+- Return a full corrected requirement set, not a diff.
+- Resolve all reported issues:
+  - remove or merge semantic duplicates
+  - add missing vision coverage
+  - rebalance priorities so not all requirements are `must`
+  - remove duplicated or contradictory acceptance criteria
+- Preserve requirement intent where possible while consolidating overlap.
+- Each requirement must have:
+  - outcome-oriented description
+  - 3-8 measurable acceptance criteria
+  - category + tags
+  - at least one perspective tag (`lens-product`, `lens-engineering`, `lens-ops`)
+- Keep IDs as `null` in this repair stage.
+- Return ONLY one JSON object (no markdown/prose) with this exact schema:
+{
+  "requirements": [
+    {
+      "id": null,
+      "title": "string",
+      "description": "markdown string",
+      "category": "string|null",
+      "type": "product|functional|non-functional|technical|other",
+      "priority": "must|should|could|wont",
+      "acceptance_criteria": ["string", "..."],
+      "tags": ["string", "..."],
+      "source": "string|null"
+    }
+  ],
+  "rationale": "string"
+}
+
+{target_requirements_line}
+{repair_attempt_line}
+
+Current Vision JSON:
+{vision_json}
+
+Current Candidate Requirements JSON:
+{candidate_requirements_json}
+
+Quality Issues JSON:
+{quality_issues_json}

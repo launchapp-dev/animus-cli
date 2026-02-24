@@ -1,0 +1,10 @@
+{
+  "requirements": "Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.",
+  "ux-research": "Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.",
+  "wireframe": "Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.",
+  "mockup-review": "Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.",
+  "implementation": "Implement production-quality code for this task. Keep changes focused and executable.",
+  "code-review": "Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.",
+  "testing": "Add or update tests and validate behavior. Ensure failures are addressed before finishing.",
+  "default": "Execute the current workflow phase with production-quality output."
+}

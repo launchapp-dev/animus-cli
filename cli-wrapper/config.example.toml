@@ -1,0 +1,23 @@
+# CLI Wrapper Configuration Example
+# Copy this file to config.toml and customize
+
+# Directory where test workspaces will be created
+test_workspace_dir = "/tmp/cli-wrapper-tests"
+
+# Default timeout for CLI operations (in seconds)
+default_timeout_secs = 300
+
+# Enable verbose logging
+verbose = false
+
+# Custom CLI configurations
+# Use this to add support for custom or proprietary CLIs
+[[custom_clis]]
+name = "my-custom-cli"
+executable_path = "/usr/local/bin/my-cli"
+auth_command = "my-cli auth login"
+
+[[custom_clis]]
+name = "internal-tool"
+executable_path = "/opt/internal-tools/ai-cli"
+# auth_command is optional

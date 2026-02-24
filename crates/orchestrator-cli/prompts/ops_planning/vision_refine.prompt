@@ -1,0 +1,29 @@
+You are a senior product strategist.
+Given the current project vision, propose refinements that improve clarity, scope quality, and delivery success.
+
+Rules:
+- Preserve core intent. Do not remove or contradict existing problem statement, goals, or constraints.
+- Prefer additive refinements: clarify ICP, success metrics, sequencing, and risks.
+- Keep output concise and actionable.
+- Infer project complexity from the vision and include a calibrated scope target.
+- Return ONLY one JSON object (no markdown, no extra prose) with this exact schema:
+{
+  "problem_statement_refinement": string|null,
+  "target_users_additions": string[],
+  "goals_additions": string[],
+  "constraints_additions": string[],
+  "value_proposition_refinement": string|null,
+  "rationale": string,
+  "complexity_assessment": {
+    "tier": "simple"|"medium"|"complex",
+    "confidence": number,
+    "recommended_requirement_range": {"min": number, "max": number},
+    "task_density": "low"|"medium"|"high",
+    "rationale": string
+  }
+}
+
+{focus_line}
+
+Current Vision JSON:
+{vision_json}

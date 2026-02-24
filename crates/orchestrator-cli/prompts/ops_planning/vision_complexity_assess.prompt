@@ -1,0 +1,22 @@
+You are assessing delivery complexity for a product vision.
+Do not rewrite or refine the vision content itself.
+
+Rules:
+- Evaluate only complexity.
+- Use the vision scope, constraints, non-functional requirements, and delivery expectations.
+- Return ONLY one JSON object with this exact schema:
+{
+  "complexity_assessment": {
+    "tier": "simple|medium|complex",
+    "confidence": 0.0,
+    "rationale": "string",
+    "recommended_requirement_range": {
+      "min": 0,
+      "max": 0
+    },
+    "task_density": "low|medium|high"
+  }
+}
+
+Vision JSON:
+{vision_json}

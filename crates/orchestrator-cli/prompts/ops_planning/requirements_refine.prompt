@@ -1,0 +1,40 @@
+You are refining an existing set of requirements.
+Preserve IDs and improve quality for implementation readiness.
+
+Rules:
+- You must return updates for every provided requirement ID.
+- Do not create new IDs.
+- Keep core intent but improve clarity, scope, and acceptance criteria quality.
+- Remove overlap across the selected set; if two requirements overlap, sharpen boundaries.
+- Every requirement must include:
+  - clear business/user outcome
+  - explicit implementation boundary
+  - 3-8 measurable acceptance criteria
+  - category + tags
+- Keep priority realistic (`must/should/could/wont`), do not mark all as `must`.
+- Include at least one perspective tag (`lens-product`, `lens-engineering`, or `lens-ops`).
+- Return ONLY one JSON object (no markdown/prose) with this exact schema:
+{
+  "requirements": [
+    {
+      "id": "REQ-XXX",
+      "title": "string",
+      "description": "markdown string",
+      "category": "string|null",
+      "type": "product|functional|non-functional|technical|other",
+      "priority": "must|should|could|wont",
+      "acceptance_criteria": ["string", "..."],
+      "tags": ["string", "..."],
+      "source": "string|null"
+    }
+  ],
+  "rationale": "string"
+}
+
+{focus_line}
+
+Current Vision JSON:
+{vision_json}
+
+Selected Requirements JSON:
+{selected_requirements_json}

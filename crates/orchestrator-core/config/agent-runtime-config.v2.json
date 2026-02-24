@@ -1,0 +1,162 @@
+{
+  "schema": "ao.agent-runtime-config.v2",
+  "version": 2,
+  "tools_allowlist": [
+    "cargo",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "pytest",
+    "go",
+    "bash",
+    "sh",
+    "make",
+    "just"
+  ],
+  "agents": {
+    "default": {
+      "description": "Default workflow phase agent profile.",
+      "system_prompt": "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
+      "tool": null,
+      "model": null,
+      "fallback_models": [],
+      "reasoning_effort": null,
+      "web_search": null,
+      "timeout_secs": null,
+      "max_attempts": null
+    },
+    "implementation": {
+      "description": "Implementation-focused coding agent profile.",
+      "system_prompt": "You are the implementation agent. Make minimal production-ready code changes and emit machine-readable completion payloads required by policy.",
+      "tool": null,
+      "model": null,
+      "fallback_models": [],
+      "reasoning_effort": null,
+      "web_search": null,
+      "timeout_secs": null,
+      "max_attempts": null
+    }
+  },
+  "phases": {
+    "default": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Execute the current workflow phase with production-quality output.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "requirements": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "research": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Gather external and codebase evidence needed to de-risk the next implementation step. Treat greenfield repositories as valid and provide assumptions/plan artifacts when source is sparse. Keep discovery targeted to first-party code and active requirement/task docs; avoid broad scans of dependency or workflow checkpoint directories. Only emit research_required for true external blockers.",
+      "runtime": {
+        "tool": null,
+        "model": null,
+        "fallback_models": [],
+        "reasoning_effort": null,
+        "web_search": true,
+        "timeout_secs": 900,
+        "max_attempts": null
+      },
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "ux-research": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "wireframe": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "mockup-review": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "implementation": {
+      "mode": "agent",
+      "agent_id": "implementation",
+      "directive": "Implement production-quality code for this task. Keep changes focused and executable.",
+      "runtime": null,
+      "output_contract": {
+        "kind": "implementation_result",
+        "required_fields": [
+          "commit_message"
+        ]
+      },
+      "output_json_schema": {
+        "type": "object",
+        "required": [
+          "kind",
+          "commit_message"
+        ],
+        "properties": {
+          "kind": {
+            "const": "implementation_result"
+          },
+          "commit_message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "command": null,
+      "manual": null
+    },
+    "code-review": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    },
+    "testing": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Add or update tests and validate behavior. Ensure failures are addressed before finishing.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null
+    }
+  }
+}

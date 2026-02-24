@@ -1,0 +1,21 @@
+[workspace]
+members = [
+  "src-tauri",
+  "agent-runner",
+  "crates/protocol",
+  "cli-wrapper",
+  "crates/orchestrator-core",
+  "crates/orchestrator-cli",
+  "crates/orchestrator-web-contracts",
+  "crates/orchestrator-web-api",
+  "crates/orchestrator-web-server",
+]
+resolver = "2"
+
+[workspace.dependencies]
+protocol = { path = "crates/protocol" }
+cli-wrapper = { path = "cli-wrapper" }
+orchestrator-core = { path = "crates/orchestrator-core" }
+orchestrator-web-contracts = { path = "crates/orchestrator-web-contracts" }
+orchestrator-web-api = { path = "crates/orchestrator-web-api" }
+orchestrator-web-server = { path = "crates/orchestrator-web-server" }

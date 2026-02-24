@@ -1,0 +1,91 @@
+{
+  "schema": "ao.agent-runtime-config.v1",
+  "version": 1,
+  "agents": {
+    "default": {
+      "description": "Default workflow phase agent profile.",
+      "system_prompt": "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
+      "tool": null,
+      "model": null,
+      "fallback_models": [],
+      "phase_directive": null,
+      "output_contract": null,
+      "output_json_schema": null
+    },
+    "implementation": {
+      "description": "Implementation-focused coding agent profile.",
+      "system_prompt": "You are the implementation agent. Make minimal production-ready code changes, preserve backward compatibility when possible, and emit machine-readable completion payloads required by policy.",
+      "tool": null,
+      "model": null,
+      "fallback_models": [],
+      "phase_directive": null,
+      "output_contract": {
+        "kind": "implementation_result",
+        "required_fields": [
+          "commit_message"
+        ]
+      },
+      "output_json_schema": {
+        "type": "object",
+        "required": [
+          "kind",
+          "commit_message"
+        ],
+        "properties": {
+          "kind": {
+            "const": "implementation_result"
+          },
+          "commit_message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "phase_agent_bindings": {
+    "default": "default",
+    "implementation": "implementation"
+  },
+  "phase_directives": {
+    "requirements": "Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.",
+    "ux-research": "Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.",
+    "wireframe": "Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.",
+    "mockup-review": "Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.",
+    "implementation": "Implement production-quality code for this task. Keep changes focused and executable.",
+    "code-review": "Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.",
+    "testing": "Add or update tests and validate behavior. Ensure failures are addressed before finishing.",
+    "default": "Execute the current workflow phase with production-quality output."
+  },
+  "phase_output_contracts": {
+    "implementation": {
+      "kind": "implementation_result",
+      "required_fields": [
+        "commit_message"
+      ]
+    }
+  },
+  "structured_output": {
+    "phase_ids": [
+      "review",
+      "manual-review",
+      "code-review",
+      "security-audit",
+      "po-review",
+      "em-review",
+      "rework-review",
+      "task-generation",
+      "mockup"
+    ],
+    "phase_id_contains": [
+      "review",
+      "audit"
+    ],
+    "allowed_tools": [
+      "claude",
+      "codex"
+    ],
+    "default_tool": "claude"
+  }
+}

@@ -1,0 +1,1751 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Agent Orchestrator Web API",
+    "version": "0.1.0",
+    "description": "HTTP API served by `ao web serve`"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4173",
+      "description": "Local default"
+    }
+  ],
+  "tags": [
+    {
+      "name": "System"
+    },
+    {
+      "name": "Events"
+    },
+    {
+      "name": "Daemon"
+    },
+    {
+      "name": "Projects"
+    },
+    {
+      "name": "Requirements"
+    },
+    {
+      "name": "Tasks"
+    },
+    {
+      "name": "Workflows"
+    },
+    {
+      "name": "Meta"
+    },
+    {
+      "name": "Reviews"
+    }
+  ],
+  "paths": {
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "Meta"
+        ],
+        "summary": "OpenAPI specification",
+        "responses": {
+          "200": {
+            "description": "OpenAPI JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs": {
+      "get": {
+        "tags": [
+          "Meta"
+        ],
+        "summary": "Swagger UI documentation page",
+        "responses": {
+          "200": {
+            "description": "HTML page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/info": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "System and runtime info",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Daemon events stream (SSE)",
+        "responses": {
+          "200": {
+            "description": "SSE stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/status": {
+      "get": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Daemon status",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/health": {
+      "get": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Daemon health",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/logs": {
+      "get": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Daemon logs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Clear daemon logs",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/start": {
+      "post": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Start daemon",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/stop": {
+      "post": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Stop daemon",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/pause": {
+      "post": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Pause daemon",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/resume": {
+      "post": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Resume daemon",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/daemon/agents": {
+      "get": {
+        "tags": [
+          "Daemon"
+        ],
+        "summary": "Active agent count",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List projects",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Create project",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "path"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "project_type": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "tech_stack": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/active": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Active project",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Get project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Rename project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Delete project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/load": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Load project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/archive": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Archive project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/project-requirements": {
+      "get": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "List requirements across projects",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/project-requirements/{id}": {
+      "get": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Get requirement snapshot for one project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/project-requirements/{project_id}/{requirement_id}": {
+      "get": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Get a requirement with markdown payload",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectRequirementProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/RequirementId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/requirements": {
+      "get": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "List requirements for active project",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/requirements/{id}": {
+      "get": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Get requirement for active project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequirementId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "List tasks",
+        "parameters": [
+          {
+            "name": "task_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "risk",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assignee_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "linked_requirement",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Create task",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "task_type": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "linked_requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/prioritized": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "List prioritized tasks",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/next": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Get next task",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/stats": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Task statistics",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}": {
+      "get": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Get task",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Update task",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "assignee": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  },
+                  "deadline": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Delete task",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/status": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Update task status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/assign-agent": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Assign task to agent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/assign-human": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Assign task to human",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "user_id"
+                ],
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/checklist": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Add checklist item",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "description"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/checklist/{item_id}": {
+      "patch": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Update checklist item",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          },
+          {
+            "$ref": "#/components/parameters/ChecklistItemId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "completed"
+                ],
+                "properties": {
+                  "completed": {
+                    "type": "boolean"
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/dependencies": {
+      "post": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Add task dependency",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "dependency_id",
+                  "dependency_type"
+                ],
+                "properties": {
+                  "dependency_id": {
+                    "type": "string"
+                  },
+                  "dependency_type": {
+                    "type": "string"
+                  },
+                  "updated_by": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/dependencies/{dependency_id}": {
+      "delete": {
+        "tags": [
+          "Tasks"
+        ],
+        "summary": "Remove task dependency",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          },
+          {
+            "$ref": "#/components/parameters/DependencyId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "List workflows",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/run": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Start workflow",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "task_id"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string"
+                  },
+                  "pipeline_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Get workflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/decisions": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Workflow decision history",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/checkpoints": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Workflow checkpoints",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/checkpoints/{checkpoint}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Get workflow checkpoint",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          },
+          {
+            "name": "checkpoint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/resume": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Resume workflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/pause": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Pause workflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Cancel workflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkflowId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/reviews/handoff": {
+      "post": {
+        "tags": [
+          "Reviews"
+        ],
+        "summary": "Request review handoff",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "run_id",
+                  "target_role",
+                  "question"
+                ],
+                "properties": {
+                  "handoff_id": {
+                    "type": "string"
+                  },
+                  "run_id": {
+                    "type": "string"
+                  },
+                  "target_role": {
+                    "type": "string",
+                    "description": "Target reviewer role: em or po"
+                  },
+                  "question": {
+                    "type": "string"
+                  },
+                  "context": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/tasks": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List tasks for project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "name": "task_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "risk",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assignee_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "linked_requirement",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/workflows": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List workflows for project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ProjectId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ProjectRequirementProjectId": {
+        "name": "project_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RequirementId": {
+        "name": "requirement_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "TaskId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ChecklistItemId": {
+        "name": "item_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "DependencyId": {
+        "name": "dependency_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "WorkflowId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "CliSuccessEnvelope": {
+        "type": "object",
+        "required": [
+          "schema",
+          "ok",
+          "data"
+        ],
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "ao.cli.v1"
+          },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {}
+        }
+      },
+      "CliErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "schema",
+          "ok",
+          "error"
+        ],
+        "properties": {
+          "schema": {
+            "type": "string",
+            "const": "ao.cli.v1"
+          },
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "exit_code"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "exit_code": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "CliSuccessEnvelope": {
+        "description": "Success envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CliSuccessEnvelope"
+            }
+          }
+        }
+      },
+      "CliErrorEnvelope": {
+        "description": "Error envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CliErrorEnvelope"
+            }
+          }
+        }
+      }
+    }
+  }
+}

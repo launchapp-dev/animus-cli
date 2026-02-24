@@ -1,0 +1,19 @@
+# Cargo Configuration for Agent Orchestrator
+
+[build]
+# Use shared target directory to save disk space
+# All worktrees will share this cache
+# target-dir = "/Users/samishukri/.cargo-target-cache"
+
+# Uncomment the line above to enable shared target directory.
+# This will save significant disk space but may cause conflicts
+# if building in multiple worktrees simultaneously.
+
+# For now, keeping separate targets per worktree.
+# Use scripts/cleanup-worktree-builds.sh regularly to prevent buildup.
+
+[alias]
+# Useful aliases for worktree development
+wt-clean = "clean --manifest-path"
+wt-build = "build --manifest-path"
+wt-test = "test --manifest-path"
