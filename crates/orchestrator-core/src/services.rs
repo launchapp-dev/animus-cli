@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
@@ -289,6 +290,58 @@ impl FileServiceHub {
         safe
     }
 
+    fn sanitize_identifier(value: &str) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            match ch {
+                'a'..='z' | 'A'..='Z' | '0'..='9' => out.push(ch.to_ascii_lowercase()),
+                ' ' | '_' | '-' => out.push('-'),
+                _ => {}
+            }
+        }
+
+        while out.contains("--") {
+            out = out.replace("--", "-");
+        }
+        out = out.trim_matches('-').to_string();
+        if out.is_empty() {
+            "repo".to_string()
+        } else {
+            out
+        }
+    }
+
+    fn repository_scope_for_path(path: &Path) -> String {
+        let canonical = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        let repo_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(Self::sanitize_identifier)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "repo".to_string());
+
+        let mut hasher = Sha256::new();
+        hasher.update(canonical.as_bytes());
+        let digest = hasher.finalize();
+        let suffix = format!(
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
+        );
+
+        format!("{repo_name}-{suffix}")
+    }
+
+    fn index_root_for_state_file(path: &Path) -> Option<PathBuf> {
+        let project_root = path.parent()?.parent()?;
+        let home = dirs::home_dir()?;
+        Some(home.join(".ao").join("index").join(Self::repository_scope_for_path(project_root)))
+    }
+
     fn legacy_requirement_status(status: RequirementStatus) -> &'static str {
         match status {
             RequirementStatus::Draft | RequirementStatus::Refined | RequirementStatus::Planned => {
@@ -395,8 +448,12 @@ impl FileServiceHub {
             "requirements": index_entries,
             "traceability": traceability,
         });
+        let index_root = Self::index_root_for_state_file(path)
+            .ok_or_else(|| anyhow!("failed to resolve AO index directory"))?;
+        std::fs::create_dir_all(index_root.join("requirements"))?;
+        let requirements_index = index_root.join("requirements").join("index.json");
         std::fs::write(
-            requirements_dir.join("index.json"),
+            requirements_index,
             serde_json::to_string_pretty(&index_payload)?,
         )?;
 
@@ -480,8 +537,12 @@ impl FileServiceHub {
             "last_sequence": last_sequence,
             "tasks": index_entries,
         });
+        let index_dir = Self::index_root_for_state_file(path)
+            .ok_or_else(|| anyhow!("failed to resolve AO index directory"))?
+            .join("tasks");
+        std::fs::create_dir_all(&index_dir)?;
         std::fs::write(
-            tasks_dir.join("index.json"),
+            index_dir.join("index.json"),
             serde_json::to_string_pretty(&index_payload)?,
         )?;
 

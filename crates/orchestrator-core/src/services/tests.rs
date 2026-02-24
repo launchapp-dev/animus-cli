@@ -1,5 +1,60 @@
 use super::*;
 use crate::types::{RequirementPriority, WorkflowStatus};
+use sha2::{Digest, Sha256};
+
+fn sanitize_identifier(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => out.push(ch.to_ascii_lowercase()),
+            ' ' | '_' | '-' => out.push('-'),
+            _ => {}
+        }
+    }
+
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "repo".to_string()
+    } else {
+        out
+    }
+}
+
+fn repository_scope_for_path(path: &std::path::Path) -> String {
+    let canonical = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    let repo_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(sanitize_identifier)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    let digest = hasher.finalize();
+    let suffix = format!(
+        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
+    );
+
+    format!("{repo_name}-{suffix}")
+}
+
+fn global_requirements_index_dir(project_root: &std::path::Path) -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("home dir available");
+    home.join(".ao")
+        .join("index")
+        .join(repository_scope_for_path(project_root))
+        .join("requirements")
+}
 
 #[tokio::test]
 async fn file_hub_persists_projects_with_rich_payload() {
@@ -1139,11 +1194,7 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
         Some(requirement_id.as_str())
     );
 
-    let requirement_index_path = temp
-        .path()
-        .join(".ao")
-        .join("requirements")
-        .join("index.json");
+    let requirement_index_path = global_requirements_index_dir(temp.path()).join("index.json");
     assert!(requirement_index_path.exists());
 
     let task_file_path = temp
