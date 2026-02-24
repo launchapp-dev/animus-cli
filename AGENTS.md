@@ -299,9 +299,19 @@ To keep AO focused on the current repo only:
 - Always pass explicit root in scripts/automation:
   - `cargo run -p orchestrator-cli -- --project-root "$(pwd)" ...`
 - Run daemon with registry disabled:
-  - `ao daemon run --include-registry false ...`
+- `ao daemon run --include-registry false ...`
   - `ao daemon start --include-registry false ...`
 - Treat this repo as the only managed scope for work in this session.
+
+## CLI-Only `.ao` Mutation Policy
+
+`/.ao` is repository state and must be changed through `ao` commands only.
+
+- Required: use `ao vision ...`, `ao requirements ...`, `ao task ...`, `ao workflow ...`, and related `ao` subcommands for all state changes.
+- Prohibited: direct manual edits to `/.ao/*.json` (including `core-state`, requirements/task entity files, and state files).
+- Exception: explicit migration tooling or code-level persistence changes in AO itself, where file-shape changes are the subject of the task.
+- When automating, always pass explicit root:
+  - `cargo run -p orchestrator-cli -- --project-root \"$(pwd)\" ...`
 
 ## Agent Task Logging and Parallel Work Execution Policy
 
