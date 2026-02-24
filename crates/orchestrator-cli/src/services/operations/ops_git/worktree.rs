@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 
 use super::model::GitSyncStatusCli;
 use super::store::{
-    ensure_force_confirmation, load_worktrees, resolve_repo_path, resolve_worktree_path, run_git,
+    ensure_confirmation, load_worktrees, resolve_repo_path, resolve_worktree_path, run_git,
 };
 
 pub(super) fn handle_git_worktree(
@@ -51,18 +51,40 @@ pub(super) fn handle_git_worktree(
         }
         GitWorktreeCommand::Remove(args) => {
             let repo_path = resolve_repo_path(project_root, &args.repo)?;
-            if args.force {
-                ensure_force_confirmation(project_root, args.confirmation_id.as_deref())?;
-            }
+            let worktree_path = resolve_worktree_path(&repo_path, &args.worktree_name)?;
             let mut cmd = vec!["worktree", "remove", args.worktree_name.as_str()];
             if args.force {
                 cmd.push("--force");
             }
+            if args.dry_run {
+                return print_value(
+                    serde_json::json!({
+                        "action": "git.worktree.remove",
+                        "dry_run": true,
+                        "destructive": true,
+                        "repo": args.repo,
+                        "repo_path": repo_path.display().to_string(),
+                        "worktree_name": args.worktree_name,
+                        "worktree_path": worktree_path.display().to_string(),
+                        "force": args.force,
+                        "requires_confirmation": true,
+                        "command": cmd,
+                    }),
+                    json,
+                );
+            }
+            ensure_confirmation(
+                project_root,
+                args.confirmation_id.as_deref(),
+                "remove_worktree",
+                &args.repo,
+            )?;
             let output = run_git(&repo_path, &cmd)?;
             print_value(
                 serde_json::json!({
                     "repo": args.repo,
                     "worktree_name": args.worktree_name,
+                    "worktree_path": worktree_path.display().to_string(),
                     "force": args.force,
                     "output": output,
                 }),
@@ -86,13 +108,36 @@ pub(super) fn handle_git_worktree(
         GitWorktreeCommand::Push(args) => {
             let repo_path = resolve_repo_path(project_root, &args.repo)?;
             let worktree_path = resolve_worktree_path(&repo_path, &args.worktree_name)?;
-            if args.force {
-                ensure_force_confirmation(project_root, args.confirmation_id.as_deref())?;
-            }
             let branch = run_git(&worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
             let mut cmd = vec!["push", args.remote.as_str(), branch.trim()];
             if args.force {
                 cmd.push("--force");
+            }
+            if args.dry_run {
+                return print_value(
+                    serde_json::json!({
+                        "action": "git.worktree.push",
+                        "dry_run": true,
+                        "destructive": args.force,
+                        "repo": args.repo,
+                        "worktree_name": args.worktree_name,
+                        "worktree_path": worktree_path.display().to_string(),
+                        "remote": args.remote,
+                        "branch": branch.trim(),
+                        "force": args.force,
+                        "requires_confirmation": args.force,
+                        "command": cmd,
+                    }),
+                    json,
+                );
+            }
+            if args.force {
+                ensure_confirmation(
+                    project_root,
+                    args.confirmation_id.as_deref(),
+                    "force_push",
+                    &args.repo,
+                )?;
             }
             let output = run_git(&worktree_path, &cmd)?;
             print_value(

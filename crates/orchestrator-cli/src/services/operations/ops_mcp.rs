@@ -71,6 +71,10 @@ struct TaskGetInput {
 struct TaskDeleteInput {
     id: String,
     #[serde(default)]
+    confirm: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
     project_root: Option<String>,
 }
 
@@ -289,7 +293,7 @@ impl AoMcpServer {
         params: Parameters<TaskDeleteInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = build_task_delete_args(input.id);
+        let args = build_task_delete_args(input.id, input.confirm, input.dry_run);
         self.run_tool("ao.task.delete", args, input.project_root)
             .await
     }
@@ -414,13 +418,21 @@ fn build_task_get_args(id: String) -> Vec<String> {
     ]
 }
 
-fn build_task_delete_args(id: String) -> Vec<String> {
-    vec![
+fn build_task_delete_args(id: String, confirm: Option<String>, dry_run: bool) -> Vec<String> {
+    let mut args = vec![
         "task".to_string(),
         "delete".to_string(),
         "--id".to_string(),
         id,
-    ]
+    ];
+    if let Some(confirm) = confirm {
+        args.push("--confirm".to_string());
+        args.push(confirm);
+    }
+    if dry_run {
+        args.push("--dry-run".to_string());
+    }
+    args
 }
 
 fn build_task_control_args(action: &str, task_id: String) -> Vec<String> {
@@ -469,7 +481,7 @@ mod tests {
 
     #[test]
     fn build_task_delete_args_includes_id() {
-        let args = build_task_delete_args("task-123".to_string());
+        let args = build_task_delete_args("task-123".to_string(), None, false);
         assert_eq!(
             args,
             vec![
@@ -477,6 +489,24 @@ mod tests {
                 "delete".to_string(),
                 "--id".to_string(),
                 "task-123".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn build_task_delete_args_supports_confirmation_and_dry_run() {
+        let args =
+            build_task_delete_args("task-123".to_string(), Some("task-123".to_string()), true);
+        assert_eq!(
+            args,
+            vec![
+                "task".to_string(),
+                "delete".to_string(),
+                "--id".to_string(),
+                "task-123".to_string(),
+                "--confirm".to_string(),
+                "task-123".to_string(),
+                "--dry-run".to_string(),
             ]
         );
     }

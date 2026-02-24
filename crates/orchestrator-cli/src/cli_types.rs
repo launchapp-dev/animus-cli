@@ -374,7 +374,7 @@ pub(crate) enum TaskCommand {
     Get(IdArgs),
     Create(TaskCreateArgs),
     Update(TaskUpdateArgs),
-    Delete(IdArgs),
+    Delete(TaskDeleteArgs),
     Assign(TaskAssignArgs),
     AssignAgent(TaskAssignAgentArgs),
     AssignHuman(TaskAssignHumanArgs),
@@ -441,6 +441,16 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) replace_linked_architecture_entities: bool,
     #[arg(long)]
     pub(crate) input_json: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskDeleteArgs {
+    #[arg(long)]
+    pub(crate) id: String,
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -537,8 +547,8 @@ pub(crate) enum WorkflowCommand {
     Run(WorkflowRunArgs),
     Resume(IdArgs),
     ResumeStatus(IdArgs),
-    Pause(IdArgs),
-    Cancel(IdArgs),
+    Pause(WorkflowPauseArgs),
+    Cancel(WorkflowCancelArgs),
     Phase {
         #[command(subcommand)]
         command: WorkflowPhaseCommand,
@@ -1247,7 +1257,7 @@ pub(crate) struct ErrorsCleanupArgs {
 pub(crate) enum TaskControlCommand {
     Pause(TaskIdArgs),
     Resume(TaskIdArgs),
-    Cancel(TaskIdArgs),
+    Cancel(TaskControlCancelArgs),
     SetPriority(TaskControlPriorityArgs),
     SetDeadline(TaskControlDeadlineArgs),
 }
@@ -1256,6 +1266,16 @@ pub(crate) enum TaskControlCommand {
 pub(crate) struct TaskIdArgs {
     #[arg(long)]
     pub(crate) task_id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskControlCancelArgs {
+    #[arg(long)]
+    pub(crate) task_id: String,
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1347,6 +1367,8 @@ pub(crate) struct GitPushArgs {
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) confirmation_id: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1403,6 +1425,8 @@ pub(crate) struct GitWorktreeRemoveArgs {
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) confirmation_id: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1427,6 +1451,8 @@ pub(crate) struct GitWorktreePushArgs {
     pub(crate) force: bool,
     #[arg(long)]
     pub(crate) confirmation_id: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1645,6 +1671,26 @@ pub(crate) struct WorkflowRunArgs {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct WorkflowPauseArgs {
+    #[arg(long)]
+    pub(crate) id: String,
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowCancelArgs {
+    #[arg(long)]
+    pub(crate) id: String,
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseApproveArgs {
     #[arg(long)]
     pub(crate) id: String,
@@ -1672,6 +1718,10 @@ pub(crate) struct WorkflowPhaseUpsertArgs {
 pub(crate) struct WorkflowPhaseRemoveArgs {
     #[arg(long)]
     pub(crate) phase: String,
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

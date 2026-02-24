@@ -148,6 +148,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 
 - Desktop-wrapper GUI code is intentionally excluded from this workspace.
 - Web UI planning and implementation notes for the web server live in `crates/orchestrator-web-server/docs/` (current artifact: `task-011-react-shell-requirements.md`).
+- CLI destructive safety planning artifacts for TASK-009 live in `crates/orchestrator-cli/docs/`:
+  - `task-009-destructive-command-requirements.md`
+  - `task-009-destructive-command-implementation-notes.md`
 - Runtime tracking files live under `.ao/`.
 - Do not hand-edit `.ao/state/*`; use `ao` commands for changes.
 - Daemon-managed git worktrees are created under:

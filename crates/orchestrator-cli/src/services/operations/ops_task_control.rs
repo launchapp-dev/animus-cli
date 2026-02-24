@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{services::ServiceHub, TaskStatus};
 
-use crate::{parse_priority_opt, print_value, TaskControlCommand};
+use crate::{ensure_destructive_confirmation, parse_priority_opt, print_value, TaskControlCommand};
 
 pub(crate) async fn handle_task_control(
     command: TaskControlCommand,
@@ -71,6 +71,27 @@ pub(crate) async fn handle_task_control(
                     json,
                 );
             }
+            if args.dry_run {
+                return print_value(
+                    serde_json::json!({
+                        "action": "task-control.cancel",
+                        "dry_run": true,
+                        "destructive": true,
+                        "task": {
+                            "task_id": task.id,
+                            "status": task.status,
+                            "paused": task.paused,
+                            "cancelled": task.cancelled,
+                        },
+                    }),
+                    json,
+                );
+            }
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.task_id,
+                "task-control cancel",
+            )?;
             task.cancelled = true;
             task.status = TaskStatus::Cancelled;
             task.metadata.updated_by = "ao-cli".to_string();

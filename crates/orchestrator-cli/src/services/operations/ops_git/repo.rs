@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 
 use super::model::GitRepoRefCli;
 use super::store::{
-    ensure_force_confirmation, load_git_repo_registry, repos_root, resolve_repo_path, run_git,
+    ensure_confirmation, load_git_repo_registry, repos_root, resolve_repo_path, run_git,
     save_git_repo_registry,
 };
 
@@ -150,12 +150,34 @@ pub(super) fn handle_git_commit(args: GitCommitArgs, project_root: &str, json: b
 
 pub(super) fn handle_git_push(args: GitPushArgs, project_root: &str, json: bool) -> Result<()> {
     let repo_path = resolve_repo_path(project_root, &args.repo)?;
-    if args.force {
-        ensure_force_confirmation(project_root, args.confirmation_id.as_deref())?;
-    }
     let mut cmd = vec!["push", args.remote.as_str(), args.branch.as_str()];
     if args.force {
         cmd.push("--force");
+    }
+    if args.dry_run {
+        return print_value(
+            serde_json::json!({
+                "action": "git.push",
+                "dry_run": true,
+                "destructive": args.force,
+                "repo": args.repo,
+                "repo_path": repo_path.display().to_string(),
+                "remote": args.remote,
+                "branch": args.branch,
+                "force": args.force,
+                "requires_confirmation": args.force,
+                "command": cmd,
+            }),
+            json,
+        );
+    }
+    if args.force {
+        ensure_confirmation(
+            project_root,
+            args.confirmation_id.as_deref(),
+            "force_push",
+            &args.repo,
+        )?;
     }
     let output = run_git(&repo_path, &cmd)?;
     print_value(

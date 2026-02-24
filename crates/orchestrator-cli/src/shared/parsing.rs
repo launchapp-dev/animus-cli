@@ -18,6 +18,28 @@ where
     }
 }
 
+pub(crate) fn ensure_destructive_confirmation(
+    confirm: Option<&str>,
+    expected: &str,
+    action: &str,
+) -> Result<()> {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        anyhow::bail!("invalid confirmation token for {action}");
+    }
+
+    let provided = confirm.map(str::trim).filter(|value| !value.is_empty());
+    if provided == Some(expected) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "CONFIRMATION_REQUIRED: rerun '{}' with --confirm {} or use --dry-run for a preview",
+        action,
+        expected
+    );
+}
+
 pub(crate) fn read_agent_status(
     project_root: &str,
     run_id: &str,
@@ -218,5 +240,21 @@ mod tests {
     fn parse_project_type_rejects_unknown_values() {
         let err = parse_project_type_opt(Some("nonsense")).expect_err("unknown value should fail");
         assert!(err.to_string().contains("invalid project_type"));
+    }
+
+    #[test]
+    fn destructive_confirmation_accepts_matching_token() {
+        ensure_destructive_confirmation(Some("TASK-123"), "TASK-123", "task.delete")
+            .expect("matching token should pass");
+    }
+
+    #[test]
+    fn destructive_confirmation_requires_exact_token() {
+        let error = ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task.delete")
+            .expect_err("mismatched token should fail");
+        let message = error.to_string();
+        assert!(message.contains("CONFIRMATION_REQUIRED"));
+        assert!(message.contains("--confirm TASK-123"));
+        assert!(message.contains("--dry-run"));
     }
 }
