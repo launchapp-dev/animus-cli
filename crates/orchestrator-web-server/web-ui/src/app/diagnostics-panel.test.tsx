@@ -110,4 +110,50 @@ describe("DiagnosticsPanel", () => {
 
     expect(screen.getByText("No diagnostics failures available.")).toBeTruthy();
   });
+
+  it("shows manual-copy fallback when clipboard API is unavailable", async () => {
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+
+    recordTelemetryEvent({
+      eventType: "request_failure",
+      timestamp: "2026-02-25T11:00:00.000Z",
+      correlationId: "cid-daemon-fallback",
+      method: "POST",
+      path: "/api/v1/daemon/stop",
+      action: "daemon.stop",
+      durationMs: 17,
+      request: {
+        headers: {
+          "x-ao-correlation-id": "cid-daemon-fallback",
+        },
+        query: {},
+      },
+      error: {
+        code: "unavailable",
+        message: "runner disconnected",
+        exitCode: 5,
+      },
+    });
+
+    render(<DiagnosticsPanel title="Daemon Diagnostics" actionPrefixes={["daemon."]} />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show diagnostics for daemon.stop failure",
+      }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy correlation ID for daemon.stop failure",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Copy unavailable. Select the value manually.")).toBeTruthy();
+    });
+  });
 });

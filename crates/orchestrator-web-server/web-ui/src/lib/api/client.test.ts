@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, requestAo } from "./client";
 import {
+  listTelemetryEvents,
   listFailedTelemetryEvents,
+  REDACTED_VALUE,
   resetCorrelationSequenceForTests,
   resetTelemetryStoreForTests,
 } from "../telemetry";
@@ -166,6 +168,102 @@ describe("requestAo", () => {
       request: {
         body: {
           token: "[REDACTED]",
+        },
+      },
+    });
+  });
+
+  it("emits request_start and request_success telemetry with canonical correlation and redaction", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        okEnvelope({
+          taskId: "TASK-019",
+          token: "server-secret",
+        }),
+        {
+          status: 201,
+          headers: {
+            "Set-Cookie": "session=secret",
+            "X-AO-Correlation-ID": "server-cid-9",
+          },
+        },
+      ),
+    );
+
+    const result = await requestAo<{ taskId: string; token: string }>(
+      "/api/v1/tasks?mode=sync&token=super-secret",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer hidden",
+        },
+        body: JSON.stringify({
+          password: "top-secret",
+          title: "Structured observability",
+        }),
+      },
+      undefined,
+      {
+        actionName: "tasks.create",
+        correlationId: "  client-cid-1  ",
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "ok",
+      data: {
+        taskId: "TASK-019",
+        token: "server-secret",
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-AO-Correlation-ID")).toBe("client-cid-1");
+
+    const events = listTelemetryEvents();
+    expect(events).toHaveLength(2);
+
+    expect(events[0]).toMatchObject({
+      eventType: "request_start",
+      action: "tasks.create",
+      correlationId: "client-cid-1",
+      method: "POST",
+      path: "/api/v1/tasks",
+      request: {
+        headers: {
+          authorization: REDACTED_VALUE,
+          "x-ao-correlation-id": "client-cid-1",
+        },
+        query: {
+          mode: "sync",
+          token: REDACTED_VALUE,
+        },
+        body: {
+          password: REDACTED_VALUE,
+          title: "Structured observability",
+        },
+      },
+    });
+
+    expect(events[1]).toMatchObject({
+      eventType: "request_success",
+      action: "tasks.create",
+      correlationId: "server-cid-9",
+      httpStatus: 201,
+      response: {
+        headers: {
+          "set-cookie": REDACTED_VALUE,
+          "x-ao-correlation-id": "server-cid-9",
+        },
+        body: {
+          data: {
+            taskId: "TASK-019",
+            token: REDACTED_VALUE,
+          },
+          ok: true,
+          schema: "ao.cli.v1",
         },
       },
     });
