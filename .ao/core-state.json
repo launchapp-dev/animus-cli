@@ -506,115 +506,6 @@
     }
   },
   "tasks": {
-    "TASK-002": {
-      "id": "TASK-002",
-      "title": "Audit and polish CLI help and error messages",
-      "description": "Review core command groups and align output style, argument clarity, and actionable validation errors.",
-      "type": "refactor",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-002"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "cli",
-        "ux"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:43.577231Z",
-        "updated_at": "2026-02-24T17:25:43.577231Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-017": {
-      "id": "TASK-017",
-      "title": "Implement accessibility, responsive, and performance baselines",
-      "description": "Deliver keyboard navigation, semantic accessibility, responsive layouts, and core route performance budgets.",
-      "type": "chore",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.244521Z",
-        "updated_at": "2026-02-24T20:06:43.244521Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
     "TASK-016": {
       "id": "TASK-016",
       "title": "Add high-risk action safeguards in web UI",
@@ -652,437 +543,6 @@
       "metadata": {
         "created_at": "2026-02-24T20:06:43.203941Z",
         "updated_at": "2026-02-24T20:06:43.203941Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-009": {
-      "id": "TASK-009",
-      "title": "Harden confirmations and dry-run behavior for destructive commands",
-      "description": "Audit git/task/workflow destructive flows and align confirmation plus preview behavior.",
-      "type": "feature",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-009",
-      "branch_name": "ao/task-009",
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.858759Z",
-        "updated_at": "2026-02-25T02:05:50.112288Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-24T22:55:46.775066Z",
-        "completed_at": "2026-02-25T02:05:50.112285Z",
-        "version": 8
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-003": {
-      "id": "TASK-003",
-      "title": "Add runner lifecycle regression tests",
-      "description": "Cover startup, health-check fallback, stale lock cleanup, and shutdown for agent-runner workflows.",
-      "type": "test",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-003"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "runner",
-        "reliability"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:44.332649Z",
-        "updated_at": "2026-02-24T17:25:44.332649Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-013": {
-      "id": "TASK-013",
-      "title": "Build vision/requirements planning workspace UI",
-      "description": "Implement authoring, refinement, list/detail, and deep-link flows for planning surfaces.",
-      "type": "feature",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:47:55.588931Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-013",
-      "branch_name": "ao/task-013",
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.079556Z",
-        "updated_at": "2026-02-25T04:47:55.588947Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.513365Z",
-        "completed_at": null,
-        "version": 19
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-007": {
-      "id": "TASK-007",
-      "title": "Implement dependency policy checks for Rust-only guardrail",
-      "description": "Add automated policy checks and docs updates to enforce Rust-only dependency boundaries.",
-      "type": "chore",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:03:13.095459Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-007",
-      "branch_name": "ao/task-007",
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.630741Z",
-        "updated_at": "2026-02-25T04:03:13.095527Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.612244Z",
-        "completed_at": null,
-        "version": 13
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-001": {
-      "id": "TASK-001",
-      "title": "Write self-hosting docs and conventions",
-      "description": "Update root README and add AGENTS.md with operating rules for self-managed development.",
-      "type": "docs",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-001"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "self-hosting",
-        "docs"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:42.658460Z",
-        "updated_at": "2026-02-24T17:27:16.724507Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": "2026-02-24T17:26:10.916940Z",
-        "completed_at": "2026-02-24T17:27:16.724507Z",
-        "version": 3
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-006": {
-      "id": "TASK-006",
-      "title": "Draft multi-binary release pipeline",
-      "description": "Define artifact matrix and automate build outputs for ao, agent-runner, llm-cli-wrapper, llm-mcp-server.",
-      "type": "chore",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-006"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "release",
-        "packaging"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:46.402288Z",
-        "updated_at": "2026-02-24T17:25:46.402288Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-019": {
-      "id": "TASK-019",
-      "title": "Implement structured observability and diagnostics panel",
-      "description": "Add client telemetry pipeline, redaction policy, correlation IDs, and diagnostics UI for failed actions.",
-      "type": "feature",
-      "status": "in-progress",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-019",
-      "branch_name": "ao/task-019",
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.324702Z",
-        "updated_at": "2026-02-25T15:08:04.504829Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": "2026-02-25T15:04:44.362764Z",
-        "completed_at": null,
-        "version": 4
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-015": {
-      "id": "TASK-015",
-      "title": "Implement run telemetry stream and artifact inspector",
-      "description": "Build real-time/poll fallback event viewer, JSONL search/filter, and artifact browsing/download UX.",
-      "type": "feature",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.164853Z",
-        "updated_at": "2026-02-24T20:06:43.164853Z",
         "created_by": "ao-cli",
         "updated_by": "ao-cli",
         "started_at": null,
@@ -1150,6 +610,115 @@
         "requires_network": true
       }
     },
+    "TASK-015": {
+      "id": "TASK-015",
+      "title": "Implement run telemetry stream and artifact inspector",
+      "description": "Build real-time/poll fallback event viewer, JSONL search/filter, and artifact browsing/download UX.",
+      "type": "feature",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.164853Z",
+        "updated_at": "2026-02-24T20:06:43.164853Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-001": {
+      "id": "TASK-001",
+      "title": "Write self-hosting docs and conventions",
+      "description": "Update root README and add AGENTS.md with operating rules for self-managed development.",
+      "type": "docs",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-001"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "self-hosting",
+        "docs"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:42.658460Z",
+        "updated_at": "2026-02-24T17:27:16.724507Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": "2026-02-24T17:26:10.916940Z",
+        "completed_at": "2026-02-24T17:27:16.724507Z",
+        "version": 3
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
     "TASK-010": {
       "id": "TASK-010",
       "title": "Add traceability checks for run/event persistence and lookup",
@@ -1187,172 +756,6 @@
       "metadata": {
         "created_at": "2026-02-24T19:48:30.979576Z",
         "updated_at": "2026-02-24T19:48:30.979576Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-020": {
-      "id": "TASK-020",
-      "title": "Implement architecture graph and task linkage",
-      "description": "Add architecture entities/edges graph and connect tasks to architecture IDs",
-      "type": "feature",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-020"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "architecture",
-        "task-routing"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:08:57.567221Z",
-        "updated_at": "2026-02-24T20:19:58.529316Z",
-        "created_by": "codex",
-        "updated_by": "codex",
-        "started_at": "2026-02-24T20:09:02.417037Z",
-        "completed_at": "2026-02-24T20:19:58.529314Z",
-        "version": 3
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-005": {
-      "id": "TASK-005",
-      "title": "Add CI workflow for Rust-only workspace",
-      "description": "Run package-level cargo checks and smoke help commands for ao and llm-cli-wrapper in CI.",
-      "type": "chore",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-005"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "ci",
-        "quality"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:45.713215Z",
-        "updated_at": "2026-02-24T17:25:45.713215Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-014": {
-      "id": "TASK-014",
-      "title": "Build task/workflow control center interface",
-      "description": "Implement queue, state transitions, workflow controls, phase timeline, and gating UX.",
-      "type": "feature",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.121717Z",
-        "updated_at": "2026-02-24T20:06:43.121717Z",
         "created_by": "ao-cli",
         "updated_by": "ao-cli",
         "started_at": null,
@@ -1529,58 +932,6 @@
         "requires_network": true
       }
     },
-    "TASK-008": {
-      "id": "TASK-008",
-      "title": "Add contract tests for JSON output envelope stability",
-      "description": "Create regression tests validating envelope schema and error code mappings across representative commands.",
-      "type": "test",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:04:04.388862Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-008",
-      "branch_name": "ao/task-008",
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.745668Z",
-        "updated_at": "2026-02-25T04:04:04.388876Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.572358Z",
-        "completed_at": null,
-        "version": 13
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
     "TASK-021": {
       "id": "TASK-021",
       "title": "Scaffold ao tui command and MVP dashboard",
@@ -1661,6 +1012,655 @@
         "max_memory_mb": null,
         "requires_network": true
       }
+    },
+    "TASK-019": {
+      "id": "TASK-019",
+      "title": "Implement structured observability and diagnostics panel",
+      "description": "Add client telemetry pipeline, redaction policy, correlation IDs, and diagnostics UI for failed actions.",
+      "type": "feature",
+      "status": "in-progress",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-019",
+      "branch_name": "ao/task-019",
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.324702Z",
+        "updated_at": "2026-02-25T15:08:04.504829Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": "2026-02-25T15:04:44.362764Z",
+        "completed_at": null,
+        "version": 4
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-013": {
+      "id": "TASK-013",
+      "title": "Build vision/requirements planning workspace UI",
+      "description": "Implement authoring, refinement, list/detail, and deep-link flows for planning surfaces.",
+      "type": "feature",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:47:55.588931Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-013",
+      "branch_name": "ao/task-013",
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.079556Z",
+        "updated_at": "2026-02-25T04:47:55.588947Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.513365Z",
+        "completed_at": null,
+        "version": 19
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-009": {
+      "id": "TASK-009",
+      "title": "Harden confirmations and dry-run behavior for destructive commands",
+      "description": "Audit git/task/workflow destructive flows and align confirmation plus preview behavior.",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-009",
+      "branch_name": "ao/task-009",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.858759Z",
+        "updated_at": "2026-02-25T02:05:50.112288Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-24T22:55:46.775066Z",
+        "completed_at": "2026-02-25T02:05:50.112285Z",
+        "version": 8
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-008": {
+      "id": "TASK-008",
+      "title": "Add contract tests for JSON output envelope stability",
+      "description": "Create regression tests validating envelope schema and error code mappings across representative commands.",
+      "type": "test",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:04:04.388862Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-008",
+      "branch_name": "ao/task-008",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.745668Z",
+        "updated_at": "2026-02-25T04:04:04.388876Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.572358Z",
+        "completed_at": null,
+        "version": 13
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-003": {
+      "id": "TASK-003",
+      "title": "Add runner lifecycle regression tests",
+      "description": "Cover startup, health-check fallback, stale lock cleanup, and shutdown for agent-runner workflows.",
+      "type": "test",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-003"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "runner",
+        "reliability"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:44.332649Z",
+        "updated_at": "2026-02-24T17:25:44.332649Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-020": {
+      "id": "TASK-020",
+      "title": "Implement architecture graph and task linkage",
+      "description": "Add architecture entities/edges graph and connect tasks to architecture IDs",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-020"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "architecture",
+        "task-routing"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:08:57.567221Z",
+        "updated_at": "2026-02-24T20:19:58.529316Z",
+        "created_by": "codex",
+        "updated_by": "codex",
+        "started_at": "2026-02-24T20:09:02.417037Z",
+        "completed_at": "2026-02-24T20:19:58.529314Z",
+        "version": 3
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-002": {
+      "id": "TASK-002",
+      "title": "Audit and polish CLI help and error messages",
+      "description": "Review core command groups and align output style, argument clarity, and actionable validation errors.",
+      "type": "refactor",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-002"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "cli",
+        "ux"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:43.577231Z",
+        "updated_at": "2026-02-24T17:25:43.577231Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-017": {
+      "id": "TASK-017",
+      "title": "Implement accessibility, responsive, and performance baselines",
+      "description": "Deliver keyboard navigation, semantic accessibility, responsive layouts, and core route performance budgets.",
+      "type": "chore",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.244521Z",
+        "updated_at": "2026-02-24T20:06:43.244521Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-006": {
+      "id": "TASK-006",
+      "title": "Draft multi-binary release pipeline",
+      "description": "Define artifact matrix and automate build outputs for ao, agent-runner, llm-cli-wrapper, llm-mcp-server.",
+      "type": "chore",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-006"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "release",
+        "packaging"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:46.402288Z",
+        "updated_at": "2026-02-24T17:25:46.402288Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-014": {
+      "id": "TASK-014",
+      "title": "Build task/workflow control center interface",
+      "description": "Implement queue, state transitions, workflow controls, phase timeline, and gating UX.",
+      "type": "feature",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.121717Z",
+        "updated_at": "2026-02-24T20:06:43.121717Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-007": {
+      "id": "TASK-007",
+      "title": "Implement dependency policy checks for Rust-only guardrail",
+      "description": "Add automated policy checks and docs updates to enforce Rust-only dependency boundaries.",
+      "type": "chore",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:03:13.095459Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-007",
+      "branch_name": "ao/task-007",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.630741Z",
+        "updated_at": "2026-02-25T04:03:13.095527Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.612244Z",
+        "completed_at": null,
+        "version": 13
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-005": {
+      "id": "TASK-005",
+      "title": "Add CI workflow for Rust-only workspace",
+      "description": "Run package-level cargo checks and smoke help commands for ao and llm-cli-wrapper in CI.",
+      "type": "chore",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-005"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "ci",
+        "quality"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:45.713215Z",
+        "updated_at": "2026-02-24T17:25:45.713215Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
     }
   },
   "workflows": {},
@@ -1709,32 +1709,25 @@
     "updated_at": "2026-02-24T19:43:32.735543Z"
   },
   "requirements": {
-    "REQ-005": {
-      "id": "REQ-005",
-      "title": "Establish Rust-only CI quality gates for workspace health",
-      "description": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
-      "body": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
+    "REQ-012": {
+      "id": "REQ-012",
+      "title": "Define typed API contract and client SDK for web GUI",
+      "description": "Establish a strict front-end contract layer that maps to orchestrator-web-server endpoints with schema validation, versioning strategy, and deterministic error handling.",
+      "body": null,
       "legacy_id": null,
-      "category": "quality",
-      "type": "technical",
+      "category": null,
+      "type": null,
       "acceptance_criteria": [
-        "CI runs `cargo check` for `orchestrator-cli`, `orchestrator-core`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server` on every pull request.",
-        "CI includes smoke checks for `ao --help` and `llm-cli-wrapper --help` with non-zero failure on command regressions.",
-        "CI configuration explicitly avoids desktop-wrapper/Tauri dependencies and fails if prohibited dependencies are introduced.",
-        "At least one CI job executes targeted automated tests for runtime or integration surfaces touched by scoped crates.",
-        "CI results are visible as required status checks for merge in the default branch workflow."
+        "Client SDK wraps all consumed endpoints with typed request/response interfaces and centralized transport configuration.",
+        "Schema-validation or structural guards protect runtime against malformed/partial payloads from server upgrades.",
+        "Error normalization maps server failures into actionable UI states with remediation hints, preserving error codes.",
+        "API version compatibility policy is documented with explicit handling for additive and breaking changes.",
+        "Contract tests validate SDK behavior against representative success, validation-failure, not-found, and unavailable responses."
       ],
       "priority": "must",
       "status": "refined",
       "source": "engineering",
-      "tags": [
-        "ci",
-        "lens-engineering",
-        "lens-ops",
-        "lens-product",
-        "quality-gates",
-        "rust-only"
-      ],
+      "tags": [],
       "links": {
         "tasks": [],
         "workflows": [],
@@ -1744,12 +1737,12 @@
         "related_requirements": []
       },
       "comments": [],
-      "relative_path": "generated/REQ-005.json",
+      "relative_path": null,
       "linked_task_ids": [
-        "TASK-005"
+        "TASK-012"
       ],
-      "created_at": "2026-02-24T17:24:44.632605Z",
-      "updated_at": "2026-02-24T19:21:21.013752Z"
+      "created_at": "2026-02-24T19:52:00.121671Z",
+      "updated_at": "2026-02-24T20:06:43.408211Z"
     },
     "REQ-018": {
       "id": "REQ-018",
@@ -1785,536 +1778,6 @@
       ],
       "created_at": "2026-02-24T19:52:00.458886Z",
       "updated_at": "2026-02-24T20:06:43.648568Z"
-    },
-    "REQ-015": {
-      "id": "REQ-015",
-      "title": "Provide real-time run telemetry and artifact inspection UX",
-      "description": "Expose live run execution insight including event streams, JSONL outputs, artifacts, and error surfaces so operators can diagnose and recover quickly.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Run detail view streams and renders events incrementally with stable ordering and clear status derivation (running/completed/failed).",
-        "JSONL viewer supports source-file filtering, keyword search, and timestamp navigation for large logs.",
-        "Artifact browser lists files with metadata and supports safe download/read actions through backend endpoints.",
-        "Error panels map runtime failures to suggested operator next steps (retry, inspect runner health, open history/error details).",
-        "UI supports degraded mode when streaming is unavailable, falling back to periodic polling with explicit indicator."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "runtime",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-015"
-      ],
-      "created_at": "2026-02-24T19:52:00.289747Z",
-      "updated_at": "2026-02-24T20:06:43.528179Z"
-    },
-    "REQ-001": {
-      "id": "REQ-001",
-      "title": "Define and maintain the ao-cli self-hosting operating workflow",
-      "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
-      "body": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
-      "legacy_id": null,
-      "category": "documentation",
-      "type": "product",
-      "acceptance_criteria": [
-        "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
-        "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
-        "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
-        "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
-        "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "self-hosting",
-      "tags": [
-        "contributor-workflow",
-        "docs",
-        "lens-product",
-        "self-hosting"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-001.json",
-      "linked_task_ids": [
-        "TASK-001"
-      ],
-      "created_at": "2026-02-24T17:24:41.776781Z",
-      "updated_at": "2026-02-24T19:21:20.999291Z"
-    },
-    "REQ-008": {
-      "id": "REQ-008",
-      "title": "Guarantee JSON schema compatibility for CLI envelopes",
-      "description": "Define and test backward-compatible JSON envelope behavior for success/error outputs and key planning/runtime payloads.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Schema validation tests cover ao.cli.v1 success and error envelopes for key command groups.",
-        "Breaking schema changes require explicit version bump and migration note."
-      ],
-      "priority": "must",
-      "status": "planned",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-008"
-      ],
-      "created_at": "2026-02-24T19:48:30.706194Z",
-      "updated_at": "2026-02-24T19:48:30.786085Z"
-    },
-    "REQ-016": {
-      "id": "REQ-016",
-      "title": "Implement safety rails for high-risk operations in web UI",
-      "description": "Ensure destructive or irreversible actions in the web app are guarded by explicit operator intent confirmation, previews, and auditability.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Destructive actions require typed confirmation or equivalent high-friction acknowledgement before request submission.",
-        "Where supported by backend, UI presents dry-run/preview output before executing destructive mutations.",
-        "Every high-risk action writes auditable context into UI-visible activity stream (actor, timestamp, target, outcome).",
-        "Permission and state preconditions are validated in UI and revalidated against server response before final success messaging.",
-        "Bulk operations include partial-failure reporting with deterministic rollback/compensation guidance."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "security",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-016"
-      ],
-      "created_at": "2026-02-24T19:52:00.339836Z",
-      "updated_at": "2026-02-24T20:06:43.568437Z"
-    },
-    "REQ-006": {
-      "id": "REQ-006",
-      "title": "Define reproducible multi-binary release packaging process",
-      "description": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
-      "body": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
-      "legacy_id": null,
-      "category": "release",
-      "type": "technical",
-      "acceptance_criteria": [
-        "Release documentation defines artifact naming convention, supported target platforms, and checksum/verification procedure.",
-        "An automated release build path produces all four required binaries in one run.",
-        "Each produced artifact includes version metadata traceable to a git commit or tag.",
-        "Release outputs are organized in a deterministic directory structure suitable for scripted consumption.",
-        "A dry-run release can be executed locally or in CI to validate packaging without publishing."
-      ],
-      "priority": "could",
-      "status": "refined",
-      "source": "release",
-      "tags": [
-        "artifacts",
-        "lens-engineering",
-        "lens-ops",
-        "packaging",
-        "release"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-006.json",
-      "linked_task_ids": [
-        "TASK-006"
-      ],
-      "created_at": "2026-02-24T17:24:45.301691Z",
-      "updated_at": "2026-02-24T19:21:21.017208Z"
-    },
-    "REQ-011": {
-      "id": "REQ-011",
-      "title": "Build React web-app shell over orchestrator-web-server",
-      "description": "Create a production-grade React app that serves as the primary operator console for AO, wrapping orchestrator-web-server capabilities with clear IA, deterministic state handling, and safe command execution pathways.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Web app bootstraps with route-level code splitting and typed API integration for all core AO domains (vision, requirements, tasks, workflow, runs, errors, history).",
-        "Navigation model includes global project context, queue dashboards, and deep-linkable pages for each entity ID.",
-        "All UI mutations execute through server APIs only; no direct file assumptions or local state hacks bypassing backend contracts.",
-        "Global error boundaries and retry affordances are implemented for route, data-fetch, and action failures.",
-        "State management strategy is documented and enforced (query caching, optimistic updates policy, invalidation rules)."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-011"
-      ],
-      "created_at": "2026-02-24T19:52:00.068186Z",
-      "updated_at": "2026-02-24T20:06:43.368028Z"
-    },
-    "REQ-017": {
-      "id": "REQ-017",
-      "title": "Meet accessibility, responsiveness, and performance baselines",
-      "description": "Ship the web GUI with enterprise-grade usability quality across desktop and mobile form factors, keyboard users, and assistive technologies.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Core flows (planning, tasks, workflows, run inspection) are fully keyboard navigable with visible focus states.",
-        "ARIA labels, semantic landmarks, and form validation messaging meet WCAG-oriented accessibility expectations for primary interactions.",
-        "Responsive breakpoints preserve full functionality on common laptop and mobile viewport classes without hidden critical controls.",
-        "Perceived performance budget is defined and met for initial load and key route transitions under realistic project data sizes.",
-        "Empty/loading/error states are intentionally designed and consistent across all route families."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-017"
-      ],
-      "created_at": "2026-02-24T19:52:00.415501Z",
-      "updated_at": "2026-02-24T20:06:43.608241Z"
-    },
-    "REQ-020": {
-      "id": "REQ-020",
-      "title": "Architecture knowledge graph support",
-      "description": "Add architecture entities/edges JSON graph and task linkage so tasks can indicate where changes should live",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [],
-      "priority": "should",
-      "status": "in-progress",
-      "source": "user-request",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [],
-      "created_at": "2026-02-24T20:08:53.349171Z",
-      "updated_at": "2026-02-24T20:09:02.444379Z"
-    },
-    "REQ-010": {
-      "id": "REQ-010",
-      "title": "Improve run/event traceability completeness",
-      "description": "Ensure every workflow and agent run emits consistent trace artifacts that can be replayed for audit and debugging.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Run artifacts include timestamps, identifiers, and event sequencing metadata sufficient for replay.",
-        "Output commands can locate run artifacts from scoped runtime storage without manual path discovery."
-      ],
-      "priority": "should",
-      "status": "planned",
-      "source": "ops",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-010"
-      ],
-      "created_at": "2026-02-24T19:48:30.934827Z",
-      "updated_at": "2026-02-24T19:48:31.028435Z"
-    },
-    "REQ-014": {
-      "id": "REQ-014",
-      "title": "Deliver operational task and workflow control center",
-      "description": "Create a unified interface for task backlog management, workflow execution controls, phase status visibility, and gated approvals.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Task board supports prioritized queue, status transitions, assignment, dependency visualization, and checklist interactions via API-backed mutations.",
-        "Workflow views expose run/resume/pause/cancel operations with explicit confirmation and post-action telemetry feedback.",
-        "Phase timeline presents current phase, checkpoint state, decisions, approvals, and blocking reasons with timestamped history.",
-        "UI enforces rule-based action availability (disabled states and rationale) based on workflow/task status and server responses.",
-        "Operator actions are idempotent on retry and display conflict-resolution messaging when backend state has changed."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "ops",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-014"
-      ],
-      "created_at": "2026-02-24T19:52:00.207696Z",
-      "updated_at": "2026-02-24T20:06:43.487167Z"
-    },
-    "REQ-004": {
-      "id": "REQ-004",
-      "title": "Standardize llm-cli-wrapper and llm-mcp-server integration contract",
-      "description": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
-      "body": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
-      "legacy_id": null,
-      "category": "integration",
-      "type": "technical",
-      "acceptance_criteria": [
-        "A documented integration contract specifies required startup inputs, endpoint discovery behavior, and expected health semantics.",
-        "A reproducible smoke test validates server startup plus at least one health and one agent-related endpoint interaction.",
-        "Wrapper behavior on MCP server unavailability returns deterministic, structured error output with clear remediation hint.",
-        "Build and startup commands used by the integration path are documented and executable from repository root.",
-        "Contract tests run in CI and fail on breaking changes to wrapper-to-server startup or endpoint resolution behavior."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "runtime",
-      "tags": [
-        "integration",
-        "lens-engineering",
-        "mcp",
-        "wrapper"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-004.json",
-      "linked_task_ids": [
-        "TASK-004"
-      ],
-      "created_at": "2026-02-24T17:24:43.920053Z",
-      "updated_at": "2026-02-24T19:21:21.010432Z"
-    },
-    "REQ-007": {
-      "id": "REQ-007",
-      "title": "Enforce Rust-only dependency guardrails",
-      "description": "Prevent desktop-wrapper drift by enforcing Rust-only workspace dependencies and validating prohibited frameworks are excluded.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "CI fails when prohibited desktop-wrapper dependencies are introduced in workspace crates.",
-        "Dependency policy documentation lists allowed and prohibited dependency classes."
-      ],
-      "priority": "must",
-      "status": "planned",
-      "source": "engineering",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-007"
-      ],
-      "created_at": "2026-02-24T19:48:30.582167Z",
-      "updated_at": "2026-02-24T19:48:30.673797Z"
-    },
-    "REQ-013": {
-      "id": "REQ-013",
-      "title": "Implement end-to-end planning UX for vision and requirements",
-      "description": "Provide complete interactive flows for drafting/refining vision, drafting/refining requirements, and reviewing requirement quality and links in one coherent workspace.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Vision editor supports structured sections (problem, users, goals, constraints, value proposition, complexity) with live preview and diff visibility.",
-        "Requirements workspace supports list/detail split view, filter/sort/search, and inline lifecycle transitions with audit-safe confirmation flows.",
-        "Requirement detail page visualizes acceptance criteria, status, linked tasks, and traceability context without raw JSON exposure by default.",
-        "Refine/draft actions expose progress, model/tool metadata, fallback behavior, and deterministic completion states.",
-        "All planning actions preserve deep links and refresh-safe state so operators can resume after navigation or reload."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-013"
-      ],
-      "created_at": "2026-02-24T19:52:00.163350Z",
-      "updated_at": "2026-02-24T20:06:43.448359Z"
-    },
-    "REQ-003": {
-      "id": "REQ-003",
-      "title": "Harden agent-runner lifecycle reliability and diagnostics",
-      "description": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
-      "body": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
-      "legacy_id": null,
-      "category": "runtime",
-      "type": "non-functional",
-      "acceptance_criteria": [
-        "Automated tests cover normal startup, graceful shutdown, forced termination handling, and restart recovery scenarios.",
-        "Health-check failures emit structured diagnostics including failure category, timestamp, and actionable context.",
-        "Runner lifecycle events are observable through existing AO event/output pathways without requiring ad-hoc log parsing.",
-        "Repeated start/stop cycling (minimum 20 cycles in test) completes without orphaned runner processes.",
-        "Documented recovery steps exist for at least three failure modes: socket bind failure, dependency unavailability, and stale process state."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "runtime",
-      "tags": [
-        "lens-engineering",
-        "lens-ops",
-        "observability",
-        "reliability",
-        "runner"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-003.json",
-      "linked_task_ids": [
-        "TASK-003"
-      ],
-      "created_at": "2026-02-24T17:24:43.242788Z",
-      "updated_at": "2026-02-24T19:21:21.007409Z"
-    },
-    "REQ-012": {
-      "id": "REQ-012",
-      "title": "Define typed API contract and client SDK for web GUI",
-      "description": "Establish a strict front-end contract layer that maps to orchestrator-web-server endpoints with schema validation, versioning strategy, and deterministic error handling.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Client SDK wraps all consumed endpoints with typed request/response interfaces and centralized transport configuration.",
-        "Schema-validation or structural guards protect runtime against malformed/partial payloads from server upgrades.",
-        "Error normalization maps server failures into actionable UI states with remediation hints, preserving error codes.",
-        "API version compatibility policy is documented with explicit handling for additive and breaking changes.",
-        "Contract tests validate SDK behavior against representative success, validation-failure, not-found, and unavailable responses."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "engineering",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-012"
-      ],
-      "created_at": "2026-02-24T19:52:00.121671Z",
-      "updated_at": "2026-02-24T20:06:43.408211Z"
     },
     "REQ-009": {
       "id": "REQ-009",
@@ -2386,6 +1849,292 @@
       "created_at": "2026-02-25T05:46:01.929281Z",
       "updated_at": "2026-02-25T06:48:42.993871Z"
     },
+    "REQ-008": {
+      "id": "REQ-008",
+      "title": "Guarantee JSON schema compatibility for CLI envelopes",
+      "description": "Define and test backward-compatible JSON envelope behavior for success/error outputs and key planning/runtime payloads.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Schema validation tests cover ao.cli.v1 success and error envelopes for key command groups.",
+        "Breaking schema changes require explicit version bump and migration note."
+      ],
+      "priority": "must",
+      "status": "planned",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-008"
+      ],
+      "created_at": "2026-02-24T19:48:30.706194Z",
+      "updated_at": "2026-02-24T19:48:30.786085Z"
+    },
+    "REQ-001": {
+      "id": "REQ-001",
+      "title": "Define and maintain the ao-cli self-hosting operating workflow",
+      "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
+      "body": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
+      "legacy_id": null,
+      "category": "documentation",
+      "type": "product",
+      "acceptance_criteria": [
+        "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
+        "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
+        "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
+        "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
+        "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "self-hosting",
+      "tags": [
+        "contributor-workflow",
+        "docs",
+        "lens-product",
+        "self-hosting"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-001.json",
+      "linked_task_ids": [
+        "TASK-001"
+      ],
+      "created_at": "2026-02-24T17:24:41.776781Z",
+      "updated_at": "2026-02-24T19:21:20.999291Z"
+    },
+    "REQ-015": {
+      "id": "REQ-015",
+      "title": "Provide real-time run telemetry and artifact inspection UX",
+      "description": "Expose live run execution insight including event streams, JSONL outputs, artifacts, and error surfaces so operators can diagnose and recover quickly.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Run detail view streams and renders events incrementally with stable ordering and clear status derivation (running/completed/failed).",
+        "JSONL viewer supports source-file filtering, keyword search, and timestamp navigation for large logs.",
+        "Artifact browser lists files with metadata and supports safe download/read actions through backend endpoints.",
+        "Error panels map runtime failures to suggested operator next steps (retry, inspect runner health, open history/error details).",
+        "UI supports degraded mode when streaming is unavailable, falling back to periodic polling with explicit indicator."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-015"
+      ],
+      "created_at": "2026-02-24T19:52:00.289747Z",
+      "updated_at": "2026-02-24T20:06:43.528179Z"
+    },
+    "REQ-019": {
+      "id": "REQ-019",
+      "title": "Add first-class web UI observability and debug logging",
+      "description": "Instrument the React web GUI with structured client telemetry, correlation IDs, and operator-facing diagnostics so failures can be triaged quickly against backend run/events.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Client logs are structured and include correlation context (route, action, request id/run id/task id when available).",
+        "Error events are captured at boundary, query, and mutation layers with severity and remediation metadata.",
+        "Operators can access a diagnostics panel that surfaces recent failed actions and linked backend artifacts/events.",
+        "Logging supports redaction rules to avoid exposing secrets or sensitive payloads in UI-visible traces.",
+        "Telemetry export format is documented and can be consumed by downstream monitoring tools."
+      ],
+      "priority": "must",
+      "status": "draft",
+      "source": "ops",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-019"
+      ],
+      "created_at": "2026-02-24T20:06:42.940529Z",
+      "updated_at": "2026-02-24T20:06:43.689364Z"
+    },
+    "REQ-014": {
+      "id": "REQ-014",
+      "title": "Deliver operational task and workflow control center",
+      "description": "Create a unified interface for task backlog management, workflow execution controls, phase status visibility, and gated approvals.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Task board supports prioritized queue, status transitions, assignment, dependency visualization, and checklist interactions via API-backed mutations.",
+        "Workflow views expose run/resume/pause/cancel operations with explicit confirmation and post-action telemetry feedback.",
+        "Phase timeline presents current phase, checkpoint state, decisions, approvals, and blocking reasons with timestamped history.",
+        "UI enforces rule-based action availability (disabled states and rationale) based on workflow/task status and server responses.",
+        "Operator actions are idempotent on retry and display conflict-resolution messaging when backend state has changed."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "ops",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-014"
+      ],
+      "created_at": "2026-02-24T19:52:00.207696Z",
+      "updated_at": "2026-02-24T20:06:43.487167Z"
+    },
+    "REQ-013": {
+      "id": "REQ-013",
+      "title": "Implement end-to-end planning UX for vision and requirements",
+      "description": "Provide complete interactive flows for drafting/refining vision, drafting/refining requirements, and reviewing requirement quality and links in one coherent workspace.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Vision editor supports structured sections (problem, users, goals, constraints, value proposition, complexity) with live preview and diff visibility.",
+        "Requirements workspace supports list/detail split view, filter/sort/search, and inline lifecycle transitions with audit-safe confirmation flows.",
+        "Requirement detail page visualizes acceptance criteria, status, linked tasks, and traceability context without raw JSON exposure by default.",
+        "Refine/draft actions expose progress, model/tool metadata, fallback behavior, and deterministic completion states.",
+        "All planning actions preserve deep links and refresh-safe state so operators can resume after navigation or reload."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-013"
+      ],
+      "created_at": "2026-02-24T19:52:00.163350Z",
+      "updated_at": "2026-02-24T20:06:43.448359Z"
+    },
+    "REQ-005": {
+      "id": "REQ-005",
+      "title": "Establish Rust-only CI quality gates for workspace health",
+      "description": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
+      "body": "Changes are validated consistently so regressions are caught before merge across AO’s core Rust workspace.\n\n**Implementation boundary:** CI checks for compile/test/smoke quality gates in this repository’s Rust crates. Excludes release packaging/distribution mechanics.",
+      "legacy_id": null,
+      "category": "quality",
+      "type": "technical",
+      "acceptance_criteria": [
+        "CI runs `cargo check` for `orchestrator-cli`, `orchestrator-core`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server` on every pull request.",
+        "CI includes smoke checks for `ao --help` and `llm-cli-wrapper --help` with non-zero failure on command regressions.",
+        "CI configuration explicitly avoids desktop-wrapper/Tauri dependencies and fails if prohibited dependencies are introduced.",
+        "At least one CI job executes targeted automated tests for runtime or integration surfaces touched by scoped crates.",
+        "CI results are visible as required status checks for merge in the default branch workflow."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "engineering",
+      "tags": [
+        "ci",
+        "lens-engineering",
+        "lens-ops",
+        "lens-product",
+        "quality-gates",
+        "rust-only"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-005.json",
+      "linked_task_ids": [
+        "TASK-005"
+      ],
+      "created_at": "2026-02-24T17:24:44.632605Z",
+      "updated_at": "2026-02-24T19:21:21.013752Z"
+    },
+    "REQ-007": {
+      "id": "REQ-007",
+      "title": "Enforce Rust-only dependency guardrails",
+      "description": "Prevent desktop-wrapper drift by enforcing Rust-only workspace dependencies and validating prohibited frameworks are excluded.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "CI fails when prohibited desktop-wrapper dependencies are introduced in workspace crates.",
+        "Dependency policy documentation lists allowed and prohibited dependency classes."
+      ],
+      "priority": "must",
+      "status": "planned",
+      "source": "engineering",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-007"
+      ],
+      "created_at": "2026-02-24T19:48:30.582167Z",
+      "updated_at": "2026-02-24T19:48:30.673797Z"
+    },
     "REQ-002": {
       "id": "REQ-002",
       "title": "Improve daily CLI ergonomics for core ao command groups",
@@ -2426,23 +2175,90 @@
       "created_at": "2026-02-24T17:24:42.443485Z",
       "updated_at": "2026-02-24T19:21:21.003203Z"
     },
-    "REQ-019": {
-      "id": "REQ-019",
-      "title": "Add first-class web UI observability and debug logging",
-      "description": "Instrument the React web GUI with structured client telemetry, correlation IDs, and operator-facing diagnostics so failures can be triaged quickly against backend run/events.",
+    "REQ-017": {
+      "id": "REQ-017",
+      "title": "Meet accessibility, responsiveness, and performance baselines",
+      "description": "Ship the web GUI with enterprise-grade usability quality across desktop and mobile form factors, keyboard users, and assistive technologies.",
       "body": null,
       "legacy_id": null,
       "category": null,
       "type": null,
       "acceptance_criteria": [
-        "Client logs are structured and include correlation context (route, action, request id/run id/task id when available).",
-        "Error events are captured at boundary, query, and mutation layers with severity and remediation metadata.",
-        "Operators can access a diagnostics panel that surfaces recent failed actions and linked backend artifacts/events.",
-        "Logging supports redaction rules to avoid exposing secrets or sensitive payloads in UI-visible traces.",
-        "Telemetry export format is documented and can be consumed by downstream monitoring tools."
+        "Core flows (planning, tasks, workflows, run inspection) are fully keyboard navigable with visible focus states.",
+        "ARIA labels, semantic landmarks, and form validation messaging meet WCAG-oriented accessibility expectations for primary interactions.",
+        "Responsive breakpoints preserve full functionality on common laptop and mobile viewport classes without hidden critical controls.",
+        "Perceived performance budget is defined and met for initial load and key route transitions under realistic project data sizes.",
+        "Empty/loading/error states are intentionally designed and consistent across all route families."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-017"
+      ],
+      "created_at": "2026-02-24T19:52:00.415501Z",
+      "updated_at": "2026-02-24T20:06:43.608241Z"
+    },
+    "REQ-016": {
+      "id": "REQ-016",
+      "title": "Implement safety rails for high-risk operations in web UI",
+      "description": "Ensure destructive or irreversible actions in the web app are guarded by explicit operator intent confirmation, previews, and auditability.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Destructive actions require typed confirmation or equivalent high-friction acknowledgement before request submission.",
+        "Where supported by backend, UI presents dry-run/preview output before executing destructive mutations.",
+        "Every high-risk action writes auditable context into UI-visible activity stream (actor, timestamp, target, outcome).",
+        "Permission and state preconditions are validated in UI and revalidated against server response before final success messaging.",
+        "Bulk operations include partial-failure reporting with deterministic rollback/compensation guidance."
       ],
       "priority": "must",
-      "status": "draft",
+      "status": "refined",
+      "source": "security",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-016"
+      ],
+      "created_at": "2026-02-24T19:52:00.339836Z",
+      "updated_at": "2026-02-24T20:06:43.568437Z"
+    },
+    "REQ-010": {
+      "id": "REQ-010",
+      "title": "Improve run/event traceability completeness",
+      "description": "Ensure every workflow and agent run emits consistent trace artifacts that can be replayed for audit and debugging.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Run artifacts include timestamps, identifiers, and event sequencing metadata sufficient for replay.",
+        "Output commands can locate run artifacts from scoped runtime storage without manual path discovery."
+      ],
+      "priority": "should",
+      "status": "planned",
       "source": "ops",
       "tags": [],
       "links": {
@@ -2456,10 +2272,194 @@
       "comments": [],
       "relative_path": null,
       "linked_task_ids": [
-        "TASK-019"
+        "TASK-010"
       ],
-      "created_at": "2026-02-24T20:06:42.940529Z",
-      "updated_at": "2026-02-24T20:06:43.689364Z"
+      "created_at": "2026-02-24T19:48:30.934827Z",
+      "updated_at": "2026-02-24T19:48:31.028435Z"
+    },
+    "REQ-011": {
+      "id": "REQ-011",
+      "title": "Build React web-app shell over orchestrator-web-server",
+      "description": "Create a production-grade React app that serves as the primary operator console for AO, wrapping orchestrator-web-server capabilities with clear IA, deterministic state handling, and safe command execution pathways.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Web app bootstraps with route-level code splitting and typed API integration for all core AO domains (vision, requirements, tasks, workflow, runs, errors, history).",
+        "Navigation model includes global project context, queue dashboards, and deep-linkable pages for each entity ID.",
+        "All UI mutations execute through server APIs only; no direct file assumptions or local state hacks bypassing backend contracts.",
+        "Global error boundaries and retry affordances are implemented for route, data-fetch, and action failures.",
+        "State management strategy is documented and enforced (query caching, optimistic updates policy, invalidation rules)."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-011"
+      ],
+      "created_at": "2026-02-24T19:52:00.068186Z",
+      "updated_at": "2026-02-24T20:06:43.368028Z"
+    },
+    "REQ-003": {
+      "id": "REQ-003",
+      "title": "Harden agent-runner lifecycle reliability and diagnostics",
+      "description": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
+      "body": "Operator confidence increases because runner start, health, and shutdown behavior is predictable and failures are diagnosable.\n\n**Implementation boundary:** Covers `agent-runner` process lifecycle, health signaling, and diagnostics emitted to AO consumers. Excludes wrapper/MCP endpoint orchestration.",
+      "legacy_id": null,
+      "category": "runtime",
+      "type": "non-functional",
+      "acceptance_criteria": [
+        "Automated tests cover normal startup, graceful shutdown, forced termination handling, and restart recovery scenarios.",
+        "Health-check failures emit structured diagnostics including failure category, timestamp, and actionable context.",
+        "Runner lifecycle events are observable through existing AO event/output pathways without requiring ad-hoc log parsing.",
+        "Repeated start/stop cycling (minimum 20 cycles in test) completes without orphaned runner processes.",
+        "Documented recovery steps exist for at least three failure modes: socket bind failure, dependency unavailability, and stale process state."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [
+        "lens-engineering",
+        "lens-ops",
+        "observability",
+        "reliability",
+        "runner"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-003.json",
+      "linked_task_ids": [
+        "TASK-003"
+      ],
+      "created_at": "2026-02-24T17:24:43.242788Z",
+      "updated_at": "2026-02-24T19:21:21.007409Z"
+    },
+    "REQ-004": {
+      "id": "REQ-004",
+      "title": "Standardize llm-cli-wrapper and llm-mcp-server integration contract",
+      "description": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
+      "body": "Integration between wrapper and MCP server becomes predictable, reducing setup drift across environments.\n\n**Implementation boundary:** Defines build/startup/endpoint-resolution contract and smoke validation between `llm-cli-wrapper` and `llm-mcp-server`. Excludes agent-runner lifecycle and general CLI help UX.",
+      "legacy_id": null,
+      "category": "integration",
+      "type": "technical",
+      "acceptance_criteria": [
+        "A documented integration contract specifies required startup inputs, endpoint discovery behavior, and expected health semantics.",
+        "A reproducible smoke test validates server startup plus at least one health and one agent-related endpoint interaction.",
+        "Wrapper behavior on MCP server unavailability returns deterministic, structured error output with clear remediation hint.",
+        "Build and startup commands used by the integration path are documented and executable from repository root.",
+        "Contract tests run in CI and fail on breaking changes to wrapper-to-server startup or endpoint resolution behavior."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [
+        "integration",
+        "lens-engineering",
+        "mcp",
+        "wrapper"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-004.json",
+      "linked_task_ids": [
+        "TASK-004"
+      ],
+      "created_at": "2026-02-24T17:24:43.920053Z",
+      "updated_at": "2026-02-24T19:21:21.010432Z"
+    },
+    "REQ-006": {
+      "id": "REQ-006",
+      "title": "Define reproducible multi-binary release packaging process",
+      "description": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
+      "body": "Operators can obtain consistent release artifacts for AO binaries with clear naming, platform scope, and verification steps.\n\n**Implementation boundary:** Covers packaging workflow and artifact conventions for `ao`, `agent-runner`, `llm-cli-wrapper`, and `llm-mcp-server`. Excludes CI PR quality gates and runtime behavior guarantees.",
+      "legacy_id": null,
+      "category": "release",
+      "type": "technical",
+      "acceptance_criteria": [
+        "Release documentation defines artifact naming convention, supported target platforms, and checksum/verification procedure.",
+        "An automated release build path produces all four required binaries in one run.",
+        "Each produced artifact includes version metadata traceable to a git commit or tag.",
+        "Release outputs are organized in a deterministic directory structure suitable for scripted consumption.",
+        "A dry-run release can be executed locally or in CI to validate packaging without publishing."
+      ],
+      "priority": "could",
+      "status": "refined",
+      "source": "release",
+      "tags": [
+        "artifacts",
+        "lens-engineering",
+        "lens-ops",
+        "packaging",
+        "release"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-006.json",
+      "linked_task_ids": [
+        "TASK-006"
+      ],
+      "created_at": "2026-02-24T17:24:45.301691Z",
+      "updated_at": "2026-02-24T19:21:21.017208Z"
+    },
+    "REQ-020": {
+      "id": "REQ-020",
+      "title": "Architecture knowledge graph support",
+      "description": "Add architecture entities/edges JSON graph and task linkage so tasks can indicate where changes should live",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [],
+      "priority": "should",
+      "status": "in-progress",
+      "source": "user-request",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [],
+      "created_at": "2026-02-24T20:08:53.349171Z",
+      "updated_at": "2026-02-24T20:09:02.444379Z"
     }
   },
   "architecture": {

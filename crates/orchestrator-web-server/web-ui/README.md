@@ -23,6 +23,12 @@ React shell and route architecture for `TASK-011`.
 - `TASK-017` requirements and implementation notes:
   `../docs/task-017-accessibility-responsive-performance-requirements.md`,
   `../docs/task-017-accessibility-responsive-performance-implementation-notes.md`
+- `TASK-018` requirements and implementation notes:
+  `../docs/task-018-web-gui-ci-e2e-release-gates-requirements.md`,
+  `../docs/task-018-web-gui-ci-e2e-release-gates-ux-brief.md`,
+  `../docs/task-018-web-gui-ci-e2e-release-gates-implementation-notes.md`
+- Web GUI release checklist:
+  `../../../.github/release-checklists/web-gui-release.md`
 
 ## Commands
 

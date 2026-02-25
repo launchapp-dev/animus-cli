@@ -24,6 +24,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+crates/orchestrator-web-server/web-ui/.smoke-artifacts/
 
 # Runtime
 *.pid

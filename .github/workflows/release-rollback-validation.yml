@@ -1,0 +1,132 @@
+name: Release Rollback Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Release candidate ref to validate (tag, branch, or SHA).
+        required: true
+        type: string
+      rollback_ref:
+        description: Known-good rollback ref to validate (tag, branch, or SHA).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate_smoke:
+    name: candidate-smoke
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.smoke.outcome }}
+
+    steps:
+      - name: Checkout candidate ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: npm
+          cache-dependency-path: crates/orchestrator-web-server/web-ui/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: crates/orchestrator-web-server/web-ui
+        run: npm ci
+
+      - name: Run smoke E2E (candidate)
+        id: smoke
+        working-directory: crates/orchestrator-web-server/web-ui
+        env:
+          SMOKE_ARTIFACT_DIR: ${{ github.workspace }}/crates/orchestrator-web-server/web-ui/.smoke-artifacts/candidate
+        run: npm run test:e2e:smoke
+
+      - name: Upload smoke diagnostics (candidate)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-validation-candidate-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/crates/orchestrator-web-server/web-ui/.smoke-artifacts/candidate
+          if-no-files-found: ignore
+          retention-days: 7
+
+  rollback_smoke:
+    name: rollback-smoke
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.smoke.outcome }}
+
+    steps:
+      - name: Checkout rollback ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rollback_ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: npm
+          cache-dependency-path: crates/orchestrator-web-server/web-ui/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: crates/orchestrator-web-server/web-ui
+        run: npm ci
+
+      - name: Run smoke E2E (rollback)
+        id: smoke
+        working-directory: crates/orchestrator-web-server/web-ui
+        env:
+          SMOKE_ARTIFACT_DIR: ${{ github.workspace }}/crates/orchestrator-web-server/web-ui/.smoke-artifacts/rollback
+        run: npm run test:e2e:smoke
+
+      - name: Upload smoke diagnostics (rollback)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-validation-rollback-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/crates/orchestrator-web-server/web-ui/.smoke-artifacts/rollback
+          if-no-files-found: ignore
+          retention-days: 7
+
+  summary:
+    name: rollback-validation-summary
+    runs-on: ubuntu-latest
+    needs:
+      - candidate_smoke
+      - rollback_smoke
+    if: always()
+
+    steps:
+      - name: Write validation summary
+        shell: bash
+        run: |
+          {
+            echo "## Release Rollback Validation"
+            echo ""
+            echo "- candidate_ref: \`${{ inputs.candidate_ref }}\`"
+            echo "- candidate_smoke: \`${{ needs.candidate_smoke.outputs.outcome }}\`"
+            echo "- rollback_ref: \`${{ inputs.rollback_ref }}\`"
+            echo "- rollback_smoke: \`${{ needs.rollback_smoke.outputs.outcome }}\`"
+            echo "- mutation: \`none\`"
+            echo "- publish: \`disabled\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce pass criteria
+        shell: bash
+        run: |
+          if [[ "${{ needs.candidate_smoke.outputs.outcome }}" != "success" || "${{ needs.rollback_smoke.outputs.outcome }}" != "success" ]]; then
+            echo "candidate_ref and rollback_ref smoke validations must both pass." >&2
+            exit 1
+          fi
