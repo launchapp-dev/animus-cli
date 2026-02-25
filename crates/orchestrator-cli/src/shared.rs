@@ -245,10 +245,7 @@ mod tests {
     fn build_agent_context_accepts_managed_worktree_cwd() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let temp = tempfile::tempdir().expect("tempdir should be created");
-        let _home = EnvVarGuard::set(
-            "HOME",
-            Some(temp.path().to_string_lossy().as_ref()),
-        );
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
 
         let project = temp.path().join("project");
         std::fs::create_dir_all(&project).expect("project dir should be created");

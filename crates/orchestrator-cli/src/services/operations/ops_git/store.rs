@@ -136,11 +136,19 @@ pub(super) fn resolve_worktree_path(repo_path: &Path, worktree_name: &str) -> Re
     Ok(PathBuf::from(worktree.path))
 }
 
-pub(super) fn ensure_force_confirmation(
+pub(super) fn ensure_confirmation(
     project_root: &str,
     confirmation_id: Option<&str>,
+    operation_type: &str,
+    repo_name: &str,
 ) -> Result<()> {
-    let confirmation_id = confirmation_id.ok_or_else(|| anyhow!("CONFIRMATION_REQUIRED"))?;
+    let confirmation_id = confirmation_id.ok_or_else(|| {
+        anyhow!(
+            "CONFIRMATION_REQUIRED: request and approve a git confirmation for '{}' on '{}' and rerun with --confirmation-id",
+            operation_type,
+            repo_name
+        )
+    })?;
     let store = load_git_confirmations(project_root)?;
     let request = store
         .requests
@@ -149,6 +157,28 @@ pub(super) fn ensure_force_confirmation(
         .ok_or_else(|| anyhow!("confirmation request not found: {confirmation_id}"))?;
     if request.blocked {
         anyhow::bail!("operation blocked by policy: {}", request.reason);
+    }
+    if !request.required {
+        anyhow::bail!(
+            "confirmation_id '{}' is not marked as required for destructive operations",
+            confirmation_id
+        );
+    }
+    if !request.operation_type.eq_ignore_ascii_case(operation_type) {
+        anyhow::bail!(
+            "confirmation '{}' operation mismatch: expected '{}', found '{}'",
+            confirmation_id,
+            operation_type,
+            request.operation_type
+        );
+    }
+    if !request.repo_name.eq_ignore_ascii_case(repo_name) {
+        anyhow::bail!(
+            "confirmation '{}' repo mismatch: expected '{}', found '{}'",
+            confirmation_id,
+            repo_name,
+            request.repo_name
+        );
     }
     if request.approved != Some(true) {
         anyhow::bail!("operation not approved for confirmation_id: {confirmation_id}");

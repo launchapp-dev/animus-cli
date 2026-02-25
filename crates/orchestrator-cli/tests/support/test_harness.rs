@@ -72,4 +72,50 @@ impl CliHarness {
 
         Ok(payload)
     }
+
+    pub(crate) fn run_json_err(&self, args: &[&str]) -> Result<Value> {
+        let output = Command::new(&self.binary_path)
+            .arg("--json")
+            .arg("--project-root")
+            .arg(self.project_root.path())
+            .args(args)
+            .env("AO_CONFIG_DIR", self.config_root.path())
+            .env("AGENT_ORCHESTRATOR_CONFIG_DIR", self.config_root.path())
+            .output()
+            .with_context(|| format!("failed to execute ao command: {}", args.join(" ")))?;
+
+        if output.status.success() {
+            anyhow::bail!(
+                "expected command to fail but it succeeded: ao --json --project-root {} {}\nstdout:\n{}\nstderr:\n{}",
+                self.project_root.path().display(),
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let payload = serde_json::from_slice::<Value>(&output.stderr).with_context(|| {
+            format!(
+                "failed to parse json error output from ao command: {}",
+                args.join(" ")
+            )
+        })?;
+
+        if payload.get("schema").and_then(Value::as_str) != Some("ao.cli.v1") {
+            anyhow::bail!(
+                "unexpected schema for failing command {}: {}",
+                args.join(" "),
+                payload
+            );
+        }
+        if payload.get("ok").and_then(Value::as_bool) != Some(false) {
+            anyhow::bail!(
+                "expected non-ok envelope for failing command {}: {}",
+                args.join(" "),
+                payload
+            );
+        }
+
+        Ok(payload)
+    }
 }

@@ -4,8 +4,8 @@ use anyhow::Result;
 use orchestrator_core::{services::ServiceHub, TaskCreateInput, TaskFilter, TaskUpdateInput};
 
 use crate::{
-    parse_dependency_type, parse_input_json_or, parse_priority_opt, parse_task_status,
-    parse_task_type_opt, print_ok, print_value, TaskCommand,
+    ensure_destructive_confirmation, parse_dependency_type, parse_input_json_or,
+    parse_priority_opt, parse_task_status, parse_task_type_opt, print_value, TaskCommand,
 };
 
 pub(crate) async fn handle_task(
@@ -96,9 +96,35 @@ pub(crate) async fn handle_task(
             print_value(tasks.update(&args.id, input).await?, json)
         }
         TaskCommand::Delete(args) => {
+            let task = tasks.get(&args.id).await?;
+            if args.dry_run {
+                return print_value(
+                    serde_json::json!({
+                        "action": "task.delete",
+                        "dry_run": true,
+                        "destructive": true,
+                        "task": {
+                            "id": task.id,
+                            "title": task.title,
+                            "status": task.status,
+                            "paused": task.paused,
+                            "cancelled": task.cancelled,
+                        },
+                    }),
+                    json,
+                );
+            }
+
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "task delete")?;
             tasks.delete(&args.id).await?;
-            print_ok("task deleted", json);
-            Ok(())
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": "task deleted",
+                    "task_id": args.id,
+                }),
+                json,
+            )
         }
         TaskCommand::Assign(args) => {
             print_value(tasks.assign(&args.id, args.assignee).await?, json)

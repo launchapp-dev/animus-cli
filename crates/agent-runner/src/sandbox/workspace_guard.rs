@@ -90,9 +90,7 @@ mod tests {
             .join("task-task-011");
         std::fs::create_dir_all(&worktree).expect("managed worktree should be created");
         std::fs::write(
-            root.join(".ao")
-                .join("scope-abc123")
-                .join(".project-root"),
+            root.join(".ao").join("scope-abc123").join(".project-root"),
             format!("{}\n", project_canonical.to_string_lossy()),
         )
         .expect("project marker should be written");
