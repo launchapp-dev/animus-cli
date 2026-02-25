@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone)]
 struct PostSuccessGitConfig {
     auto_merge_enabled: bool,
+    auto_commit_before_merge: bool,
     auto_merge_target_branch: String,
     auto_merge_no_ff: bool,
     auto_push_remote: String,
@@ -13,6 +14,7 @@ struct PostSuccessGitConfig {
 fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
     let mut cfg = PostSuccessGitConfig {
         auto_merge_enabled: false,
+        auto_commit_before_merge: false,
         auto_merge_target_branch: "main".to_string(),
         auto_merge_no_ff: true,
         auto_push_remote: "origin".to_string(),
@@ -20,40 +22,47 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
     };
 
     let config_path = Path::new(project_root).join(".ao").join("pm-config.json");
-    let Ok(content) = fs::read_to_string(config_path) else {
-        return cfg;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&content) else {
-        return cfg;
-    };
+    if let Ok(content) = fs::read_to_string(config_path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&content) {
+            if let Some(enabled) = value.get("auto_merge_enabled").and_then(Value::as_bool) {
+                cfg.auto_merge_enabled = enabled;
+            }
+            if let Some(enabled) = value.get("auto_commit_before_merge").and_then(Value::as_bool) {
+                cfg.auto_commit_before_merge = enabled;
+            }
+            if let Some(branch) = value
+                .get("auto_merge_target_branch")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                cfg.auto_merge_target_branch = branch.to_string();
+            }
+            if let Some(no_ff) = value.get("auto_merge_no_ff").and_then(Value::as_bool) {
+                cfg.auto_merge_no_ff = no_ff;
+            }
+            if let Some(remote) = value
+                .get("auto_push_remote")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                cfg.auto_push_remote = remote.to_string();
+            }
+            if let Some(cleanup) = value
+                .get("auto_cleanup_worktree_enabled")
+                .and_then(Value::as_bool)
+            {
+                cfg.auto_cleanup_worktree_enabled = cleanup;
+            }
+        }
+    }
 
-    if let Some(enabled) = value.get("auto_merge_enabled").and_then(Value::as_bool) {
+    if let Some(enabled) = env_bool_override("AO_AUTO_MERGE_ENABLED") {
         cfg.auto_merge_enabled = enabled;
     }
-    if let Some(branch) = value
-        .get("auto_merge_target_branch")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        cfg.auto_merge_target_branch = branch.to_string();
-    }
-    if let Some(no_ff) = value.get("auto_merge_no_ff").and_then(Value::as_bool) {
-        cfg.auto_merge_no_ff = no_ff;
-    }
-    if let Some(remote) = value
-        .get("auto_push_remote")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        cfg.auto_push_remote = remote.to_string();
-    }
-    if let Some(cleanup) = value
-        .get("auto_cleanup_worktree_enabled")
-        .and_then(Value::as_bool)
-    {
-        cfg.auto_cleanup_worktree_enabled = cleanup;
+    if let Some(enabled) = env_bool_override("AO_AUTO_COMMIT_BEFORE_MERGE") {
+        cfg.auto_commit_before_merge = enabled;
     }
 
     if cfg.auto_push_remote != "origin" {
@@ -64,6 +73,15 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
     }
 
     cfg
+}
+
+fn env_bool_override(key: &str) -> Option<bool> {
+    let value = std::env::var(key).ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 fn resolve_task_source_branch(task: &orchestrator_core::OrchestratorTask) -> Option<String> {
@@ -167,6 +185,22 @@ fn ensure_git_identity(cwd: &str) -> Result<()> {
     Ok(())
 }
 
+fn auto_commit_pending_source_changes(cwd: &str, task_id: &str) -> Result<()> {
+    if !git_has_pending_changes(cwd)? {
+        return Ok(());
+    }
+
+    ensure_git_identity(cwd)?;
+    git_status(cwd, &["add", "-A"], "stage pending source branch changes")?;
+    let commit_message = format!("chore(ao): auto-commit {task_id} before merge");
+    git_status(
+        cwd,
+        &["commit", "-m", commit_message.as_str()],
+        "auto-commit source branch changes before merge",
+    )?;
+    Ok(())
+}
+
 pub(super) fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<()> {
     let commit_message = commit_message.trim();
     if commit_message.is_empty() {
@@ -214,6 +248,9 @@ pub(super) async fn post_success_merge_push_and_cleanup(
         .as_deref()
         .filter(|path| Path::new(path).exists())
         .unwrap_or(project_root);
+    if cfg.auto_commit_before_merge {
+        auto_commit_pending_source_changes(source_push_cwd, &task.id)?;
+    }
     git_status(
         source_push_cwd,
         &[

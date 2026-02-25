@@ -119,8 +119,16 @@ pub(super) async fn handle_daemon_run(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    let auto_merge_override = args.auto_merge;
+    let auto_commit_before_merge_override = args.auto_commit_before_merge;
     let phase_timeout_override = args.phase_timeout_secs;
     let idle_timeout_override = args.idle_timeout_secs;
+    let auto_merge_original = auto_merge_override
+        .map(|_| std::env::var("AO_AUTO_MERGE_ENABLED").ok())
+        .flatten();
+    let auto_commit_before_merge_original = auto_commit_before_merge_override
+        .map(|_| std::env::var("AO_AUTO_COMMIT_BEFORE_MERGE").ok())
+        .flatten();
     let phase_timeout_original = phase_timeout_override
         .map(|_| std::env::var("AO_PHASE_TIMEOUT_SECS").ok())
         .flatten();
@@ -128,6 +136,15 @@ pub(super) async fn handle_daemon_run(
         .map(|_| std::env::var("AO_RUN_IDLE_TIMEOUT_SECS").ok())
         .flatten();
 
+    if let Some(enabled) = auto_merge_override {
+        std::env::set_var("AO_AUTO_MERGE_ENABLED", if enabled { "1" } else { "0" });
+    }
+    if let Some(enabled) = auto_commit_before_merge_override {
+        std::env::set_var(
+            "AO_AUTO_COMMIT_BEFORE_MERGE",
+            if enabled { "1" } else { "0" },
+        );
+    }
     if let Some(timeout_secs) = phase_timeout_override {
         std::env::set_var("AO_PHASE_TIMEOUT_SECS", timeout_secs.to_string());
     }
@@ -337,6 +354,15 @@ pub(super) async fn handle_daemon_run(
     if idle_timeout_override.is_some() {
         restore_env_override("AO_RUN_IDLE_TIMEOUT_SECS", idle_timeout_original);
     }
+    if auto_merge_override.is_some() {
+        restore_env_override("AO_AUTO_MERGE_ENABLED", auto_merge_original);
+    }
+    if auto_commit_before_merge_override.is_some() {
+        restore_env_override(
+            "AO_AUTO_COMMIT_BEFORE_MERGE",
+            auto_commit_before_merge_original,
+        );
+    }
 
     run_result
 }
@@ -408,6 +434,8 @@ mod tests {
             include_registry: true,
             ai_task_generation: false,
             auto_run_ready: false,
+            auto_merge: None,
+            auto_commit_before_merge: None,
             startup_cleanup: true,
             resume_interrupted: false,
             reconcile_stale: false,

@@ -150,6 +150,7 @@ pub(crate) enum DaemonCommand {
     Logs(LogArgs),
     ClearLogs,
     Agents,
+    Config(DaemonConfigArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -306,6 +307,14 @@ pub(crate) struct DaemonRunArgs {
     pub(crate) idle_timeout_secs: Option<u64>,
     #[arg(long, default_value_t = false)]
     pub(crate) once: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DaemonConfigArgs {
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_merge: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_commit_before_merge: Option<bool>,
 }
 
 #[derive(Debug, Args)]

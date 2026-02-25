@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-25T02:05:50.112285Z",
     "created_at": "2026-02-24T19:48:30.858759Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-24T22:55:46.775066Z",
-    "updated_at": "2026-02-24T22:55:47.233035Z",
-    "updated_by": "ao-cli",
-    "version": 3
+    "updated_at": "2026-02-25T02:05:50.112288Z",
+    "updated_by": "ao-daemon",
+    "version": 8
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Harden confirmations and dry-run behavior for destructive commands",
   "type": "feature",

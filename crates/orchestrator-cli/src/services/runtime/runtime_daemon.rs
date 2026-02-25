@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +8,8 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
 
 use crate::{
-    print_ok, print_value, DaemonCommand, DaemonEventsArgs, DaemonStartArgs, RunnerScopeArg,
+    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
+    RunnerScopeArg,
 };
 
 mod daemon_events;
@@ -120,6 +123,76 @@ fn runner_scope_value(scope: &RunnerScopeArg) -> &'static str {
     }
 }
 
+fn pm_config_path(project_root: &str) -> PathBuf {
+    PathBuf::from(canonicalize_lossy(project_root))
+        .join(".ao")
+        .join("pm-config.json")
+}
+
+fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
+    let path = pm_config_path(project_root);
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read daemon config at {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+
+    serde_json::from_str(&content)
+        .with_context(|| format!("invalid daemon config JSON at {}", path.display()))
+}
+
+fn save_pm_config(project_root: &str, value: &serde_json::Value) -> Result<()> {
+    let path = pm_config_path(project_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+    let content =
+        serde_json::to_string_pretty(value).context("failed to serialize daemon config JSON")?;
+    fs::write(&path, format!("{content}\n"))
+        .with_context(|| format!("failed to write daemon config at {}", path.display()))?;
+    Ok(())
+}
+
+fn daemon_config_bool(config: &serde_json::Value, key: &str) -> Option<bool> {
+    config.get(key).and_then(serde_json::Value::as_bool)
+}
+
+fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) -> Result<()> {
+    let mut config = load_pm_config(project_root)?;
+    if !config.is_object() {
+        config = serde_json::json!({});
+    }
+
+    let mut updated = false;
+    if let Some(enabled) = args.auto_merge {
+        config["auto_merge_enabled"] = serde_json::Value::Bool(enabled);
+        updated = true;
+    }
+    if let Some(enabled) = args.auto_commit_before_merge {
+        config["auto_commit_before_merge"] = serde_json::Value::Bool(enabled);
+        updated = true;
+    }
+
+    if updated {
+        save_pm_config(project_root, &config)?;
+    }
+
+    print_value(
+        serde_json::json!({
+            "config_path": pm_config_path(project_root).display().to_string(),
+            "auto_merge_enabled": daemon_config_bool(&config, "auto_merge_enabled").unwrap_or(false),
+            "auto_commit_before_merge": daemon_config_bool(&config, "auto_commit_before_merge").unwrap_or(false),
+            "updated": updated
+        }),
+        json,
+    )
+}
+
 fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {
     let current_exe = std::env::current_exe().context("failed to resolve current ao binary")?;
     let mut command = ProcessCommand::new(current_exe);
@@ -147,6 +220,14 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .stdin(Stdio::null());
+    if let Some(auto_merge) = args.auto_merge {
+        command.arg("--auto-merge").arg(auto_merge.to_string());
+    }
+    if let Some(auto_commit_before_merge) = args.auto_commit_before_merge {
+        command
+            .arg("--auto-commit-before-merge")
+            .arg(auto_commit_before_merge.to_string());
+    }
     if let Some(timeout_secs) = args.phase_timeout_secs {
         command
             .arg("--phase-timeout-secs")
@@ -300,6 +381,7 @@ pub(crate) async fn handle_daemon(
             let active_agents = daemon.active_agents().await?;
             print_value(serde_json::json!({ "active_agents": active_agents }), json)
         }
+        DaemonCommand::Config(args) => handle_daemon_config(args, project_root, json),
     }
 }
 

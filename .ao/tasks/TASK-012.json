@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-25T02:06:05.838582Z",
     "created_at": "2026-02-24T20:06:43.038925Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-24T22:55:46.946940Z",
-    "updated_at": "2026-02-24T22:55:47.282314Z",
-    "updated_by": "ao-cli",
-    "version": 3
+    "updated_at": "2026-02-25T02:06:05.838584Z",
+    "updated_by": "ao-daemon",
+    "version": 10
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Implement typed web API client and contract guards",
   "type": "feature",
