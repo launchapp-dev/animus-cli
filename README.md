@@ -144,10 +144,31 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - `REQ-005` <-> `TASK-005`: CLI-focused CI coverage
 - `REQ-006` <-> `TASK-006`: multi-binary release packaging
 
+## Rust-Only Dependency Policy
+
+- Scope: workspace Rust crate manifests (`Cargo.toml` for members in `[workspace].members`).
+- Allowed dependency classes: Rust crates needed for CLI/runtime/server behavior, including test and observability crates that do not embed desktop wrappers.
+- Prohibited dependency classes:
+  - `tauri`
+  - `tauri-build`
+  - `tauri-plugin-*`
+  - `wry`
+  - `tao`
+  - `gtk`
+  - `gtk4`
+  - `webkit2gtk`
+  - `webview2`
+  - `webview2-com`
+- Enforcement: `.github/workflows/rust-only-dependency-policy.yml` runs `cargo test -p orchestrator-cli --test rust_only_dependency_policy` and fails on violations.
+
 ## Notes
 
 - Desktop-wrapper GUI code is intentionally excluded from this workspace.
 - Web UI planning and implementation notes for the web server live in `crates/orchestrator-web-server/docs/` (current artifact: `task-011-react-shell-requirements.md`).
+- Rust-only dependency guardrail artifacts for TASK-007 live in
+  `crates/orchestrator-cli/docs/`:
+  - `task-007-rust-only-dependency-policy-requirements.md`
+  - `task-007-rust-only-dependency-policy-implementation-notes.md`
 - CLI destructive safety planning artifacts for TASK-009 live in `crates/orchestrator-cli/docs/`:
   - `task-009-destructive-command-requirements.md`
   - `task-009-destructive-command-implementation-notes.md`

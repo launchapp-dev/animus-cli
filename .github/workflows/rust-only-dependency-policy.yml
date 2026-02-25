@@ -1,0 +1,23 @@
+name: Rust-Only Dependency Policy
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  rust_only_dependency_guardrail:
+    name: Rust-only dependency guardrail
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate dependency policy
+        run: cargo test -p orchestrator-cli --test rust_only_dependency_policy
