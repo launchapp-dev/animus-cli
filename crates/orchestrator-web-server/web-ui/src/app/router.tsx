@@ -1,21 +1,41 @@
+import { Suspense, lazy } from "react";
+import type { ReactNode } from "react";
 import { createBrowserRouter, Navigate, RouterProvider, useRouteError } from "react-router-dom";
 
 import { AppShellLayout } from "./shell";
-import {
-  DaemonPage,
-  DashboardPage,
-  EventsPage,
-  NotFoundPage,
-  ProjectDetailPage,
-  ProjectsPage,
-  RequirementDetailPage,
-  ReviewHandoffPage,
-  TaskDetailPage,
-  TasksPage,
-  WorkflowCheckpointPage,
-  WorkflowDetailPage,
-  WorkflowsPage,
-} from "./screens";
+
+type ScreensModule = typeof import("./screens");
+type ScreenExport =
+  | "DashboardPage"
+  | "DaemonPage"
+  | "ProjectsPage"
+  | "ProjectDetailPage"
+  | "RequirementDetailPage"
+  | "TasksPage"
+  | "TaskDetailPage"
+  | "WorkflowsPage"
+  | "WorkflowDetailPage"
+  | "WorkflowCheckpointPage"
+  | "EventsPage"
+  | "ReviewHandoffPage"
+  | "NotFoundPage";
+
+const lazyScreen = (name: ScreenExport) =>
+  lazy(async () => import("./screens").then((module: ScreensModule) => ({ default: module[name] })));
+
+const DashboardPage = lazyScreen("DashboardPage");
+const DaemonPage = lazyScreen("DaemonPage");
+const ProjectsPage = lazyScreen("ProjectsPage");
+const ProjectDetailPage = lazyScreen("ProjectDetailPage");
+const RequirementDetailPage = lazyScreen("RequirementDetailPage");
+const TasksPage = lazyScreen("TasksPage");
+const TaskDetailPage = lazyScreen("TaskDetailPage");
+const WorkflowsPage = lazyScreen("WorkflowsPage");
+const WorkflowDetailPage = lazyScreen("WorkflowDetailPage");
+const WorkflowCheckpointPage = lazyScreen("WorkflowCheckpointPage");
+const EventsPage = lazyScreen("EventsPage");
+const ReviewHandoffPage = lazyScreen("ReviewHandoffPage");
+const NotFoundPage = lazyScreen("NotFoundPage");
 
 export const APP_ROUTE_PATHS = [
   "/",
@@ -46,55 +66,55 @@ const router = createBrowserRouter([
       },
       {
         path: "dashboard",
-        element: <DashboardPage />,
+        element: withRouteSuspense(<DashboardPage />),
       },
       {
         path: "daemon",
-        element: <DaemonPage />,
+        element: withRouteSuspense(<DaemonPage />),
       },
       {
         path: "projects",
-        element: <ProjectsPage />,
+        element: withRouteSuspense(<ProjectsPage />),
       },
       {
         path: "projects/:projectId",
-        element: <ProjectDetailPage />,
+        element: withRouteSuspense(<ProjectDetailPage />),
       },
       {
         path: "projects/:projectId/requirements/:requirementId",
-        element: <RequirementDetailPage />,
+        element: withRouteSuspense(<RequirementDetailPage />),
       },
       {
         path: "tasks",
-        element: <TasksPage />,
+        element: withRouteSuspense(<TasksPage />),
       },
       {
         path: "tasks/:taskId",
-        element: <TaskDetailPage />,
+        element: withRouteSuspense(<TaskDetailPage />),
       },
       {
         path: "workflows",
-        element: <WorkflowsPage />,
+        element: withRouteSuspense(<WorkflowsPage />),
       },
       {
         path: "workflows/:workflowId",
-        element: <WorkflowDetailPage />,
+        element: withRouteSuspense(<WorkflowDetailPage />),
       },
       {
         path: "workflows/:workflowId/checkpoints/:checkpoint",
-        element: <WorkflowCheckpointPage />,
+        element: withRouteSuspense(<WorkflowCheckpointPage />),
       },
       {
         path: "events",
-        element: <EventsPage />,
+        element: withRouteSuspense(<EventsPage />),
       },
       {
         path: "reviews/handoff",
-        element: <ReviewHandoffPage />,
+        element: withRouteSuspense(<ReviewHandoffPage />),
       },
       {
         path: "*",
-        element: <NotFoundPage />,
+        element: withRouteSuspense(<NotFoundPage />),
       },
     ],
   },
@@ -115,5 +135,13 @@ function RouteErrorBoundary() {
       </p>
       <pre>{JSON.stringify(error, null, 2)}</pre>
     </section>
+  );
+}
+
+function withRouteSuspense(element: ReactNode) {
+  return (
+    <Suspense fallback={<section className="loading-box">Loading route...</section>}>
+      {element}
+    </Suspense>
   );
 }
