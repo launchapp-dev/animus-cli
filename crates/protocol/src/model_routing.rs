@@ -130,9 +130,9 @@ pub fn default_model_specs() -> Vec<(String, String)> {
     vec![
         ("claude-sonnet-4-6".to_string(), "claude".to_string()),
         ("claude-opus-4-6".to_string(), "claude".to_string()),
+        ("gpt-5.3-codex".to_string(), "codex".to_string()),
         ("gpt-5.3-codex-spark".to_string(), "codex".to_string()),
         ("gpt-5".to_string(), "codex".to_string()),
-        ("gpt-5.3-codex".to_string(), "codex".to_string()),
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
         ("gemini-3-pro".to_string(), "gemini".to_string()),
@@ -302,5 +302,17 @@ mod tests {
             Some("zai-coding-plan/glm-5")
         );
         assert_eq!(default_model_for_tool("unknown"), None);
+    }
+
+    #[test]
+    fn default_model_specs_start_with_each_tool_default() {
+        for tool in ["claude", "codex", "gemini", "opencode"] {
+            let expected = default_model_for_tool(tool).expect("tool should have default model");
+            let first_for_tool = default_model_specs()
+                .into_iter()
+                .find_map(|(model, tool_id)| (tool_id == tool).then_some(model))
+                .expect("tool should exist in default model specs");
+            assert_eq!(first_for_tool, expected);
+        }
     }
 }

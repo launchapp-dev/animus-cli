@@ -68,6 +68,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_item_wrapped_mcp_tool_call_event() {
+        let mut parser = OutputParser::new();
+        let events = parser.parse_line(
+            r#"{"type":"item.started","item":{"id":"item_7","type":"mcp_tool_call","server":"shortcut","tool":"documents-search","arguments":{"title":"REQ-021"}}}"#,
+        );
+
+        let tool_event = events
+            .into_iter()
+            .find_map(|event| match event {
+                ParsedEvent::ToolCall {
+                    tool_name,
+                    parameters,
+                    ..
+                } => Some((tool_name, parameters)),
+                _ => None,
+            })
+            .expect("tool call event");
+
+        assert_eq!(tool_event.0, "documents-search");
+        assert_eq!(
+            tool_event
+                .1
+                .get("title")
+                .and_then(serde_json::Value::as_str),
+            Some("REQ-021")
+        );
+        assert_eq!(
+            tool_event
+                .1
+                .get("server")
+                .and_then(serde_json::Value::as_str),
+            Some("shortcut")
+        );
+    }
+
+    #[test]
     fn parses_phase_transition_json_fallback_signal() {
         let mut parser = OutputParser::new();
         let events = parser.parse_line(

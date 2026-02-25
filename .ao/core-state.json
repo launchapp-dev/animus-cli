@@ -1,7 +1,7 @@
 {
   "daemon_status": "running",
   "daemon_max_agents": null,
-  "runner_pid": 32501,
+  "runner_pid": 51622,
   "logs": [
     {
       "timestamp": "2026-02-24T17:23:54.768509Z",
@@ -132,6 +132,191 @@
       "timestamp": "2026-02-25T03:27:41.181129Z",
       "level": "info",
       "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:02:22.761580Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:37:45.102423Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:37:58.128422Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:38:15.740919Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:44:57.993259Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:49:05.001090Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:52:31.614986Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:53:15.031780Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 32501)"
+    },
+    {
+      "timestamp": "2026-02-25T06:53:42.033655Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T06:53:42.158004Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 59364, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T06:53:47.343539Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 59364)"
+    },
+    {
+      "timestamp": "2026-02-25T06:57:53.824754Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 94085)"
+    },
+    {
+      "timestamp": "2026-02-25T06:59:00.402410Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T06:59:01.935814Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 3335, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T06:59:51.476567Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 11091)"
+    },
+    {
+      "timestamp": "2026-02-25T07:00:53.602948Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:00:54.780312Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 20104)"
+    },
+    {
+      "timestamp": "2026-02-25T07:01:26.912440Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:01:27.037308Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 24534, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T07:01:28.079297Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 24534)"
+    },
+    {
+      "timestamp": "2026-02-25T07:12:26.873350Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 12691)"
+    },
+    {
+      "timestamp": "2026-02-25T07:20:06.735472Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:20:06.863671Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 72168, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T07:22:15.433155Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 90926)"
+    },
+    {
+      "timestamp": "2026-02-25T07:22:31.358961Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:22:36.573560Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 93919, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T07:23:03.342738Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 97809)"
+    },
+    {
+      "timestamp": "2026-02-25T07:23:18.281589Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:23:18.402421Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 228, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T07:23:19.176143Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 228)"
+    },
+    {
+      "timestamp": "2026-02-25T07:24:11.830935Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 8373)"
+    },
+    {
+      "timestamp": "2026-02-25T07:24:26.590535Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T07:24:27.489221Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 10801)"
+    },
+    {
+      "timestamp": "2026-02-25T14:30:23.625545Z",
+      "level": "error",
+      "message": "agent-runner health check failed while daemon was active"
+    },
+    {
+      "timestamp": "2026-02-25T14:30:23.752165Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 46930, max_agents: 3)"
+    },
+    {
+      "timestamp": "2026-02-25T14:30:25.013259Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 46930)"
+    },
+    {
+      "timestamp": "2026-02-25T14:30:54.288079Z",
+      "level": "info",
+      "message": "daemon started (runner pid: 51622)"
     }
   ],
   "active_project_id": "d3e64ce6-19dc-428a-ac8d-f96c7ab91351",
@@ -181,17 +366,17 @@
     }
   },
   "tasks": {
-    "TASK-017": {
-      "id": "TASK-017",
-      "title": "Implement accessibility, responsive, and performance baselines",
-      "description": "Deliver keyboard navigation, semantic accessibility, responsive layouts, and core route performance budgets.",
-      "type": "chore",
+    "TASK-015": {
+      "id": "TASK-015",
+      "title": "Implement run telemetry stream and artifact inspector",
+      "description": "Build real-time/poll fallback event viewer, JSONL search/filter, and artifact browsing/download UX.",
+      "type": "feature",
       "status": "backlog",
       "blocked_reason": null,
       "blocked_at": null,
       "blocked_phase": null,
       "blocked_by": null,
-      "priority": "medium",
+      "priority": "high",
       "risk": "medium",
       "scope": "medium",
       "complexity": "medium",
@@ -216,8 +401,8 @@
       "worktree_path": null,
       "branch_name": null,
       "metadata": {
-        "created_at": "2026-02-24T20:06:43.244521Z",
-        "updated_at": "2026-02-24T20:06:43.244521Z",
+        "created_at": "2026-02-24T20:06:43.164853Z",
+        "updated_at": "2026-02-24T20:06:43.164853Z",
         "created_by": "ao-cli",
         "updated_by": "ao-cli",
         "started_at": null,
@@ -233,10 +418,91 @@
         "requires_network": true
       }
     },
-    "TASK-009": {
-      "id": "TASK-009",
-      "title": "Harden confirmations and dry-run behavior for destructive commands",
-      "description": "Audit git/task/workflow destructive flows and align confirmation plus preview behavior.",
+    "TASK-021": {
+      "id": "TASK-021",
+      "title": "Scaffold ao tui command and MVP dashboard",
+      "description": "Build an agent-first TUI where provider execution is MCP-locked and always routed through AO CLI MCP by spawning the 'ao mcp serve' command behind an internal bridge; no external MCP server dependency.",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [
+        {
+          "id": "3aed6c70-f815-4e27-8e54-d82422888421",
+          "description": "Add clap + main dispatch support for new tui command",
+          "completed": true,
+          "created_at": "2026-02-25T05:46:05.466510Z",
+          "completed_at": "2026-02-25T05:57:47.795690Z"
+        },
+        {
+          "id": "6a9bd04b-c37c-401b-b983-a585f0000f17",
+          "description": "Implement minimal ratatui screen with task list and keybinds",
+          "completed": true,
+          "created_at": "2026-02-25T05:46:06.842913Z",
+          "completed_at": "2026-02-25T05:57:48.595151Z"
+        },
+        {
+          "id": "c81ac588-5f49-45af-8e28-2feffe2bd0bb",
+          "description": "Run cargo check and CLI smoke coverage updates",
+          "completed": true,
+          "created_at": "2026-02-25T05:46:07.642782Z",
+          "completed_at": "2026-02-25T06:56:52.220134Z"
+        },
+        {
+          "id": "385bcbdb-2705-4bd8-891e-cf5218b30396",
+          "description": "Add AO MCP stdio -> HTTP bridge so agent runs use AO CLI MCP only",
+          "completed": true,
+          "created_at": "2026-02-25T05:48:27.028778Z",
+          "completed_at": "2026-02-25T05:57:50.858418Z"
+        }
+      ],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-25T05:46:02.633221Z",
+        "updated_at": "2026-02-25T06:56:52.220134Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": "2026-02-25T05:46:04.756127Z",
+        "completed_at": "2026-02-25T05:57:51.625316Z",
+        "version": 12
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-011": {
+      "id": "TASK-011",
+      "title": "Create React shell and route architecture over web server",
+      "description": "Scaffold web app shell, route tree, project context frame, and core navigation around orchestrator-web-server endpoints.",
       "type": "feature",
       "status": "done",
       "blocked_reason": null,
@@ -265,120 +531,16 @@
         "requires_staging_deploy": false,
         "requires_production_deploy": false
       },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-009",
-      "branch_name": "ao/task-009",
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-011",
+      "branch_name": "ao/task-011",
       "metadata": {
-        "created_at": "2026-02-24T19:48:30.858759Z",
-        "updated_at": "2026-02-25T02:05:50.112288Z",
+        "created_at": "2026-02-24T20:06:42.993480Z",
+        "updated_at": "2026-02-24T22:10:03.059827Z",
         "created_by": "ao-cli",
         "updated_by": "ao-daemon",
-        "started_at": "2026-02-24T22:55:46.775066Z",
-        "completed_at": "2026-02-25T02:05:50.112285Z",
-        "version": 8
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-012": {
-      "id": "TASK-012",
-      "title": "Implement typed web API client and contract guards",
-      "description": "Build typed SDK wrappers with response guards, normalized errors, and compatibility handling for server contracts.",
-      "type": "feature",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-012",
-      "branch_name": "ao/task-012",
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.038925Z",
-        "updated_at": "2026-02-25T02:06:05.838584Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-24T22:55:46.946940Z",
-        "completed_at": "2026-02-25T02:06:05.838582Z",
-        "version": 10
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-010": {
-      "id": "TASK-010",
-      "title": "Add traceability checks for run/event persistence and lookup",
-      "description": "Validate run artifact persistence and retrieval under global scoped runtime directories.",
-      "type": "test",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.979576Z",
-        "updated_at": "2026-02-24T19:48:30.979576Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
+        "started_at": "2026-02-24T20:13:37.289431Z",
+        "completed_at": "2026-02-24T22:10:03.059824Z",
+        "version": 30
       },
       "deadline": null,
       "paused": false,
@@ -498,69 +660,17 @@
         "requires_network": true
       }
     },
-    "TASK-007": {
-      "id": "TASK-007",
-      "title": "Implement dependency policy checks for Rust-only guardrail",
-      "description": "Add automated policy checks and docs updates to enforce Rust-only dependency boundaries.",
-      "type": "chore",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:03:13.095459Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-007",
-      "branch_name": "ao/task-007",
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.630741Z",
-        "updated_at": "2026-02-25T04:03:13.095527Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.612244Z",
-        "completed_at": null,
-        "version": 13
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-011": {
-      "id": "TASK-011",
-      "title": "Create React shell and route architecture over web server",
-      "description": "Scaffold web app shell, route tree, project context frame, and core navigation around orchestrator-web-server endpoints.",
-      "type": "feature",
-      "status": "done",
+    "TASK-010": {
+      "id": "TASK-010",
+      "title": "Add traceability checks for run/event persistence and lookup",
+      "description": "Validate run artifact persistence and retrieval under global scoped runtime directories.",
+      "type": "test",
+      "status": "backlog",
       "blocked_reason": null,
       "blocked_at": null,
       "blocked_phase": null,
       "blocked_by": null,
-      "priority": "high",
+      "priority": "medium",
       "risk": "medium",
       "scope": "medium",
       "complexity": "medium",
@@ -582,16 +692,16 @@
         "requires_staging_deploy": false,
         "requires_production_deploy": false
       },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-011",
-      "branch_name": "ao/task-011",
+      "worktree_path": null,
+      "branch_name": null,
       "metadata": {
-        "created_at": "2026-02-24T20:06:42.993480Z",
-        "updated_at": "2026-02-24T22:10:03.059827Z",
+        "created_at": "2026-02-24T19:48:30.979576Z",
+        "updated_at": "2026-02-24T19:48:30.979576Z",
         "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-24T20:13:37.289431Z",
-        "completed_at": "2026-02-24T22:10:03.059824Z",
-        "version": 30
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
       },
       "deadline": null,
       "paused": false,
@@ -602,115 +712,11 @@
         "requires_network": true
       }
     },
-    "TASK-008": {
-      "id": "TASK-008",
-      "title": "Add contract tests for JSON output envelope stability",
-      "description": "Create regression tests validating envelope schema and error code mappings across representative commands.",
-      "type": "test",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:04:04.388862Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-008",
-      "branch_name": "ao/task-008",
-      "metadata": {
-        "created_at": "2026-02-24T19:48:30.745668Z",
-        "updated_at": "2026-02-25T04:04:04.388876Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.572358Z",
-        "completed_at": null,
-        "version": 13
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-013": {
-      "id": "TASK-013",
-      "title": "Build vision/requirements planning workspace UI",
-      "description": "Implement authoring, refinement, list/detail, and deep-link flows for planning surfaces.",
+    "TASK-014": {
+      "id": "TASK-014",
+      "title": "Build task/workflow control center interface",
+      "description": "Implement queue, state transitions, workflow controls, phase timeline, and gating UX.",
       "type": "feature",
-      "status": "blocked",
-      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
-      "blocked_at": "2026-02-25T04:47:55.588931Z",
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-013",
-      "branch_name": "ao/task-013",
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.079556Z",
-        "updated_at": "2026-02-25T04:47:55.588947Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-daemon",
-        "started_at": "2026-02-25T03:27:07.513365Z",
-        "completed_at": null,
-        "version": 19
-      },
-      "deadline": null,
-      "paused": true,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-002": {
-      "id": "TASK-002",
-      "title": "Audit and polish CLI help and error messages",
-      "description": "Review core command groups and align output style, argument clarity, and actionable validation errors.",
-      "type": "refactor",
       "status": "backlog",
       "blocked_reason": null,
       "blocked_at": null,
@@ -725,15 +731,67 @@
         "type": "unassigned"
       },
       "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.121717Z",
+        "updated_at": "2026-02-24T20:06:43.121717Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-004": {
+      "id": "TASK-004",
+      "title": "Strengthen llm wrapper to MCP server contract",
+      "description": "Validate binary path resolution, build invocation, and endpoint checks between llm-cli-wrapper and llm-mcp-server.",
+      "type": "feature",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
       "linked_requirements": [
-        "REQ-002"
+        "REQ-004"
       ],
       "linked_architecture_entities": [],
       "dependencies": [],
       "checklist": [],
       "tags": [
-        "cli",
-        "ux"
+        "mcp",
+        "wrapper"
       ],
       "workflow_metadata": {
         "workflow_id": null,
@@ -746,8 +804,8 @@
       "worktree_path": null,
       "branch_name": null,
       "metadata": {
-        "created_at": "2026-02-24T17:25:43.577231Z",
-        "updated_at": "2026-02-24T17:25:43.577231Z",
+        "created_at": "2026-02-24T17:25:45.015654Z",
+        "updated_at": "2026-02-24T17:25:45.015654Z",
         "created_by": "ao-cli",
         "updated_by": "ao-cli",
         "started_at": null,
@@ -815,6 +873,427 @@
         "requires_network": true
       }
     },
+    "TASK-017": {
+      "id": "TASK-017",
+      "title": "Implement accessibility, responsive, and performance baselines",
+      "description": "Deliver keyboard navigation, semantic accessibility, responsive layouts, and core route performance budgets.",
+      "type": "chore",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.244521Z",
+        "updated_at": "2026-02-24T20:06:43.244521Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-013": {
+      "id": "TASK-013",
+      "title": "Build vision/requirements planning workspace UI",
+      "description": "Implement authoring, refinement, list/detail, and deep-link flows for planning surfaces.",
+      "type": "feature",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:47:55.588931Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-013",
+      "branch_name": "ao/task-013",
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.079556Z",
+        "updated_at": "2026-02-25T04:47:55.588947Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.513365Z",
+        "completed_at": null,
+        "version": 19
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-007": {
+      "id": "TASK-007",
+      "title": "Implement dependency policy checks for Rust-only guardrail",
+      "description": "Add automated policy checks and docs updates to enforce Rust-only dependency boundaries.",
+      "type": "chore",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:03:13.095459Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-007",
+      "branch_name": "ao/task-007",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.630741Z",
+        "updated_at": "2026-02-25T04:03:13.095527Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.612244Z",
+        "completed_at": null,
+        "version": 13
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-020": {
+      "id": "TASK-020",
+      "title": "Implement architecture graph and task linkage",
+      "description": "Add architecture entities/edges graph and connect tasks to architecture IDs",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-020"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "architecture",
+        "task-routing"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:08:57.567221Z",
+        "updated_at": "2026-02-24T20:19:58.529316Z",
+        "created_by": "codex",
+        "updated_by": "codex",
+        "started_at": "2026-02-24T20:09:02.417037Z",
+        "completed_at": "2026-02-24T20:19:58.529314Z",
+        "version": 3
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-018": {
+      "id": "TASK-018",
+      "title": "Set up web GUI CI, E2E smoke, and release gates",
+      "description": "Add frontend test matrix, smoke E2E, release checklist, and rollback validation workflow.",
+      "type": "test",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "medium",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.284244Z",
+        "updated_at": "2026-02-24T20:06:43.284244Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-009": {
+      "id": "TASK-009",
+      "title": "Harden confirmations and dry-run behavior for destructive commands",
+      "description": "Audit git/task/workflow destructive flows and align confirmation plus preview behavior.",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-009",
+      "branch_name": "ao/task-009",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.858759Z",
+        "updated_at": "2026-02-25T02:05:50.112288Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-24T22:55:46.775066Z",
+        "completed_at": "2026-02-25T02:05:50.112285Z",
+        "version": 8
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-012": {
+      "id": "TASK-012",
+      "title": "Implement typed web API client and contract guards",
+      "description": "Build typed SDK wrappers with response guards, normalized errors, and compatibility handling for server contracts.",
+      "type": "feature",
+      "status": "done",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-012",
+      "branch_name": "ao/task-012",
+      "metadata": {
+        "created_at": "2026-02-24T20:06:43.038925Z",
+        "updated_at": "2026-02-25T02:06:05.838584Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-24T22:55:46.946940Z",
+        "completed_at": "2026-02-25T02:06:05.838582Z",
+        "version": 10
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-008": {
+      "id": "TASK-008",
+      "title": "Add contract tests for JSON output envelope stability",
+      "description": "Create regression tests validating envelope schema and error code mappings across representative commands.",
+      "type": "test",
+      "status": "blocked",
+      "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+      "blocked_at": "2026-02-25T04:04:04.388862Z",
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-008",
+      "branch_name": "ao/task-008",
+      "metadata": {
+        "created_at": "2026-02-24T19:48:30.745668Z",
+        "updated_at": "2026-02-25T04:04:04.388876Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-daemon",
+        "started_at": "2026-02-25T03:27:07.572358Z",
+        "completed_at": null,
+        "version": 13
+      },
+      "deadline": null,
+      "paused": true,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
     "TASK-001": {
       "id": "TASK-001",
       "title": "Write self-hosting docs and conventions",
@@ -862,6 +1341,63 @@
         "started_at": "2026-02-24T17:26:10.916940Z",
         "completed_at": "2026-02-24T17:27:16.724507Z",
         "version": 3
+      },
+      "deadline": null,
+      "paused": false,
+      "cancelled": false,
+      "resource_requirements": {
+        "max_cpu_percent": null,
+        "max_memory_mb": null,
+        "requires_network": true
+      }
+    },
+    "TASK-002": {
+      "id": "TASK-002",
+      "title": "Audit and polish CLI help and error messages",
+      "description": "Review core command groups and align output style, argument clarity, and actionable validation errors.",
+      "type": "refactor",
+      "status": "backlog",
+      "blocked_reason": null,
+      "blocked_at": null,
+      "blocked_phase": null,
+      "blocked_by": null,
+      "priority": "high",
+      "risk": "medium",
+      "scope": "medium",
+      "complexity": "medium",
+      "impact_area": [],
+      "assignee": {
+        "type": "unassigned"
+      },
+      "estimated_effort": null,
+      "linked_requirements": [
+        "REQ-002"
+      ],
+      "linked_architecture_entities": [],
+      "dependencies": [],
+      "checklist": [],
+      "tags": [
+        "cli",
+        "ux"
+      ],
+      "workflow_metadata": {
+        "workflow_id": null,
+        "requires_design": false,
+        "requires_architecture": false,
+        "requires_qa": true,
+        "requires_staging_deploy": false,
+        "requires_production_deploy": false
+      },
+      "worktree_path": null,
+      "branch_name": null,
+      "metadata": {
+        "created_at": "2026-02-24T17:25:43.577231Z",
+        "updated_at": "2026-02-24T17:25:43.577231Z",
+        "created_by": "ao-cli",
+        "updated_by": "ao-cli",
+        "started_at": null,
+        "completed_at": null,
+        "version": 1
       },
       "deadline": null,
       "paused": false,
@@ -985,282 +1521,12 @@
         "max_memory_mb": null,
         "requires_network": true
       }
-    },
-    "TASK-020": {
-      "id": "TASK-020",
-      "title": "Implement architecture graph and task linkage",
-      "description": "Add architecture entities/edges graph and connect tasks to architecture IDs",
-      "type": "feature",
-      "status": "done",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-020"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "architecture",
-        "task-routing"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:08:57.567221Z",
-        "updated_at": "2026-02-24T20:19:58.529316Z",
-        "created_by": "codex",
-        "updated_by": "codex",
-        "started_at": "2026-02-24T20:09:02.417037Z",
-        "completed_at": "2026-02-24T20:19:58.529314Z",
-        "version": 3
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-004": {
-      "id": "TASK-004",
-      "title": "Strengthen llm wrapper to MCP server contract",
-      "description": "Validate binary path resolution, build invocation, and endpoint checks between llm-cli-wrapper and llm-mcp-server.",
-      "type": "feature",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [
-        "REQ-004"
-      ],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [
-        "mcp",
-        "wrapper"
-      ],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T17:25:45.015654Z",
-        "updated_at": "2026-02-24T17:25:45.015654Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-018": {
-      "id": "TASK-018",
-      "title": "Set up web GUI CI, E2E smoke, and release gates",
-      "description": "Add frontend test matrix, smoke E2E, release checklist, and rollback validation workflow.",
-      "type": "test",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "medium",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.284244Z",
-        "updated_at": "2026-02-24T20:06:43.284244Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-015": {
-      "id": "TASK-015",
-      "title": "Implement run telemetry stream and artifact inspector",
-      "description": "Build real-time/poll fallback event viewer, JSONL search/filter, and artifact browsing/download UX.",
-      "type": "feature",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.164853Z",
-        "updated_at": "2026-02-24T20:06:43.164853Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
-    },
-    "TASK-014": {
-      "id": "TASK-014",
-      "title": "Build task/workflow control center interface",
-      "description": "Implement queue, state transitions, workflow controls, phase timeline, and gating UX.",
-      "type": "feature",
-      "status": "backlog",
-      "blocked_reason": null,
-      "blocked_at": null,
-      "blocked_phase": null,
-      "blocked_by": null,
-      "priority": "high",
-      "risk": "medium",
-      "scope": "medium",
-      "complexity": "medium",
-      "impact_area": [],
-      "assignee": {
-        "type": "unassigned"
-      },
-      "estimated_effort": null,
-      "linked_requirements": [],
-      "linked_architecture_entities": [],
-      "dependencies": [],
-      "checklist": [],
-      "tags": [],
-      "workflow_metadata": {
-        "workflow_id": null,
-        "requires_design": false,
-        "requires_architecture": false,
-        "requires_qa": true,
-        "requires_staging_deploy": false,
-        "requires_production_deploy": false
-      },
-      "worktree_path": null,
-      "branch_name": null,
-      "metadata": {
-        "created_at": "2026-02-24T20:06:43.121717Z",
-        "updated_at": "2026-02-24T20:06:43.121717Z",
-        "created_by": "ao-cli",
-        "updated_by": "ao-cli",
-        "started_at": null,
-        "completed_at": null,
-        "version": 1
-      },
-      "deadline": null,
-      "paused": false,
-      "cancelled": false,
-      "resource_requirements": {
-        "max_cpu_percent": null,
-        "max_memory_mb": null,
-        "requires_network": true
-      }
     }
   },
   "workflows": {
-    "4eb9b944-c4d0-4420-98f5-8e33e2fb28d3": {
-      "id": "4eb9b944-c4d0-4420-98f5-8e33e2fb28d3",
-      "task_id": "TASK-009",
+    "392dadc3-7c41-4e01-bd50-c1e882dcf415": {
+      "id": "392dadc3-7c41-4e01-bd50-c1e882dcf415",
+      "task_id": "TASK-008",
       "pipeline_id": "standard",
       "status": "completed",
       "current_phase_index": 3,
@@ -1268,102 +1534,116 @@
         {
           "phase_id": "requirements",
           "status": "success",
-          "started_at": "2026-02-24T22:20:57.762099Z",
-          "completed_at": "2026-02-24T22:24:51.031271Z",
+          "started_at": "2026-02-25T03:27:03.607791Z",
+          "completed_at": "2026-02-25T03:31:14.553873Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "implementation",
           "status": "success",
-          "started_at": "2026-02-24T22:24:51.031277Z",
-          "completed_at": "2026-02-24T22:46:27.628351Z",
+          "started_at": "2026-02-25T03:31:14.553878Z",
+          "completed_at": "2026-02-25T03:36:33.667213Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "code-review",
           "status": "success",
-          "started_at": "2026-02-24T22:46:27.628357Z",
-          "completed_at": "2026-02-24T23:09:28.768128Z",
+          "started_at": "2026-02-25T03:36:33.667219Z",
+          "completed_at": "2026-02-25T04:00:31.070162Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "testing",
           "status": "success",
-          "started_at": "2026-02-24T23:09:28.768134Z",
-          "completed_at": "2026-02-24T23:15:38.383874Z",
+          "started_at": "2026-02-25T04:00:31.070168Z",
+          "completed_at": "2026-02-25T04:04:02.671933Z",
           "attempt": 1,
           "error_message": null
         }
       ],
       "machine_state": "completed",
       "current_phase": null,
-      "started_at": "2026-02-24T22:20:57.762099Z",
-      "completed_at": "2026-02-24T23:15:38.383880Z",
+      "started_at": "2026-02-25T03:27:03.607791Z",
+      "completed_at": "2026-02-25T04:04:02.671940Z",
       "checkpoint_metadata": {
-        "checkpoint_count": 9,
+        "checkpoint_count": 11,
         "checkpoints": [
           {
             "number": 1,
-            "timestamp": "2026-02-24T22:20:57.786189Z",
+            "timestamp": "2026-02-25T03:27:03.621974Z",
             "reason": "start",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 2,
-            "timestamp": "2026-02-24T22:21:06.231495Z",
+            "timestamp": "2026-02-25T03:27:07.543907Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 3,
-            "timestamp": "2026-02-24T22:24:51.040780Z",
-            "reason": "status-change",
+            "timestamp": "2026-02-25T03:27:41.255817Z",
+            "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 4,
-            "timestamp": "2026-02-24T22:33:34.308200Z",
+            "timestamp": "2026-02-25T03:27:51.351365Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 5,
-            "timestamp": "2026-02-24T22:46:27.646975Z",
+            "timestamp": "2026-02-25T03:31:14.561494Z",
             "reason": "status-change",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 6,
-            "timestamp": "2026-02-24T22:55:46.719304Z",
+            "timestamp": "2026-02-25T03:31:37.603441Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 7,
-            "timestamp": "2026-02-24T23:09:28.777692Z",
+            "timestamp": "2026-02-25T03:36:33.678739Z",
             "reason": "status-change",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 8,
-            "timestamp": "2026-02-24T23:09:33.898296Z",
+            "timestamp": "2026-02-25T03:37:57.762396Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 9,
-            "timestamp": "2026-02-24T23:15:38.394185Z",
+            "timestamp": "2026-02-25T04:00:31.078188Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 10,
+            "timestamp": "2026-02-25T04:01:28.279022Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 11,
+            "timestamp": "2026-02-25T04:04:02.685191Z",
             "reason": "status-change",
             "machine_state": "completed",
             "status": "completed"
@@ -1374,7 +1654,7 @@
       "total_reworks": 0,
       "decision_history": [
         {
-          "timestamp": "2026-02-24T22:24:51.031278Z",
+          "timestamp": "2026-02-25T03:31:14.553879Z",
           "phase_id": "requirements",
           "source": "fallback",
           "decision": "advance",
@@ -1388,7 +1668,7 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-24T22:46:27.628357Z",
+          "timestamp": "2026-02-25T03:36:33.667221Z",
           "phase_id": "implementation",
           "source": "fallback",
           "decision": "advance",
@@ -1402,7 +1682,7 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-24T23:09:28.768135Z",
+          "timestamp": "2026-02-25T04:00:31.070169Z",
           "phase_id": "code-review",
           "source": "fallback",
           "decision": "advance",
@@ -1416,7 +1696,666 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-24T23:15:38.383880Z",
+          "timestamp": "2026-02-25T04:04:02.671939Z",
+          "phase_id": "testing",
+          "source": "fallback",
+          "decision": "advance",
+          "reason": "workflow completed all phases",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        }
+      ]
+    },
+    "65737bd7-e019-4524-b446-a9de9e082165": {
+      "id": "65737bd7-e019-4524-b446-a9de9e082165",
+      "task_id": "TASK-013",
+      "pipeline_id": "ui-ux-standard",
+      "status": "completed",
+      "current_phase_index": 6,
+      "phases": [
+        {
+          "phase_id": "requirements",
+          "status": "success",
+          "started_at": "2026-02-25T03:27:03.570309Z",
+          "completed_at": "2026-02-25T03:31:32.434829Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "ux-research",
+          "status": "success",
+          "started_at": "2026-02-25T03:31:32.434834Z",
+          "completed_at": "2026-02-25T03:33:28.931056Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "wireframe",
+          "status": "success",
+          "started_at": "2026-02-25T03:33:28.931104Z",
+          "completed_at": "2026-02-25T03:43:44.070715Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "mockup-review",
+          "status": "success",
+          "started_at": "2026-02-25T03:43:44.070721Z",
+          "completed_at": "2026-02-25T04:06:39.233405Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "implementation",
+          "status": "success",
+          "started_at": "2026-02-25T04:06:39.233410Z",
+          "completed_at": "2026-02-25T04:25:09.705491Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "code-review",
+          "status": "success",
+          "started_at": "2026-02-25T04:25:09.705498Z",
+          "completed_at": "2026-02-25T04:44:51.102491Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "testing",
+          "status": "success",
+          "started_at": "2026-02-25T04:44:51.102496Z",
+          "completed_at": "2026-02-25T04:47:53.575649Z",
+          "attempt": 1,
+          "error_message": null
+        }
+      ],
+      "machine_state": "completed",
+      "current_phase": null,
+      "started_at": "2026-02-25T03:27:03.570309Z",
+      "completed_at": "2026-02-25T04:47:53.575658Z",
+      "checkpoint_metadata": {
+        "checkpoint_count": 17,
+        "checkpoints": [
+          {
+            "number": 1,
+            "timestamp": "2026-02-25T03:27:03.578933Z",
+            "reason": "start",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 2,
+            "timestamp": "2026-02-25T03:27:07.439032Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 3,
+            "timestamp": "2026-02-25T03:27:41.205552Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 4,
+            "timestamp": "2026-02-25T03:27:51.283470Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 5,
+            "timestamp": "2026-02-25T03:31:32.444357Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 6,
+            "timestamp": "2026-02-25T03:31:37.558690Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 7,
+            "timestamp": "2026-02-25T03:33:28.941361Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 8,
+            "timestamp": "2026-02-25T03:37:57.716575Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 9,
+            "timestamp": "2026-02-25T03:43:44.085967Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 10,
+            "timestamp": "2026-02-25T04:01:28.233845Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 11,
+            "timestamp": "2026-02-25T04:06:39.243366Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 12,
+            "timestamp": "2026-02-25T04:06:44.383387Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 13,
+            "timestamp": "2026-02-25T04:25:09.725874Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 14,
+            "timestamp": "2026-02-25T04:25:14.862257Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 15,
+            "timestamp": "2026-02-25T04:44:51.111433Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 16,
+            "timestamp": "2026-02-25T04:44:56.248416Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 17,
+            "timestamp": "2026-02-25T04:47:53.586200Z",
+            "reason": "status-change",
+            "machine_state": "completed",
+            "status": "completed"
+          }
+        ]
+      },
+      "rework_counts": {},
+      "total_reworks": 0,
+      "decision_history": [
+        {
+          "timestamp": "2026-02-25T03:31:32.434835Z",
+          "phase_id": "requirements",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "ux-research",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T03:33:28.931105Z",
+          "phase_id": "ux-research",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "wireframe",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T03:43:44.070721Z",
+          "phase_id": "wireframe",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "mockup-review",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:06:39.233411Z",
+          "phase_id": "mockup-review",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "implementation",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:25:09.705499Z",
+          "phase_id": "implementation",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "code-review",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:44:51.102497Z",
+          "phase_id": "code-review",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "testing",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:47:53.575657Z",
+          "phase_id": "testing",
+          "source": "fallback",
+          "decision": "advance",
+          "reason": "workflow completed all phases",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        }
+      ]
+    },
+    "6bd840dd-c1b9-4c6f-ad7d-896f1c7a9754": {
+      "id": "6bd840dd-c1b9-4c6f-ad7d-896f1c7a9754",
+      "task_id": "TASK-012",
+      "pipeline_id": "standard",
+      "status": "completed",
+      "current_phase_index": 3,
+      "phases": [
+        {
+          "phase_id": "requirements",
+          "status": "success",
+          "started_at": "2026-02-24T22:20:57.676086Z",
+          "completed_at": "2026-02-24T22:29:04.029381Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "implementation",
+          "status": "success",
+          "started_at": "2026-02-24T22:29:04.029391Z",
+          "completed_at": "2026-02-24T23:04:14.439359Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "code-review",
+          "status": "success",
+          "started_at": "2026-02-24T23:04:14.439365Z",
+          "completed_at": "2026-02-24T23:33:18.942553Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "testing",
+          "status": "success",
+          "started_at": "2026-02-24T23:33:18.942560Z",
+          "completed_at": "2026-02-24T23:38:40.725794Z",
+          "attempt": 1,
+          "error_message": null
+        }
+      ],
+      "machine_state": "completed",
+      "current_phase": null,
+      "started_at": "2026-02-24T22:20:57.676086Z",
+      "completed_at": "2026-02-24T23:38:40.725801Z",
+      "checkpoint_metadata": {
+        "checkpoint_count": 10,
+        "checkpoints": [
+          {
+            "number": 1,
+            "timestamp": "2026-02-24T22:20:57.692811Z",
+            "reason": "start",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 2,
+            "timestamp": "2026-02-24T22:21:06.281108Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 3,
+            "timestamp": "2026-02-24T22:29:04.036755Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 4,
+            "timestamp": "2026-02-24T22:33:34.352577Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 5,
+            "timestamp": "2026-02-24T22:55:46.845057Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 6,
+            "timestamp": "2026-02-24T23:04:14.454189Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 7,
+            "timestamp": "2026-02-24T23:09:33.944102Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 8,
+            "timestamp": "2026-02-24T23:33:18.955592Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 9,
+            "timestamp": "2026-02-24T23:33:24.085443Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 10,
+            "timestamp": "2026-02-24T23:38:40.735623Z",
+            "reason": "status-change",
+            "machine_state": "completed",
+            "status": "completed"
+          }
+        ]
+      },
+      "rework_counts": {},
+      "total_reworks": 0,
+      "decision_history": [
+        {
+          "timestamp": "2026-02-24T22:29:04.029392Z",
+          "phase_id": "requirements",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "implementation",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-24T23:04:14.439366Z",
+          "phase_id": "implementation",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "code-review",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-24T23:33:18.942560Z",
+          "phase_id": "code-review",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "testing",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-24T23:38:40.725798Z",
+          "phase_id": "testing",
+          "source": "fallback",
+          "decision": "advance",
+          "reason": "workflow completed all phases",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        }
+      ]
+    },
+    "d28ddbdf-2b9d-499d-8b24-b8561b31ad7d": {
+      "id": "d28ddbdf-2b9d-499d-8b24-b8561b31ad7d",
+      "task_id": "TASK-007",
+      "pipeline_id": "standard",
+      "status": "completed",
+      "current_phase_index": 3,
+      "phases": [
+        {
+          "phase_id": "requirements",
+          "status": "success",
+          "started_at": "2026-02-25T03:27:03.607808Z",
+          "completed_at": "2026-02-25T03:31:05.321230Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "implementation",
+          "status": "success",
+          "started_at": "2026-02-25T03:31:05.321236Z",
+          "completed_at": "2026-02-25T03:37:52.581648Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "code-review",
+          "status": "success",
+          "started_at": "2026-02-25T03:37:52.581652Z",
+          "completed_at": "2026-02-25T04:01:23.091238Z",
+          "attempt": 1,
+          "error_message": null
+        },
+        {
+          "phase_id": "testing",
+          "status": "success",
+          "started_at": "2026-02-25T04:01:23.091244Z",
+          "completed_at": "2026-02-25T04:03:11.302481Z",
+          "attempt": 1,
+          "error_message": null
+        }
+      ],
+      "machine_state": "completed",
+      "current_phase": null,
+      "started_at": "2026-02-25T03:27:03.607808Z",
+      "completed_at": "2026-02-25T04:03:11.302489Z",
+      "checkpoint_metadata": {
+        "checkpoint_count": 11,
+        "checkpoints": [
+          {
+            "number": 1,
+            "timestamp": "2026-02-25T03:27:03.616416Z",
+            "reason": "start",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 2,
+            "timestamp": "2026-02-25T03:27:07.591227Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 3,
+            "timestamp": "2026-02-25T03:27:41.301465Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 4,
+            "timestamp": "2026-02-25T03:27:51.392392Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 5,
+            "timestamp": "2026-02-25T03:31:05.331197Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 6,
+            "timestamp": "2026-02-25T03:31:37.643643Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 7,
+            "timestamp": "2026-02-25T03:37:52.591288Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 8,
+            "timestamp": "2026-02-25T03:37:57.801740Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 9,
+            "timestamp": "2026-02-25T04:01:23.100686Z",
+            "reason": "status-change",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 10,
+            "timestamp": "2026-02-25T04:01:28.321030Z",
+            "reason": "resume",
+            "machine_state": "run-phase",
+            "status": "running"
+          },
+          {
+            "number": 11,
+            "timestamp": "2026-02-25T04:03:11.311775Z",
+            "reason": "status-change",
+            "machine_state": "completed",
+            "status": "completed"
+          }
+        ]
+      },
+      "rework_counts": {},
+      "total_reworks": 0,
+      "decision_history": [
+        {
+          "timestamp": "2026-02-25T03:31:05.321237Z",
+          "phase_id": "requirements",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "implementation",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T03:37:52.581652Z",
+          "phase_id": "implementation",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "code-review",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:01:23.091245Z",
+          "phase_id": "code-review",
+          "source": "fallback",
+          "decision": "advance",
+          "target_phase": "testing",
+          "reason": "phase completed successfully",
+          "confidence": 1.0,
+          "risk": "low",
+          "guardrail_violations": [],
+          "machine_version": 1,
+          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
+          "machine_source": "json"
+        },
+        {
+          "timestamp": "2026-02-25T04:03:11.302488Z",
           "phase_id": "testing",
           "source": "fallback",
           "decision": "advance",
@@ -1901,9 +2840,9 @@
         }
       ]
     },
-    "392dadc3-7c41-4e01-bd50-c1e882dcf415": {
-      "id": "392dadc3-7c41-4e01-bd50-c1e882dcf415",
-      "task_id": "TASK-008",
+    "4eb9b944-c4d0-4420-98f5-8e33e2fb28d3": {
+      "id": "4eb9b944-c4d0-4420-98f5-8e33e2fb28d3",
+      "task_id": "TASK-009",
       "pipeline_id": "standard",
       "status": "completed",
       "current_phase_index": 3,
@@ -1911,116 +2850,102 @@
         {
           "phase_id": "requirements",
           "status": "success",
-          "started_at": "2026-02-25T03:27:03.607791Z",
-          "completed_at": "2026-02-25T03:31:14.553873Z",
+          "started_at": "2026-02-24T22:20:57.762099Z",
+          "completed_at": "2026-02-24T22:24:51.031271Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "implementation",
           "status": "success",
-          "started_at": "2026-02-25T03:31:14.553878Z",
-          "completed_at": "2026-02-25T03:36:33.667213Z",
+          "started_at": "2026-02-24T22:24:51.031277Z",
+          "completed_at": "2026-02-24T22:46:27.628351Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "code-review",
           "status": "success",
-          "started_at": "2026-02-25T03:36:33.667219Z",
-          "completed_at": "2026-02-25T04:00:31.070162Z",
+          "started_at": "2026-02-24T22:46:27.628357Z",
+          "completed_at": "2026-02-24T23:09:28.768128Z",
           "attempt": 1,
           "error_message": null
         },
         {
           "phase_id": "testing",
           "status": "success",
-          "started_at": "2026-02-25T04:00:31.070168Z",
-          "completed_at": "2026-02-25T04:04:02.671933Z",
+          "started_at": "2026-02-24T23:09:28.768134Z",
+          "completed_at": "2026-02-24T23:15:38.383874Z",
           "attempt": 1,
           "error_message": null
         }
       ],
       "machine_state": "completed",
       "current_phase": null,
-      "started_at": "2026-02-25T03:27:03.607791Z",
-      "completed_at": "2026-02-25T04:04:02.671940Z",
+      "started_at": "2026-02-24T22:20:57.762099Z",
+      "completed_at": "2026-02-24T23:15:38.383880Z",
       "checkpoint_metadata": {
-        "checkpoint_count": 11,
+        "checkpoint_count": 9,
         "checkpoints": [
           {
             "number": 1,
-            "timestamp": "2026-02-25T03:27:03.621974Z",
+            "timestamp": "2026-02-24T22:20:57.786189Z",
             "reason": "start",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 2,
-            "timestamp": "2026-02-25T03:27:07.543907Z",
+            "timestamp": "2026-02-24T22:21:06.231495Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 3,
-            "timestamp": "2026-02-25T03:27:41.255817Z",
-            "reason": "resume",
+            "timestamp": "2026-02-24T22:24:51.040780Z",
+            "reason": "status-change",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 4,
-            "timestamp": "2026-02-25T03:27:51.351365Z",
+            "timestamp": "2026-02-24T22:33:34.308200Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 5,
-            "timestamp": "2026-02-25T03:31:14.561494Z",
+            "timestamp": "2026-02-24T22:46:27.646975Z",
             "reason": "status-change",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 6,
-            "timestamp": "2026-02-25T03:31:37.603441Z",
+            "timestamp": "2026-02-24T22:55:46.719304Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 7,
-            "timestamp": "2026-02-25T03:36:33.678739Z",
+            "timestamp": "2026-02-24T23:09:28.777692Z",
             "reason": "status-change",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 8,
-            "timestamp": "2026-02-25T03:37:57.762396Z",
+            "timestamp": "2026-02-24T23:09:33.898296Z",
             "reason": "resume",
             "machine_state": "run-phase",
             "status": "running"
           },
           {
             "number": 9,
-            "timestamp": "2026-02-25T04:00:31.078188Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 10,
-            "timestamp": "2026-02-25T04:01:28.279022Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 11,
-            "timestamp": "2026-02-25T04:04:02.685191Z",
+            "timestamp": "2026-02-24T23:15:38.394185Z",
             "reason": "status-change",
             "machine_state": "completed",
             "status": "completed"
@@ -2031,7 +2956,7 @@
       "total_reworks": 0,
       "decision_history": [
         {
-          "timestamp": "2026-02-25T03:31:14.553879Z",
+          "timestamp": "2026-02-24T22:24:51.031278Z",
           "phase_id": "requirements",
           "source": "fallback",
           "decision": "advance",
@@ -2045,7 +2970,7 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-25T03:36:33.667221Z",
+          "timestamp": "2026-02-24T22:46:27.628357Z",
           "phase_id": "implementation",
           "source": "fallback",
           "decision": "advance",
@@ -2059,7 +2984,7 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-25T04:00:31.070169Z",
+          "timestamp": "2026-02-24T23:09:28.768135Z",
           "phase_id": "code-review",
           "source": "fallback",
           "decision": "advance",
@@ -2073,666 +2998,7 @@
           "machine_source": "json"
         },
         {
-          "timestamp": "2026-02-25T04:04:02.671939Z",
-          "phase_id": "testing",
-          "source": "fallback",
-          "decision": "advance",
-          "reason": "workflow completed all phases",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        }
-      ]
-    },
-    "65737bd7-e019-4524-b446-a9de9e082165": {
-      "id": "65737bd7-e019-4524-b446-a9de9e082165",
-      "task_id": "TASK-013",
-      "pipeline_id": "ui-ux-standard",
-      "status": "completed",
-      "current_phase_index": 6,
-      "phases": [
-        {
-          "phase_id": "requirements",
-          "status": "success",
-          "started_at": "2026-02-25T03:27:03.570309Z",
-          "completed_at": "2026-02-25T03:31:32.434829Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "ux-research",
-          "status": "success",
-          "started_at": "2026-02-25T03:31:32.434834Z",
-          "completed_at": "2026-02-25T03:33:28.931056Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "wireframe",
-          "status": "success",
-          "started_at": "2026-02-25T03:33:28.931104Z",
-          "completed_at": "2026-02-25T03:43:44.070715Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "mockup-review",
-          "status": "success",
-          "started_at": "2026-02-25T03:43:44.070721Z",
-          "completed_at": "2026-02-25T04:06:39.233405Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "implementation",
-          "status": "success",
-          "started_at": "2026-02-25T04:06:39.233410Z",
-          "completed_at": "2026-02-25T04:25:09.705491Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "code-review",
-          "status": "success",
-          "started_at": "2026-02-25T04:25:09.705498Z",
-          "completed_at": "2026-02-25T04:44:51.102491Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "testing",
-          "status": "success",
-          "started_at": "2026-02-25T04:44:51.102496Z",
-          "completed_at": "2026-02-25T04:47:53.575649Z",
-          "attempt": 1,
-          "error_message": null
-        }
-      ],
-      "machine_state": "completed",
-      "current_phase": null,
-      "started_at": "2026-02-25T03:27:03.570309Z",
-      "completed_at": "2026-02-25T04:47:53.575658Z",
-      "checkpoint_metadata": {
-        "checkpoint_count": 17,
-        "checkpoints": [
-          {
-            "number": 1,
-            "timestamp": "2026-02-25T03:27:03.578933Z",
-            "reason": "start",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 2,
-            "timestamp": "2026-02-25T03:27:07.439032Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 3,
-            "timestamp": "2026-02-25T03:27:41.205552Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 4,
-            "timestamp": "2026-02-25T03:27:51.283470Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 5,
-            "timestamp": "2026-02-25T03:31:32.444357Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 6,
-            "timestamp": "2026-02-25T03:31:37.558690Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 7,
-            "timestamp": "2026-02-25T03:33:28.941361Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 8,
-            "timestamp": "2026-02-25T03:37:57.716575Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 9,
-            "timestamp": "2026-02-25T03:43:44.085967Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 10,
-            "timestamp": "2026-02-25T04:01:28.233845Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 11,
-            "timestamp": "2026-02-25T04:06:39.243366Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 12,
-            "timestamp": "2026-02-25T04:06:44.383387Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 13,
-            "timestamp": "2026-02-25T04:25:09.725874Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 14,
-            "timestamp": "2026-02-25T04:25:14.862257Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 15,
-            "timestamp": "2026-02-25T04:44:51.111433Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 16,
-            "timestamp": "2026-02-25T04:44:56.248416Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 17,
-            "timestamp": "2026-02-25T04:47:53.586200Z",
-            "reason": "status-change",
-            "machine_state": "completed",
-            "status": "completed"
-          }
-        ]
-      },
-      "rework_counts": {},
-      "total_reworks": 0,
-      "decision_history": [
-        {
-          "timestamp": "2026-02-25T03:31:32.434835Z",
-          "phase_id": "requirements",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "ux-research",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T03:33:28.931105Z",
-          "phase_id": "ux-research",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "wireframe",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T03:43:44.070721Z",
-          "phase_id": "wireframe",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "mockup-review",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:06:39.233411Z",
-          "phase_id": "mockup-review",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "implementation",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:25:09.705499Z",
-          "phase_id": "implementation",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "code-review",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:44:51.102497Z",
-          "phase_id": "code-review",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "testing",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:47:53.575657Z",
-          "phase_id": "testing",
-          "source": "fallback",
-          "decision": "advance",
-          "reason": "workflow completed all phases",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        }
-      ]
-    },
-    "d28ddbdf-2b9d-499d-8b24-b8561b31ad7d": {
-      "id": "d28ddbdf-2b9d-499d-8b24-b8561b31ad7d",
-      "task_id": "TASK-007",
-      "pipeline_id": "standard",
-      "status": "completed",
-      "current_phase_index": 3,
-      "phases": [
-        {
-          "phase_id": "requirements",
-          "status": "success",
-          "started_at": "2026-02-25T03:27:03.607808Z",
-          "completed_at": "2026-02-25T03:31:05.321230Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "implementation",
-          "status": "success",
-          "started_at": "2026-02-25T03:31:05.321236Z",
-          "completed_at": "2026-02-25T03:37:52.581648Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "code-review",
-          "status": "success",
-          "started_at": "2026-02-25T03:37:52.581652Z",
-          "completed_at": "2026-02-25T04:01:23.091238Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "testing",
-          "status": "success",
-          "started_at": "2026-02-25T04:01:23.091244Z",
-          "completed_at": "2026-02-25T04:03:11.302481Z",
-          "attempt": 1,
-          "error_message": null
-        }
-      ],
-      "machine_state": "completed",
-      "current_phase": null,
-      "started_at": "2026-02-25T03:27:03.607808Z",
-      "completed_at": "2026-02-25T04:03:11.302489Z",
-      "checkpoint_metadata": {
-        "checkpoint_count": 11,
-        "checkpoints": [
-          {
-            "number": 1,
-            "timestamp": "2026-02-25T03:27:03.616416Z",
-            "reason": "start",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 2,
-            "timestamp": "2026-02-25T03:27:07.591227Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 3,
-            "timestamp": "2026-02-25T03:27:41.301465Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 4,
-            "timestamp": "2026-02-25T03:27:51.392392Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 5,
-            "timestamp": "2026-02-25T03:31:05.331197Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 6,
-            "timestamp": "2026-02-25T03:31:37.643643Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 7,
-            "timestamp": "2026-02-25T03:37:52.591288Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 8,
-            "timestamp": "2026-02-25T03:37:57.801740Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 9,
-            "timestamp": "2026-02-25T04:01:23.100686Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 10,
-            "timestamp": "2026-02-25T04:01:28.321030Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 11,
-            "timestamp": "2026-02-25T04:03:11.311775Z",
-            "reason": "status-change",
-            "machine_state": "completed",
-            "status": "completed"
-          }
-        ]
-      },
-      "rework_counts": {},
-      "total_reworks": 0,
-      "decision_history": [
-        {
-          "timestamp": "2026-02-25T03:31:05.321237Z",
-          "phase_id": "requirements",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "implementation",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T03:37:52.581652Z",
-          "phase_id": "implementation",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "code-review",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:01:23.091245Z",
-          "phase_id": "code-review",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "testing",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-25T04:03:11.302488Z",
-          "phase_id": "testing",
-          "source": "fallback",
-          "decision": "advance",
-          "reason": "workflow completed all phases",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        }
-      ]
-    },
-    "6bd840dd-c1b9-4c6f-ad7d-896f1c7a9754": {
-      "id": "6bd840dd-c1b9-4c6f-ad7d-896f1c7a9754",
-      "task_id": "TASK-012",
-      "pipeline_id": "standard",
-      "status": "completed",
-      "current_phase_index": 3,
-      "phases": [
-        {
-          "phase_id": "requirements",
-          "status": "success",
-          "started_at": "2026-02-24T22:20:57.676086Z",
-          "completed_at": "2026-02-24T22:29:04.029381Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "implementation",
-          "status": "success",
-          "started_at": "2026-02-24T22:29:04.029391Z",
-          "completed_at": "2026-02-24T23:04:14.439359Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "code-review",
-          "status": "success",
-          "started_at": "2026-02-24T23:04:14.439365Z",
-          "completed_at": "2026-02-24T23:33:18.942553Z",
-          "attempt": 1,
-          "error_message": null
-        },
-        {
-          "phase_id": "testing",
-          "status": "success",
-          "started_at": "2026-02-24T23:33:18.942560Z",
-          "completed_at": "2026-02-24T23:38:40.725794Z",
-          "attempt": 1,
-          "error_message": null
-        }
-      ],
-      "machine_state": "completed",
-      "current_phase": null,
-      "started_at": "2026-02-24T22:20:57.676086Z",
-      "completed_at": "2026-02-24T23:38:40.725801Z",
-      "checkpoint_metadata": {
-        "checkpoint_count": 10,
-        "checkpoints": [
-          {
-            "number": 1,
-            "timestamp": "2026-02-24T22:20:57.692811Z",
-            "reason": "start",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 2,
-            "timestamp": "2026-02-24T22:21:06.281108Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 3,
-            "timestamp": "2026-02-24T22:29:04.036755Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 4,
-            "timestamp": "2026-02-24T22:33:34.352577Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 5,
-            "timestamp": "2026-02-24T22:55:46.845057Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 6,
-            "timestamp": "2026-02-24T23:04:14.454189Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 7,
-            "timestamp": "2026-02-24T23:09:33.944102Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 8,
-            "timestamp": "2026-02-24T23:33:18.955592Z",
-            "reason": "status-change",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 9,
-            "timestamp": "2026-02-24T23:33:24.085443Z",
-            "reason": "resume",
-            "machine_state": "run-phase",
-            "status": "running"
-          },
-          {
-            "number": 10,
-            "timestamp": "2026-02-24T23:38:40.735623Z",
-            "reason": "status-change",
-            "machine_state": "completed",
-            "status": "completed"
-          }
-        ]
-      },
-      "rework_counts": {},
-      "total_reworks": 0,
-      "decision_history": [
-        {
-          "timestamp": "2026-02-24T22:29:04.029392Z",
-          "phase_id": "requirements",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "implementation",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-24T23:04:14.439366Z",
-          "phase_id": "implementation",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "code-review",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-24T23:33:18.942560Z",
-          "phase_id": "code-review",
-          "source": "fallback",
-          "decision": "advance",
-          "target_phase": "testing",
-          "reason": "phase completed successfully",
-          "confidence": 1.0,
-          "risk": "low",
-          "guardrail_violations": [],
-          "machine_version": 1,
-          "machine_hash": "1c4dc8a8419433158f1d503e5900195cfe903061cb4c990a9b38ade658d47119",
-          "machine_source": "json"
-        },
-        {
-          "timestamp": "2026-02-24T23:38:40.725798Z",
+          "timestamp": "2026-02-24T23:15:38.383880Z",
           "phase_id": "testing",
           "source": "fallback",
           "decision": "advance",
@@ -2792,6 +3058,79 @@
     "updated_at": "2026-02-24T19:43:32.735543Z"
   },
   "requirements": {
+    "REQ-014": {
+      "id": "REQ-014",
+      "title": "Deliver operational task and workflow control center",
+      "description": "Create a unified interface for task backlog management, workflow execution controls, phase status visibility, and gated approvals.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Task board supports prioritized queue, status transitions, assignment, dependency visualization, and checklist interactions via API-backed mutations.",
+        "Workflow views expose run/resume/pause/cancel operations with explicit confirmation and post-action telemetry feedback.",
+        "Phase timeline presents current phase, checkpoint state, decisions, approvals, and blocking reasons with timestamped history.",
+        "UI enforces rule-based action availability (disabled states and rationale) based on workflow/task status and server responses.",
+        "Operator actions are idempotent on retry and display conflict-resolution messaging when backend state has changed."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "ops",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-014"
+      ],
+      "created_at": "2026-02-24T19:52:00.207696Z",
+      "updated_at": "2026-02-24T20:06:43.487167Z"
+    },
+    "REQ-021": {
+      "id": "REQ-021",
+      "title": "Add interactive terminal UI for ao CLI",
+      "description": "Deliver `ao tui` as an interactive terminal command that lets operators inspect prioritized tasks and launch agent runs from one screen while routing MCP traffic through an AO-managed internal bridge.\n\nConstraints:\n- Task data in the TUI must come from ServiceHub APIs; no direct `.ao` JSON reads in the TUI flow.\n- Provider execution from TUI must be MCP-locked to an internally spawned `ao mcp serve` process via `AoCliMcpBridge`; no external MCP server dependency.\n- Scope is MVP: one-screen dashboard with model selection, prompt input, output panel, and prioritized task list.\n- Existing CLI command behavior outside `tui` must remain unchanged.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "`ao tui` launches an interactive terminal screen and exits cleanly on `q` or `Ctrl+C` without leaving the terminal in raw mode.",
+        "Interactive mode rejects `--json` output with a clear error message.",
+        "The screen shows MCP bridge session context and a selectable model list, and supports model navigation with `j/k` or arrow keys.",
+        "The TUI loads prioritized tasks via `ServiceHub::tasks().list_prioritized` and renders each row as `TASK-ID [status] title`.",
+        "Prompt editing and control keys are implemented: typing, `Backspace`, `Esc`, `Enter`, `r` refresh, `p` print-mode toggle, and `Ctrl+L` output clear.",
+        "Agent runs launched from TUI are MCP-locked through an internally spawned `ao mcp serve` process bridged by `AoCliMcpBridge`, with success/failure summary surfaced in status/output.",
+        "Headless mode (`ao tui --headless --prompt \"<text>\"`) executes one run through the same MCP lock path and returns a non-zero exit on failed runs.",
+        "CLI wiring includes the `tui` subcommand in dispatch and preserves behavior of existing non-TUI commands (validated by `cargo check` and CLI smoke tests)."
+      ],
+      "priority": "should",
+      "status": "done",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-021"
+      ],
+      "created_at": "2026-02-25T05:46:01.929281Z",
+      "updated_at": "2026-02-25T06:48:42.993871Z"
+    },
     "REQ-008": {
       "id": "REQ-008",
       "title": "Guarantee JSON schema compatibility for CLI envelopes",
@@ -2823,6 +3162,210 @@
       ],
       "created_at": "2026-02-24T19:48:30.706194Z",
       "updated_at": "2026-02-24T19:48:30.786085Z"
+    },
+    "REQ-017": {
+      "id": "REQ-017",
+      "title": "Meet accessibility, responsiveness, and performance baselines",
+      "description": "Ship the web GUI with enterprise-grade usability quality across desktop and mobile form factors, keyboard users, and assistive technologies.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Core flows (planning, tasks, workflows, run inspection) are fully keyboard navigable with visible focus states.",
+        "ARIA labels, semantic landmarks, and form validation messaging meet WCAG-oriented accessibility expectations for primary interactions.",
+        "Responsive breakpoints preserve full functionality on common laptop and mobile viewport classes without hidden critical controls.",
+        "Perceived performance budget is defined and met for initial load and key route transitions under realistic project data sizes.",
+        "Empty/loading/error states are intentionally designed and consistent across all route families."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-017"
+      ],
+      "created_at": "2026-02-24T19:52:00.415501Z",
+      "updated_at": "2026-02-24T20:06:43.608241Z"
+    },
+    "REQ-009": {
+      "id": "REQ-009",
+      "title": "Standardize destructive action safeguards",
+      "description": "Ensure destructive CLI operations require explicit confirmations and provide deterministic dry-run/preview semantics.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Destructive commands require explicit operator confirmation before state-changing execution.",
+        "Each destructive command provides a non-destructive preview path or clear precondition output."
+      ],
+      "priority": "must",
+      "status": "planned",
+      "source": "runtime",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-009"
+      ],
+      "created_at": "2026-02-24T19:48:30.818389Z",
+      "updated_at": "2026-02-24T19:48:30.902451Z"
+    },
+    "REQ-012": {
+      "id": "REQ-012",
+      "title": "Define typed API contract and client SDK for web GUI",
+      "description": "Establish a strict front-end contract layer that maps to orchestrator-web-server endpoints with schema validation, versioning strategy, and deterministic error handling.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Client SDK wraps all consumed endpoints with typed request/response interfaces and centralized transport configuration.",
+        "Schema-validation or structural guards protect runtime against malformed/partial payloads from server upgrades.",
+        "Error normalization maps server failures into actionable UI states with remediation hints, preserving error codes.",
+        "API version compatibility policy is documented with explicit handling for additive and breaking changes.",
+        "Contract tests validate SDK behavior against representative success, validation-failure, not-found, and unavailable responses."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "engineering",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-012"
+      ],
+      "created_at": "2026-02-24T19:52:00.121671Z",
+      "updated_at": "2026-02-24T20:06:43.408211Z"
+    },
+    "REQ-020": {
+      "id": "REQ-020",
+      "title": "Architecture knowledge graph support",
+      "description": "Add architecture entities/edges JSON graph and task linkage so tasks can indicate where changes should live",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [],
+      "priority": "should",
+      "status": "in-progress",
+      "source": "user-request",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [],
+      "created_at": "2026-02-24T20:08:53.349171Z",
+      "updated_at": "2026-02-24T20:09:02.444379Z"
+    },
+    "REQ-001": {
+      "id": "REQ-001",
+      "title": "Define and maintain the ao-cli self-hosting operating workflow",
+      "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
+      "body": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
+      "legacy_id": null,
+      "category": "documentation",
+      "type": "product",
+      "acceptance_criteria": [
+        "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
+        "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
+        "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
+        "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
+        "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "self-hosting",
+      "tags": [
+        "contributor-workflow",
+        "docs",
+        "lens-product",
+        "self-hosting"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-001.json",
+      "linked_task_ids": [
+        "TASK-001"
+      ],
+      "created_at": "2026-02-24T17:24:41.776781Z",
+      "updated_at": "2026-02-24T19:21:20.999291Z"
+    },
+    "REQ-018": {
+      "id": "REQ-018",
+      "title": "Establish testing and release discipline for web GUI",
+      "description": "Create robust quality gates and release process for the React app so changes are reliable, observable, and safe to deploy with backend evolution.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "CI pipeline runs static checks, unit tests, and integration tests for web-app critical flows against mocked and/or local backend contracts.",
+        "End-to-end smoke suite validates login/context load, requirement operations, task/workflow actions, and run telemetry rendering.",
+        "Frontend build artifacts include version metadata tied to git commit for traceability.",
+        "Release checklist defines rollback strategy, compatibility checks versus server API versions, and post-deploy verification steps.",
+        "Regression criteria are documented for every new route/action before feature completion is accepted."
+      ],
+      "priority": "should",
+      "status": "refined",
+      "source": "engineering",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-018"
+      ],
+      "created_at": "2026-02-24T19:52:00.458886Z",
+      "updated_at": "2026-02-24T20:06:43.648568Z"
     },
     "REQ-010": {
       "id": "REQ-010",
@@ -2896,221 +3439,6 @@
       ],
       "created_at": "2026-02-24T17:24:43.242788Z",
       "updated_at": "2026-02-24T19:21:21.007409Z"
-    },
-    "REQ-011": {
-      "id": "REQ-011",
-      "title": "Build React web-app shell over orchestrator-web-server",
-      "description": "Create a production-grade React app that serves as the primary operator console for AO, wrapping orchestrator-web-server capabilities with clear IA, deterministic state handling, and safe command execution pathways.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Web app bootstraps with route-level code splitting and typed API integration for all core AO domains (vision, requirements, tasks, workflow, runs, errors, history).",
-        "Navigation model includes global project context, queue dashboards, and deep-linkable pages for each entity ID.",
-        "All UI mutations execute through server APIs only; no direct file assumptions or local state hacks bypassing backend contracts.",
-        "Global error boundaries and retry affordances are implemented for route, data-fetch, and action failures.",
-        "State management strategy is documented and enforced (query caching, optimistic updates policy, invalidation rules)."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-011"
-      ],
-      "created_at": "2026-02-24T19:52:00.068186Z",
-      "updated_at": "2026-02-24T20:06:43.368028Z"
-    },
-    "REQ-012": {
-      "id": "REQ-012",
-      "title": "Define typed API contract and client SDK for web GUI",
-      "description": "Establish a strict front-end contract layer that maps to orchestrator-web-server endpoints with schema validation, versioning strategy, and deterministic error handling.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Client SDK wraps all consumed endpoints with typed request/response interfaces and centralized transport configuration.",
-        "Schema-validation or structural guards protect runtime against malformed/partial payloads from server upgrades.",
-        "Error normalization maps server failures into actionable UI states with remediation hints, preserving error codes.",
-        "API version compatibility policy is documented with explicit handling for additive and breaking changes.",
-        "Contract tests validate SDK behavior against representative success, validation-failure, not-found, and unavailable responses."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "engineering",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-012"
-      ],
-      "created_at": "2026-02-24T19:52:00.121671Z",
-      "updated_at": "2026-02-24T20:06:43.408211Z"
-    },
-    "REQ-002": {
-      "id": "REQ-002",
-      "title": "Improve daily CLI ergonomics for core ao command groups",
-      "description": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
-      "body": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
-      "legacy_id": null,
-      "category": "usability",
-      "type": "functional",
-      "acceptance_criteria": [
-        "Each core command group has a non-empty top-level help description and subcommand list with consistent structure and terminology.",
-        "At least 10 representative invalid-input scenarios return actionable errors that include both the failure reason and a concrete correction hint.",
-        "All `--json` error responses for invalid input conform to the `ao.cli.v1` envelope with `ok=false`, `error.code`, and `exit_code=2`.",
-        "Help output examples and command names in documentation match actual CLI behavior for the five scoped command groups.",
-        "Regression tests verify help output snapshots and error-shape consistency for the scoped groups."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "product",
-      "tags": [
-        "cli",
-        "error-handling",
-        "lens-product",
-        "ux"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-002.json",
-      "linked_task_ids": [
-        "TASK-002"
-      ],
-      "created_at": "2026-02-24T17:24:42.443485Z",
-      "updated_at": "2026-02-24T19:21:21.003203Z"
-    },
-    "REQ-016": {
-      "id": "REQ-016",
-      "title": "Implement safety rails for high-risk operations in web UI",
-      "description": "Ensure destructive or irreversible actions in the web app are guarded by explicit operator intent confirmation, previews, and auditability.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Destructive actions require typed confirmation or equivalent high-friction acknowledgement before request submission.",
-        "Where supported by backend, UI presents dry-run/preview output before executing destructive mutations.",
-        "Every high-risk action writes auditable context into UI-visible activity stream (actor, timestamp, target, outcome).",
-        "Permission and state preconditions are validated in UI and revalidated against server response before final success messaging.",
-        "Bulk operations include partial-failure reporting with deterministic rollback/compensation guidance."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "security",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-016"
-      ],
-      "created_at": "2026-02-24T19:52:00.339836Z",
-      "updated_at": "2026-02-24T20:06:43.568437Z"
-    },
-    "REQ-015": {
-      "id": "REQ-015",
-      "title": "Provide real-time run telemetry and artifact inspection UX",
-      "description": "Expose live run execution insight including event streams, JSONL outputs, artifacts, and error surfaces so operators can diagnose and recover quickly.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Run detail view streams and renders events incrementally with stable ordering and clear status derivation (running/completed/failed).",
-        "JSONL viewer supports source-file filtering, keyword search, and timestamp navigation for large logs.",
-        "Artifact browser lists files with metadata and supports safe download/read actions through backend endpoints.",
-        "Error panels map runtime failures to suggested operator next steps (retry, inspect runner health, open history/error details).",
-        "UI supports degraded mode when streaming is unavailable, falling back to periodic polling with explicit indicator."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "runtime",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-015"
-      ],
-      "created_at": "2026-02-24T19:52:00.289747Z",
-      "updated_at": "2026-02-24T20:06:43.528179Z"
-    },
-    "REQ-013": {
-      "id": "REQ-013",
-      "title": "Implement end-to-end planning UX for vision and requirements",
-      "description": "Provide complete interactive flows for drafting/refining vision, drafting/refining requirements, and reviewing requirement quality and links in one coherent workspace.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Vision editor supports structured sections (problem, users, goals, constraints, value proposition, complexity) with live preview and diff visibility.",
-        "Requirements workspace supports list/detail split view, filter/sort/search, and inline lifecycle transitions with audit-safe confirmation flows.",
-        "Requirement detail page visualizes acceptance criteria, status, linked tasks, and traceability context without raw JSON exposure by default.",
-        "Refine/draft actions expose progress, model/tool metadata, fallback behavior, and deterministic completion states.",
-        "All planning actions preserve deep links and refresh-safe state so operators can resume after navigation or reload."
-      ],
-      "priority": "must",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-013"
-      ],
-      "created_at": "2026-02-24T19:52:00.163350Z",
-      "updated_at": "2026-02-24T20:06:43.448359Z"
     },
     "REQ-005": {
       "id": "REQ-005",
@@ -3186,59 +3514,24 @@
       "created_at": "2026-02-24T19:48:30.582167Z",
       "updated_at": "2026-02-24T19:48:30.673797Z"
     },
-    "REQ-019": {
-      "id": "REQ-019",
-      "title": "Add first-class web UI observability and debug logging",
-      "description": "Instrument the React web GUI with structured client telemetry, correlation IDs, and operator-facing diagnostics so failures can be triaged quickly against backend run/events.",
+    "REQ-013": {
+      "id": "REQ-013",
+      "title": "Implement end-to-end planning UX for vision and requirements",
+      "description": "Provide complete interactive flows for drafting/refining vision, drafting/refining requirements, and reviewing requirement quality and links in one coherent workspace.",
       "body": null,
       "legacy_id": null,
       "category": null,
       "type": null,
       "acceptance_criteria": [
-        "Client logs are structured and include correlation context (route, action, request id/run id/task id when available).",
-        "Error events are captured at boundary, query, and mutation layers with severity and remediation metadata.",
-        "Operators can access a diagnostics panel that surfaces recent failed actions and linked backend artifacts/events.",
-        "Logging supports redaction rules to avoid exposing secrets or sensitive payloads in UI-visible traces.",
-        "Telemetry export format is documented and can be consumed by downstream monitoring tools."
-      ],
-      "priority": "must",
-      "status": "draft",
-      "source": "ops",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-019"
-      ],
-      "created_at": "2026-02-24T20:06:42.940529Z",
-      "updated_at": "2026-02-24T20:06:43.689364Z"
-    },
-    "REQ-014": {
-      "id": "REQ-014",
-      "title": "Deliver operational task and workflow control center",
-      "description": "Create a unified interface for task backlog management, workflow execution controls, phase status visibility, and gated approvals.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Task board supports prioritized queue, status transitions, assignment, dependency visualization, and checklist interactions via API-backed mutations.",
-        "Workflow views expose run/resume/pause/cancel operations with explicit confirmation and post-action telemetry feedback.",
-        "Phase timeline presents current phase, checkpoint state, decisions, approvals, and blocking reasons with timestamped history.",
-        "UI enforces rule-based action availability (disabled states and rationale) based on workflow/task status and server responses.",
-        "Operator actions are idempotent on retry and display conflict-resolution messaging when backend state has changed."
+        "Vision editor supports structured sections (problem, users, goals, constraints, value proposition, complexity) with live preview and diff visibility.",
+        "Requirements workspace supports list/detail split view, filter/sort/search, and inline lifecycle transitions with audit-safe confirmation flows.",
+        "Requirement detail page visualizes acceptance criteria, status, linked tasks, and traceability context without raw JSON exposure by default.",
+        "Refine/draft actions expose progress, model/tool metadata, fallback behavior, and deterministic completion states.",
+        "All planning actions preserve deep links and refresh-safe state so operators can resume after navigation or reload."
       ],
       "priority": "must",
       "status": "refined",
-      "source": "ops",
+      "source": "product",
       "tags": [],
       "links": {
         "tasks": [],
@@ -3251,26 +3544,29 @@
       "comments": [],
       "relative_path": null,
       "linked_task_ids": [
-        "TASK-014"
+        "TASK-013"
       ],
-      "created_at": "2026-02-24T19:52:00.207696Z",
-      "updated_at": "2026-02-24T20:06:43.487167Z"
+      "created_at": "2026-02-24T19:52:00.163350Z",
+      "updated_at": "2026-02-24T20:06:43.448359Z"
     },
-    "REQ-009": {
-      "id": "REQ-009",
-      "title": "Standardize destructive action safeguards",
-      "description": "Ensure destructive CLI operations require explicit confirmations and provide deterministic dry-run/preview semantics.",
+    "REQ-016": {
+      "id": "REQ-016",
+      "title": "Implement safety rails for high-risk operations in web UI",
+      "description": "Ensure destructive or irreversible actions in the web app are guarded by explicit operator intent confirmation, previews, and auditability.",
       "body": null,
       "legacy_id": null,
       "category": null,
       "type": null,
       "acceptance_criteria": [
-        "Destructive commands require explicit operator confirmation before state-changing execution.",
-        "Each destructive command provides a non-destructive preview path or clear precondition output."
+        "Destructive actions require typed confirmation or equivalent high-friction acknowledgement before request submission.",
+        "Where supported by backend, UI presents dry-run/preview output before executing destructive mutations.",
+        "Every high-risk action writes auditable context into UI-visible activity stream (actor, timestamp, target, outcome).",
+        "Permission and state preconditions are validated in UI and revalidated against server response before final success messaging.",
+        "Bulk operations include partial-failure reporting with deterministic rollback/compensation guidance."
       ],
       "priority": "must",
-      "status": "planned",
-      "source": "runtime",
+      "status": "refined",
+      "source": "security",
       "tags": [],
       "links": {
         "tasks": [],
@@ -3283,10 +3579,10 @@
       "comments": [],
       "relative_path": null,
       "linked_task_ids": [
-        "TASK-009"
+        "TASK-016"
       ],
-      "created_at": "2026-02-24T19:48:30.818389Z",
-      "updated_at": "2026-02-24T19:48:30.902451Z"
+      "created_at": "2026-02-24T19:52:00.339836Z",
+      "updated_at": "2026-02-24T20:06:43.568437Z"
     },
     "REQ-004": {
       "id": "REQ-004",
@@ -3328,6 +3624,151 @@
       "created_at": "2026-02-24T17:24:43.920053Z",
       "updated_at": "2026-02-24T19:21:21.010432Z"
     },
+    "REQ-019": {
+      "id": "REQ-019",
+      "title": "Add first-class web UI observability and debug logging",
+      "description": "Instrument the React web GUI with structured client telemetry, correlation IDs, and operator-facing diagnostics so failures can be triaged quickly against backend run/events.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Client logs are structured and include correlation context (route, action, request id/run id/task id when available).",
+        "Error events are captured at boundary, query, and mutation layers with severity and remediation metadata.",
+        "Operators can access a diagnostics panel that surfaces recent failed actions and linked backend artifacts/events.",
+        "Logging supports redaction rules to avoid exposing secrets or sensitive payloads in UI-visible traces.",
+        "Telemetry export format is documented and can be consumed by downstream monitoring tools."
+      ],
+      "priority": "must",
+      "status": "draft",
+      "source": "ops",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-019"
+      ],
+      "created_at": "2026-02-24T20:06:42.940529Z",
+      "updated_at": "2026-02-24T20:06:43.689364Z"
+    },
+    "REQ-011": {
+      "id": "REQ-011",
+      "title": "Build React web-app shell over orchestrator-web-server",
+      "description": "Create a production-grade React app that serves as the primary operator console for AO, wrapping orchestrator-web-server capabilities with clear IA, deterministic state handling, and safe command execution pathways.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Web app bootstraps with route-level code splitting and typed API integration for all core AO domains (vision, requirements, tasks, workflow, runs, errors, history).",
+        "Navigation model includes global project context, queue dashboards, and deep-linkable pages for each entity ID.",
+        "All UI mutations execute through server APIs only; no direct file assumptions or local state hacks bypassing backend contracts.",
+        "Global error boundaries and retry affordances are implemented for route, data-fetch, and action failures.",
+        "State management strategy is documented and enforced (query caching, optimistic updates policy, invalidation rules)."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "product",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-011"
+      ],
+      "created_at": "2026-02-24T19:52:00.068186Z",
+      "updated_at": "2026-02-24T20:06:43.368028Z"
+    },
+    "REQ-015": {
+      "id": "REQ-015",
+      "title": "Provide real-time run telemetry and artifact inspection UX",
+      "description": "Expose live run execution insight including event streams, JSONL outputs, artifacts, and error surfaces so operators can diagnose and recover quickly.",
+      "body": null,
+      "legacy_id": null,
+      "category": null,
+      "type": null,
+      "acceptance_criteria": [
+        "Run detail view streams and renders events incrementally with stable ordering and clear status derivation (running/completed/failed).",
+        "JSONL viewer supports source-file filtering, keyword search, and timestamp navigation for large logs.",
+        "Artifact browser lists files with metadata and supports safe download/read actions through backend endpoints.",
+        "Error panels map runtime failures to suggested operator next steps (retry, inspect runner health, open history/error details).",
+        "UI supports degraded mode when streaming is unavailable, falling back to periodic polling with explicit indicator."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "runtime",
+      "tags": [],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": null,
+      "linked_task_ids": [
+        "TASK-015"
+      ],
+      "created_at": "2026-02-24T19:52:00.289747Z",
+      "updated_at": "2026-02-24T20:06:43.528179Z"
+    },
+    "REQ-002": {
+      "id": "REQ-002",
+      "title": "Improve daily CLI ergonomics for core ao command groups",
+      "description": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
+      "body": "Developers and operators can discover and run core commands faster with consistent help text and actionable input-error guidance.\n\n**Implementation boundary:** Applies to `orchestrator-cli` command UX for `project`, `requirements`, `task`, `workflow`, and `execute`. Excludes runtime reliability concerns and integration behavior of external binaries.",
+      "legacy_id": null,
+      "category": "usability",
+      "type": "functional",
+      "acceptance_criteria": [
+        "Each core command group has a non-empty top-level help description and subcommand list with consistent structure and terminology.",
+        "At least 10 representative invalid-input scenarios return actionable errors that include both the failure reason and a concrete correction hint.",
+        "All `--json` error responses for invalid input conform to the `ao.cli.v1` envelope with `ok=false`, `error.code`, and `exit_code=2`.",
+        "Help output examples and command names in documentation match actual CLI behavior for the five scoped command groups.",
+        "Regression tests verify help output snapshots and error-shape consistency for the scoped groups."
+      ],
+      "priority": "must",
+      "status": "refined",
+      "source": "product",
+      "tags": [
+        "cli",
+        "error-handling",
+        "lens-product",
+        "ux"
+      ],
+      "links": {
+        "tasks": [],
+        "workflows": [],
+        "tests": [],
+        "mockups": [],
+        "flows": [],
+        "related_requirements": []
+      },
+      "comments": [],
+      "relative_path": "generated/REQ-002.json",
+      "linked_task_ids": [
+        "TASK-002"
+      ],
+      "created_at": "2026-02-24T17:24:42.443485Z",
+      "updated_at": "2026-02-24T19:21:21.003203Z"
+    },
     "REQ-006": {
       "id": "REQ-006",
       "title": "Define reproducible multi-binary release packaging process",
@@ -3368,143 +3809,6 @@
       ],
       "created_at": "2026-02-24T17:24:45.301691Z",
       "updated_at": "2026-02-24T19:21:21.017208Z"
-    },
-    "REQ-017": {
-      "id": "REQ-017",
-      "title": "Meet accessibility, responsiveness, and performance baselines",
-      "description": "Ship the web GUI with enterprise-grade usability quality across desktop and mobile form factors, keyboard users, and assistive technologies.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "Core flows (planning, tasks, workflows, run inspection) are fully keyboard navigable with visible focus states.",
-        "ARIA labels, semantic landmarks, and form validation messaging meet WCAG-oriented accessibility expectations for primary interactions.",
-        "Responsive breakpoints preserve full functionality on common laptop and mobile viewport classes without hidden critical controls.",
-        "Perceived performance budget is defined and met for initial load and key route transitions under realistic project data sizes.",
-        "Empty/loading/error states are intentionally designed and consistent across all route families."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "product",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-017"
-      ],
-      "created_at": "2026-02-24T19:52:00.415501Z",
-      "updated_at": "2026-02-24T20:06:43.608241Z"
-    },
-    "REQ-018": {
-      "id": "REQ-018",
-      "title": "Establish testing and release discipline for web GUI",
-      "description": "Create robust quality gates and release process for the React app so changes are reliable, observable, and safe to deploy with backend evolution.",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [
-        "CI pipeline runs static checks, unit tests, and integration tests for web-app critical flows against mocked and/or local backend contracts.",
-        "End-to-end smoke suite validates login/context load, requirement operations, task/workflow actions, and run telemetry rendering.",
-        "Frontend build artifacts include version metadata tied to git commit for traceability.",
-        "Release checklist defines rollback strategy, compatibility checks versus server API versions, and post-deploy verification steps.",
-        "Regression criteria are documented for every new route/action before feature completion is accepted."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "engineering",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [
-        "TASK-018"
-      ],
-      "created_at": "2026-02-24T19:52:00.458886Z",
-      "updated_at": "2026-02-24T20:06:43.648568Z"
-    },
-    "REQ-001": {
-      "id": "REQ-001",
-      "title": "Define and maintain the ao-cli self-hosting operating workflow",
-      "description": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
-      "body": "Contributors can reliably use `ao` to plan, execute, and close work in this repository without undocumented steps.\n\n**Implementation boundary:** This requirement covers contributor-facing workflow documentation and repository operating rules (`README` and `AGENTS.md`) for this repo only. It does not include CLI feature development.",
-      "legacy_id": null,
-      "category": "documentation",
-      "type": "product",
-      "acceptance_criteria": [
-        "README includes a self-hosting workflow section with at least one complete command sequence from requirement selection through task/requirement closure.",
-        "All documented commands in the self-hosting section include explicit `--project-root \"$(pwd)\"` usage where automation is shown.",
-        "AGENTS.md documents CLI-only `.ao` mutation policy and task logging expectations (before work, during work, completion).",
-        "README and AGENTS.md contain no conflicting instructions for project root resolution, daemon registry usage, or status transitions.",
-        "A new contributor can execute the documented workflow on a clean clone and produce at least one updated task status without manual `.ao` file edits."
-      ],
-      "priority": "should",
-      "status": "refined",
-      "source": "self-hosting",
-      "tags": [
-        "contributor-workflow",
-        "docs",
-        "lens-product",
-        "self-hosting"
-      ],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": "generated/REQ-001.json",
-      "linked_task_ids": [
-        "TASK-001"
-      ],
-      "created_at": "2026-02-24T17:24:41.776781Z",
-      "updated_at": "2026-02-24T19:21:20.999291Z"
-    },
-    "REQ-020": {
-      "id": "REQ-020",
-      "title": "Architecture knowledge graph support",
-      "description": "Add architecture entities/edges JSON graph and task linkage so tasks can indicate where changes should live",
-      "body": null,
-      "legacy_id": null,
-      "category": null,
-      "type": null,
-      "acceptance_criteria": [],
-      "priority": "should",
-      "status": "in-progress",
-      "source": "user-request",
-      "tags": [],
-      "links": {
-        "tasks": [],
-        "workflows": [],
-        "tests": [],
-        "mockups": [],
-        "flows": [],
-        "related_requirements": []
-      },
-      "comments": [],
-      "relative_path": null,
-      "linked_task_ids": [],
-      "created_at": "2026-02-24T20:08:53.349171Z",
-      "updated_at": "2026-02-24T20:09:02.444379Z"
     }
   },
   "architecture": {

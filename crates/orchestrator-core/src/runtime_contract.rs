@@ -34,6 +34,30 @@ fn normalized_tool(tool: &str) -> String {
     tool.trim().to_ascii_lowercase()
 }
 
+fn default_allowed_tool_prefixes(agent_id: Option<&str>) -> Vec<String> {
+    let mut prefixes = vec![
+        "ao.".to_string(),
+        "mcp__ao__".to_string(),
+        "mcp.ao.".to_string(),
+    ];
+
+    if let Some(agent_id) = agent_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+    {
+        for base in [agent_id.clone(), agent_id.replace('-', "_")] {
+            prefixes.push(format!("{base}."));
+            prefixes.push(format!("mcp__{base}__"));
+            prefixes.push(format!("mcp.{base}."));
+        }
+    }
+
+    prefixes.sort();
+    prefixes.dedup();
+    prefixes
+}
+
 pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
     match normalized_tool(tool).as_str() {
         "claude" => Some(CliCapabilities {
@@ -52,7 +76,7 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
             supports_vision: false,
             supports_long_context: false,
             max_context_tokens: Some(128_000),
-            supports_mcp: false,
+            supports_mcp: true,
         }),
         "gemini" => Some(CliCapabilities {
             supports_file_editing: true,
@@ -61,7 +85,7 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
             supports_vision: true,
             supports_long_context: true,
             max_context_tokens: Some(1_000_000),
-            supports_mcp: false,
+            supports_mcp: true,
         }),
         "opencode" => Some(CliCapabilities {
             supports_file_editing: true,
@@ -216,6 +240,7 @@ pub fn build_runtime_contract(
     let launch =
         build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override)?;
     let capabilities = cli_capabilities_for_tool(&normalized)?;
+    let enforce_mcp_only = mcp_endpoint.is_some() && capabilities.supports_mcp;
 
     let mut cli = serde_json::Map::new();
     cli.insert("name".to_string(), json!(normalized));
@@ -241,7 +266,13 @@ pub fn build_runtime_contract(
         "model": model_id,
         "mcp": {
             "agent_id": mcp_agent_id,
-            "endpoint": mcp_endpoint
+            "endpoint": mcp_endpoint,
+            "enforce_only": enforce_mcp_only,
+            "allowed_tool_prefixes": if enforce_mcp_only {
+                default_allowed_tool_prefixes(mcp_agent_id)
+            } else {
+                Vec::<String>::new()
+            }
         }
     }))
 }
@@ -281,6 +312,53 @@ mod tests {
             contract.pointer("/mcp/agent_id").and_then(Value::as_str),
             Some("agent-1")
         );
+        assert_eq!(
+            contract
+                .pointer("/mcp/enforce_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let allowed_prefixes = contract
+            .pointer("/mcp/allowed_tool_prefixes")
+            .and_then(Value::as_array)
+            .expect("allowed tool prefixes should be present");
+        assert!(
+            allowed_prefixes
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|prefix| prefix == "ao."),
+            "AO prefix should always be allowed under MCP-only enforcement"
+        );
+    }
+
+    #[test]
+    fn build_runtime_contract_enforces_mcp_only_when_supported_tool_has_endpoint() {
+        let contract = build_runtime_contract(
+            "claude",
+            "claude-sonnet-4-6",
+            "Implement feature",
+            None,
+            None,
+            Some("http://127.0.0.1:7000/mcp/ao"),
+            Some("ao"),
+        )
+        .expect("runtime contract should build");
+
+        assert_eq!(
+            contract
+                .pointer("/mcp/enforce_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let allowed_prefixes = contract
+            .pointer("/mcp/allowed_tool_prefixes")
+            .and_then(Value::as_array)
+            .expect("allowed tool prefixes should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(allowed_prefixes.contains(&"ao."));
+        assert!(allowed_prefixes.contains(&"mcp__ao__"));
     }
 
     #[test]
@@ -357,5 +435,32 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(opencode_args.contains(&"--format"));
         assert!(opencode_args.contains(&"json"));
+    }
+
+    #[test]
+    fn build_launch_contract_preserves_opencode_glm_and_minimax_models() {
+        for model in ["zai-coding-plan/glm-4.7", "minimax/MiniMax-M2.1"] {
+            let launch = build_cli_launch_contract("opencode", model, "hello", None, None)
+                .expect("opencode launch contract should build");
+            let args = launch
+                .pointer("/args")
+                .and_then(Value::as_array)
+                .expect("opencode args should be present")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+
+            let model_flag_index = args
+                .iter()
+                .position(|entry| *entry == "-m")
+                .expect("opencode launch should include -m model flag");
+            assert_eq!(
+                args.get(model_flag_index + 1).copied(),
+                Some(model),
+                "opencode launch should preserve provider model id"
+            );
+            assert!(args.contains(&"--format"));
+            assert!(args.contains(&"json"));
+        }
     }
 }

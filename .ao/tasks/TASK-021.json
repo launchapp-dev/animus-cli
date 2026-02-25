@@ -8,29 +8,56 @@
   "blocked_reason": null,
   "branch_name": null,
   "cancelled": false,
-  "checklist": [],
+  "checklist": [
+    {
+      "completed": true,
+      "completed_at": "2026-02-25T05:57:47.795690Z",
+      "created_at": "2026-02-25T05:46:05.466510Z",
+      "description": "Add clap + main dispatch support for new tui command",
+      "id": "3aed6c70-f815-4e27-8e54-d82422888421"
+    },
+    {
+      "completed": true,
+      "completed_at": "2026-02-25T05:57:48.595151Z",
+      "created_at": "2026-02-25T05:46:06.842913Z",
+      "description": "Implement minimal ratatui screen with task list and keybinds",
+      "id": "6a9bd04b-c37c-401b-b983-a585f0000f17"
+    },
+    {
+      "completed": true,
+      "completed_at": "2026-02-25T06:56:52.220134Z",
+      "created_at": "2026-02-25T05:46:07.642782Z",
+      "description": "Run cargo check and CLI smoke coverage updates",
+      "id": "c81ac588-5f49-45af-8e28-2feffe2bd0bb"
+    },
+    {
+      "completed": true,
+      "completed_at": "2026-02-25T05:57:50.858418Z",
+      "created_at": "2026-02-25T05:48:27.028778Z",
+      "description": "Add AO MCP stdio -> HTTP bridge so agent runs use AO CLI MCP only",
+      "id": "385bcbdb-2705-4bd8-891e-cf5218b30396"
+    }
+  ],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Task linked to architecture entity",
+  "description": "Build an agent-first TUI where provider execution is MCP-locked and always routed through AO CLI MCP by spawning the 'ao mcp serve' command behind an internal bridge; no external MCP server dependency.",
   "estimated_effort": null,
   "id": "TASK-021",
   "impact_area": [],
-  "linked_architecture_entities": [
-    "arch-cli-core"
-  ],
+  "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
-    "created_at": "2026-02-24T20:17:30.482524Z",
+    "completed_at": "2026-02-25T05:57:51.625316Z",
+    "created_at": "2026-02-25T05:46:02.633221Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-24T20:17:30.482524Z",
+    "started_at": "2026-02-25T05:46:04.756127Z",
+    "updated_at": "2026-02-25T06:56:52.220134Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 12
   },
   "paused": false,
-  "priority": "medium",
+  "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
     "max_memory_mb": null,
@@ -38,9 +65,9 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "done",
   "tags": [],
-  "title": "Use architecture-linked task",
+  "title": "Scaffold ao tui command and MVP dashboard",
   "type": "feature",
   "workflow_metadata": {
     "requires_architecture": false,

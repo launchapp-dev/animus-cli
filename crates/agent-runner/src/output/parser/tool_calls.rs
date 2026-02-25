@@ -11,6 +11,29 @@ pub(super) fn parse_json_tool_call(line: &str) -> Option<(String, Value)> {
         return Some(call);
     }
 
+    if let Some(item) = value.get("item") {
+        if let Some(call) = parse_json_tool_call_value(item) {
+            return Some(call);
+        }
+        if let Some(tool_call) = item.get("tool_call") {
+            if let Some(call) = parse_json_tool_call_value(tool_call) {
+                return Some(call);
+            }
+        }
+        if let Some(function_call) = item.get("function_call") {
+            if let Some(call) = parse_json_tool_call_value(function_call) {
+                return Some(call);
+            }
+        }
+        if let Some(tool_calls) = item.get("tool_calls").and_then(Value::as_array) {
+            for tool_call in tool_calls {
+                if let Some(call) = parse_json_tool_call_value(tool_call) {
+                    return Some(call);
+                }
+            }
+        }
+    }
+
     if let Some(tool_call) = value.get("tool_call") {
         if let Some(call) = parse_json_tool_call_value(tool_call) {
             return Some(call);
@@ -32,6 +55,24 @@ pub(super) fn parse_json_tool_call(line: &str) -> Option<(String, Value)> {
     }
 
     if let Some(content) = value.get("content").and_then(Value::as_array) {
+        for item in content {
+            if let Some(call) = parse_json_tool_call_value(item) {
+                return Some(call);
+            }
+            if let Some(tool_call) = item.get("tool_call") {
+                if let Some(call) = parse_json_tool_call_value(tool_call) {
+                    return Some(call);
+                }
+            }
+            if let Some(function_call) = item.get("function_call") {
+                if let Some(call) = parse_json_tool_call_value(function_call) {
+                    return Some(call);
+                }
+            }
+        }
+    }
+
+    if let Some(content) = value.pointer("/message/content").and_then(Value::as_array) {
         for item in content {
             if let Some(call) = parse_json_tool_call_value(item) {
                 return Some(call);
@@ -147,6 +188,17 @@ fn parse_json_tool_call_value(value: &Value) -> Option<(String, Value)> {
         .cloned()
         .map(normalize_arguments_value)
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+    if let Some(server_name) = value
+        .get("server")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|server| !server.is_empty())
+    {
+        if let Some(object) = parameters.as_object_mut() {
+            object.insert("server".to_string(), Value::String(server_name.to_string()));
+        }
+    }
 
     if matches!(
         normalize_token(&tool_name).as_str(),

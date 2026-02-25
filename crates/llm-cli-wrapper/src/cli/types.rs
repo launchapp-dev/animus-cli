@@ -116,7 +116,7 @@ impl CliCapability {
                 supports_vision: false,
                 supports_long_context: false,
                 max_context_tokens: Some(128_000),
-                supports_mcp: false,
+                supports_mcp: true,
                 mcp_endpoint: None,
             },
             CliType::Gemini => Self {
@@ -126,7 +126,7 @@ impl CliCapability {
                 supports_vision: true,
                 supports_long_context: true,
                 max_context_tokens: Some(1_000_000),
-                supports_mcp: false,
+                supports_mcp: true,
                 mcp_endpoint: None,
             },
             CliType::OpenCode => Self {
@@ -160,5 +160,19 @@ impl CliCapability {
                 mcp_endpoint: None,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CliCapability, CliType};
+
+    #[test]
+    fn codex_and_gemini_default_to_mcp_capable() {
+        let codex = CliCapability::default_for_type(CliType::Codex);
+        let gemini = CliCapability::default_for_type(CliType::Gemini);
+
+        assert!(codex.supports_mcp);
+        assert!(gemini.supports_mcp);
     }
 }

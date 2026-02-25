@@ -603,8 +603,8 @@ async fn execute_running_workflow_phases_for_project(
             && !workflow_has_completed_research(&workflow)
             && !workflow_has_active_research(&workflow)
         {
-            let reason = "requirements validation requested research evidence before execution"
-                .to_string();
+            let reason =
+                "requirements validation requested research evidence before execution".to_string();
             let updated = hub
                 .workflows()
                 .request_research(&workflow.id, reason)
@@ -658,7 +658,12 @@ async fn execute_running_workflow_phases_for_project(
                 Ok(result)
             });
 
-            (scheduled.workflow, scheduled.task, scheduled.phase_id, run_result)
+            (
+                scheduled.workflow,
+                scheduled.task,
+                scheduled.phase_id,
+                run_result,
+            )
         });
     }
 

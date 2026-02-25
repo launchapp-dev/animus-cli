@@ -14,6 +14,10 @@ fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
         stdout.contains("Usage: ao [OPTIONS] <COMMAND>"),
         "help output should include usage line"
     );
+    assert!(
+        stdout.contains("tui"),
+        "help output should include tui command"
+    );
     Ok(())
 }
 
@@ -64,7 +68,9 @@ fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::E
         Some("ao.cli.v1")
     );
     assert_eq!(
-        payload.pointer("/data/binary").and_then(|value| value.as_str()),
+        payload
+            .pointer("/data/binary")
+            .and_then(|value| value.as_str()),
         Some("ao")
     );
     assert!(

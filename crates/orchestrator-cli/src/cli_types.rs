@@ -99,6 +99,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: WebCommand,
     },
+    Tui(TuiArgs),
     Doctor,
 }
 
@@ -135,6 +136,18 @@ pub(crate) struct WebOpenArgs {
     pub(crate) port: u16,
     #[arg(long, default_value = "/")]
     pub(crate) path: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TuiArgs {
+    #[arg(long)]
+    pub(crate) model: Option<String>,
+    #[arg(long)]
+    pub(crate) tool: Option<String>,
+    #[arg(long)]
+    pub(crate) headless: bool,
+    #[arg(long)]
+    pub(crate) prompt: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

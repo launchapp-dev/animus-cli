@@ -25,6 +25,9 @@ schemars = "1.0"
 fs2 = "0.4"
 sha2 = "0.10"
 webbrowser = "1"
+crossterm = "0.28"
+ratatui = "0.29"
+axum = "0.8"
 
 [dev-dependencies]
 assert_cmd = "2"

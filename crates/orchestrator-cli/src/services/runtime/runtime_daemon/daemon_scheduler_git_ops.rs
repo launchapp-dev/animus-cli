@@ -32,7 +32,10 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
             if let Some(enabled) = value.get("auto_pr_enabled").and_then(Value::as_bool) {
                 cfg.auto_pr_enabled = enabled;
             }
-            if let Some(enabled) = value.get("auto_commit_before_merge").and_then(Value::as_bool) {
+            if let Some(enabled) = value
+                .get("auto_commit_before_merge")
+                .and_then(Value::as_bool)
+            {
                 cfg.auto_commit_before_merge = enabled;
             }
             if let Some(branch) = value
@@ -188,7 +191,9 @@ struct GitIntegrationOutboxEntry {
 }
 
 fn integration_outbox_path(project_root: &str) -> Result<PathBuf> {
-    Ok(repo_ao_root(project_root)?.join("sync").join("outbox.jsonl"))
+    Ok(repo_ao_root(project_root)?
+        .join("sync")
+        .join("outbox.jsonl"))
 }
 
 fn load_git_integration_outbox(project_root: &str) -> Result<Vec<GitIntegrationOutboxEntry>> {
@@ -197,10 +202,18 @@ fn load_git_integration_outbox(project_root: &str) -> Result<Vec<GitIntegrationO
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read git integration outbox at {}", path.display()))?;
+    let content = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read git integration outbox at {}",
+            path.display()
+        )
+    })?;
     let mut entries = Vec::new();
-    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if let Ok(entry) = serde_json::from_str::<GitIntegrationOutboxEntry>(line) {
             entries.push(entry);
         }
@@ -714,7 +727,10 @@ pub(super) async fn post_success_merge_push_and_cleanup(
         if cfg.auto_merge_enabled {
             if opened_pr_now {
                 if enable_pull_request_auto_merge(project_root, source_branch.as_str()).is_err() {
-                    enqueue_git_integration_operation(project_root, enable_pr_auto_merge_operation)?;
+                    enqueue_git_integration_operation(
+                        project_root,
+                        enable_pr_auto_merge_operation,
+                    )?;
                 }
             } else {
                 enqueue_git_integration_operation(project_root, enable_pr_auto_merge_operation)?;
