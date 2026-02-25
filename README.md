@@ -151,6 +151,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - CLI destructive safety planning artifacts for TASK-009 live in `crates/orchestrator-cli/docs/`:
   - `task-009-destructive-command-requirements.md`
   - `task-009-destructive-command-implementation-notes.md`
+- CLI JSON envelope contract planning artifacts for TASK-008 live in `crates/orchestrator-cli/docs/`:
+  - `task-008-json-envelope-contract-requirements.md`
+  - `task-008-json-envelope-contract-implementation-notes.md`
 - Runtime tracking files live under `.ao/`.
 - Do not hand-edit `.ao/state/*`; use `ao` commands for changes.
 - Daemon-managed git worktrees are created under:

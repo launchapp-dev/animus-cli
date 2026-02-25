@@ -27,15 +27,7 @@ impl CliHarness {
     }
 
     pub(crate) fn run_json_ok(&self, args: &[&str]) -> Result<Value> {
-        let output = Command::new(&self.binary_path)
-            .arg("--json")
-            .arg("--project-root")
-            .arg(self.project_root.path())
-            .args(args)
-            .env("AO_CONFIG_DIR", self.config_root.path())
-            .env("AGENT_ORCHESTRATOR_CONFIG_DIR", self.config_root.path())
-            .output()
-            .with_context(|| format!("failed to execute ao command: {}", args.join(" ")))?;
+        let output = self.run_json_command(args)?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -74,15 +66,12 @@ impl CliHarness {
     }
 
     pub(crate) fn run_json_err(&self, args: &[&str]) -> Result<Value> {
-        let output = Command::new(&self.binary_path)
-            .arg("--json")
-            .arg("--project-root")
-            .arg(self.project_root.path())
-            .args(args)
-            .env("AO_CONFIG_DIR", self.config_root.path())
-            .env("AGENT_ORCHESTRATOR_CONFIG_DIR", self.config_root.path())
-            .output()
-            .with_context(|| format!("failed to execute ao command: {}", args.join(" ")))?;
+        let (payload, _) = self.run_json_err_with_exit(args)?;
+        Ok(payload)
+    }
+
+    pub(crate) fn run_json_err_with_exit(&self, args: &[&str]) -> Result<(Value, i32)> {
+        let output = self.run_json_command(args)?;
 
         if output.status.success() {
             anyhow::bail!(
@@ -116,6 +105,20 @@ impl CliHarness {
             );
         }
 
-        Ok(payload)
+        Ok((payload, output.status.code().unwrap_or(-1)))
+    }
+
+    fn run_json_command(&self, args: &[&str]) -> Result<std::process::Output> {
+        Command::new(&self.binary_path)
+            .arg("--json")
+            .arg("--project-root")
+            .arg(self.project_root.path())
+            .args(args)
+            .env("HOME", self.config_root.path())
+            .env("XDG_CONFIG_HOME", self.config_root.path())
+            .env("AO_CONFIG_DIR", self.config_root.path())
+            .env("AGENT_ORCHESTRATOR_CONFIG_DIR", self.config_root.path())
+            .output()
+            .with_context(|| format!("failed to execute ao command: {}", args.join(" ")))
     }
 }
