@@ -517,6 +517,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         web_search: profile.web_search,
                         timeout_secs: profile.timeout_secs,
                         max_attempts: profile.max_attempts,
+                        execution_policy: None,
                     },
                 )
             })
@@ -572,6 +573,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                 web_search: settings.web_search,
                 timeout_secs: settings.timeout_secs,
                 max_attempts: settings.max_attempts,
+                execution_policy: None,
             }
         });
 

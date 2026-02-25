@@ -647,6 +647,7 @@ async fn execute_running_workflow_phases_for_project(
                 Some(scheduled.task.complexity),
                 &scheduled.phase_id,
                 scheduled.phase_attempt,
+                scheduled.task.execution_policy.as_ref(),
             )
             .await
             .and_then(|result| {
@@ -763,26 +764,47 @@ async fn execute_running_workflow_phases_for_project(
                         task_id: workflow.task_id.clone(),
                         phase_id: phase_id.clone(),
                         phase_mode: "unknown".to_string(),
-                        metadata: PhaseExecutionMetadata {
-                            phase_id: phase_id.clone(),
-                            phase_mode: "unknown".to_string(),
-                            phase_definition_hash: "unknown".to_string(),
-                            agent_runtime_config_hash: "unknown".to_string(),
-                            agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID
-                                .to_string(),
-                            agent_runtime_version:
-                                orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
-                            agent_runtime_source: "unknown".to_string(),
-                            agent_id: None,
-                            agent_profile_hash: None,
-                            selected_tool: None,
-                            selected_model: None,
-                        },
+                        metadata: unknown_phase_metadata(&phase_id),
                         payload: serde_json::json!({
                             "workflow_id": workflow.id,
                             "task_id": workflow.task_id,
                             "phase_id": phase_id,
                             "error": error_message,
+                        }),
+                    });
+                }
+                if error_message.contains("POLICY_VIOLATION") {
+                    phase_events.push(PhaseExecutionEvent {
+                        event_type: "workflow-phase-policy-blocked".to_string(),
+                        project_root: project_root.to_string(),
+                        workflow_id: workflow.id.clone(),
+                        task_id: workflow.task_id.clone(),
+                        phase_id: phase_id.clone(),
+                        phase_mode: "unknown".to_string(),
+                        metadata: unknown_phase_metadata(&phase_id),
+                        payload: serde_json::json!({
+                            "workflow_id": workflow.id,
+                            "task_id": workflow.task_id,
+                            "phase_id": phase_id,
+                            "error": error_message,
+                            "decision": "blocked",
+                        }),
+                    });
+                } else if error_message.contains("ELEVATION_REQUIRED") {
+                    phase_events.push(PhaseExecutionEvent {
+                        event_type: "workflow-phase-elevation-required".to_string(),
+                        project_root: project_root.to_string(),
+                        workflow_id: workflow.id.clone(),
+                        task_id: workflow.task_id.clone(),
+                        phase_id: phase_id.clone(),
+                        phase_mode: "unknown".to_string(),
+                        metadata: unknown_phase_metadata(&phase_id),
+                        payload: serde_json::json!({
+                            "workflow_id": workflow.id,
+                            "task_id": workflow.task_id,
+                            "phase_id": phase_id,
+                            "error": error_message,
+                            "decision": "elevation_required",
                         }),
                     });
                 }
@@ -806,6 +828,35 @@ async fn execute_running_workflow_phases_for_project(
     }
 
     Ok((executed, failed, phase_events))
+}
+
+fn unknown_phase_metadata(phase_id: &str) -> PhaseExecutionMetadata {
+    PhaseExecutionMetadata {
+        phase_id: phase_id.to_string(),
+        phase_mode: "unknown".to_string(),
+        phase_definition_hash: "unknown".to_string(),
+        agent_runtime_config_hash: "unknown".to_string(),
+        agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID
+            .to_string(),
+        agent_runtime_version: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+        agent_runtime_source: "unknown".to_string(),
+        policy_hash: "unknown".to_string(),
+        sandbox_mode: "workspace_write".to_string(),
+        allow_elevated: false,
+        tool_policy: orchestrator_core::ToolPolicy::default(),
+        policy_sources: orchestrator_core::ExecutionPolicySources {
+            sandbox_mode: "global".to_string(),
+            allow_prefixes: "global".to_string(),
+            allow_exact: "global".to_string(),
+            deny_prefixes: "global".to_string(),
+            deny_exact: "global".to_string(),
+            allow_elevated: "global".to_string(),
+        },
+        agent_id: None,
+        agent_profile_hash: None,
+        selected_tool: None,
+        selected_model: None,
+    }
 }
 
 fn phase_execution_events_from_signals(

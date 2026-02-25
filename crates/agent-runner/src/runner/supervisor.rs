@@ -138,6 +138,7 @@ impl Supervisor {
             model,
             prompt,
             runtime_contract,
+            Some(&context),
             cwd,
             env,
             timeout_secs,

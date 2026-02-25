@@ -717,6 +717,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                     paused: false,
                     cancelled: false,
                     resource_requirements: Default::default(),
+                    execution_policy: None,
                 };
                 lock.tasks.insert(task_id.clone(), task);
                 task_ids_created.push(task_id.clone());

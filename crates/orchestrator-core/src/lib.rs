@@ -2,6 +2,7 @@ pub mod agent_runtime_config;
 pub mod config;
 pub mod doctor;
 pub mod domain_state;
+pub mod execution_policy;
 pub mod events;
 pub mod runtime;
 pub mod runtime_contract;
@@ -30,6 +31,11 @@ pub use domain_state::{
     HistoryExecutionRecord, HistoryStore, QaGateResultRecord, QaPhaseGateResult, QaResultsStore,
     QaReviewApprovalRecord, QaReviewApprovalStore, ReviewDecision, ReviewEntityType, ReviewRecord,
     ReviewStore, ReviewerRole,
+};
+pub use execution_policy::{
+    execution_policy_hash, resolve_execution_policy, validate_execution_policy_overrides,
+    ExecutionPolicy, ExecutionPolicyOverrides, ExecutionPolicySources, PolicySource,
+    ResolvedExecutionPolicy, SandboxMode, ToolPolicy,
 };
 pub use events::{OrchestratorEvent, OrchestratorEventKind};
 pub use runtime::{EventSink, OrchestratorRuntime, RuntimeHandle};

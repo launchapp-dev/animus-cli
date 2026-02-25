@@ -45,6 +45,11 @@ pub(crate) struct PhaseExecutionMetadata {
     pub(super) agent_runtime_schema: String,
     pub(super) agent_runtime_version: u32,
     pub(super) agent_runtime_source: String,
+    pub(super) policy_hash: String,
+    pub(super) sandbox_mode: String,
+    pub(super) allow_elevated: bool,
+    pub(super) tool_policy: orchestrator_core::ToolPolicy,
+    pub(super) policy_sources: orchestrator_core::ExecutionPolicySources,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,6 +115,18 @@ fn phase_output_json_schema_for(project_root: &str, phase_id: &str) -> Option<Va
     load_agent_runtime_config(project_root)
         .phase_output_json_schema(phase_id)
         .cloned()
+}
+
+fn resolve_phase_execution_policy(
+    runtime_config: &orchestrator_core::AgentRuntimeConfig,
+    phase_id: &str,
+    task_execution_policy: Option<&orchestrator_core::ExecutionPolicyOverrides>,
+) -> orchestrator_core::ResolvedExecutionPolicy {
+    orchestrator_core::resolve_execution_policy(
+        task_execution_policy,
+        runtime_config.phase_execution_policy_override(phase_id),
+        runtime_config.phase_agent_execution_policy_override(phase_id),
+    )
 }
 
 pub(super) fn phase_directive_for(project_root: &str, phase_id: &str) -> String {
@@ -550,6 +567,7 @@ pub(super) async fn run_workflow_phase_with_agent(
     task_complexity: Option<orchestrator_core::Complexity>,
     phase_id: &str,
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+    resolved_execution_policy: &orchestrator_core::ResolvedExecutionPolicy,
 ) -> Result<PhaseExecutionOutcome> {
     let routing_complexity = routing_complexity(task_complexity);
     let agent_model_override = phase_model_override_for(project_root, phase_id);
@@ -586,6 +604,13 @@ pub(super) async fn run_workflow_phase_with_agent(
         .and_then(|settings| settings.max_attempts)
         .unwrap_or_else(phase_runner_attempts);
     let mut fallover_errors: Vec<String> = Vec::new();
+    let execution_policy_payload = serde_json::json!({
+        "sandbox_mode": resolved_execution_policy.policy.sandbox_mode,
+        "allow_elevated": resolved_execution_policy.policy.allow_elevated,
+        "policy_hash": resolved_execution_policy.policy_hash,
+        "tool_policy": resolved_execution_policy.policy.tool_policy,
+        "policy_sources": resolved_execution_policy.sources,
+    });
 
     for (target_index, (target_tool_id, target_model_id)) in execution_targets.iter().enumerate() {
         let mut context = serde_json::json!({
@@ -613,23 +638,41 @@ pub(super) async fn run_workflow_phase_with_agent(
             target_model_id,
             &prompt,
         ) {
-            if let Some(contract) = phase_contract.as_ref() {
-                let mut policy = serde_json::json!({
-                    "require_commit_message": contract.requires_field("commit_message"),
-                    "required_result_kind": contract.kind.as_str(),
-                    "required_result_fields": contract.required_fields.clone(),
-                });
-                if let Some(schema) = phase_output_schema.clone() {
-                    policy
-                        .as_object_mut()
-                        .expect("json object")
-                        .insert("output_json_schema".to_string(), schema);
-                }
-                runtime_contract
+            {
+                let policy_value = runtime_contract
                     .as_object_mut()
                     .expect("json object")
-                    .insert("policy".to_string(), policy);
+                    .entry("policy".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                if !policy_value.is_object() {
+                    *policy_value = serde_json::json!({});
+                }
+                let policy_object = policy_value.as_object_mut().expect("json object");
+
+                if let Some(contract) = phase_contract.as_ref() {
+                    let mut contract_policy = serde_json::json!({
+                        "require_commit_message": contract.requires_field("commit_message"),
+                        "required_result_kind": contract.kind.as_str(),
+                        "required_result_fields": contract.required_fields.clone(),
+                    });
+                    if let Some(schema) = phase_output_schema.clone() {
+                        contract_policy
+                            .as_object_mut()
+                            .expect("json object")
+                            .insert("output_json_schema".to_string(), schema);
+                    }
+                    if let Some(contract_policy_object) = contract_policy.as_object() {
+                        for (key, value) in contract_policy_object {
+                            policy_object.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+                policy_object.insert("execution".to_string(), execution_policy_payload.clone());
             }
+            runtime_contract
+                .as_object_mut()
+                .expect("json object")
+                .insert("execution_policy".to_string(), execution_policy_payload.clone());
             inject_codex_search_launch_flag(
                 &mut runtime_contract,
                 context
@@ -1050,6 +1093,7 @@ pub(super) async fn run_workflow_phase(
     task_complexity: Option<orchestrator_core::Complexity>,
     phase_id: &str,
     phase_attempt: u32,
+    task_execution_policy: Option<&orchestrator_core::ExecutionPolicyOverrides>,
 ) -> Result<PhaseExecutionRunResult> {
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
@@ -1070,6 +1114,8 @@ pub(super) async fn run_workflow_phase(
         .as_deref()
         .and_then(|id| runtime_loaded.config.agent_profile(id))
         .map(hash_serializable);
+    let resolved_execution_policy =
+        resolve_phase_execution_policy(&runtime_loaded.config, phase_id, task_execution_policy);
 
     let mut metadata = PhaseExecutionMetadata {
         phase_id: phase_id.to_string(),
@@ -1079,6 +1125,11 @@ pub(super) async fn run_workflow_phase(
         agent_runtime_schema: runtime_loaded.metadata.schema.clone(),
         agent_runtime_version: runtime_loaded.metadata.version,
         agent_runtime_source: runtime_loaded.metadata.source.as_str().to_string(),
+        policy_hash: resolved_execution_policy.policy_hash.clone(),
+        sandbox_mode: resolved_execution_policy.policy.sandbox_mode.as_str().to_string(),
+        allow_elevated: resolved_execution_policy.policy.allow_elevated,
+        tool_policy: resolved_execution_policy.policy.tool_policy.clone(),
+        policy_sources: resolved_execution_policy.sources.clone(),
         agent_id: agent_id.clone(),
         agent_profile_hash,
         selected_tool: None,
@@ -1097,10 +1148,28 @@ pub(super) async fn run_workflow_phase(
             "agent_runtime_schema": metadata.agent_runtime_schema,
             "agent_runtime_version": metadata.agent_runtime_version,
             "agent_runtime_source": metadata.agent_runtime_source,
+            "policy_hash": metadata.policy_hash,
+            "sandbox_mode": metadata.sandbox_mode,
+            "allow_elevated": metadata.allow_elevated,
+            "tool_policy": metadata.tool_policy,
+            "policy_sources": metadata.policy_sources,
             "agent_id": metadata.agent_id,
             "agent_profile_hash": metadata.agent_profile_hash,
         }),
     }];
+    signals.push(PhaseExecutionSignal {
+        event_type: "workflow-phase-policy-resolved".to_string(),
+        payload: serde_json::json!({
+            "workflow_id": workflow_id,
+            "task_id": task_id,
+            "phase_id": phase_id,
+            "policy_hash": metadata.policy_hash,
+            "sandbox_mode": metadata.sandbox_mode,
+            "allow_elevated": metadata.allow_elevated,
+            "tool_policy": metadata.tool_policy,
+            "policy_sources": metadata.policy_sources,
+        }),
+    });
 
     match definition.mode {
         orchestrator_core::PhaseExecutionMode::Agent => {
@@ -1158,6 +1227,7 @@ pub(super) async fn run_workflow_phase(
                 task_complexity,
                 phase_id,
                 runtime_settings.as_ref(),
+                &resolved_execution_policy,
             )
             .await?;
 

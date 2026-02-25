@@ -65,6 +65,9 @@ pub(super) fn apply_task_update(task: &mut OrchestratorTask, input: TaskUpdateIn
     if let Some(linked_architecture_entities) = input.linked_architecture_entities {
         task.linked_architecture_entities = linked_architecture_entities;
     }
+    if let Some(execution_policy) = input.execution_policy {
+        task.execution_policy = Some(execution_policy);
+    }
     task.metadata.updated_at = Utc::now();
     task.metadata.version = task.metadata.version.saturating_add(1);
     if let Some(updated_by) = input.updated_by {

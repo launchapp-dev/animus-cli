@@ -1,5 +1,8 @@
 use anyhow::{bail, Context, Result};
+use chrono::Utc;
 use protocol::{AgentRunEvent, OutputStreamType, RunId};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -35,6 +38,108 @@ struct McpToolEnforcement {
     stdio: Option<McpStdioConfig>,
     agent_id: String,
     allowed_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::WorkspaceWrite => "workspace_write",
+            Self::DangerFullAccess => "danger_full_access",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ToolPolicyEnforcement {
+    #[serde(default)]
+    allow_prefixes: Vec<String>,
+    #[serde(default)]
+    allow_exact: Vec<String>,
+    #[serde(default)]
+    deny_prefixes: Vec<String>,
+    #[serde(default)]
+    deny_exact: Vec<String>,
+}
+
+impl ToolPolicyEnforcement {
+    fn has_allow_rules(&self) -> bool {
+        !self.allow_prefixes.is_empty() || !self.allow_exact.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ElevationApproval {
+    request_id: String,
+    approved: bool,
+    approved_by: Option<String>,
+    comment: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionPolicyEnforcement {
+    sandbox_mode: SandboxMode,
+    tool_policy: ToolPolicyEnforcement,
+    allow_elevated: bool,
+    policy_hash: String,
+    approval: Option<ElevationApproval>,
+}
+
+impl Default for ExecutionPolicyEnforcement {
+    fn default() -> Self {
+        let mut policy = Self {
+            sandbox_mode: SandboxMode::WorkspaceWrite,
+            tool_policy: ToolPolicyEnforcement::default(),
+            allow_elevated: false,
+            policy_hash: String::new(),
+            approval: None,
+        };
+        policy.policy_hash = execution_policy_hash(&policy);
+        policy
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ElevationAuditLog {
+    #[serde(default)]
+    requests: Vec<ElevationRequestRecord>,
+    #[serde(default)]
+    outcomes: Vec<ElevationOutcomeRecord>,
+    #[serde(default)]
+    consumed_approvals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ElevationRequestRecord {
+    request_id: String,
+    run_id: String,
+    policy_hash: String,
+    action: String,
+    reason: String,
+    requested_at: String,
+    workflow_id: Option<String>,
+    task_id: Option<String>,
+    phase_id: Option<String>,
+    agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ElevationOutcomeRecord {
+    request_id: String,
+    run_id: String,
+    approved: bool,
+    success: bool,
+    message: String,
+    recorded_at: String,
+    approved_by: Option<String>,
+    comment: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -161,6 +266,460 @@ fn resolve_mcp_tool_enforcement(
         stdio,
         agent_id,
         allowed_prefixes,
+    }
+}
+
+fn normalize_tool_entries(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn parse_tool_entries(value: Option<&serde_json::Value>) -> Vec<String> {
+    let values = value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    normalize_tool_entries(&values)
+}
+
+fn parse_sandbox_mode(value: Option<&str>) -> SandboxMode {
+    match value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("read_only") => SandboxMode::ReadOnly,
+        Some("danger_full_access") => SandboxMode::DangerFullAccess,
+        _ => SandboxMode::WorkspaceWrite,
+    }
+}
+
+fn parse_elevation_approval(value: Option<&serde_json::Value>) -> Option<ElevationApproval> {
+    let object = value?.as_object()?;
+    let request_id = object
+        .get("request_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let approved = object
+        .get("approved")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let approved_by = object
+        .get("approved_by")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let comment = object
+        .get("comment")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Some(ElevationApproval {
+        request_id,
+        approved,
+        approved_by,
+        comment,
+    })
+}
+
+fn execution_policy_hash(policy: &ExecutionPolicyEnforcement) -> String {
+    let value = serde_json::json!({
+        "sandbox_mode": policy.sandbox_mode.as_str(),
+        "allow_elevated": policy.allow_elevated,
+        "tool_policy": policy.tool_policy,
+    });
+    let bytes = serde_json::to_vec(&value).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn resolve_execution_policy_enforcement(
+    runtime_contract: Option<&serde_json::Value>,
+) -> ExecutionPolicyEnforcement {
+    let mut policy = ExecutionPolicyEnforcement::default();
+    let Some(contract) = runtime_contract else {
+        return policy;
+    };
+
+    let execution = contract
+        .pointer("/policy/execution")
+        .or_else(|| contract.pointer("/execution_policy"));
+    let Some(execution) = execution else {
+        policy.policy_hash = execution_policy_hash(&policy);
+        return policy;
+    };
+
+    policy.sandbox_mode =
+        parse_sandbox_mode(execution.get("sandbox_mode").and_then(serde_json::Value::as_str));
+    policy.allow_elevated = execution
+        .get("allow_elevated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let tool_policy = execution
+        .get("tool_policy")
+        .filter(|value| value.is_object())
+        .unwrap_or(execution);
+    policy.tool_policy.allow_prefixes =
+        parse_tool_entries(tool_policy.get("allow_prefixes"));
+    policy.tool_policy.allow_exact = parse_tool_entries(tool_policy.get("allow_exact"));
+    policy.tool_policy.deny_prefixes = parse_tool_entries(tool_policy.get("deny_prefixes"));
+    policy.tool_policy.deny_exact = parse_tool_entries(tool_policy.get("deny_exact"));
+
+    policy.approval = parse_elevation_approval(
+        execution
+            .get("elevation_approval")
+            .or_else(|| execution.pointer("/elevation/approval")),
+    );
+
+    policy.policy_hash = execution
+        .get("policy_hash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| execution_policy_hash(&policy));
+
+    policy
+}
+
+fn elevation_audit_path(execution_context: Option<&serde_json::Value>) -> Option<PathBuf> {
+    execution_context
+        .and_then(|context| context.get("project_root"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Path::new)
+        .map(|project_root| {
+            project_root
+                .join(".ao")
+                .join("state")
+                .join("elevation-audit.v1.json")
+        })
+}
+
+fn load_elevation_audit(path: &Path) -> ElevationAuditLog {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return ElevationAuditLog::default();
+    };
+    serde_json::from_str::<ElevationAuditLog>(&raw).unwrap_or_default()
+}
+
+fn write_elevation_audit(path: &Path, log: &ElevationAuditLog) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create elevation audit dir {}", parent.display()))?;
+    }
+    let payload = serde_json::to_vec_pretty(log).context("Failed to encode elevation audit log")?;
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("elevation-audit"),
+        std::process::id(),
+        now_nanos
+    ));
+    std::fs::write(&tmp_path, payload).with_context(|| {
+        format!(
+            "Failed to write temporary elevation audit file {}",
+            tmp_path.display()
+        )
+    })?;
+    std::fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "Failed to atomically update elevation audit file {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn mutate_elevation_audit<T>(
+    audit_path: Option<&Path>,
+    mutate: impl FnOnce(&mut ElevationAuditLog) -> T,
+) -> Result<T> {
+    let Some(path) = audit_path else {
+        let mut log = ElevationAuditLog::default();
+        return Ok(mutate(&mut log));
+    };
+
+    let mut log = load_elevation_audit(path);
+    let result = mutate(&mut log);
+    write_elevation_audit(path, &log)?;
+    Ok(result)
+}
+
+fn elevation_request_id(run_id: &RunId, policy_hash: &str, action: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(run_id.0.as_bytes());
+    hasher.update(policy_hash.as_bytes());
+    hasher.update(action.as_bytes());
+    let digest = hasher.finalize();
+    format!(
+        "elv-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]
+    )
+}
+
+fn context_identity(
+    execution_context: Option<&serde_json::Value>,
+    key: &str,
+) -> Option<String> {
+    execution_context
+        .and_then(|context| context.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn append_elevation_request(
+    audit_path: Option<&Path>,
+    record: ElevationRequestRecord,
+) -> Result<()> {
+    mutate_elevation_audit(audit_path, |log| {
+        if !log
+            .requests
+            .iter()
+            .any(|existing| existing.request_id == record.request_id)
+        {
+            log.requests.push(record);
+        }
+    })?;
+    Ok(())
+}
+
+fn append_elevation_outcome(
+    audit_path: Option<&Path>,
+    record: ElevationOutcomeRecord,
+) -> Result<()> {
+    mutate_elevation_audit(audit_path, |log| {
+        log.outcomes.push(record);
+    })?;
+    Ok(())
+}
+
+fn consume_approval_once(audit_path: Option<&Path>, approval_id: &str) -> Result<bool> {
+    mutate_elevation_audit(audit_path, |log| {
+        if log
+            .consumed_approvals
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(approval_id))
+        {
+            false
+        } else {
+            log.consumed_approvals.push(approval_id.to_string());
+            true
+        }
+    })
+}
+
+fn require_elevation_for_action(
+    run_id: &RunId,
+    execution_context: Option<&serde_json::Value>,
+    policy: &ExecutionPolicyEnforcement,
+    action: &str,
+    reason: &str,
+) -> Result<()> {
+    let request_id = elevation_request_id(run_id, &policy.policy_hash, action);
+    let audit_path = elevation_audit_path(execution_context);
+    append_elevation_request(
+        audit_path.as_deref(),
+        ElevationRequestRecord {
+            request_id: request_id.clone(),
+            run_id: run_id.0.clone(),
+            policy_hash: policy.policy_hash.clone(),
+            action: action.to_string(),
+            reason: reason.to_string(),
+            requested_at: Utc::now().to_rfc3339(),
+            workflow_id: context_identity(execution_context, "workflow_id"),
+            task_id: context_identity(execution_context, "task_id"),
+            phase_id: context_identity(execution_context, "phase_id"),
+            agent_id: context_identity(execution_context, "agent_id"),
+        },
+    )?;
+
+    if !policy.allow_elevated {
+        let message = "policy does not allow elevated execution".to_string();
+        append_elevation_outcome(
+            audit_path.as_deref(),
+            ElevationOutcomeRecord {
+                request_id,
+                run_id: run_id.0.clone(),
+                approved: false,
+                success: false,
+                message: message.clone(),
+                recorded_at: Utc::now().to_rfc3339(),
+                approved_by: None,
+                comment: None,
+            },
+        )?;
+        let payload = serde_json::json!({
+            "code": "POLICY_VIOLATION",
+            "run_id": run_id.0.as_str(),
+            "policy_hash": policy.policy_hash.as_str(),
+            "action": action,
+            "reason": reason,
+            "message": message,
+        });
+        bail!("POLICY_VIOLATION: {payload}");
+    }
+
+    let approval = policy.approval.as_ref().filter(|approval| approval.approved);
+    let Some(approval) = approval else {
+        append_elevation_outcome(
+            audit_path.as_deref(),
+            ElevationOutcomeRecord {
+                request_id: request_id.clone(),
+                run_id: run_id.0.clone(),
+                approved: false,
+                success: false,
+                message: "elevation approval is required".to_string(),
+                recorded_at: Utc::now().to_rfc3339(),
+                approved_by: None,
+                comment: None,
+            },
+        )?;
+        let payload = serde_json::json!({
+            "code": "ELEVATION_REQUIRED",
+            "run_id": run_id.0.as_str(),
+            "policy_hash": policy.policy_hash.as_str(),
+            "elevation_request_id": request_id,
+            "action": action,
+            "reason": reason,
+            "guidance": "approve this exact request_id and retry with runtime_contract.policy.execution.elevation_approval",
+        });
+        bail!("ELEVATION_REQUIRED: {payload}");
+    };
+
+    if !approval.request_id.eq_ignore_ascii_case(&request_id) {
+        append_elevation_outcome(
+            audit_path.as_deref(),
+            ElevationOutcomeRecord {
+                request_id: request_id.clone(),
+                run_id: run_id.0.clone(),
+                approved: false,
+                success: false,
+                message: "approval does not match requested action".to_string(),
+                recorded_at: Utc::now().to_rfc3339(),
+                approved_by: approval.approved_by.clone(),
+                comment: approval.comment.clone(),
+            },
+        )?;
+        let payload = serde_json::json!({
+            "code": "POLICY_VIOLATION",
+            "run_id": run_id.0.as_str(),
+            "policy_hash": policy.policy_hash.as_str(),
+            "expected_request_id": request_id,
+            "provided_request_id": approval.request_id.as_str(),
+            "action": action,
+            "reason": reason,
+            "message": "approval mismatch",
+        });
+        bail!("POLICY_VIOLATION: {payload}");
+    }
+
+    let consumed = consume_approval_once(audit_path.as_deref(), &approval.request_id)?;
+    if !consumed {
+        append_elevation_outcome(
+            audit_path.as_deref(),
+            ElevationOutcomeRecord {
+                request_id,
+                run_id: run_id.0.clone(),
+                approved: true,
+                success: false,
+                message: "approval already consumed".to_string(),
+                recorded_at: Utc::now().to_rfc3339(),
+                approved_by: approval.approved_by.clone(),
+                comment: approval.comment.clone(),
+            },
+        )?;
+        let payload = serde_json::json!({
+            "code": "POLICY_VIOLATION",
+            "run_id": run_id.0.as_str(),
+            "policy_hash": policy.policy_hash.as_str(),
+            "action": action,
+            "reason": reason,
+            "message": "approval already consumed",
+            "elevation_request_id": approval.request_id.as_str(),
+        });
+        bail!("POLICY_VIOLATION: {payload}");
+    }
+
+    append_elevation_outcome(
+        audit_path.as_deref(),
+        ElevationOutcomeRecord {
+            request_id,
+            run_id: run_id.0.clone(),
+            approved: true,
+            success: true,
+            message: "elevation approved".to_string(),
+            recorded_at: Utc::now().to_rfc3339(),
+            approved_by: approval.approved_by.clone(),
+            comment: approval.comment.clone(),
+        },
+    )?;
+
+    Ok(())
+}
+
+fn enforce_sandbox_mode_before_launch(
+    run_id: &RunId,
+    tool: &str,
+    cwd: &str,
+    execution_context: Option<&serde_json::Value>,
+    policy: &ExecutionPolicyEnforcement,
+) -> Result<()> {
+    match policy.sandbox_mode {
+        SandboxMode::WorkspaceWrite => Ok(()),
+        SandboxMode::ReadOnly => require_elevation_for_action(
+            run_id,
+            execution_context,
+            policy,
+            "sandbox_read_only_override",
+            &format!(
+                "sandbox mode '{}' blocks side-effecting CLI launch for tool '{}' in '{}'",
+                policy.sandbox_mode.as_str(),
+                tool,
+                cwd
+            ),
+        ),
+        SandboxMode::DangerFullAccess => require_elevation_for_action(
+            run_id,
+            execution_context,
+            policy,
+            "sandbox_danger_full_access_launch",
+            &format!(
+                "sandbox mode '{}' requires explicit elevation approval for tool '{}' in '{}'",
+                policy.sandbox_mode.as_str(),
+                tool,
+                cwd
+            ),
+        ),
     }
 }
 
@@ -523,7 +1082,32 @@ fn apply_native_mcp_policy(
     Ok(())
 }
 
-fn is_tool_call_allowed(
+fn is_tool_denied_by_policy(tool_name: &str, policy: &ToolPolicyEnforcement) -> bool {
+    policy
+        .deny_exact
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(tool_name))
+        || policy
+            .deny_prefixes
+            .iter()
+            .any(|prefix| tool_name.starts_with(prefix))
+}
+
+fn is_tool_allowed_by_policy_allowlist(tool_name: &str, policy: &ToolPolicyEnforcement) -> bool {
+    if !policy.has_allow_rules() {
+        return true;
+    }
+    policy
+        .allow_exact
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(tool_name))
+        || policy
+            .allow_prefixes
+            .iter()
+            .any(|prefix| tool_name.starts_with(prefix))
+}
+
+fn is_tool_call_allowed_by_mcp_policy(
     tool_name: &str,
     parameters: &serde_json::Value,
     enforcement: &McpToolEnforcement,
@@ -531,16 +1115,12 @@ fn is_tool_call_allowed(
     if !enforcement.enabled {
         return true;
     }
-    let normalized = tool_name.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return false;
-    }
-    if matches!(normalized.as_str(), "phase_transition" | "phase-transition") {
+    if matches!(tool_name, "phase_transition" | "phase-transition") {
         return true;
     }
 
     let is_mcp_discovery_helper = matches!(
-        normalized.as_str(),
+        tool_name,
         "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
     );
 
@@ -572,7 +1152,40 @@ fn is_tool_call_allowed(
     enforcement
         .allowed_prefixes
         .iter()
-        .any(|prefix| normalized.starts_with(prefix))
+        .any(|prefix| tool_name.starts_with(prefix))
+}
+
+fn is_tool_call_allowed_with_policy(
+    tool_name: &str,
+    parameters: &serde_json::Value,
+    mcp_enforcement: &McpToolEnforcement,
+    execution_policy: &ExecutionPolicyEnforcement,
+) -> bool {
+    let normalized = tool_name.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    if is_tool_denied_by_policy(&normalized, &execution_policy.tool_policy) {
+        return false;
+    }
+    if !is_tool_call_allowed_by_mcp_policy(&normalized, parameters, mcp_enforcement) {
+        return false;
+    }
+    is_tool_allowed_by_policy_allowlist(&normalized, &execution_policy.tool_policy)
+}
+
+#[cfg(test)]
+fn is_tool_call_allowed(
+    tool_name: &str,
+    parameters: &serde_json::Value,
+    enforcement: &McpToolEnforcement,
+) -> bool {
+    is_tool_call_allowed_with_policy(
+        tool_name,
+        parameters,
+        enforcement,
+        &ExecutionPolicyEnforcement::default(),
+    )
 }
 
 // Keeping this explicit signature preserves current call sites across the
@@ -583,6 +1196,7 @@ pub async fn spawn_cli_process(
     model: &str,
     prompt: &str,
     runtime_contract: Option<&serde_json::Value>,
+    execution_context: Option<&serde_json::Value>,
     cwd: &str,
     env: HashMap<String, String>,
     timeout_secs: Option<u64>,
@@ -595,6 +1209,16 @@ pub async fn spawn_cli_process(
     let hard_timeout_secs = timeout_secs.filter(|value| *value > 0);
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, hard_timeout_secs, runtime_contract);
     let mcp_tool_enforcement = resolve_mcp_tool_enforcement(runtime_contract);
+    let execution_policy = resolve_execution_policy_enforcement(runtime_contract);
+    enforce_sandbox_mode_before_launch(run_id, tool, cwd, execution_context, &execution_policy)?;
+    env.insert(
+        "AO_SANDBOX_MODE".to_string(),
+        execution_policy.sandbox_mode.as_str().to_string(),
+    );
+    env.insert(
+        "AO_EXECUTION_POLICY_HASH".to_string(),
+        execution_policy.policy_hash.clone(),
+    );
     let mut temp_cleanup = TempPathCleanup::default();
     apply_native_mcp_policy(
         &mut invocation,
@@ -631,6 +1255,13 @@ pub async fn spawn_cli_process(
             .map(|config| config.args.as_slice()),
         mcp_agent_id = %mcp_tool_enforcement.agent_id,
         mcp_allowed_prefixes = ?mcp_tool_enforcement.allowed_prefixes,
+        sandbox_mode = %execution_policy.sandbox_mode.as_str(),
+        allow_elevated = execution_policy.allow_elevated,
+        policy_hash = %execution_policy.policy_hash,
+        policy_allow_prefixes = ?execution_policy.tool_policy.allow_prefixes,
+        policy_allow_exact = ?execution_policy.tool_policy.allow_exact,
+        policy_deny_prefixes = ?execution_policy.tool_policy.deny_prefixes,
+        policy_deny_exact = ?execution_policy.tool_policy.deny_exact,
         "Spawning CLI process"
     );
     debug!(
@@ -758,16 +1389,18 @@ pub async fn spawn_cli_process(
     let mut output_chunks_stderr: u64 = 0;
     let mut skipped_initial_heartbeat_tick = false;
     let mcp_tool_enforcement_for_select = mcp_tool_enforcement.clone();
+    let execution_policy_for_select = execution_policy.clone();
 
     let run_loop = async move {
         loop {
             tokio::select! {
                 Some(evt) = output_rx.recv() => {
                     if let AgentRunEvent::ToolCall { tool_info, .. } = &evt {
-                        if !is_tool_call_allowed(
+                        if !is_tool_call_allowed_with_policy(
                             &tool_info.tool_name,
                             &tool_info.parameters,
                             &mcp_tool_enforcement_for_select,
+                            &execution_policy_for_select,
                         ) {
                             let server_context = tool_info
                                 .parameters
@@ -776,41 +1409,39 @@ pub async fn spawn_cli_process(
                                 .map(str::trim)
                                 .filter(|value| !value.is_empty())
                                 .map(ToString::to_string);
-                            let policy = mcp_tool_enforcement_for_select.allowed_prefixes.join(", ");
-                            let error = if let Some(server_name) = &server_context {
-                                format!(
-                                    "MCP-only policy violation: tool '{}' on server '{}' is not allowed (allowed prefixes: [{}], allowed server: '{}')",
-                                    tool_info.tool_name,
-                                    server_name,
-                                    policy,
-                                    mcp_tool_enforcement_for_select.agent_id
-                                )
-                            } else {
-                                format!(
-                                    "MCP-only policy violation: tool '{}' is not allowed (allowed prefixes: [{}])",
-                                    tool_info.tool_name,
-                                    policy
-                                )
-                            };
+                            let error = serde_json::json!({
+                                "code": "POLICY_VIOLATION",
+                                "reason": "tool_call_blocked",
+                                "tool_name": tool_info.tool_name,
+                                "tool_server": server_context,
+                                "policy_hash": execution_policy_for_select.policy_hash,
+                                "mcp_allowed_prefixes": mcp_tool_enforcement_for_select.allowed_prefixes,
+                                "policy_allow_prefixes": execution_policy_for_select.tool_policy.allow_prefixes,
+                                "policy_allow_exact": execution_policy_for_select.tool_policy.allow_exact,
+                                "policy_deny_prefixes": execution_policy_for_select.tool_policy.deny_prefixes,
+                                "policy_deny_exact": execution_policy_for_select.tool_policy.deny_exact,
+                            })
+                            .to_string();
                             warn!(
                                 run_id = %run_id_for_select.0.as_str(),
                                 pid,
                                 tool_name = %tool_info.tool_name,
                                 tool_server = ?server_context,
                                 allowed_prefixes = ?mcp_tool_enforcement_for_select.allowed_prefixes,
-                                "Run emitted disallowed tool call under MCP-only policy"
+                                policy_hash = %execution_policy_for_select.policy_hash,
+                                "Run emitted disallowed tool call under policy enforcement"
                             );
                             let _ = event_tx.send(evt.clone()).await;
                             let _ = event_tx.send(AgentRunEvent::Error {
                                 run_id: run_id_for_select.clone(),
-                                error: error.clone(),
+                                error: format!("POLICY_VIOLATION: {error}"),
                             }).await;
                             let killed = crate::cleanup::kill_process(pid as i32);
                             if !killed {
                                 warn!(
                                     run_id = %run_id_for_select.0.as_str(),
                                     pid,
-                                    "Failed to terminate process after MCP-only violation"
+                                    "Failed to terminate process after policy violation"
                                 );
                             }
                             if let Err(track_error) = untrack_process(&run_id_for_select.0) {
@@ -818,12 +1449,12 @@ pub async fn spawn_cli_process(
                                     run_id = %run_id_for_select.0.as_str(),
                                     pid,
                                     error = %track_error,
-                                    "Failed to remove process from orphan tracker after MCP-only violation"
+                                    "Failed to remove process from orphan tracker after policy violation"
                                 );
                             }
                             #[cfg(windows)]
                             crate::cleanup::untrack_job(pid);
-                            bail!("{error}");
+                            bail!("POLICY_VIOLATION: {error}");
                         }
                     }
                     if let AgentRunEvent::OutputChunk { stream_type, text, .. } = &evt {
@@ -1072,6 +1703,143 @@ mod tests {
             &json!({ "server": "codex" }),
             &enforcement
         ));
+    }
+
+    #[test]
+    fn execution_policy_parser_reads_runtime_contract_policy_block() {
+        let contract = json!({
+            "policy": {
+                "execution": {
+                    "sandbox_mode": "danger_full_access",
+                    "allow_elevated": true,
+                    "policy_hash": "abc123",
+                    "tool_policy": {
+                        "allow_prefixes": ["ao."],
+                        "allow_exact": ["phase_transition"],
+                        "deny_prefixes": ["bash"],
+                        "deny_exact": ["ao.git.push"]
+                    },
+                    "elevation_approval": {
+                        "request_id": "elv-123",
+                        "approved": true,
+                        "approved_by": "operator"
+                    }
+                }
+            }
+        });
+        let policy = resolve_execution_policy_enforcement(Some(&contract));
+        assert_eq!(policy.sandbox_mode, SandboxMode::DangerFullAccess);
+        assert!(policy.allow_elevated);
+        assert_eq!(policy.policy_hash, "abc123");
+        assert_eq!(policy.tool_policy.allow_prefixes, vec!["ao.".to_string()]);
+        assert_eq!(policy.tool_policy.deny_prefixes, vec!["bash".to_string()]);
+        assert_eq!(
+            policy
+                .approval
+                .as_ref()
+                .map(|approval| approval.request_id.as_str()),
+            Some("elv-123")
+        );
+    }
+
+    #[test]
+    fn execution_policy_deny_rules_override_allow_rules() {
+        let mcp = McpToolEnforcement {
+            enabled: false,
+            endpoint: None,
+            stdio: None,
+            agent_id: "ao".to_string(),
+            allowed_prefixes: Vec::new(),
+        };
+        let mut policy = ExecutionPolicyEnforcement {
+            sandbox_mode: SandboxMode::WorkspaceWrite,
+            tool_policy: ToolPolicyEnforcement {
+                allow_prefixes: vec!["ao.".to_string()],
+                allow_exact: Vec::new(),
+                deny_prefixes: vec!["ao.task.".to_string()],
+                deny_exact: vec!["ao.requirements.list".to_string()],
+            },
+            allow_elevated: false,
+            policy_hash: String::new(),
+            approval: None,
+        };
+        policy.policy_hash = execution_policy_hash(&policy);
+
+        assert!(!is_tool_call_allowed_with_policy(
+            "ao.task.list",
+            &json!({}),
+            &mcp,
+            &policy
+        ));
+        assert!(!is_tool_call_allowed_with_policy(
+            "ao.requirements.list",
+            &json!({}),
+            &mcp,
+            &policy
+        ));
+        assert!(is_tool_call_allowed_with_policy(
+            "ao.review.get",
+            &json!({}),
+            &mcp,
+            &policy
+        ));
+    }
+
+    #[test]
+    fn sandbox_elevation_approval_is_single_use() {
+        let temp = std::env::temp_dir().join(format!(
+            "ao-policy-elevation-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir should be created");
+        let run_id = RunId("run-sandbox-1".to_string());
+        let mut policy = ExecutionPolicyEnforcement {
+            sandbox_mode: SandboxMode::ReadOnly,
+            tool_policy: ToolPolicyEnforcement::default(),
+            allow_elevated: true,
+            policy_hash: "policy-1".to_string(),
+            approval: None,
+        };
+        let request_id =
+            elevation_request_id(&run_id, &policy.policy_hash, "sandbox_read_only_override");
+        policy.approval = Some(ElevationApproval {
+            request_id,
+            approved: true,
+            approved_by: Some("operator".to_string()),
+            comment: None,
+        });
+        let context = json!({
+            "project_root": temp.to_string_lossy(),
+            "workflow_id": "wf-1",
+            "task_id": "TASK-1",
+            "phase_id": "implementation",
+            "agent_id": "implementation"
+        });
+
+        enforce_sandbox_mode_before_launch(
+            &run_id,
+            "codex",
+            temp.to_string_lossy().as_ref(),
+            Some(&context),
+            &policy,
+        )
+        .expect("first approval use should pass");
+
+        let err = enforce_sandbox_mode_before_launch(
+            &run_id,
+            "codex",
+            temp.to_string_lossy().as_ref(),
+            Some(&context),
+            &policy,
+        )
+        .expect_err("approval replay should fail");
+        assert!(err.to_string().contains("POLICY_VIOLATION"));
+        assert!(err.to_string().contains("approval already consumed"));
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]

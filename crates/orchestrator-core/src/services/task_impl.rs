@@ -90,6 +90,7 @@ impl TaskServiceApi for InMemoryServiceHub {
             paused: false,
             cancelled: false,
             resource_requirements: Default::default(),
+            execution_policy: None,
         };
 
         lock.tasks.insert(id, task.clone());
@@ -377,6 +378,7 @@ impl TaskServiceApi for FileServiceHub {
                 paused: false,
                 cancelled: false,
                 resource_requirements: Default::default(),
+                execution_policy: None,
             };
             lock.tasks.insert(id, task.clone());
             task

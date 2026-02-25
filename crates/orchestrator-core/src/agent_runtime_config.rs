@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::execution_policy::{validate_execution_policy_overrides, ExecutionPolicyOverrides};
+
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
 pub const AGENT_RUNTIME_CONFIG_FILE_NAME: &str = "agent-runtime-config.v2.json";
@@ -65,6 +67,8 @@ pub struct AgentRuntimeOverrides {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub execution_policy: Option<ExecutionPolicyOverrides>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +91,8 @@ pub struct AgentProfile {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub execution_policy: Option<ExecutionPolicyOverrides>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +352,23 @@ impl AgentRuntimeConfig {
             .and_then(|definition| definition.output_json_schema.as_ref())
     }
 
+    pub fn phase_execution_policy_override(
+        &self,
+        phase_id: &str,
+    ) -> Option<&ExecutionPolicyOverrides> {
+        self.phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .and_then(|runtime| runtime.execution_policy.as_ref())
+    }
+
+    pub fn phase_agent_execution_policy_override(
+        &self,
+        phase_id: &str,
+    ) -> Option<&ExecutionPolicyOverrides> {
+        self.phase_agent_profile(phase_id)
+            .and_then(|profile| profile.execution_policy.as_ref())
+    }
+
     pub fn phase_directive(&self, phase_id: &str) -> Option<&str> {
         trim_nonempty(
             self.phase_execution(phase_id)
@@ -477,6 +500,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     web_search: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    execution_policy: None,
                 },
             ),
             (
@@ -491,6 +515,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     web_search: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    execution_policy: None,
                 },
             ),
         ]),
@@ -536,6 +561,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: Some(AgentRuntimeOverrides {
                         web_search: Some(true),
                         timeout_secs: Some(900),
+                        execution_policy: None,
                         ..AgentRuntimeOverrides::default()
                     }),
                     output_contract: None,
@@ -968,6 +994,13 @@ fn validate_phase_definition(
                 phase_id
             ));
         }
+
+        if let Some(policy) = runtime.execution_policy.as_ref() {
+            validate_execution_policy_overrides(
+                &format!("phases['{}'].runtime.execution_policy", phase_id),
+                policy,
+            )?;
+        }
     }
 
     Ok(())
@@ -1057,6 +1090,13 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
                 agent_id
             ));
         }
+
+        if let Some(policy) = profile.execution_policy.as_ref() {
+            validate_execution_policy_overrides(
+                &format!("agents['{}'].execution_policy", agent_id),
+                policy,
+            )?;
+        }
     }
 
     if config.phases.is_empty() {
@@ -1109,6 +1149,60 @@ mod tests {
     fn builtin_defaults_mark_review_as_structured_output() {
         let config = builtin_agent_runtime_config();
         assert!(config.is_structured_output_phase("code-review"));
-        assert!(!config.is_structured_output_phase("implementation"));
+        assert!(config.is_structured_output_phase("implementation"));
+    }
+
+    #[test]
+    fn validates_execution_policy_overrides() {
+        let mut config = builtin_agent_runtime_config();
+        let implementation = config
+            .phases
+            .get_mut("implementation")
+            .expect("implementation phase exists");
+        implementation.runtime = Some(AgentRuntimeOverrides {
+            execution_policy: Some(ExecutionPolicyOverrides {
+                allow_prefixes: Some(vec!["".to_string()]),
+                ..ExecutionPolicyOverrides::default()
+            }),
+            ..AgentRuntimeOverrides::default()
+        });
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let err = write_agent_runtime_config(temp.path(), &config)
+            .expect_err("invalid execution policy should fail");
+        assert!(err
+            .to_string()
+            .contains("phases['implementation'].runtime.execution_policy.allow_prefixes"));
+    }
+
+    #[test]
+    fn exposes_phase_and_agent_execution_policy_overrides() {
+        let mut config = builtin_agent_runtime_config();
+        let implementation = config
+            .phases
+            .get_mut("implementation")
+            .expect("implementation phase exists");
+        implementation.runtime = Some(AgentRuntimeOverrides {
+            execution_policy: Some(ExecutionPolicyOverrides {
+                deny_exact: Some(vec!["bash".to_string()]),
+                ..ExecutionPolicyOverrides::default()
+            }),
+            ..AgentRuntimeOverrides::default()
+        });
+        let profile = config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists");
+        profile.execution_policy = Some(ExecutionPolicyOverrides {
+            sandbox_mode: Some(crate::SandboxMode::ReadOnly),
+            ..ExecutionPolicyOverrides::default()
+        });
+
+        assert!(config
+            .phase_execution_policy_override("implementation")
+            .is_some());
+        assert!(config
+            .phase_agent_execution_policy_override("implementation")
+            .is_some());
     }
 }

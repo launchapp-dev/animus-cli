@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::execution_policy::ExecutionPolicyOverrides;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonStatus {
@@ -980,6 +982,8 @@ pub struct OrchestratorTask {
     pub cancelled: bool,
     #[serde(default)]
     pub resource_requirements: ResourceRequirements,
+    #[serde(default)]
+    pub execution_policy: Option<ExecutionPolicyOverrides>,
 }
 
 impl OrchestratorTask {
@@ -1125,6 +1129,8 @@ pub struct TaskUpdateInput {
     pub deadline: Option<String>,
     #[serde(default)]
     pub linked_architecture_entities: Option<Vec<String>>,
+    #[serde(default)]
+    pub execution_policy: Option<ExecutionPolicyOverrides>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

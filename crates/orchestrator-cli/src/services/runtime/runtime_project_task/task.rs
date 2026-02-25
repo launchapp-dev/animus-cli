@@ -91,6 +91,7 @@ pub(crate) async fn handle_task(
                     } else {
                         None
                     },
+                    execution_policy: None,
                 })
             })?;
             print_value(tasks.update(&args.id, input).await?, json)

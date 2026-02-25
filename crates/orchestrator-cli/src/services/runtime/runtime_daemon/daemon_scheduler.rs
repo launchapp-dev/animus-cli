@@ -184,6 +184,7 @@ async fn run_workflow_phase_with_agent(
     task_complexity: Option<orchestrator_core::Complexity>,
     phase_id: &str,
     phase_attempt: u32,
+    task_execution_policy: Option<&orchestrator_core::ExecutionPolicyOverrides>,
 ) -> Result<PhaseExecutionRunResult> {
     phase_exec::run_workflow_phase(
         project_root,
@@ -195,6 +196,7 @@ async fn run_workflow_phase_with_agent(
         task_complexity,
         phase_id,
         phase_attempt,
+        task_execution_policy,
     )
     .await
 }
@@ -211,6 +213,12 @@ async fn run_workflow_phase_with_agent_legacy(
     phase_id: &str,
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
 ) -> Result<PhaseExecutionOutcome> {
+    let runtime_config = orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root));
+    let resolved_policy = orchestrator_core::resolve_execution_policy(
+        None,
+        runtime_config.phase_execution_policy_override(phase_id),
+        runtime_config.phase_agent_execution_policy_override(phase_id),
+    );
     phase_exec::run_workflow_phase_with_agent(
         project_root,
         execution_cwd,
@@ -221,6 +229,7 @@ async fn run_workflow_phase_with_agent_legacy(
         task_complexity,
         phase_id,
         phase_runtime_settings,
+        &resolved_policy,
     )
     .await
 }

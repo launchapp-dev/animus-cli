@@ -174,6 +174,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - CLI destructive safety planning artifacts for TASK-009 live in `crates/orchestrator-cli/docs/`:
   - `task-009-destructive-command-requirements.md`
   - `task-009-destructive-command-implementation-notes.md`
+- CLI sandbox/tool policy planning artifacts for TASK-025 live in `crates/orchestrator-cli/docs/`:
+  - `task-025-sandbox-tool-policy-requirements.md`
+  - `task-025-sandbox-tool-policy-implementation-notes.md`
 - CLI JSON envelope contract planning artifacts for TASK-008 live in `crates/orchestrator-cli/docs/`:
   - `task-008-json-envelope-contract-requirements.md`
   - `task-008-json-envelope-contract-implementation-notes.md`

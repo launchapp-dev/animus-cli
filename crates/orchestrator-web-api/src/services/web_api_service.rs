@@ -647,6 +647,7 @@ impl WebApiService {
             ),
             deadline: request.deadline,
             linked_architecture_entities: request.linked_architecture_entities,
+            execution_policy: request.execution_policy,
         };
 
         let task = self.context.hub.tasks().update(id, input).await?;
@@ -1164,6 +1165,8 @@ struct TaskPatchRequest {
     deadline: Option<String>,
     #[serde(default)]
     linked_architecture_entities: Option<Vec<String>>,
+    #[serde(default)]
+    execution_policy: Option<orchestrator_core::ExecutionPolicyOverrides>,
 }
 
 #[derive(Debug, Deserialize)]
