@@ -14,6 +14,7 @@
     "make",
     "just"
   ],
+  "auth_profiles": {},
   "agents": {
     "default": {
       "description": "Default workflow phase agent profile.",
@@ -24,7 +25,8 @@
       "reasoning_effort": null,
       "web_search": null,
       "timeout_secs": null,
-      "max_attempts": null
+      "max_attempts": null,
+      "auth_profile_chain": []
     },
     "implementation": {
       "description": "Implementation-focused coding agent profile.",
@@ -35,7 +37,8 @@
       "reasoning_effort": null,
       "web_search": null,
       "timeout_secs": null,
-      "max_attempts": null
+      "max_attempts": null,
+      "auth_profile_chain": []
     }
   },
   "phases": {
@@ -70,7 +73,8 @@
         "reasoning_effort": null,
         "web_search": true,
         "timeout_secs": 900,
-        "max_attempts": null
+        "max_attempts": null,
+        "auth_profile_chain": []
       },
       "output_contract": null,
       "output_json_schema": null,

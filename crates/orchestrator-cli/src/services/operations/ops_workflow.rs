@@ -6,6 +6,11 @@ use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use orchestrator_core::{services::ServiceHub, WorkflowResumeManager, WorkflowRunInput};
+use protocol::{
+    canonical_model_id, default_fallback_models_for_phase, default_primary_model_for_phase,
+    normalize_tool_id, required_api_keys_for_tool, tool_for_model_id,
+    tool_supports_repository_writes, ModelRoutingComplexity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -326,6 +331,405 @@ fn set_agent_runtime_payload(project_root: &str, input_json: &str) -> Result<Val
     }))
 }
 
+const PHASE_RETRY_BACKOFF_BASE_MS: u64 = 200;
+const PHASE_RETRY_BACKOFF_CAP_MS: u64 = 3_000;
+
+#[derive(Debug, Clone)]
+struct RuntimeDiagnosticTarget {
+    index: usize,
+    tool: String,
+    model: String,
+    source: String,
+}
+
+fn parse_phase_complexity_arg(value: Option<&str>) -> Result<Option<ModelRoutingComplexity>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    ModelRoutingComplexity::parse(value)
+        .ok_or_else(|| {
+            anyhow!(
+                "invalid complexity '{}'; expected one of: low, medium, high",
+                value
+            )
+        })
+        .map(Some)
+}
+
+fn env_phase_key(phase_id: &str) -> String {
+    phase_id
+        .trim()
+        .to_ascii_uppercase()
+        .replace('-', "_")
+        .replace(' ', "_")
+}
+
+fn parse_model_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(canonical_model_id)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn parse_env_bool(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn resolve_phase_model_for_diagnostics(
+    runtime_config: &orchestrator_core::AgentRuntimeConfig,
+    phase_id: &str,
+    complexity: Option<ModelRoutingComplexity>,
+) -> (String, String) {
+    if let Some(model) = runtime_config
+        .phase_model_override(phase_id)
+        .map(canonical_model_id)
+        .filter(|value| !value.is_empty())
+    {
+        return (model, "runtime_override".to_string());
+    }
+
+    let phase_env_key = format!("AO_PHASE_MODEL_{}", env_phase_key(phase_id));
+    if let Ok(value) = std::env::var(&phase_env_key) {
+        let model = canonical_model_id(&value);
+        if !model.is_empty() {
+            return (model, "env_phase_override".to_string());
+        }
+    }
+
+    if let Ok(value) = std::env::var("AO_PHASE_MODEL") {
+        let model = canonical_model_id(&value);
+        if !model.is_empty() {
+            return (model, "env_global_override".to_string());
+        }
+    }
+
+    (
+        default_primary_model_for_phase(phase_id, complexity).to_string(),
+        "protocol_default".to_string(),
+    )
+}
+
+fn resolve_phase_tool_for_diagnostics(
+    runtime_config: &orchestrator_core::AgentRuntimeConfig,
+    phase_id: &str,
+    model_id: &str,
+) -> (String, String) {
+    if let Some(tool) = runtime_config
+        .phase_tool_override(phase_id)
+        .map(normalize_tool_id)
+        .filter(|value| !value.is_empty())
+    {
+        return (tool, "runtime_override".to_string());
+    }
+
+    let phase_env_key = format!("AO_PHASE_TOOL_{}", env_phase_key(phase_id));
+    if let Ok(value) = std::env::var(&phase_env_key) {
+        let tool = normalize_tool_id(&value);
+        if !tool.is_empty() {
+            return (tool, "env_phase_override".to_string());
+        }
+    }
+
+    if let Ok(value) = std::env::var("AO_PHASE_TOOL") {
+        let tool = normalize_tool_id(&value);
+        if !tool.is_empty() {
+            return (tool, "env_global_override".to_string());
+        }
+    }
+
+    (
+        tool_for_model_id(model_id).to_string(),
+        "model_provider_default".to_string(),
+    )
+}
+
+fn phase_fallback_models_from_env_for_diagnostics(phase_id: &str) -> Vec<String> {
+    let phase_key = env_phase_key(phase_id);
+    let phase_specific = format!("AO_PHASE_FALLBACK_MODELS_{phase_key}");
+    if let Ok(value) = std::env::var(&phase_specific) {
+        let parsed = parse_model_list(&value);
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+
+    std::env::var("AO_PHASE_FALLBACK_MODELS")
+        .ok()
+        .map(|value| parse_model_list(&value))
+        .unwrap_or_default()
+}
+
+fn enforce_write_capable_target_for_diagnostics(
+    tool_id: String,
+    model_id: String,
+) -> (String, String, bool) {
+    let normalized_tool_id = normalize_tool_id(&tool_id);
+    if !parse_env_bool("AO_ALLOW_NON_EDITING_PHASE_TOOL")
+        && !tool_supports_repository_writes(&normalized_tool_id)
+    {
+        let fallback_model = std::env::var("AO_PHASE_MODEL_FILE_EDIT")
+            .ok()
+            .map(|value| canonical_model_id(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "gpt-5.3-codex".to_string());
+        let fallback_tool = std::env::var("AO_PHASE_TOOL_FILE_EDIT")
+            .ok()
+            .map(|value| normalize_tool_id(&value))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "codex".to_string());
+        return (fallback_tool, fallback_model, true);
+    }
+    (normalized_tool_id, model_id, false)
+}
+
+fn resolve_phase_targets_for_diagnostics(
+    runtime_config: &orchestrator_core::AgentRuntimeConfig,
+    phase_id: &str,
+    complexity: Option<ModelRoutingComplexity>,
+) -> Vec<RuntimeDiagnosticTarget> {
+    let (primary_model, model_source) =
+        resolve_phase_model_for_diagnostics(runtime_config, phase_id, complexity);
+    let (primary_tool, tool_source) =
+        resolve_phase_tool_for_diagnostics(runtime_config, phase_id, &primary_model);
+    let (primary_tool, primary_model, write_adjusted) =
+        enforce_write_capable_target_for_diagnostics(primary_tool, primary_model);
+    let primary_source = if write_adjusted {
+        "write_capability_fallback".to_string()
+    } else if model_source == tool_source {
+        model_source
+    } else {
+        format!("{model_source}+{tool_source}")
+    };
+
+    let mut candidate_models = vec![(primary_model.clone(), primary_source)];
+    candidate_models.extend(
+        runtime_config
+            .phase_fallback_models(phase_id)
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| (canonical_model_id(&value), "runtime_fallback".to_string())),
+    );
+    candidate_models.extend(
+        phase_fallback_models_from_env_for_diagnostics(phase_id)
+            .into_iter()
+            .map(|value| (value, "env_fallback".to_string())),
+    );
+    candidate_models.extend(
+        default_fallback_models_for_phase(phase_id, complexity)
+            .into_iter()
+            .map(canonical_model_id)
+            .filter(|value| !value.is_empty())
+            .map(|value| (value, "protocol_default_fallback".to_string())),
+    );
+
+    let mut targets = Vec::new();
+    let mut seen_models = BTreeSet::new();
+    for (candidate_model, source) in candidate_models {
+        if candidate_model.trim().is_empty() {
+            continue;
+        }
+
+        let model_key = candidate_model.to_ascii_lowercase();
+        if !seen_models.insert(model_key) {
+            continue;
+        }
+
+        let (tool_id, model_id, write_adjusted) =
+            if candidate_model.eq_ignore_ascii_case(&primary_model) {
+                (primary_tool.clone(), primary_model.clone(), false)
+            } else {
+                enforce_write_capable_target_for_diagnostics(
+                    tool_for_model_id(&candidate_model).to_string(),
+                    candidate_model,
+                )
+            };
+
+        targets.push(RuntimeDiagnosticTarget {
+            index: targets.len(),
+            tool: tool_id,
+            model: model_id,
+            source: if write_adjusted {
+                "write_capability_fallback".to_string()
+            } else {
+                source
+            },
+        });
+    }
+
+    if targets.is_empty() {
+        targets.push(RuntimeDiagnosticTarget {
+            index: 0,
+            tool: primary_tool,
+            model: primary_model,
+            source: "protocol_default".to_string(),
+        });
+    }
+
+    targets
+}
+
+fn phase_runner_attempts_for_diagnostics() -> usize {
+    std::env::var("AO_PHASE_RUN_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(3)
+        .clamp(1, 10)
+}
+
+fn workflow_agent_runtime_diagnostics_payload(
+    project_root: &str,
+    phase_id: &str,
+    pipeline_id: Option<&str>,
+    requested_complexity: Option<&str>,
+) -> Result<Value> {
+    let normalized_phase = phase_id.trim();
+    if normalized_phase.is_empty() {
+        return Err(anyhow!("phase must not be empty"));
+    }
+
+    let runtime_config = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
+    let explicit_complexity = parse_phase_complexity_arg(requested_complexity)?;
+    let complexity = explicit_complexity.or_else(|| {
+        let phase_key = env_phase_key(normalized_phase);
+        let phase_specific = format!("AO_PHASE_COMPLEXITY_{phase_key}");
+        std::env::var(&phase_specific)
+            .ok()
+            .and_then(|value| ModelRoutingComplexity::parse(&value))
+            .or_else(|| {
+                std::env::var("AO_PHASE_COMPLEXITY")
+                    .ok()
+                    .and_then(|value| ModelRoutingComplexity::parse(&value))
+            })
+    });
+
+    let execution_targets =
+        resolve_phase_targets_for_diagnostics(&runtime_config, normalized_phase, complexity);
+
+    let mut warnings = Vec::new();
+    let auth_profile_chains = execution_targets
+        .iter()
+        .map(|target| {
+            let profiles = runtime_config
+                .resolve_phase_auth_profiles_for_provider(normalized_phase, &target.tool);
+            if profiles.is_empty() {
+                let required = required_api_keys_for_tool(&target.tool);
+                let missing = required
+                    .iter()
+                    .filter(|env_key| {
+                        std::env::var(env_key)
+                            .ok()
+                            .map(|value| value.trim().is_empty())
+                            .unwrap_or(true)
+                    })
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    warnings.push(format!(
+                        "target {} ({}/{}) missing env keys: {}",
+                        target.index,
+                        target.tool,
+                        target.model,
+                        missing.join(", ")
+                    ));
+                }
+                return serde_json::json!({
+                    "target_index": target.index,
+                    "tool": target.tool,
+                    "model": target.model,
+                    "profiles": [{
+                        "profile_id": Value::Null,
+                        "provider": target.tool,
+                        "readiness": {
+                            "ready": missing.is_empty(),
+                            "missing_env_keys": missing,
+                        },
+                    }],
+                });
+            }
+
+            let profile_entries = profiles
+                .into_iter()
+                .map(|(profile_id, profile)| {
+                    let mut missing_source_env = profile
+                        .env_map
+                        .iter()
+                        .filter_map(|(_required_env, source_env)| {
+                            let source = source_env.trim();
+                            if source.is_empty() {
+                                return None;
+                            }
+                            let is_missing = std::env::var(source)
+                                .ok()
+                                .map(|value| value.trim().is_empty())
+                                .unwrap_or(true);
+                            if is_missing {
+                                return Some(source.to_string());
+                            }
+                            None
+                        })
+                        .collect::<Vec<_>>();
+                    missing_source_env.sort();
+                    missing_source_env.dedup();
+                    if !missing_source_env.is_empty() {
+                        warnings.push(format!(
+                            "auth profile '{}' missing source env vars: {}",
+                            profile_id,
+                            missing_source_env.join(", ")
+                        ));
+                    }
+
+                    let mut required_env_keys = profile.env_map.keys().cloned().collect::<Vec<_>>();
+                    required_env_keys.sort();
+                    serde_json::json!({
+                        "profile_id": profile_id,
+                        "provider": profile.provider,
+                        "readiness": {
+                            "ready": missing_source_env.is_empty(),
+                            "required_env_keys": required_env_keys,
+                            "missing_source_env": missing_source_env,
+                        },
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            serde_json::json!({
+                "target_index": target.index,
+                "tool": target.tool,
+                "model": target.model,
+                "profiles": profile_entries,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let max_attempts = runtime_config
+        .phase_max_attempts(normalized_phase)
+        .unwrap_or_else(phase_runner_attempts_for_diagnostics);
+
+    Ok(serde_json::json!({
+        "phase_id": normalized_phase,
+        "pipeline_id": pipeline_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "execution_targets": execution_targets.iter().map(|target| serde_json::json!({
+            "index": target.index,
+            "tool": target.tool,
+            "model": target.model,
+            "source": target.source,
+        })).collect::<Vec<_>>(),
+        "auth_profile_chains": auth_profile_chains,
+        "retry_policy": {
+            "max_attempts": max_attempts,
+            "backoff_base_ms": PHASE_RETRY_BACKOFF_BASE_MS,
+            "backoff_cap_ms": PHASE_RETRY_BACKOFF_CAP_MS,
+        },
+        "warnings": warnings,
+    }))
+}
+
 fn get_workflow_config_payload(project_root: &str) -> Value {
     let path = workflow_config_path(project_root);
     match orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root)) {
@@ -517,6 +921,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         web_search: profile.web_search,
                         timeout_secs: profile.timeout_secs,
                         max_attempts: profile.max_attempts,
+                        auth_profile_chain: Vec::new(),
                     },
                 )
             })
@@ -572,6 +977,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                 web_search: settings.web_search,
                 timeout_secs: settings.timeout_secs,
                 max_attempts: settings.max_attempts,
+                auth_profile_chain: Vec::new(),
             }
         });
 
@@ -1124,6 +1530,15 @@ pub(crate) async fn handle_workflow(
             WorkflowAgentRuntimeCommand::Validate => {
                 print_value(validate_agent_runtime_payload(project_root), json)
             }
+            WorkflowAgentRuntimeCommand::Diagnostics(args) => print_value(
+                workflow_agent_runtime_diagnostics_payload(
+                    project_root,
+                    &args.phase,
+                    args.pipeline_id.as_deref(),
+                    args.complexity.as_deref(),
+                )?,
+                json,
+            ),
             WorkflowAgentRuntimeCommand::Set(args) => print_value(
                 set_agent_runtime_payload(project_root, &args.input_json)?,
                 json,
@@ -1140,5 +1555,87 @@ pub(crate) async fn handle_workflow(
             })?;
             print_value(upsert_pipeline(project_root, pipeline)?, json)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_payload_includes_targets_retry_policy_and_profiles() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        config.auth_profiles.insert(
+            "codex-primary".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_PRIMARY_KEY".to_string(),
+                )]),
+                priority: Some(1),
+                enabled: true,
+            },
+        );
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile")
+            .auth_profile_chain = vec!["codex-primary".to_string()];
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config)
+            .expect("write runtime config");
+
+        std::env::set_var("OPENAI_PRIMARY_KEY", "test-key");
+        let payload = workflow_agent_runtime_diagnostics_payload(
+            temp.path().to_str().expect("path"),
+            "implementation",
+            None,
+            Some("medium"),
+        )
+        .expect("diagnostics payload");
+        std::env::remove_var("OPENAI_PRIMARY_KEY");
+
+        let phase_id = payload.get("phase_id").and_then(Value::as_str);
+        assert_eq!(phase_id, Some("implementation"));
+        let targets = payload
+            .get("execution_targets")
+            .and_then(Value::as_array)
+            .expect("execution targets");
+        assert!(!targets.is_empty());
+        let retry_policy = payload
+            .get("retry_policy")
+            .and_then(Value::as_object)
+            .expect("retry policy");
+        assert_eq!(
+            retry_policy.get("backoff_base_ms").and_then(Value::as_u64),
+            Some(PHASE_RETRY_BACKOFF_BASE_MS)
+        );
+        assert_eq!(
+            retry_policy.get("backoff_cap_ms").and_then(Value::as_u64),
+            Some(PHASE_RETRY_BACKOFF_CAP_MS)
+        );
+        let auth_chains = payload
+            .get("auth_profile_chains")
+            .and_then(Value::as_array)
+            .expect("auth profile chains");
+        assert!(!auth_chains.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_payload_reports_invalid_complexity() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = orchestrator_core::builtin_agent_runtime_config();
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config)
+            .expect("write runtime config");
+
+        let error = workflow_agent_runtime_diagnostics_payload(
+            temp.path().to_str().expect("path"),
+            "implementation",
+            None,
+            Some("extreme"),
+        )
+        .expect_err("invalid complexity should fail");
+        assert!(error.to_string().contains("invalid complexity"));
     }
 }

@@ -1,7 +1,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Component;
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
@@ -10,6 +10,8 @@ const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/runtime/workflow_phase.prompt"
 ));
+const PHASE_RETRY_BACKOFF_BASE_MS: u64 = 200;
+const PHASE_RETRY_BACKOFF_CAP_MS: u64 = 3_000;
 
 fn load_agent_runtime_config(project_root: &str) -> orchestrator_core::AgentRuntimeConfig {
     orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root))
@@ -399,6 +401,71 @@ fn routing_complexity(
     })
 }
 
+#[derive(Debug, Clone)]
+struct PhaseAuthCandidate {
+    profile_id: Option<String>,
+    provider: String,
+    env_map: BTreeMap<String, String>,
+}
+
+fn resolve_phase_auth_candidates(
+    runtime_config: &orchestrator_core::AgentRuntimeConfig,
+    phase_id: &str,
+    provider: &str,
+    chain_hint: Option<&[String]>,
+) -> Vec<PhaseAuthCandidate> {
+    let mut resolved: Vec<(String, orchestrator_core::ProviderAuthProfile)> = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if let Some(chain) = chain_hint {
+        for profile_id in chain {
+            let trimmed = profile_id.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(profile) = runtime_config.auth_profile(trimmed) else {
+                continue;
+            };
+            if !profile.enabled
+                || !protocol::normalize_tool_id(&profile.provider)
+                    .eq_ignore_ascii_case(&protocol::normalize_tool_id(provider))
+            {
+                continue;
+            }
+            let key = trimmed.to_ascii_lowercase();
+            if seen.insert(key) {
+                resolved.push((trimmed.to_string(), profile.clone()));
+            }
+        }
+    }
+
+    for (profile_id, profile) in
+        runtime_config.resolve_phase_auth_profiles_for_provider(phase_id, provider)
+    {
+        let key = profile_id.to_ascii_lowercase();
+        if seen.insert(key) {
+            resolved.push((profile_id, profile));
+        }
+    }
+
+    if resolved.is_empty() {
+        return vec![PhaseAuthCandidate {
+            profile_id: None,
+            provider: provider.to_string(),
+            env_map: BTreeMap::new(),
+        }];
+    }
+
+    resolved
+        .into_iter()
+        .map(|(profile_id, profile)| PhaseAuthCandidate {
+            profile_id: Some(profile_id),
+            provider: profile.provider,
+            env_map: profile.env_map,
+        })
+        .collect()
+}
+
 pub(super) async fn run_workflow_phase_attempt(
     project_root: &str,
     workflow_id: &str,
@@ -550,8 +617,9 @@ pub(super) async fn run_workflow_phase_with_agent(
     task_complexity: Option<orchestrator_core::Complexity>,
     phase_id: &str,
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
-) -> Result<PhaseExecutionOutcome> {
+) -> Result<(PhaseExecutionOutcome, Vec<PhaseExecutionSignal>)> {
     let routing_complexity = routing_complexity(task_complexity);
+    let runtime_config = load_agent_runtime_config(project_root);
     let agent_model_override = phase_model_override_for(project_root, phase_id);
     let agent_tool_override = phase_tool_override_for(project_root, phase_id);
     let agent_fallback_models = phase_fallback_models_for(project_root, phase_id);
@@ -585,146 +653,300 @@ pub(super) async fn run_workflow_phase_with_agent(
     let max_attempts = phase_runtime_settings
         .and_then(|settings| settings.max_attempts)
         .unwrap_or_else(phase_runner_attempts);
-    let mut fallover_errors: Vec<String> = Vec::new();
+    let mut failover_errors: Vec<String> = Vec::new();
+    let mut signals: Vec<PhaseExecutionSignal> = Vec::new();
 
     for (target_index, (target_tool_id, target_model_id)) in execution_targets.iter().enumerate() {
-        let mut context = serde_json::json!({
-            "tool": target_tool_id,
-            "prompt": prompt.clone(),
-            "cwd": execution_cwd,
-            "project_root": project_root,
+        let auth_chain_hint = phase_runtime_settings
+            .map(|settings| settings.auth_profile_chain.as_slice())
+            .filter(|chain| !chain.is_empty());
+        let auth_candidates = resolve_phase_auth_candidates(
+            &runtime_config,
+            phase_id,
+            target_tool_id,
+            auth_chain_hint,
+        );
+        let mut advance_to_next_target = false;
+
+        for (auth_index, auth_candidate) in auth_candidates.iter().enumerate() {
+            let mut context = serde_json::json!({
+                "tool": target_tool_id,
+                "prompt": prompt.clone(),
+                "cwd": execution_cwd,
+                "project_root": project_root,
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "phase_id": phase_id,
+                "auth_profile": {
+                    "profile_id": auth_candidate.profile_id,
+                    "provider": auth_candidate.provider,
+                    "env_map": auth_candidate.env_map,
+                    "implicit": auth_candidate.profile_id.is_none(),
+                },
+            });
+            if let Some(agent_id) = phase_agent_id_for(project_root, phase_id) {
+                context
+                    .as_object_mut()
+                    .expect("json object")
+                    .insert("agent_id".to_string(), serde_json::json!(agent_id));
+            }
+            let phase_contract = phase_output_contract_for(project_root, phase_id);
+            let phase_output_schema = phase_output_json_schema_for(project_root, phase_id);
+            if let Some(mut runtime_contract) = build_runtime_contract(
+                context
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or("codex"),
+                target_model_id,
+                &prompt,
+            ) {
+                if let Some(contract) = phase_contract.as_ref() {
+                    let mut policy = serde_json::json!({
+                        "require_commit_message": contract.requires_field("commit_message"),
+                        "required_result_kind": contract.kind.as_str(),
+                        "required_result_fields": contract.required_fields.clone(),
+                    });
+                    if let Some(schema) = phase_output_schema.clone() {
+                        policy
+                            .as_object_mut()
+                            .expect("json object")
+                            .insert("output_json_schema".to_string(), schema);
+                    }
+                    runtime_contract
+                        .as_object_mut()
+                        .expect("json object")
+                        .insert("policy".to_string(), policy);
+                }
+                inject_codex_search_launch_flag(
+                    &mut runtime_contract,
+                    context
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .unwrap_or("codex"),
+                    phase_runtime_settings.and_then(|settings| settings.web_search),
+                );
+                inject_codex_reasoning_effort(
+                    &mut runtime_contract,
+                    context
+                        .get("tool")
+                        .and_then(Value::as_str)
+                        .unwrap_or("codex"),
+                    phase_runtime_settings
+                        .and_then(|settings| settings.reasoning_effort.as_deref()),
+                );
+                context
+                    .as_object_mut()
+                    .expect("json object")
+                    .insert("runtime_contract".to_string(), runtime_contract);
+            }
+
+            let run_id = RunId(format!(
+                "wf-{workflow_id}-{}-{target_index}-{auth_index}-{}",
+                phase_id,
+                Uuid::new_v4().simple()
+            ));
+            let request = AgentRunRequest {
+                protocol_version: PROTOCOL_VERSION.to_string(),
+                run_id,
+                model: ModelId(target_model_id.clone()),
+                context,
+                timeout_secs: phase_runtime_settings
+                    .and_then(|settings| settings.timeout_secs)
+                    .or_else(phase_timeout_secs),
+            };
+
+            let mut backoff = Duration::from_millis(PHASE_RETRY_BACKOFF_BASE_MS);
+            for attempt in 1..=max_attempts {
+                match run_workflow_phase_attempt(
+                    project_root,
+                    workflow_id,
+                    phase_id,
+                    &request,
+                    parse_research_signal,
+                )
+                .await
+                {
+                    Ok(mut outcome) => {
+                        if phase_requires_commit_message_with_config(project_root, phase_id) {
+                            if let PhaseExecutionOutcome::Completed { commit_message } =
+                                &mut outcome
+                            {
+                                let resolved_commit_message =
+                                    commit_message.clone().unwrap_or_else(|| {
+                                        fallback_implementation_commit_message(task_id, task_title)
+                                    });
+                                commit_implementation_changes(
+                                    execution_cwd,
+                                    &resolved_commit_message,
+                                )?;
+                                *commit_message = Some(resolved_commit_message);
+                            }
+                        }
+                        return Ok((outcome, signals));
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        let has_more_attempts = attempt < max_attempts;
+                        let has_more_auth_profiles = auth_index + 1 < auth_candidates.len();
+                        let has_more_targets = target_index + 1 < execution_targets.len();
+                        let action = PhaseFailureClassifier::classify_failure_action(
+                            &message,
+                            has_more_auth_profiles,
+                            has_more_targets,
+                        );
+                        let profile_label = auth_candidate
+                            .profile_id
+                            .as_deref()
+                            .unwrap_or("implicit-env");
+
+                        if matches!(action, PhaseFailureAction::RetrySameTuple) && has_more_attempts
+                        {
+                            let backoff_ms = backoff.as_millis().min(u128::from(u64::MAX)) as u64;
+                            signals.push(PhaseExecutionSignal {
+                                event_type: "workflow-phase-retry-scheduled".to_string(),
+                                payload: serde_json::json!({
+                                    "workflow_id": workflow_id,
+                                    "task_id": task_id,
+                                    "phase_id": phase_id,
+                                    "target": {
+                                        "index": target_index,
+                                        "tool": target_tool_id,
+                                        "model": target_model_id,
+                                    },
+                                    "auth_profile_id": auth_candidate.profile_id,
+                                    "attempt": attempt,
+                                    "max_attempts": max_attempts,
+                                    "backoff_ms": backoff_ms,
+                                    "classification": "transient_runner_error",
+                                    "reason": message,
+                                }),
+                            });
+                            sleep(backoff).await;
+                            backoff = std::cmp::min(
+                                backoff.saturating_mul(2),
+                                Duration::from_millis(PHASE_RETRY_BACKOFF_CAP_MS),
+                            );
+                            continue;
+                        }
+
+                        if matches!(action, PhaseFailureAction::RotateAuthProfile)
+                            && has_more_auth_profiles
+                        {
+                            let next_profile = auth_candidates
+                                .get(auth_index + 1)
+                                .and_then(|candidate| candidate.profile_id.clone());
+                            signals.push(PhaseExecutionSignal {
+                                event_type: "workflow-phase-auth-rotated".to_string(),
+                                payload: serde_json::json!({
+                                    "workflow_id": workflow_id,
+                                    "task_id": task_id,
+                                    "phase_id": phase_id,
+                                    "target": {
+                                        "index": target_index,
+                                        "tool": target_tool_id,
+                                        "model": target_model_id,
+                                    },
+                                    "attempt": attempt,
+                                    "from_auth_profile_id": auth_candidate.profile_id,
+                                    "to_auth_profile_id": next_profile,
+                                    "classification": "provider_exhaustion",
+                                    "reason": message,
+                                }),
+                            });
+                            failover_errors.push(format!(
+                                "target {}:{} profile {} attempt {} failed: {}",
+                                target_tool_id, target_model_id, profile_label, attempt, message
+                            ));
+                            break;
+                        }
+
+                        if matches!(action, PhaseFailureAction::FailoverModelTarget)
+                            && has_more_targets
+                        {
+                            let next_target = execution_targets.get(target_index + 1);
+                            let classification =
+                                if PhaseFailureClassifier::provider_exhaustion_reason_from_text(
+                                    &message,
+                                )
+                                .is_some()
+                                {
+                                    "provider_exhaustion"
+                                } else {
+                                    "target_unavailable"
+                                };
+                            signals.push(PhaseExecutionSignal {
+                                event_type: "workflow-phase-model-failover".to_string(),
+                                payload: serde_json::json!({
+                                    "workflow_id": workflow_id,
+                                    "task_id": task_id,
+                                    "phase_id": phase_id,
+                                    "from_target": {
+                                        "index": target_index,
+                                        "tool": target_tool_id,
+                                        "model": target_model_id,
+                                    },
+                                    "to_target": next_target.map(|(tool, model)| serde_json::json!({
+                                        "index": target_index + 1,
+                                        "tool": tool,
+                                        "model": model,
+                                    })),
+                                    "auth_profile_id": auth_candidate.profile_id,
+                                    "attempt": attempt,
+                                    "classification": classification,
+                                    "reason": message,
+                                }),
+                            });
+                            failover_errors.push(format!(
+                                "target {}:{} profile {} attempt {} failed: {}",
+                                target_tool_id, target_model_id, profile_label, attempt, message
+                            ));
+                            advance_to_next_target = true;
+                            break;
+                        }
+
+                        return Err(error);
+                    }
+                }
+            }
+
+            if advance_to_next_target {
+                break;
+            }
+        }
+
+    }
+
+    signals.push(PhaseExecutionSignal {
+        event_type: "workflow-phase-fallback-exhausted".to_string(),
+        payload: serde_json::json!({
             "workflow_id": workflow_id,
             "task_id": task_id,
             "phase_id": phase_id,
-        });
-        if let Some(agent_id) = phase_agent_id_for(project_root, phase_id) {
-            context
-                .as_object_mut()
-                .expect("json object")
-                .insert("agent_id".to_string(), serde_json::json!(agent_id));
-        }
-        let phase_contract = phase_output_contract_for(project_root, phase_id);
-        let phase_output_schema = phase_output_json_schema_for(project_root, phase_id);
-        if let Some(mut runtime_contract) = build_runtime_contract(
-            context
-                .get("tool")
-                .and_then(Value::as_str)
-                .unwrap_or("codex"),
-            target_model_id,
-            &prompt,
-        ) {
-            if let Some(contract) = phase_contract.as_ref() {
-                let mut policy = serde_json::json!({
-                    "require_commit_message": contract.requires_field("commit_message"),
-                    "required_result_kind": contract.kind.as_str(),
-                    "required_result_fields": contract.required_fields.clone(),
-                });
-                if let Some(schema) = phase_output_schema.clone() {
-                    policy
-                        .as_object_mut()
-                        .expect("json object")
-                        .insert("output_json_schema".to_string(), schema);
-                }
-                runtime_contract
-                    .as_object_mut()
-                    .expect("json object")
-                    .insert("policy".to_string(), policy);
-            }
-            inject_codex_search_launch_flag(
-                &mut runtime_contract,
-                context
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or("codex"),
-                phase_runtime_settings.and_then(|settings| settings.web_search),
-            );
-            inject_codex_reasoning_effort(
-                &mut runtime_contract,
-                context
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or("codex"),
-                phase_runtime_settings.and_then(|settings| settings.reasoning_effort.as_deref()),
-            );
-            context
-                .as_object_mut()
-                .expect("json object")
-                .insert("runtime_contract".to_string(), runtime_contract);
-        }
-
-        let run_id = RunId(format!(
-            "wf-{workflow_id}-{}-{target_index}-{}",
-            phase_id,
-            Uuid::new_v4().simple()
-        ));
-        let request = AgentRunRequest {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-            run_id,
-            model: ModelId(target_model_id.clone()),
-            context,
-            timeout_secs: phase_runtime_settings
-                .and_then(|settings| settings.timeout_secs)
-                .or_else(phase_timeout_secs),
-        };
-
-        let mut backoff = Duration::from_millis(200);
-        for attempt in 1..=max_attempts {
-            match run_workflow_phase_attempt(
-                project_root,
-                workflow_id,
-                phase_id,
-                &request,
-                parse_research_signal,
-            )
-            .await
-            {
-                Ok(mut outcome) => {
-                    if phase_requires_commit_message_with_config(project_root, phase_id) {
-                        if let PhaseExecutionOutcome::Completed { commit_message } = &mut outcome {
-                            let resolved_commit_message =
-                                commit_message.clone().unwrap_or_else(|| {
-                                    fallback_implementation_commit_message(task_id, task_title)
-                                });
-                            commit_implementation_changes(execution_cwd, &resolved_commit_message)?;
-                            *commit_message = Some(resolved_commit_message);
-                        }
-                    }
-                    return Ok(outcome);
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    let should_retry = attempt < max_attempts
-                        && PhaseFailureClassifier::is_transient_runner_error_message(&message);
-                    if should_retry {
-                        sleep(backoff).await;
-                        backoff = std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(3));
-                        continue;
-                    }
-
-                    let has_fallback_target = target_index + 1 < execution_targets.len();
-                    if has_fallback_target
-                        && PhaseFailureClassifier::should_failover_target(&message)
-                    {
-                        fallover_errors.push(format!(
-                            "target {}:{} failed: {}",
-                            target_tool_id, target_model_id, message
-                        ));
-                        break;
-                    }
-                    return Err(error);
-                }
-            }
-        }
-    }
+            "targets": execution_targets
+                .iter()
+                .enumerate()
+                .map(|(index, (tool, model))| serde_json::json!({
+                    "index": index,
+                    "tool": tool,
+                    "model": model,
+                }))
+                .collect::<Vec<_>>(),
+            "summary": if failover_errors.is_empty() {
+                "no available execution targets".to_string()
+            } else {
+                failover_errors.join(" || ")
+            },
+        }),
+    });
 
     Err(anyhow!(
         "workflow {} phase {} exhausted fallback targets: {}",
         workflow_id,
         phase_id,
-        if fallover_errors.is_empty() {
+        if failover_errors.is_empty() {
             "no available execution targets".to_string()
         } else {
-            fallover_errors.join(" || ")
+            failover_errors.join(" || ")
         }
     ))
 }
@@ -1116,6 +1338,7 @@ pub(super) async fn run_workflow_phase(
                         web_search: runtime.web_search,
                         timeout_secs: runtime.timeout_secs,
                         max_attempts: runtime.max_attempts,
+                        auth_profile_chain: runtime.auth_profile_chain.clone(),
                     });
 
             let routing_complexity = routing_complexity(task_complexity);
@@ -1148,7 +1371,7 @@ pub(super) async fn run_workflow_phase(
                 metadata.selected_model = Some(model.clone());
             }
 
-            let outcome = run_workflow_phase_with_agent(
+            let (outcome, mut agent_signals) = run_workflow_phase_with_agent(
                 project_root,
                 execution_cwd,
                 workflow_id,
@@ -1160,6 +1383,7 @@ pub(super) async fn run_workflow_phase(
                 runtime_settings.as_ref(),
             )
             .await?;
+            signals.append(&mut agent_signals);
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
                 match &outcome {

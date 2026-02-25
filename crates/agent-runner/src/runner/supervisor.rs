@@ -43,6 +43,32 @@ impl Supervisor {
             .or_else(|| context.get("timeout_secs").and_then(|v| v.as_u64()));
         let model = req.model.0.as_str();
         let runtime_contract = context.get("runtime_contract");
+        let auth_profile_id = context
+            .pointer("/auth_profile/profile_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let auth_env_mappings = context
+            .pointer("/auth_profile/env_map")
+            .and_then(|v| v.as_object())
+            .map(|object| {
+                object
+                    .iter()
+                    .filter_map(|(required_env, source_env)| {
+                        let required = required_env.trim();
+                        let source = source_env.as_str().map(str::trim).unwrap_or_default();
+                        if required.is_empty() || source.is_empty() {
+                            return None;
+                        }
+                        Some((required.to_string(), source.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut auth_extra_env_keys = Vec::new();
+        for (required_env, source_env) in &auth_env_mappings {
+            auth_extra_env_keys.push(required_env.clone());
+            auth_extra_env_keys.push(source_env.clone());
+        }
 
         info!(
             run_id = %run_id.0.as_str(),
@@ -53,6 +79,8 @@ impl Supervisor {
             request_timeout_secs = ?request_timeout_secs,
             has_runtime_contract = runtime_contract.is_some(),
             has_project_root = project_root.is_some(),
+            auth_profile_id = ?auth_profile_id,
+            auth_mapping_count = auth_env_mappings.len(),
             "Supervisor accepted agent run"
         );
 
@@ -80,8 +108,22 @@ impl Supervisor {
             );
         }
 
-        let mut env = env_sanitizer::sanitize_env();
+        let mut env = if auth_extra_env_keys.is_empty() {
+            env_sanitizer::sanitize_env()
+        } else {
+            env_sanitizer::sanitize_env_with_extra_vars(&auth_extra_env_keys)
+        };
         let base_env_count = env.len();
+        let mut missing_required_auth_envs = Vec::new();
+        for (required_env, source_env) in &auth_env_mappings {
+            if let Some(value) = env.get(source_env).cloned() {
+                env.insert(required_env.clone(), value);
+            } else if let Ok(value) = std::env::var(source_env) {
+                env.insert(required_env.clone(), value);
+            } else {
+                missing_required_auth_envs.push(required_env.clone());
+            }
+        }
 
         // Add Claude settings path if working in a worktree
         if let Some(_root) = project_root {
@@ -130,6 +172,8 @@ impl Supervisor {
             run_id = %run_id.0.as_str(),
             base_env_count,
             final_env_count = env.len(),
+            auth_profile_id = ?auth_profile_id,
+            missing_required_auth_envs = ?missing_required_auth_envs,
             "Launching CLI process"
         );
 

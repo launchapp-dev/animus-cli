@@ -786,6 +786,37 @@ async fn execute_running_workflow_phases_for_project(
                         }),
                     });
                 }
+                if error_message.contains("exhausted fallback targets") {
+                    phase_events.push(PhaseExecutionEvent {
+                        event_type: "workflow-phase-fallback-exhausted".to_string(),
+                        project_root: project_root.to_string(),
+                        workflow_id: workflow.id.clone(),
+                        task_id: workflow.task_id.clone(),
+                        phase_id: phase_id.clone(),
+                        phase_mode: "unknown".to_string(),
+                        metadata: PhaseExecutionMetadata {
+                            phase_id: phase_id.clone(),
+                            phase_mode: "unknown".to_string(),
+                            phase_definition_hash: "unknown".to_string(),
+                            agent_runtime_config_hash: "unknown".to_string(),
+                            agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID
+                                .to_string(),
+                            agent_runtime_version:
+                                orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                            agent_runtime_source: "unknown".to_string(),
+                            agent_id: None,
+                            agent_profile_hash: None,
+                            selected_tool: None,
+                            selected_model: None,
+                        },
+                        payload: serde_json::json!({
+                            "workflow_id": workflow.id,
+                            "task_id": workflow.task_id,
+                            "phase_id": phase_id,
+                            "error": error_message,
+                        }),
+                    });
+                }
                 if PhaseFailureClassifier::is_transient_runner_error_message(&error_message) {
                     continue;
                 }

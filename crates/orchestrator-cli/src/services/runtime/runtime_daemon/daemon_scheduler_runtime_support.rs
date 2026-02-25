@@ -16,6 +16,8 @@ pub(super) struct WorkflowPhaseRuntimeSettings {
     pub(super) timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) max_attempts: Option<usize>,
+    #[serde(default)]
+    pub(super) auth_profile_chain: Vec<String>,
 }
 
 #[cfg(test)]

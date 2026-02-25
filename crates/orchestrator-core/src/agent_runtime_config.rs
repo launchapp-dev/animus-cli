@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -65,6 +65,19 @@ pub struct AgentRuntimeOverrides {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub auth_profile_chain: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAuthProfile {
+    pub provider: String,
+    #[serde(default)]
+    pub env_map: BTreeMap<String, String>,
+    #[serde(default)]
+    pub priority: Option<i32>,
+    #[serde(default = "default_auth_profile_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +100,8 @@ pub struct AgentProfile {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub auth_profile_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +160,8 @@ pub struct AgentRuntimeConfig {
     #[serde(default)]
     pub tools_allowlist: Vec<String>,
     #[serde(default)]
+    pub auth_profiles: BTreeMap<String, ProviderAuthProfile>,
+    #[serde(default)]
     pub agents: BTreeMap<String, AgentProfile>,
     #[serde(default)]
     pub phases: BTreeMap<String, PhaseExecutionDefinition>,
@@ -193,6 +210,10 @@ fn default_command_cwd_mode() -> CommandCwdMode {
     CommandCwdMode::ProjectRoot
 }
 
+fn default_auth_profile_enabled() -> bool {
+    true
+}
+
 fn default_success_exit_codes() -> Vec<i32> {
     vec![0]
 }
@@ -207,6 +228,22 @@ fn trim_nonempty(value: Option<&str>) -> Option<&str> {
     value
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
+}
+
+fn normalize_auth_profile_chain(values: &[String]) -> Vec<String> {
+    let mut resolved = Vec::new();
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if seen.insert(key) {
+            resolved.push(trimmed.to_string());
+        }
+    }
+    resolved
 }
 
 impl AgentRuntimeConfig {
@@ -341,6 +378,82 @@ impl AgentRuntimeConfig {
             })
     }
 
+    pub fn auth_profile(&self, profile_id: &str) -> Option<&ProviderAuthProfile> {
+        lookup_case_insensitive(&self.auth_profiles, profile_id)
+    }
+
+    pub fn phase_auth_profile_chain(&self, phase_id: &str) -> Vec<String> {
+        let phase_chain = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| normalize_auth_profile_chain(&runtime.auth_profile_chain))
+            .unwrap_or_default();
+        if !phase_chain.is_empty() {
+            return phase_chain;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| normalize_auth_profile_chain(&profile.auth_profile_chain))
+            .unwrap_or_default()
+    }
+
+    pub fn resolve_phase_auth_profiles_for_provider(
+        &self,
+        phase_id: &str,
+        provider: &str,
+    ) -> Vec<(String, ProviderAuthProfile)> {
+        let normalized_provider = protocol::normalize_tool_id(provider);
+        if normalized_provider.is_empty() {
+            return Vec::new();
+        }
+
+        let mut resolved = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        for profile_id in self.phase_auth_profile_chain(phase_id) {
+            let Some(profile) = self.auth_profile(&profile_id) else {
+                continue;
+            };
+            let provider = protocol::normalize_tool_id(&profile.provider);
+            if !profile.enabled || !provider.eq_ignore_ascii_case(&normalized_provider) {
+                continue;
+            }
+            let key = profile_id.to_ascii_lowercase();
+            if seen.insert(key) {
+                resolved.push((profile_id, profile.clone()));
+            }
+        }
+
+        let mut provider_matches = self
+            .auth_profiles
+            .iter()
+            .filter(|(_, profile)| {
+                profile.enabled
+                    && protocol::normalize_tool_id(&profile.provider)
+                        .eq_ignore_ascii_case(&normalized_provider)
+            })
+            .map(|(profile_id, profile)| (profile_id.clone(), profile.clone()))
+            .collect::<Vec<_>>();
+        provider_matches.sort_by(|(left_id, left_profile), (right_id, right_profile)| {
+            let left_priority = left_profile.priority.unwrap_or(i32::MAX);
+            let right_priority = right_profile.priority.unwrap_or(i32::MAX);
+            left_priority.cmp(&right_priority).then_with(|| {
+                left_id
+                    .to_ascii_lowercase()
+                    .cmp(&right_id.to_ascii_lowercase())
+            })
+        });
+
+        for (profile_id, profile) in provider_matches {
+            let key = profile_id.to_ascii_lowercase();
+            if seen.insert(key) {
+                resolved.push((profile_id, profile));
+            }
+        }
+
+        resolved
+    }
+
     pub fn phase_output_json_schema(&self, phase_id: &str) -> Option<&Value> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.output_json_schema.as_ref())
@@ -464,6 +577,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
             "make".to_string(),
             "just".to_string(),
         ],
+        auth_profiles: BTreeMap::new(),
         agents: BTreeMap::from([
             (
                 "default".to_string(),
@@ -477,6 +591,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     web_search: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    auth_profile_chain: Vec::new(),
                 },
             ),
             (
@@ -491,6 +606,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     web_search: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    auth_profile_chain: Vec::new(),
                 },
             ),
         ]),
@@ -968,6 +1084,26 @@ fn validate_phase_definition(
                 phase_id
             ));
         }
+
+        if runtime
+            .auth_profile_chain
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "phases['{}'].runtime.auth_profile_chain must not contain empty values",
+                phase_id
+            ));
+        }
+        for profile_id in normalize_auth_profile_chain(&runtime.auth_profile_chain) {
+            if lookup_case_insensitive(&config.auth_profiles, &profile_id).is_none() {
+                return Err(anyhow!(
+                    "phases['{}'].runtime.auth_profile_chain references unknown auth profile '{}'",
+                    phase_id,
+                    profile_id
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -999,6 +1135,51 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         return Err(anyhow!(
             "tools_allowlist must include at least one non-empty command"
         ));
+    }
+
+    for (profile_id, profile) in &config.auth_profiles {
+        if profile_id.trim().is_empty() {
+            return Err(anyhow!("auth_profiles contains empty profile id"));
+        }
+
+        let provider = protocol::normalize_tool_id(&profile.provider);
+        if provider.trim().is_empty() {
+            return Err(anyhow!(
+                "auth_profiles['{}'].provider must not be empty",
+                profile_id
+            ));
+        }
+
+        if profile.env_map.is_empty() {
+            return Err(anyhow!(
+                "auth_profiles['{}'].env_map must include at least one mapping",
+                profile_id
+            ));
+        }
+
+        let mut source_env_seen = BTreeSet::new();
+        for (required_env, source_env) in &profile.env_map {
+            if required_env.trim().is_empty() {
+                return Err(anyhow!(
+                    "auth_profiles['{}'].env_map must not contain empty required env names",
+                    profile_id
+                ));
+            }
+            if source_env.trim().is_empty() {
+                return Err(anyhow!(
+                    "auth_profiles['{}'].env_map['{}'] must not be empty",
+                    profile_id,
+                    required_env
+                ));
+            }
+            let source_key = source_env.trim().to_ascii_lowercase();
+            if !source_env_seen.insert(source_key) {
+                return Err(anyhow!(
+                    "auth_profiles['{}'].env_map must not map duplicate source env vars",
+                    profile_id
+                ));
+            }
+        }
     }
 
     if config.agents.is_empty() {
@@ -1057,6 +1238,26 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
                 agent_id
             ));
         }
+
+        if profile
+            .auth_profile_chain
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "agents['{}'].auth_profile_chain must not contain empty values",
+                agent_id
+            ));
+        }
+        for profile_id in normalize_auth_profile_chain(&profile.auth_profile_chain) {
+            if lookup_case_insensitive(&config.auth_profiles, &profile_id).is_none() {
+                return Err(anyhow!(
+                    "agents['{}'].auth_profile_chain references unknown auth profile '{}'",
+                    agent_id,
+                    profile_id
+                ));
+            }
+        }
     }
 
     if config.phases.is_empty() {
@@ -1109,6 +1310,148 @@ mod tests {
     fn builtin_defaults_mark_review_as_structured_output() {
         let config = builtin_agent_runtime_config();
         assert!(config.is_structured_output_phase("code-review"));
-        assert!(!config.is_structured_output_phase("implementation"));
+        assert!(config.is_structured_output_phase("implementation"));
+    }
+
+    #[test]
+    fn validation_rejects_unknown_auth_profile_reference() {
+        let mut config = builtin_agent_runtime_config();
+        config
+            .agents
+            .get_mut("default")
+            .expect("default profile")
+            .auth_profile_chain = vec!["missing".to_string()];
+        let error =
+            validate_agent_runtime_config(&config).expect_err("unknown auth profile should fail");
+        assert!(error
+            .to_string()
+            .contains("auth_profile_chain references unknown auth profile 'missing'"));
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_source_env_in_auth_profile() {
+        let mut config = builtin_agent_runtime_config();
+        config.auth_profiles.insert(
+            "codex-main".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([
+                    (
+                        "OPENAI_API_KEY".to_string(),
+                        "OPENAI_PRIMARY_KEY".to_string(),
+                    ),
+                    ("OPENAI_ORG".to_string(), "OPENAI_PRIMARY_KEY".to_string()),
+                ]),
+                priority: Some(10),
+                enabled: true,
+            },
+        );
+        let error = validate_agent_runtime_config(&config)
+            .expect_err("duplicate source mapping should fail");
+        assert!(error
+            .to_string()
+            .contains("must not map duplicate source env vars"));
+    }
+
+    #[test]
+    fn resolve_phase_auth_profiles_prioritizes_chain_then_provider_sort() {
+        let mut config = builtin_agent_runtime_config();
+        config.auth_profiles.insert(
+            "codex-b".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_B".to_string(),
+                )]),
+                priority: Some(20),
+                enabled: true,
+            },
+        );
+        config.auth_profiles.insert(
+            "codex-a".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_A".to_string(),
+                )]),
+                priority: Some(10),
+                enabled: true,
+            },
+        );
+        config.auth_profiles.insert(
+            "codex-disabled".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_DISABLED".to_string(),
+                )]),
+                priority: Some(0),
+                enabled: false,
+            },
+        );
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile")
+            .auth_profile_chain = vec!["codex-b".to_string()];
+
+        let resolved = config.resolve_phase_auth_profiles_for_provider("implementation", "codex");
+        let ids = resolved
+            .iter()
+            .map(|(profile_id, _)| profile_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["codex-b", "codex-a"]);
+    }
+
+    #[test]
+    fn phase_runtime_chain_overrides_agent_chain() {
+        let mut config = builtin_agent_runtime_config();
+        config.auth_profiles.insert(
+            "codex-phase".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_PHASE".to_string(),
+                )]),
+                priority: Some(1),
+                enabled: true,
+            },
+        );
+        config.auth_profiles.insert(
+            "codex-agent".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_AGENT".to_string(),
+                )]),
+                priority: Some(2),
+                enabled: true,
+            },
+        );
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile")
+            .auth_profile_chain = vec!["codex-agent".to_string()];
+        config
+            .phases
+            .get_mut("implementation")
+            .expect("implementation phase")
+            .runtime = Some(AgentRuntimeOverrides {
+            auth_profile_chain: vec!["codex-phase".to_string()],
+            ..AgentRuntimeOverrides::default()
+        });
+
+        let resolved = config.resolve_phase_auth_profiles_for_provider("implementation", "codex");
+        let ids = resolved
+            .iter()
+            .map(|(profile_id, _)| profile_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids.first().copied(), Some("codex-phase"));
     }
 }

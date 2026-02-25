@@ -447,6 +447,14 @@ pub(crate) struct DaemonEventsArgs {
     pub(crate) limit: Option<usize>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) follow: bool,
+    #[arg(long = "event-type")]
+    pub(crate) event_type: Option<String>,
+    #[arg(long = "workflow-id")]
+    pub(crate) workflow_id: Option<String>,
+    #[arg(long = "task-id")]
+    pub(crate) task_id: Option<String>,
+    #[arg(long = "phase")]
+    pub(crate) phase: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -859,6 +867,8 @@ pub(crate) enum WorkflowAgentRuntimeCommand {
     Get,
     /// Validate workflow agent-runtime config.
     Validate,
+    /// Resolve runtime targets/auth plan diagnostics for a phase.
+    Diagnostics(WorkflowAgentRuntimeDiagnosticsArgs),
     /// Replace workflow agent-runtime config JSON.
     Set(WorkflowAgentRuntimeSetArgs),
 }
@@ -2160,4 +2170,14 @@ pub(crate) struct WorkflowStateMachineSetArgs {
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
     #[arg(long)]
     pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowAgentRuntimeDiagnosticsArgs {
+    #[arg(long)]
+    pub(crate) phase: String,
+    #[arg(long = "pipeline")]
+    pub(crate) pipeline_id: Option<String>,
+    #[arg(long)]
+    pub(crate) complexity: Option<String>,
 }

@@ -6,6 +6,14 @@ use crate::shared::collect_json_payload_lines;
 
 pub(crate) struct PhaseFailureClassifier;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PhaseFailureAction {
+    RetrySameTuple,
+    RotateAuthProfile,
+    FailoverModelTarget,
+    Terminal,
+}
+
 impl PhaseFailureClassifier {
     pub(crate) fn is_transient_runner_error_message(message: &str) -> bool {
         let normalized = message.to_ascii_lowercase();
@@ -51,9 +59,39 @@ impl PhaseFailureClassifier {
         None
     }
 
+    #[cfg(test)]
     pub(crate) fn should_failover_target(message: &str) -> bool {
         is_provider_exhaustion_error_message(message)
             || is_target_unavailable_error_message(message)
+    }
+
+    pub(crate) fn classify_failure_action(
+        message: &str,
+        has_more_auth_profiles: bool,
+        has_more_targets: bool,
+    ) -> PhaseFailureAction {
+        if Self::is_transient_runner_error_message(message) {
+            return PhaseFailureAction::RetrySameTuple;
+        }
+
+        if is_provider_exhaustion_error_message(message) {
+            if has_more_auth_profiles {
+                return PhaseFailureAction::RotateAuthProfile;
+            }
+            if has_more_targets {
+                return PhaseFailureAction::FailoverModelTarget;
+            }
+            return PhaseFailureAction::Terminal;
+        }
+
+        if is_target_unavailable_error_message(message) {
+            if has_more_targets {
+                return PhaseFailureAction::FailoverModelTarget;
+            }
+            return PhaseFailureAction::Terminal;
+        }
+
+        PhaseFailureAction::Terminal
     }
 
     pub(crate) fn push_phase_diagnostic_line(lines: &mut VecDeque<String>, text: &str) {

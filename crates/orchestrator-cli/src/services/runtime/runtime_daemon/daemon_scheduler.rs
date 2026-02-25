@@ -41,7 +41,7 @@ mod project_tick_ops;
 use phase_exec::{
     PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionRunResult, PhaseExecutionSignal,
 };
-use phase_failover::PhaseFailureClassifier;
+use phase_failover::{PhaseFailureAction, PhaseFailureClassifier};
 use phase_targets::PhaseTargetPlanner;
 
 #[path = "daemon_scheduler_runtime_support.rs"]
@@ -223,6 +223,7 @@ async fn run_workflow_phase_with_agent_legacy(
         phase_runtime_settings,
     )
     .await
+    .map(|(outcome, _signals)| outcome)
 }
 
 #[cfg(test)]
@@ -546,6 +547,36 @@ mod tests {
     }
 
     #[test]
+    fn failure_action_rotates_auth_profiles_before_target_failover() {
+        let action = PhaseFailureClassifier::classify_failure_action(
+            "workflow wf-1 phase implementation exited with code Some(1) (provider_exhausted: provider quota exceeded)",
+            true,
+            true,
+        );
+        assert_eq!(action, PhaseFailureAction::RotateAuthProfile);
+    }
+
+    #[test]
+    fn failure_action_fails_over_target_for_unavailable_model() {
+        let action = PhaseFailureClassifier::classify_failure_action(
+            "workflow wf-1 phase implementation error: Process execution failed: unknown model",
+            false,
+            true,
+        );
+        assert_eq!(action, PhaseFailureAction::FailoverModelTarget);
+    }
+
+    #[test]
+    fn failure_action_retries_transient_runner_errors() {
+        let action = PhaseFailureClassifier::classify_failure_action(
+            "workflow wf-1 phase implementation error: connection reset by peer",
+            false,
+            false,
+        );
+        assert_eq!(action, PhaseFailureAction::RetrySameTuple);
+    }
+
+    #[test]
     fn build_phase_execution_targets_respects_fallback_models() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
@@ -768,6 +799,7 @@ mod tests {
                         web_search: Some(true),
                         timeout_secs: None,
                         max_attempts: None,
+                        auth_profile_chain: Vec::new(),
                     },
                 )]),
             }],

@@ -17,6 +17,7 @@ pub use agent_runtime_config::{
     AgentProfile, AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides,
     AgentRuntimeSource, CommandCwdMode, LoadedAgentRuntimeConfig, PhaseCommandDefinition,
     PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition, PhaseOutputContract,
+    ProviderAuthProfile,
 };
 pub use config::RuntimeConfig;
 pub use doctor::{DoctorCheck, DoctorCheckResult, DoctorReport};

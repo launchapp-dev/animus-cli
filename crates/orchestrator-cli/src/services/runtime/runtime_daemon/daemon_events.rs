@@ -25,6 +25,49 @@ pub(crate) fn daemon_events_log_path() -> PathBuf {
     protocol::Config::global_config_dir().join("daemon-events.jsonl")
 }
 
+fn event_matches_filter(value: Option<&str>, expected: Option<&str>) -> bool {
+    match expected {
+        Some(expected) if !expected.is_empty() => value
+            .map(|candidate| candidate.eq_ignore_ascii_case(expected))
+            .unwrap_or(false),
+        _ => true,
+    }
+}
+
+fn event_record_matches_args(record: &DaemonEventRecord, args: &DaemonEventsArgs) -> bool {
+    let event_type = args
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let workflow_id = args
+        .workflow_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let task_id = args
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let phase_id = args
+        .phase
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    event_matches_filter(Some(record.event_type.as_str()), event_type)
+        && event_matches_filter(
+            record.data.get("workflow_id").and_then(Value::as_str),
+            workflow_id,
+        )
+        && event_matches_filter(record.data.get("task_id").and_then(Value::as_str), task_id)
+        && event_matches_filter(
+            record.data.get("phase_id").and_then(Value::as_str),
+            phase_id,
+        )
+}
+
 fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -140,9 +183,22 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
         };
 
         for line in &lines {
+            let parsed = serde_json::from_str::<DaemonEventRecord>(line).ok();
+            if let Some(record) = parsed.as_ref() {
+                if !event_record_matches_args(record, &args) {
+                    continue;
+                }
+            } else if args.event_type.is_some()
+                || args.workflow_id.is_some()
+                || args.task_id.is_some()
+                || args.phase.is_some()
+            {
+                continue;
+            }
+
             if json {
                 println!("{line}");
-            } else if let Ok(record) = serde_json::from_str::<DaemonEventRecord>(line) {
+            } else if let Some(record) = parsed {
                 let project = record
                     .project_root
                     .as_deref()
@@ -166,4 +222,73 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(event_type: &str) -> DaemonEventRecord {
+        DaemonEventRecord {
+            schema: "ao.daemon.event.v1".to_string(),
+            id: "evt-1".to_string(),
+            seq: 1,
+            timestamp: "2026-02-25T00:00:00Z".to_string(),
+            event_type: event_type.to_string(),
+            project_root: Some("/tmp/project".to_string()),
+            data: serde_json::json!({
+                "workflow_id": "wf-1",
+                "task_id": "TASK-023",
+                "phase_id": "implementation"
+            }),
+        }
+    }
+
+    #[test]
+    fn daemon_event_filters_match_when_unset() {
+        let args = DaemonEventsArgs {
+            limit: None,
+            follow: false,
+            event_type: None,
+            workflow_id: None,
+            task_id: None,
+            phase: None,
+        };
+        assert!(event_record_matches_args(
+            &record("workflow-phase-model-failover"),
+            &args
+        ));
+    }
+
+    #[test]
+    fn daemon_event_filters_match_all_requested_fields() {
+        let args = DaemonEventsArgs {
+            limit: None,
+            follow: false,
+            event_type: Some("workflow-phase-model-failover".to_string()),
+            workflow_id: Some("wf-1".to_string()),
+            task_id: Some("TASK-023".to_string()),
+            phase: Some("implementation".to_string()),
+        };
+        assert!(event_record_matches_args(
+            &record("workflow-phase-model-failover"),
+            &args
+        ));
+    }
+
+    #[test]
+    fn daemon_event_filters_exclude_non_matching_phase() {
+        let args = DaemonEventsArgs {
+            limit: None,
+            follow: false,
+            event_type: Some("workflow-phase-model-failover".to_string()),
+            workflow_id: Some("wf-1".to_string()),
+            task_id: Some("TASK-023".to_string()),
+            phase: Some("testing".to_string()),
+        };
+        assert!(!event_record_matches_args(
+            &record("workflow-phase-model-failover"),
+            &args
+        ));
+    }
 }
