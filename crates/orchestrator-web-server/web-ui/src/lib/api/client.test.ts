@@ -59,6 +59,23 @@ describe("requestAo", () => {
       exitCode: 5,
     });
   });
+
+  it("maps invalid JSON responses to deterministic invalid_json errors", async () => {
+    fetchMock.mockResolvedValue({
+      json: async () => {
+        throw new SyntaxError("Unexpected token <");
+      },
+    } as Response);
+
+    const result = await requestAo("/api/v1/system/info");
+
+    expect(result).toEqual({
+      kind: "error",
+      code: "invalid_json",
+      message: "Invalid JSON response for /api/v1/system/info: Unexpected token <",
+      exitCode: 1,
+    });
+  });
 });
 
 describe("api endpoint contract", () => {
@@ -101,5 +118,41 @@ describe("api endpoint contract", () => {
     expect(daemonStartInit.body).toBe("{}");
     expect(reviewHandoffInit.method).toBe("POST");
     expect(reviewHandoffInit.body).toBe(JSON.stringify({ taskId: "TASK-011" }));
+  });
+
+  it("returns invalid_payload when an ok envelope fails endpoint guard checks", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(okEnvelope({ not: "an-array" })));
+
+    const result = await api.tasksList();
+
+    expect(result).toEqual({
+      kind: "error",
+      code: "invalid_payload",
+      message: "Invalid payload for /api/v1/tasks: tasks must be an array",
+      exitCode: 1,
+    });
+  });
+
+  it("preserves server error envelope code, message, and exit code", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        schema: "ao.cli.v1",
+        ok: false,
+        error: {
+          code: "not_found",
+          message: "task not found",
+          exit_code: 3,
+        },
+      }),
+    );
+
+    const result = await api.tasksById("TASK-404");
+
+    expect(result).toEqual({
+      kind: "error",
+      code: "not_found",
+      message: "task not found",
+      exitCode: 3,
+    });
   });
 });

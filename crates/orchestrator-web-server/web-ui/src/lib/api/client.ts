@@ -1,3 +1,50 @@
+import {
+  decodeDaemonHealth,
+  decodeDaemonLogs,
+  decodeDaemonStatus,
+  decodeMessagePayload,
+  decodeProjectDetail,
+  decodeProjectRequirementDetail,
+  decodeProjectRequirementsById,
+  decodeProjectRequirementsSummary,
+  decodeProjectsActive,
+  decodeProjectsList,
+  decodeProjectTasksPayload,
+  decodeProjectWorkflowsPayload,
+  decodeReviewHandoffResponse,
+  decodeSystemInfo,
+  decodeTaskDetail,
+  decodeTaskStats,
+  decodeTasksList,
+  decodeWorkflowCheckpointDetail,
+  decodeWorkflowCheckpoints,
+  decodeWorkflowDecisions,
+  decodeWorkflowDetail,
+  decodeWorkflowsList,
+} from "./contracts/guards";
+import type { PayloadDecoder } from "./contracts/guards";
+import type {
+  DaemonHealth,
+  DaemonLogEntry,
+  DaemonStatusValue,
+  MessagePayload,
+  ProjectDetail,
+  ProjectRequirementDetailPayload,
+  ProjectRequirementSummary,
+  ProjectRequirementsByIdPayload,
+  ProjectSummary,
+  ProjectTasksPayload,
+  ProjectWorkflowsPayload,
+  ReviewHandoffResponse,
+  SystemInfo,
+  TaskDetail,
+  TaskStatsPayload,
+  TaskSummary,
+  WorkflowCheckpoint,
+  WorkflowCheckpointDetail,
+  WorkflowDecision,
+  WorkflowSummary,
+} from "./contracts/models";
 import { ApiError, ApiResult, parseAoEnvelope } from "./envelope";
 
 export type RequestJsonValue =
@@ -16,6 +63,7 @@ const JSON_HEADERS = {
 export async function requestAo<TData>(
   path: string,
   init: RequestInit = {},
+  decoder?: PayloadDecoder<TData>,
 ): Promise<ApiResult<TData>> {
   const requestInit: RequestInit = {
     ...init,
@@ -27,8 +75,48 @@ export async function requestAo<TData>(
 
   try {
     const response = await fetch(path, requestInit);
-    const payload = (await response.json()) as unknown;
-    return parseAoEnvelope<TData>(payload);
+    let payload: unknown;
+
+    try {
+      payload = await response.json();
+    } catch (error) {
+      return {
+        kind: "error",
+        code: "invalid_json",
+        message:
+          error instanceof Error
+            ? `Invalid JSON response for ${path}: ${error.message}`
+            : `Invalid JSON response for ${path}.`,
+        exitCode: 1,
+      };
+    }
+
+    const envelope = parseAoEnvelope<unknown>(payload);
+    if (envelope.kind === "error") {
+      return envelope;
+    }
+
+    if (!decoder) {
+      return {
+        kind: "ok",
+        data: envelope.data as TData,
+      };
+    }
+
+    const decoded = decoder(envelope.data);
+    if (!decoded.ok) {
+      return {
+        kind: "error",
+        code: "invalid_payload",
+        message: `Invalid payload for ${path}: ${decoded.message}`,
+        exitCode: 1,
+      };
+    }
+
+    return {
+      kind: "ok",
+      data: decoded.data,
+    };
   } catch (error) {
     return {
       kind: "error",
@@ -55,54 +143,89 @@ export function firstApiError(
   return null;
 }
 
+function getAo<TData>(
+  path: string,
+  decoder: PayloadDecoder<TData>,
+): Promise<ApiResult<TData>> {
+  return requestAo(path, {}, decoder);
+}
+
 export const api = {
-  systemInfo: () => requestAo<unknown>("/api/v1/system/info"),
-  daemonStatus: () => requestAo<unknown>("/api/v1/daemon/status"),
-  daemonHealth: () => requestAo<unknown>("/api/v1/daemon/health"),
-  daemonLogs: (limit = 100) => requestAo<unknown>(`/api/v1/daemon/logs?limit=${limit}`),
+  systemInfo: () => getAo<SystemInfo>("/api/v1/system/info", decodeSystemInfo),
+  daemonStatus: () => getAo<DaemonStatusValue>("/api/v1/daemon/status", decodeDaemonStatus),
+  daemonHealth: () => getAo<DaemonHealth>("/api/v1/daemon/health", decodeDaemonHealth),
+  daemonLogs: (limit = 100) =>
+    getAo<DaemonLogEntry[]>(`/api/v1/daemon/logs?limit=${limit}`, decodeDaemonLogs),
   daemonStart: () => postEmpty("/api/v1/daemon/start"),
   daemonPause: () => postEmpty("/api/v1/daemon/pause"),
   daemonResume: () => postEmpty("/api/v1/daemon/resume"),
   daemonStop: () => postEmpty("/api/v1/daemon/stop"),
-  daemonClearLogs: () => requestAo<unknown>("/api/v1/daemon/logs", { method: "DELETE" }),
-  projectsList: () => requestAo<Array<ProjectSummary>>("/api/v1/projects"),
-  projectsActive: () => requestAo<ProjectSummary | null>("/api/v1/projects/active"),
-  projectsById: (projectId: string) => requestAo<unknown>(`/api/v1/projects/${projectId}`),
-  projectTasks: (projectId: string) => requestAo<unknown>(`/api/v1/projects/${projectId}/tasks`),
+  daemonClearLogs: () =>
+    requestAo<MessagePayload>("/api/v1/daemon/logs", { method: "DELETE" }, decodeMessagePayload),
+  projectsList: () => getAo<ProjectSummary[]>("/api/v1/projects", decodeProjectsList),
+  projectsActive: () =>
+    getAo<ProjectSummary | null>("/api/v1/projects/active", decodeProjectsActive),
+  projectsById: (projectId: string) =>
+    getAo<ProjectDetail>(`/api/v1/projects/${projectId}`, decodeProjectDetail),
+  projectTasks: (projectId: string) =>
+    getAo<ProjectTasksPayload>(`/api/v1/projects/${projectId}/tasks`, decodeProjectTasksPayload),
   projectWorkflows: (projectId: string) =>
-    requestAo<unknown>(`/api/v1/projects/${projectId}/workflows`),
-  projectsRequirementsSummary: () => requestAo<unknown>("/api/v1/project-requirements"),
+    getAo<ProjectWorkflowsPayload>(
+      `/api/v1/projects/${projectId}/workflows`,
+      decodeProjectWorkflowsPayload,
+    ),
+  projectsRequirementsSummary: () =>
+    getAo<ProjectRequirementSummary[]>(
+      "/api/v1/project-requirements",
+      decodeProjectRequirementsSummary,
+    ),
   projectsRequirementsById: (projectId: string) =>
-    requestAo<unknown>(`/api/v1/project-requirements/${projectId}`),
+    getAo<ProjectRequirementsByIdPayload>(
+      `/api/v1/project-requirements/${projectId}`,
+      decodeProjectRequirementsById,
+    ),
   projectRequirementDetail: (projectId: string, requirementId: string) =>
-    requestAo<unknown>(`/api/v1/project-requirements/${projectId}/${requirementId}`),
-  tasksList: () => requestAo<unknown>("/api/v1/tasks"),
-  tasksStats: () => requestAo<unknown>("/api/v1/tasks/stats"),
-  tasksById: (taskId: string) => requestAo<unknown>(`/api/v1/tasks/${taskId}`),
-  workflowsList: () => requestAo<unknown>("/api/v1/workflows"),
-  workflowsById: (workflowId: string) => requestAo<unknown>(`/api/v1/workflows/${workflowId}`),
+    getAo<ProjectRequirementDetailPayload>(
+      `/api/v1/project-requirements/${projectId}/${requirementId}`,
+      decodeProjectRequirementDetail,
+    ),
+  tasksList: () => getAo<TaskSummary[]>("/api/v1/tasks", decodeTasksList),
+  tasksStats: () => getAo<TaskStatsPayload>("/api/v1/tasks/stats", decodeTaskStats),
+  tasksById: (taskId: string) => getAo<TaskDetail>(`/api/v1/tasks/${taskId}`, decodeTaskDetail),
+  workflowsList: () => getAo<WorkflowSummary[]>("/api/v1/workflows", decodeWorkflowsList),
+  workflowsById: (workflowId: string) =>
+    getAo<WorkflowSummary>(`/api/v1/workflows/${workflowId}`, decodeWorkflowDetail),
   workflowDecisions: (workflowId: string) =>
-    requestAo<unknown>(`/api/v1/workflows/${workflowId}/decisions`),
+    getAo<WorkflowDecision[]>(
+      `/api/v1/workflows/${workflowId}/decisions`,
+      decodeWorkflowDecisions,
+    ),
   workflowCheckpoints: (workflowId: string) =>
-    requestAo<unknown>(`/api/v1/workflows/${workflowId}/checkpoints`),
+    getAo<WorkflowCheckpoint[]>(
+      `/api/v1/workflows/${workflowId}/checkpoints`,
+      decodeWorkflowCheckpoints,
+    ),
   workflowCheckpointById: (workflowId: string, checkpoint: string) =>
-    requestAo<unknown>(`/api/v1/workflows/${workflowId}/checkpoints/${checkpoint}`),
+    getAo<WorkflowCheckpointDetail>(
+      `/api/v1/workflows/${workflowId}/checkpoints/${checkpoint}`,
+      decodeWorkflowCheckpointDetail,
+    ),
   reviewHandoff: (payload: RequestJsonValue) =>
-    requestAo<unknown>("/api/v1/reviews/handoff", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    requestAo<ReviewHandoffResponse>(
+      "/api/v1/reviews/handoff",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      decodeReviewHandoffResponse,
+    ),
 };
 
-async function postEmpty(path: string): Promise<ApiResult<unknown>> {
+async function postEmpty(path: string): Promise<ApiResult<MessagePayload>> {
   return requestAo(path, {
     method: "POST",
     body: JSON.stringify({}),
-  });
+  }, decodeMessagePayload);
 }
 
-export type ProjectSummary = {
-  id: string;
-  name: string;
-  archived?: boolean;
-};
+export type { ProjectSummary };
