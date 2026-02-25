@@ -120,11 +120,15 @@ pub(super) async fn handle_daemon_run(
     json: bool,
 ) -> Result<()> {
     let auto_merge_override = args.auto_merge;
+    let auto_pr_override = args.auto_pr;
     let auto_commit_before_merge_override = args.auto_commit_before_merge;
     let phase_timeout_override = args.phase_timeout_secs;
     let idle_timeout_override = args.idle_timeout_secs;
     let auto_merge_original = auto_merge_override
         .map(|_| std::env::var("AO_AUTO_MERGE_ENABLED").ok())
+        .flatten();
+    let auto_pr_original = auto_pr_override
+        .map(|_| std::env::var("AO_AUTO_PR_ENABLED").ok())
         .flatten();
     let auto_commit_before_merge_original = auto_commit_before_merge_override
         .map(|_| std::env::var("AO_AUTO_COMMIT_BEFORE_MERGE").ok())
@@ -138,6 +142,9 @@ pub(super) async fn handle_daemon_run(
 
     if let Some(enabled) = auto_merge_override {
         std::env::set_var("AO_AUTO_MERGE_ENABLED", if enabled { "1" } else { "0" });
+    }
+    if let Some(enabled) = auto_pr_override {
+        std::env::set_var("AO_AUTO_PR_ENABLED", if enabled { "1" } else { "0" });
     }
     if let Some(enabled) = auto_commit_before_merge_override {
         std::env::set_var(
@@ -357,6 +364,9 @@ pub(super) async fn handle_daemon_run(
     if auto_merge_override.is_some() {
         restore_env_override("AO_AUTO_MERGE_ENABLED", auto_merge_original);
     }
+    if auto_pr_override.is_some() {
+        restore_env_override("AO_AUTO_PR_ENABLED", auto_pr_original);
+    }
     if auto_commit_before_merge_override.is_some() {
         restore_env_override(
             "AO_AUTO_COMMIT_BEFORE_MERGE",
@@ -435,6 +445,7 @@ mod tests {
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
+            auto_pr: None,
             auto_commit_before_merge: None,
             startup_cleanup: true,
             resume_interrupted: false,

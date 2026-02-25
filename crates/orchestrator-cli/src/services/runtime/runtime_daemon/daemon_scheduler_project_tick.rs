@@ -961,6 +961,7 @@ pub(super) async fn bootstrap_from_vision_if_needed(
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
     let hub = Arc::new(FileServiceHub::new(&root)?);
+    let _ = flush_git_integration_outbox(&root);
     let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
     let daemon = hub.daemon();
     let status = daemon.status().await?;

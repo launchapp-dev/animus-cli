@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone)]
 struct PostSuccessGitConfig {
     auto_merge_enabled: bool,
+    auto_pr_enabled: bool,
     auto_commit_before_merge: bool,
     auto_merge_target_branch: String,
     auto_merge_no_ff: bool,
@@ -14,6 +15,7 @@ struct PostSuccessGitConfig {
 fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
     let mut cfg = PostSuccessGitConfig {
         auto_merge_enabled: false,
+        auto_pr_enabled: false,
         auto_commit_before_merge: false,
         auto_merge_target_branch: "main".to_string(),
         auto_merge_no_ff: true,
@@ -26,6 +28,9 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
         if let Ok(value) = serde_json::from_str::<Value>(&content) {
             if let Some(enabled) = value.get("auto_merge_enabled").and_then(Value::as_bool) {
                 cfg.auto_merge_enabled = enabled;
+            }
+            if let Some(enabled) = value.get("auto_pr_enabled").and_then(Value::as_bool) {
+                cfg.auto_pr_enabled = enabled;
             }
             if let Some(enabled) = value.get("auto_commit_before_merge").and_then(Value::as_bool) {
                 cfg.auto_commit_before_merge = enabled;
@@ -60,6 +65,9 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
 
     if let Some(enabled) = env_bool_override("AO_AUTO_MERGE_ENABLED") {
         cfg.auto_merge_enabled = enabled;
+    }
+    if let Some(enabled) = env_bool_override("AO_AUTO_PR_ENABLED") {
+        cfg.auto_pr_enabled = enabled;
     }
     if let Some(enabled) = env_bool_override("AO_AUTO_COMMIT_BEFORE_MERGE") {
         cfg.auto_commit_before_merge = enabled;
@@ -140,6 +148,349 @@ fn git_status(cwd: &str, args: &[&str], operation: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GitIntegrationOperation {
+    PushBranch {
+        cwd: String,
+        remote: String,
+        branch: String,
+    },
+    PushRef {
+        cwd: String,
+        remote: String,
+        source_ref: String,
+        target_ref: String,
+    },
+    OpenPullRequest {
+        cwd: String,
+        base_branch: String,
+        head_branch: String,
+        title: String,
+        body: String,
+        draft: bool,
+    },
+    EnablePullRequestAutoMerge {
+        cwd: String,
+        head_branch: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GitIntegrationOutboxEntry {
+    id: String,
+    key: String,
+    created_at: String,
+    attempts: u32,
+    next_attempt_unix_secs: i64,
+    last_error: Option<String>,
+    operation: GitIntegrationOperation,
+}
+
+fn integration_outbox_path(project_root: &str) -> Result<PathBuf> {
+    Ok(repo_ao_root(project_root)?.join("sync").join("outbox.jsonl"))
+}
+
+fn load_git_integration_outbox(project_root: &str) -> Result<Vec<GitIntegrationOutboxEntry>> {
+    let path = integration_outbox_path(project_root)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read git integration outbox at {}", path.display()))?;
+    let mut entries = Vec::new();
+    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Ok(entry) = serde_json::from_str::<GitIntegrationOutboxEntry>(line) {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+fn save_git_integration_outbox(
+    project_root: &str,
+    entries: &[GitIntegrationOutboxEntry],
+) -> Result<()> {
+    let path = integration_outbox_path(project_root)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if entries.is_empty() {
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        return Ok(());
+    }
+
+    let mut payload = String::new();
+    for entry in entries {
+        payload.push_str(&serde_json::to_string(entry)?);
+        payload.push('\n');
+    }
+
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("outbox"),
+        Uuid::new_v4()
+    ));
+    fs::write(&tmp_path, payload)?;
+    fs::rename(&tmp_path, &path)?;
+    Ok(())
+}
+
+fn git_integration_operation_key(operation: &GitIntegrationOperation) -> String {
+    match operation {
+        GitIntegrationOperation::PushBranch {
+            cwd,
+            remote,
+            branch,
+        } => format!("push-branch:{cwd}:{remote}:{branch}"),
+        GitIntegrationOperation::PushRef {
+            cwd,
+            remote,
+            source_ref,
+            target_ref,
+        } => format!("push-ref:{cwd}:{remote}:{source_ref}:{target_ref}"),
+        GitIntegrationOperation::OpenPullRequest {
+            cwd,
+            base_branch,
+            head_branch,
+            ..
+        } => format!("open-pr:{cwd}:{base_branch}:{head_branch}"),
+        GitIntegrationOperation::EnablePullRequestAutoMerge { cwd, head_branch } => {
+            format!("enable-pr-auto-merge:{cwd}:{head_branch}")
+        }
+    }
+}
+
+fn enqueue_git_integration_operation(
+    project_root: &str,
+    operation: GitIntegrationOperation,
+) -> Result<()> {
+    let mut entries = load_git_integration_outbox(project_root)?;
+    let key = git_integration_operation_key(&operation);
+    if entries.iter().any(|entry| entry.key == key) {
+        return Ok(());
+    }
+
+    entries.push(GitIntegrationOutboxEntry {
+        id: Uuid::new_v4().to_string(),
+        key,
+        created_at: Utc::now().to_rfc3339(),
+        attempts: 0,
+        next_attempt_unix_secs: Utc::now().timestamp(),
+        last_error: None,
+        operation,
+    });
+    save_git_integration_outbox(project_root, &entries)
+}
+
+fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+
+    if !stderr_text.is_empty() {
+        return stderr_text;
+    }
+    if !stdout_text.is_empty() {
+        return stdout_text;
+    }
+    "command failed without output".to_string()
+}
+
+fn run_external_command(cwd: &str, program: &str, args: &[&str], operation: &str) -> Result<()> {
+    let output = ProcessCommand::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to run '{program}' for {operation} in {}", cwd))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{} failed in {}: {}",
+            operation,
+            cwd,
+            summarize_command_output(&output.stdout, &output.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn push_branch(cwd: &str, remote: &str, branch: &str) -> Result<()> {
+    run_external_command(cwd, "git", &["push", remote, branch], "push source branch")
+}
+
+fn push_ref(cwd: &str, remote: &str, source_ref: &str, target_ref: &str) -> Result<()> {
+    let refspec = format!("{source_ref}:{target_ref}");
+    run_external_command(
+        cwd,
+        "git",
+        &["push", remote, refspec.as_str()],
+        "push target ref",
+    )
+}
+
+fn create_pull_request(
+    cwd: &str,
+    base_branch: &str,
+    head_branch: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> Result<()> {
+    let gh_available = ProcessCommand::new("gh")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !gh_available {
+        anyhow::bail!("gh CLI is not installed");
+    }
+
+    let mut command = ProcessCommand::new("gh");
+    command
+        .current_dir(cwd)
+        .args([
+            "pr",
+            "create",
+            "--base",
+            base_branch,
+            "--head",
+            head_branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if draft {
+        command.arg("--draft");
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run gh pr create in {}", cwd))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let summary = summarize_command_output(&output.stdout, &output.stderr);
+    let summary_lower = summary.to_ascii_lowercase();
+    if summary_lower.contains("already exists") {
+        return Ok(());
+    }
+    anyhow::bail!("gh pr create failed: {summary}")
+}
+
+fn enable_pull_request_auto_merge(cwd: &str, head_branch: &str) -> Result<()> {
+    let gh_available = ProcessCommand::new("gh")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !gh_available {
+        anyhow::bail!("gh CLI is not installed");
+    }
+
+    let output = ProcessCommand::new("gh")
+        .current_dir(cwd)
+        .args([
+            "pr",
+            "merge",
+            "--auto",
+            "--squash",
+            "--delete-branch",
+            head_branch,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to run gh pr merge --auto in {}", cwd))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let summary = summarize_command_output(&output.stdout, &output.stderr);
+    let summary_lower = summary.to_ascii_lowercase();
+    if summary_lower.contains("already enabled")
+        || summary_lower.contains("is already merged")
+        || summary_lower.contains("pull request is already merged")
+    {
+        return Ok(());
+    }
+    anyhow::bail!("gh pr merge --auto failed: {summary}")
+}
+
+fn execute_git_integration_operation(operation: &GitIntegrationOperation) -> Result<()> {
+    match operation {
+        GitIntegrationOperation::PushBranch {
+            cwd,
+            remote,
+            branch,
+        } => push_branch(cwd, remote, branch),
+        GitIntegrationOperation::PushRef {
+            cwd,
+            remote,
+            source_ref,
+            target_ref,
+        } => push_ref(cwd, remote, source_ref, target_ref),
+        GitIntegrationOperation::OpenPullRequest {
+            cwd,
+            base_branch,
+            head_branch,
+            title,
+            body,
+            draft,
+        } => create_pull_request(cwd, base_branch, head_branch, title, body, *draft),
+        GitIntegrationOperation::EnablePullRequestAutoMerge { cwd, head_branch } => {
+            enable_pull_request_auto_merge(cwd, head_branch)
+        }
+    }
+}
+
+fn git_integration_retry_delay_secs(attempts: u32) -> i64 {
+    let shift = attempts.min(8);
+    (1_i64 << shift).clamp(2, 300)
+}
+
+pub(super) fn flush_git_integration_outbox(project_root: &str) -> Result<()> {
+    let entries = load_git_integration_outbox(project_root)?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let now = Utc::now().timestamp();
+    let mut remaining = Vec::new();
+    for mut entry in entries {
+        if entry.next_attempt_unix_secs > now {
+            remaining.push(entry);
+            continue;
+        }
+
+        match execute_git_integration_operation(&entry.operation) {
+            Ok(()) => {}
+            Err(error) => {
+                entry.attempts = entry.attempts.saturating_add(1);
+                entry.next_attempt_unix_secs =
+                    now.saturating_add(git_integration_retry_delay_secs(entry.attempts));
+                entry.last_error = Some(error.to_string());
+                remaining.push(entry);
+            }
+        }
+    }
+
+    save_git_integration_outbox(project_root, &remaining)
+}
+
 fn git_has_pending_changes(cwd: &str) -> Result<bool> {
     let output = ProcessCommand::new("git")
         .arg("-C")
@@ -201,6 +552,53 @@ fn auto_commit_pending_source_changes(cwd: &str, task_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_branch_checked_out_in_any_worktree(project_root: &str, branch_name: &str) -> Result<bool> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["worktree", "list", "--porcelain"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to inspect git worktrees in {}", project_root))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let target = format!("refs/heads/{}", branch_name.trim());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("branch ") {
+            if value.trim() == target {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn merge_queue_branch_name(task_id: &str) -> String {
+    format!("ao/merge-queue/{}", sanitize_identifier_for_git(task_id))
+}
+
+fn pull_request_title(task: &orchestrator_core::OrchestratorTask) -> String {
+    let title = task.title.trim();
+    if title.is_empty() {
+        format!("[{}] Automated update", task.id)
+    } else {
+        format!("[{}] {}", task.id, title)
+    }
+}
+
+fn pull_request_body(task: &orchestrator_core::OrchestratorTask) -> String {
+    let description = task.description.trim();
+    if description.is_empty() {
+        format!("Automated update for task {}.", task.id)
+    } else {
+        format!("Automated update for task {}.\n\n{}", task.id, description)
+    }
+}
+
 pub(super) fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<()> {
     let commit_message = commit_message.trim();
     if commit_message.is_empty() {
@@ -235,7 +633,13 @@ pub(super) async fn post_success_merge_push_and_cleanup(
     task: &orchestrator_core::OrchestratorTask,
 ) -> Result<bool> {
     let cfg = load_post_success_git_config(project_root);
-    if !cfg.auto_merge_enabled || !is_git_repo(project_root) {
+    if !is_git_repo(project_root) {
+        return Ok(false);
+    }
+
+    let do_pr_flow = cfg.auto_pr_enabled;
+    let do_direct_merge = cfg.auto_merge_enabled && !cfg.auto_pr_enabled;
+    if !do_pr_flow && !do_direct_merge {
         return Ok(false);
     }
 
@@ -251,24 +655,257 @@ pub(super) async fn post_success_merge_push_and_cleanup(
     if cfg.auto_commit_before_merge {
         auto_commit_pending_source_changes(source_push_cwd, &task.id)?;
     }
-    git_status(
-        source_push_cwd,
-        &[
-            "push",
+    if do_pr_flow {
+        let pushed_source_branch = match push_branch(
+            source_push_cwd,
             cfg.auto_push_remote.as_str(),
             source_branch.as_str(),
-        ],
-        "push source branch",
-    )?;
+        ) {
+            Ok(()) => true,
+            Err(_) => {
+                enqueue_git_integration_operation(
+                    project_root,
+                    GitIntegrationOperation::PushBranch {
+                        cwd: project_root.to_string(),
+                        remote: cfg.auto_push_remote.clone(),
+                        branch: source_branch.clone(),
+                    },
+                )?;
+                false
+            }
+        };
 
-    let merge_worktree_root = ensure_repo_worktree_root(project_root)?;
-    let merge_worktree_path = merge_worktree_root.join(format!(
-        "__merge-{}",
-        sanitize_identifier_for_git(cfg.auto_merge_target_branch.as_str())
-    ));
-    let merge_worktree_path_str = merge_worktree_path.to_string_lossy().to_string();
+        let pr_title = pull_request_title(task);
+        let pr_body = pull_request_body(task);
+        let open_pr_operation = GitIntegrationOperation::OpenPullRequest {
+            cwd: project_root.to_string(),
+            base_branch: cfg.auto_merge_target_branch.clone(),
+            head_branch: source_branch.clone(),
+            title: pr_title.clone(),
+            body: pr_body.clone(),
+            draft: false,
+        };
+        let enable_pr_auto_merge_operation = GitIntegrationOperation::EnablePullRequestAutoMerge {
+            cwd: project_root.to_string(),
+            head_branch: source_branch.clone(),
+        };
 
-    if merge_worktree_path.exists() {
+        let opened_pr_now = if pushed_source_branch {
+            if create_pull_request(
+                project_root,
+                cfg.auto_merge_target_branch.as_str(),
+                source_branch.as_str(),
+                pr_title.as_str(),
+                pr_body.as_str(),
+                false,
+            )
+            .is_ok()
+            {
+                true
+            } else {
+                enqueue_git_integration_operation(project_root, open_pr_operation.clone())?;
+                false
+            }
+        } else {
+            enqueue_git_integration_operation(project_root, open_pr_operation)?;
+            false
+        };
+
+        if cfg.auto_merge_enabled {
+            if opened_pr_now {
+                if enable_pull_request_auto_merge(project_root, source_branch.as_str()).is_err() {
+                    enqueue_git_integration_operation(project_root, enable_pr_auto_merge_operation)?;
+                }
+            } else {
+                enqueue_git_integration_operation(project_root, enable_pr_auto_merge_operation)?;
+            }
+        }
+    }
+
+    if do_direct_merge {
+        if push_branch(
+            source_push_cwd,
+            cfg.auto_push_remote.as_str(),
+            source_branch.as_str(),
+        )
+        .is_err()
+        {
+            enqueue_git_integration_operation(
+                project_root,
+                GitIntegrationOperation::PushBranch {
+                    cwd: project_root.to_string(),
+                    remote: cfg.auto_push_remote.clone(),
+                    branch: source_branch.clone(),
+                },
+            )?;
+        }
+
+        let merge_worktree_root = ensure_repo_worktree_root(project_root)?;
+        let merge_worktree_path = merge_worktree_root.join(format!(
+            "__merge-{}",
+            sanitize_identifier_for_git(cfg.auto_merge_target_branch.as_str())
+        ));
+        let merge_worktree_path_str = merge_worktree_path.to_string_lossy().to_string();
+        let merge_queue_branch = merge_queue_branch_name(&task.id);
+
+        if merge_worktree_path.exists() {
+            let _ = ProcessCommand::new("git")
+                .arg("-C")
+                .arg(project_root)
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    merge_worktree_path_str.as_str(),
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if merge_worktree_path.exists() {
+                let _ = fs::remove_dir_all(&merge_worktree_path);
+            }
+        }
+        if let Some(parent) = merge_worktree_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let merge_result = (|| -> Result<()> {
+            git_status(
+                project_root,
+                &[
+                    "fetch",
+                    cfg.auto_push_remote.as_str(),
+                    cfg.auto_merge_target_branch.as_str(),
+                ],
+                "fetch target branch",
+            )?;
+
+            let target_ref = format!("refs/heads/{}", cfg.auto_merge_target_branch);
+            let remote_ref = format!(
+                "refs/remotes/{}/{}",
+                cfg.auto_push_remote, cfg.auto_merge_target_branch
+            );
+            if !git_ref_exists(project_root, target_ref.as_str())
+                && git_ref_exists(project_root, remote_ref.as_str())
+            {
+                git_status(
+                    project_root,
+                    &[
+                        "branch",
+                        cfg.auto_merge_target_branch.as_str(),
+                        remote_ref.as_str(),
+                    ],
+                    "materialize local target branch",
+                )?;
+            }
+
+            let target_checked_out_elsewhere = is_branch_checked_out_in_any_worktree(
+                project_root,
+                cfg.auto_merge_target_branch.as_str(),
+            )?;
+            if target_checked_out_elsewhere {
+                let detached_base_ref = if git_ref_exists(project_root, remote_ref.as_str()) {
+                    remote_ref.as_str().to_string()
+                } else {
+                    target_ref.as_str().to_string()
+                };
+                git_status(
+                    project_root,
+                    &[
+                        "worktree",
+                        "add",
+                        "--detach",
+                        merge_worktree_path_str.as_str(),
+                        detached_base_ref.as_str(),
+                    ],
+                    "create merge worktree (detached)",
+                )?;
+            } else {
+                git_status(
+                    project_root,
+                    &[
+                        "worktree",
+                        "add",
+                        merge_worktree_path_str.as_str(),
+                        cfg.auto_merge_target_branch.as_str(),
+                    ],
+                    "create merge worktree",
+                )?;
+                git_status(
+                    merge_worktree_path_str.as_str(),
+                    &[
+                        "pull",
+                        "--ff-only",
+                        cfg.auto_push_remote.as_str(),
+                        cfg.auto_merge_target_branch.as_str(),
+                    ],
+                    "sync target branch",
+                )?;
+            }
+
+            let merge_message = format!(
+                "Merge '{}' into '{}'",
+                source_branch, cfg.auto_merge_target_branch
+            );
+            let mut merge_command = ProcessCommand::new("git");
+            merge_command
+                .arg("-C")
+                .arg(merge_worktree_path_str.as_str())
+                .arg("merge");
+            if cfg.auto_merge_no_ff {
+                merge_command.arg("--no-ff");
+            }
+            let merge_status = merge_command
+                .arg(source_branch.as_str())
+                .arg("-m")
+                .arg(merge_message.as_str())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("failed to merge source branch into target branch")?;
+            if !merge_status.success() {
+                anyhow::bail!(
+                    "failed to merge '{}' into '{}'",
+                    source_branch,
+                    cfg.auto_merge_target_branch
+                );
+            }
+
+            git_status(
+                merge_worktree_path_str.as_str(),
+                &["branch", "-f", merge_queue_branch.as_str(), "HEAD"],
+                "persist merge commit ref",
+            )?;
+
+            if push_ref(
+                merge_worktree_path_str.as_str(),
+                cfg.auto_push_remote.as_str(),
+                "HEAD",
+                cfg.auto_merge_target_branch.as_str(),
+            )
+            .is_err()
+            {
+                enqueue_git_integration_operation(
+                    project_root,
+                    GitIntegrationOperation::PushRef {
+                        cwd: project_root.to_string(),
+                        remote: cfg.auto_push_remote.clone(),
+                        source_ref: merge_queue_branch.clone(),
+                        target_ref: cfg.auto_merge_target_branch.clone(),
+                    },
+                )?;
+            } else {
+                let _ = ProcessCommand::new("git")
+                    .arg("-C")
+                    .arg(project_root)
+                    .args(["branch", "-D", merge_queue_branch.as_str()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+            Ok(())
+        })();
+
         let _ = ProcessCommand::new("git")
             .arg("-C")
             .arg(project_root)
@@ -284,118 +921,8 @@ pub(super) async fn post_success_merge_push_and_cleanup(
         if merge_worktree_path.exists() {
             let _ = fs::remove_dir_all(&merge_worktree_path);
         }
+        merge_result?;
     }
-    if let Some(parent) = merge_worktree_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let merge_result = (|| -> Result<()> {
-        git_status(
-            project_root,
-            &[
-                "fetch",
-                cfg.auto_push_remote.as_str(),
-                cfg.auto_merge_target_branch.as_str(),
-            ],
-            "fetch target branch",
-        )?;
-
-        let target_ref = format!("refs/heads/{}", cfg.auto_merge_target_branch);
-        if !git_ref_exists(project_root, target_ref.as_str()) {
-            let remote_ref = format!(
-                "refs/remotes/{}/{}",
-                cfg.auto_push_remote, cfg.auto_merge_target_branch
-            );
-            if git_ref_exists(project_root, remote_ref.as_str()) {
-                git_status(
-                    project_root,
-                    &[
-                        "branch",
-                        cfg.auto_merge_target_branch.as_str(),
-                        remote_ref.as_str(),
-                    ],
-                    "materialize local target branch",
-                )?;
-            }
-        }
-
-        git_status(
-            project_root,
-            &[
-                "worktree",
-                "add",
-                merge_worktree_path_str.as_str(),
-                cfg.auto_merge_target_branch.as_str(),
-            ],
-            "create merge worktree",
-        )?;
-        git_status(
-            merge_worktree_path_str.as_str(),
-            &[
-                "pull",
-                "--ff-only",
-                cfg.auto_push_remote.as_str(),
-                cfg.auto_merge_target_branch.as_str(),
-            ],
-            "sync target branch",
-        )?;
-
-        let merge_message = format!(
-            "Merge '{}' into '{}'",
-            source_branch, cfg.auto_merge_target_branch
-        );
-        let mut merge_command = ProcessCommand::new("git");
-        merge_command
-            .arg("-C")
-            .arg(merge_worktree_path_str.as_str())
-            .arg("merge");
-        if cfg.auto_merge_no_ff {
-            merge_command.arg("--no-ff");
-        }
-        let merge_status = merge_command
-            .arg(source_branch.as_str())
-            .arg("-m")
-            .arg(merge_message.as_str())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("failed to merge source branch into target branch")?;
-        if !merge_status.success() {
-            anyhow::bail!(
-                "failed to merge '{}' into '{}'",
-                source_branch,
-                cfg.auto_merge_target_branch
-            );
-        }
-
-        git_status(
-            merge_worktree_path_str.as_str(),
-            &[
-                "push",
-                cfg.auto_push_remote.as_str(),
-                cfg.auto_merge_target_branch.as_str(),
-            ],
-            "push target branch",
-        )?;
-        Ok(())
-    })();
-
-    let _ = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args([
-            "worktree",
-            "remove",
-            "--force",
-            merge_worktree_path_str.as_str(),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if merge_worktree_path.exists() {
-        let _ = fs::remove_dir_all(&merge_worktree_path);
-    }
-    merge_result?;
 
     if !cfg.auto_cleanup_worktree_enabled {
         return Ok(true);

@@ -173,6 +173,10 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         config["auto_merge_enabled"] = serde_json::Value::Bool(enabled);
         updated = true;
     }
+    if let Some(enabled) = args.auto_pr {
+        config["auto_pr_enabled"] = serde_json::Value::Bool(enabled);
+        updated = true;
+    }
     if let Some(enabled) = args.auto_commit_before_merge {
         config["auto_commit_before_merge"] = serde_json::Value::Bool(enabled);
         updated = true;
@@ -186,6 +190,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         serde_json::json!({
             "config_path": pm_config_path(project_root).display().to_string(),
             "auto_merge_enabled": daemon_config_bool(&config, "auto_merge_enabled").unwrap_or(false),
+            "auto_pr_enabled": daemon_config_bool(&config, "auto_pr_enabled").unwrap_or(false),
             "auto_commit_before_merge": daemon_config_bool(&config, "auto_commit_before_merge").unwrap_or(false),
             "updated": updated
         }),
@@ -222,6 +227,9 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .stdin(Stdio::null());
     if let Some(auto_merge) = args.auto_merge {
         command.arg("--auto-merge").arg(auto_merge.to_string());
+    }
+    if let Some(auto_pr) = args.auto_pr {
+        command.arg("--auto-pr").arg(auto_pr.to_string());
     }
     if let Some(auto_commit_before_merge) = args.auto_commit_before_merge {
         command

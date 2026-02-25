@@ -264,6 +264,8 @@ pub(crate) struct DaemonStartArgs {
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_merge: Option<bool>,
     #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_pr: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_commit_before_merge: Option<bool>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) startup_cleanup: bool,
@@ -292,6 +294,8 @@ pub(crate) struct DaemonRunArgs {
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_merge: Option<bool>,
     #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_pr: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_commit_before_merge: Option<bool>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) startup_cleanup: bool,
@@ -313,6 +317,8 @@ pub(crate) struct DaemonRunArgs {
 pub(crate) struct DaemonConfigArgs {
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_merge: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_pr: Option<bool>,
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_commit_before_merge: Option<bool>,
 }

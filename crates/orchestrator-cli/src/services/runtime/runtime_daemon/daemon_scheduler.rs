@@ -1204,6 +1204,7 @@ mod tests {
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
+            auto_pr: None,
             auto_commit_before_merge: None,
             startup_cleanup: false,
             resume_interrupted: false,
@@ -1282,6 +1283,7 @@ mod tests {
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
+            auto_pr: None,
             auto_commit_before_merge: None,
             startup_cleanup: false,
             resume_interrupted: false,
@@ -1388,6 +1390,10 @@ async fn post_success_merge_push_and_cleanup(
     task: &orchestrator_core::OrchestratorTask,
 ) -> Result<bool> {
     git_ops::post_success_merge_push_and_cleanup(hub, project_root, task).await
+}
+
+fn flush_git_integration_outbox(project_root: &str) -> Result<()> {
+    git_ops::flush_git_integration_outbox(project_root)
 }
 
 fn task_status_label(status: TaskStatus) -> &'static str {
