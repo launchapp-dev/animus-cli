@@ -3,6 +3,10 @@ import {
   decodeDaemonLogs,
   decodeDaemonStatus,
   decodeMessagePayload,
+  decodePlanningRequirementDetail,
+  decodePlanningRequirementsDraftResult,
+  decodePlanningRequirementsList,
+  decodePlanningRequirementsRefineResult,
   decodeProjectDetail,
   decodeProjectRequirementDetail,
   decodeProjectRequirementsById,
@@ -16,6 +20,9 @@ import {
   decodeTaskDetail,
   decodeTaskStats,
   decodeTasksList,
+  decodeVisionDocument,
+  decodeVisionDocumentNullable,
+  decodeVisionRefineResult,
   decodeWorkflowCheckpointDetail,
   decodeWorkflowCheckpoints,
   decodeWorkflowDecisions,
@@ -28,6 +35,17 @@ import type {
   DaemonLogEntry,
   DaemonStatusValue,
   MessagePayload,
+  PlanningRequirementCreateInput,
+  PlanningRequirementItem,
+  PlanningRequirementsDraftInput,
+  PlanningRequirementsDraftResult,
+  PlanningRequirementsRefineInput,
+  PlanningRequirementsRefineResult,
+  PlanningRequirementUpdateInput,
+  PlanningVisionDocument,
+  PlanningVisionDraftInput,
+  PlanningVisionRefineInput,
+  PlanningVisionRefineResult,
   ProjectDetail,
   ProjectRequirementDetailPayload,
   ProjectRequirementSummary,
@@ -343,6 +361,45 @@ export const api = {
       `/api/v1/project-requirements/${projectId}/${requirementId}`,
       decodeProjectRequirementDetail,
     ),
+  visionGet: () =>
+    getAo<PlanningVisionDocument | null>("/api/v1/vision", decodeVisionDocumentNullable),
+  visionSave: (payload: PlanningVisionDraftInput) =>
+    postAo<PlanningVisionDocument>("/api/v1/vision", payload, decodeVisionDocument),
+  visionRefine: (payload: PlanningVisionRefineInput) =>
+    postAo<PlanningVisionRefineResult>("/api/v1/vision/refine", payload, decodeVisionRefineResult),
+  requirementsList: () =>
+    getAo<PlanningRequirementItem[]>("/api/v1/requirements", decodePlanningRequirementsList),
+  requirementsById: (requirementId: string) =>
+    getAo<PlanningRequirementItem>(
+      `/api/v1/requirements/${requirementId}`,
+      decodePlanningRequirementDetail,
+    ),
+  requirementsCreate: (payload: PlanningRequirementCreateInput) =>
+    postAo<PlanningRequirementItem>(
+      "/api/v1/requirements",
+      payload,
+      decodePlanningRequirementDetail,
+    ),
+  requirementsUpdate: (requirementId: string, payload: PlanningRequirementUpdateInput) =>
+    patchAo<PlanningRequirementItem>(
+      `/api/v1/requirements/${requirementId}`,
+      payload,
+      decodePlanningRequirementDetail,
+    ),
+  requirementsDelete: (requirementId: string) =>
+    deleteAo<MessagePayload>(`/api/v1/requirements/${requirementId}`, decodeMessagePayload),
+  requirementsDraft: (payload: PlanningRequirementsDraftInput = {}) =>
+    postAo<PlanningRequirementsDraftResult>(
+      "/api/v1/requirements/draft",
+      payload,
+      decodePlanningRequirementsDraftResult,
+    ),
+  requirementsRefine: (payload: PlanningRequirementsRefineInput = {}) =>
+    postAo<PlanningRequirementsRefineResult>(
+      "/api/v1/requirements/refine",
+      payload,
+      decodePlanningRequirementsRefineResult,
+    ),
   tasksList: () => getAo<TaskSummary[]>("/api/v1/tasks", decodeTasksList),
   tasksStats: () => getAo<TaskStatsPayload>("/api/v1/tasks/stats", decodeTaskStats),
   tasksById: (taskId: string) => getAo<TaskDetail>(`/api/v1/tasks/${taskId}`, decodeTaskDetail),
@@ -493,6 +550,49 @@ function normalizeHttpStatus(status: number | undefined): number | undefined {
   }
 
   return Math.floor(status);
+}
+
+async function postAo<TData>(
+  path: string,
+  payload: unknown,
+  decoder: PayloadDecoder<TData>,
+): Promise<ApiResult<TData>> {
+  return requestAo<TData>(
+    path,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    decoder,
+  );
+}
+
+async function patchAo<TData>(
+  path: string,
+  payload: unknown,
+  decoder: PayloadDecoder<TData>,
+): Promise<ApiResult<TData>> {
+  return requestAo<TData>(
+    path,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+    decoder,
+  );
+}
+
+async function deleteAo<TData>(
+  path: string,
+  decoder: PayloadDecoder<TData>,
+): Promise<ApiResult<TData>> {
+  return requestAo<TData>(
+    path,
+    {
+      method: "DELETE",
+    },
+    decoder,
+  );
 }
 
 export type { ProjectSummary };

@@ -209,6 +209,60 @@ code {
   margin-top: 0.75rem;
 }
 
+.planning-surface {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.planning-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.planning-form-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.planning-inline {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.planning-inline > * {
+  min-height: 44px;
+}
+
+.compact-field {
+  min-width: min(340px, 100%);
+}
+
+.compact-field span {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #9fbcdf;
+  border-radius: 10px;
+  padding: 0.48rem 0.8rem;
+  background: #f3f8ff;
+  color: #153b68;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.action-link:hover {
+  text-decoration: none;
+  background: #eaf3ff;
+}
+
 .danger-action {
   border-color: var(--danger-line);
   background: var(--danger-soft);
@@ -351,6 +405,93 @@ code {
   align-items: start;
 }
 
+.planning-requirement-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.planning-requirement-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 0.65rem;
+}
+
+.row-select {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+}
+
+.row-select input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.row-content {
+  min-width: 0;
+}
+
+.row-title {
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.row-description {
+  margin: 0.35rem 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.row-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.confirmation-box,
+.danger-box {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.85rem;
+  background: #f9fcff;
+}
+
+.danger-box {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.danger-button {
+  border-color: #d28d8d;
+  background: #ffecec;
+  color: #682222;
+}
+
+.status-box {
+  border: 1px solid #b8d4a8;
+  border-radius: 10px;
+  padding: 0.75rem 0.8rem;
+  background: #f3fbe8;
+  color: #234d1a;
+}
+
+.field-error {
+  color: #8f1d1d;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
 .error-box {
   border: 1px solid var(--danger-line);
   background: var(--danger-soft);
@@ -471,6 +612,25 @@ pre {
 
   .project-frame label,
   .project-frame select {
+    width: 100%;
+  }
+
+  .planning-requirement-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .planning-requirement-row .action-link {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .planning-inline {
+    align-items: stretch;
+  }
+
+  .planning-inline button,
+  .planning-inline .action-link,
+  .planning-inline .compact-field {
     width: 100%;
   }
 

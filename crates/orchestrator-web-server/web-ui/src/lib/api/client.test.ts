@@ -299,17 +299,60 @@ describe("api endpoint contract", () => {
     ]);
   });
 
+  it("uses planning read endpoints for vision and requirements screens", async () => {
+    await api.visionGet();
+    await api.requirementsList();
+    await api.requirementsById("REQ-1");
+
+    const requestedPaths = fetchMock.mock.calls.map((call) => call[0] as string);
+
+    expect(requestedPaths).toEqual([
+      "/api/v1/vision",
+      "/api/v1/requirements",
+      "/api/v1/requirements/REQ-1",
+    ]);
+  });
+
   it("uses POST with JSON body for write endpoints", async () => {
     await api.daemonStart();
     await api.reviewHandoff({ taskId: "TASK-011" });
+    await api.visionSave({
+      project_name: "AO",
+      problem_statement: "Planning is fragmented",
+      target_users: ["PM"],
+      goals: ["Ship planning UI"],
+      constraints: ["Deterministic output"],
+      value_proposition: "Faster planning",
+    });
+    await api.requirementsCreate({ title: "Planning route coverage" });
+    await api.requirementsUpdate("REQ-1", { status: "planned" });
+    await api.requirementsDelete("REQ-1");
+    await api.requirementsDraft({ append_only: true });
+    await api.requirementsRefine({ requirement_ids: ["REQ-1"], focus: "quality gates" });
+    await api.visionRefine({ focus: "traceability" });
 
     const daemonStartInit = fetchMock.mock.calls[0][1] as RequestInit;
     const reviewHandoffInit = fetchMock.mock.calls[1][1] as RequestInit;
+    const visionSaveInit = fetchMock.mock.calls[2][1] as RequestInit;
+    const requirementCreateInit = fetchMock.mock.calls[3][1] as RequestInit;
+    const requirementPatchInit = fetchMock.mock.calls[4][1] as RequestInit;
+    const requirementDeleteInit = fetchMock.mock.calls[5][1] as RequestInit;
+    const requirementDraftInit = fetchMock.mock.calls[6][1] as RequestInit;
+    const requirementRefineInit = fetchMock.mock.calls[7][1] as RequestInit;
+    const visionRefineInit = fetchMock.mock.calls[8][1] as RequestInit;
 
     expect(daemonStartInit.method).toBe("POST");
     expect(daemonStartInit.body).toBe("{}");
     expect(reviewHandoffInit.method).toBe("POST");
     expect(reviewHandoffInit.body).toBe(JSON.stringify({ taskId: "TASK-011" }));
+    expect(visionSaveInit.method).toBe("POST");
+    expect(requirementCreateInit.method).toBe("POST");
+    expect(requirementPatchInit.method).toBe("PATCH");
+    expect(requirementDeleteInit.method).toBe("DELETE");
+    expect(requirementDeleteInit.body).toBeUndefined();
+    expect(requirementDraftInit.method).toBe("POST");
+    expect(requirementRefineInit.method).toBe("POST");
+    expect(visionRefineInit.method).toBe("POST");
   });
 
   it("returns invalid_payload when an ok envelope fails endpoint guard checks", async () => {

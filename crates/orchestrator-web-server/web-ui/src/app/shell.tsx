@@ -13,6 +13,7 @@ export const PRIMARY_NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/daemon", label: "Daemon" },
   { to: "/projects", label: "Projects" },
+  { to: "/planning", label: "Planning" },
   { to: "/tasks", label: "Tasks" },
   { to: "/workflows", label: "Workflows" },
   { to: "/events", label: "Events" },

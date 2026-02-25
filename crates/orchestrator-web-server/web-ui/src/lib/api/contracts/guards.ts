@@ -4,14 +4,22 @@ import type {
   DaemonStatusValue,
   JsonRecord,
   MessagePayload,
+  PlanningRequirementItem,
+  PlanningRequirementsDraftResult,
+  PlanningRequirementsRefineResult,
+  PlanningVisionDocument,
+  PlanningVisionRefineResult,
   ProjectDetail,
   ProjectRequirementDetailPayload,
   ProjectRequirementSummary,
   ProjectRequirementsByIdPayload,
   ProjectSummary,
+  RequirementPriorityValue,
+  RequirementStatusValue,
   ProjectTasksPayload,
   ProjectWorkflowsPayload,
   RequirementSummary,
+  RequirementTypeValue,
   ReviewHandoffResponse,
   SystemInfo,
   TaskDetail,
@@ -24,6 +32,9 @@ import type {
 } from "./models";
 import {
   normalizeDaemonStatus,
+  normalizeRequirementPriority,
+  normalizeRequirementStatus,
+  normalizeRequirementType,
   normalizeTaskStatus,
   normalizeTaskType,
 } from "./normalize";
@@ -124,6 +135,24 @@ function decodeOptionalNumberField(
   return decodeOk(value);
 }
 
+function decodeOptionalRecordField(
+  record: JsonRecord,
+  key: string,
+  context: string,
+): DecodeResult<JsonRecord | undefined> {
+  const value = record[key];
+  if (value === undefined) {
+    return decodeOk(undefined);
+  }
+
+  const decodedRecord = decodeRecord(value, `${context}.${key}`);
+  if (!decodedRecord.ok) {
+    return decodedRecord;
+  }
+
+  return decodeOk(decodedRecord.data);
+}
+
 function decodeArray(
   value: unknown,
   context: string,
@@ -133,6 +162,40 @@ function decodeArray(
   }
 
   return decodeOk(value);
+}
+
+function decodeStringArray(
+  value: unknown,
+  context: string,
+): DecodeResult<string[]> {
+  const array = decodeArray(value, context);
+  if (!array.ok) {
+    return array;
+  }
+
+  const decoded: string[] = [];
+  for (let index = 0; index < array.data.length; index += 1) {
+    const item = array.data[index];
+    if (typeof item !== "string") {
+      return decodeError(`${context}[${index}] must be a string`);
+    }
+    decoded.push(item);
+  }
+
+  return decodeOk(decoded);
+}
+
+function decodeOptionalStringArrayField(
+  record: JsonRecord,
+  key: string,
+  context: string,
+): DecodeResult<string[] | undefined> {
+  const value = record[key];
+  if (value === undefined) {
+    return decodeOk(undefined);
+  }
+
+  return decodeStringArray(value, `${context}.${key}`);
 }
 
 function decodeNumericRecord(
@@ -273,6 +336,235 @@ function decodeRequirementSummary(
   return decodeOk({
     ...record.data,
     id: id.data,
+  });
+}
+
+function decodeRequirementPriorityField(
+  record: JsonRecord,
+  key: string,
+  context: string,
+): DecodeResult<RequirementPriorityValue> {
+  const value = decodeStringField(record, key, context);
+  if (!value.ok) {
+    return value;
+  }
+
+  return decodeOk(normalizeRequirementPriority(value.data));
+}
+
+function decodeRequirementStatusField(
+  record: JsonRecord,
+  key: string,
+  context: string,
+): DecodeResult<RequirementStatusValue> {
+  const value = decodeStringField(record, key, context);
+  if (!value.ok) {
+    return value;
+  }
+
+  return decodeOk(normalizeRequirementStatus(value.data));
+}
+
+function decodeOptionalRequirementTypeField(
+  record: JsonRecord,
+  key: string,
+  context: string,
+): DecodeResult<RequirementTypeValue | undefined> {
+  const value = decodeOptionalStringField(record, key, context);
+  if (!value.ok) {
+    return value;
+  }
+
+  if (value.data === undefined) {
+    return decodeOk(undefined);
+  }
+
+  return decodeOk(normalizeRequirementType(value.data));
+}
+
+function decodePlanningRequirementItem(
+  value: unknown,
+  context: string,
+): DecodeResult<PlanningRequirementItem> {
+  const record = decodeRecord(value, context);
+  if (!record.ok) {
+    return record;
+  }
+
+  const id = decodeStringField(record.data, "id", context);
+  if (!id.ok) {
+    return id;
+  }
+
+  const title = decodeStringField(record.data, "title", context);
+  if (!title.ok) {
+    return title;
+  }
+
+  const description = decodeStringField(record.data, "description", context);
+  if (!description.ok) {
+    return description;
+  }
+
+  const body = decodeOptionalStringField(record.data, "body", context);
+  if (!body.ok) {
+    return body;
+  }
+
+  const category = decodeOptionalStringField(record.data, "category", context);
+  if (!category.ok) {
+    return category;
+  }
+
+  const requirementType = decodeOptionalRequirementTypeField(
+    record.data,
+    "requirement_type",
+    context,
+  );
+  if (!requirementType.ok) {
+    return requirementType;
+  }
+
+  const acceptanceCriteria = decodeOptionalStringArrayField(
+    record.data,
+    "acceptance_criteria",
+    context,
+  );
+  if (!acceptanceCriteria.ok) {
+    return acceptanceCriteria;
+  }
+
+  const priority = decodeRequirementPriorityField(record.data, "priority", context);
+  if (!priority.ok) {
+    return priority;
+  }
+
+  const status = decodeRequirementStatusField(record.data, "status", context);
+  if (!status.ok) {
+    return status;
+  }
+
+  const source = decodeStringField(record.data, "source", context);
+  if (!source.ok) {
+    return source;
+  }
+
+  const tags = decodeOptionalStringArrayField(record.data, "tags", context);
+  if (!tags.ok) {
+    return tags;
+  }
+
+  const linkedTaskIds = decodeOptionalStringArrayField(record.data, "linked_task_ids", context);
+  if (!linkedTaskIds.ok) {
+    return linkedTaskIds;
+  }
+
+  const relativePath = decodeOptionalStringField(record.data, "relative_path", context);
+  if (!relativePath.ok) {
+    return relativePath;
+  }
+
+  const createdAt = decodeStringField(record.data, "created_at", context);
+  if (!createdAt.ok) {
+    return createdAt;
+  }
+
+  const updatedAt = decodeStringField(record.data, "updated_at", context);
+  if (!updatedAt.ok) {
+    return updatedAt;
+  }
+
+  return decodeOk({
+    ...record.data,
+    id: id.data,
+    title: title.data,
+    description: description.data,
+    body: body.data,
+    category: category.data,
+    requirement_type: requirementType.data,
+    acceptance_criteria: acceptanceCriteria.data ?? [],
+    priority: priority.data,
+    status: status.data,
+    source: source.data,
+    tags: tags.data ?? [],
+    linked_task_ids: linkedTaskIds.data ?? [],
+    relative_path: relativePath.data,
+    created_at: createdAt.data,
+    updated_at: updatedAt.data,
+  });
+}
+
+function decodePlanningVisionDocument(
+  value: unknown,
+  context: string,
+): DecodeResult<PlanningVisionDocument> {
+  const record = decodeRecord(value, context);
+  if (!record.ok) {
+    return record;
+  }
+
+  const id = decodeStringField(record.data, "id", context);
+  if (!id.ok) {
+    return id;
+  }
+
+  const projectRoot = decodeStringField(record.data, "project_root", context);
+  if (!projectRoot.ok) {
+    return projectRoot;
+  }
+
+  const markdown = decodeStringField(record.data, "markdown", context);
+  if (!markdown.ok) {
+    return markdown;
+  }
+
+  const problemStatement = decodeStringField(record.data, "problem_statement", context);
+  if (!problemStatement.ok) {
+    return problemStatement;
+  }
+
+  const targetUsers = decodeOptionalStringArrayField(record.data, "target_users", context);
+  if (!targetUsers.ok) {
+    return targetUsers;
+  }
+
+  const goals = decodeOptionalStringArrayField(record.data, "goals", context);
+  if (!goals.ok) {
+    return goals;
+  }
+
+  const constraints = decodeOptionalStringArrayField(record.data, "constraints", context);
+  if (!constraints.ok) {
+    return constraints;
+  }
+
+  const valueProposition = decodeOptionalStringField(record.data, "value_proposition", context);
+  if (!valueProposition.ok) {
+    return valueProposition;
+  }
+
+  const createdAt = decodeStringField(record.data, "created_at", context);
+  if (!createdAt.ok) {
+    return createdAt;
+  }
+
+  const updatedAt = decodeStringField(record.data, "updated_at", context);
+  if (!updatedAt.ok) {
+    return updatedAt;
+  }
+
+  return decodeOk({
+    ...record.data,
+    id: id.data,
+    project_root: projectRoot.data,
+    markdown: markdown.data,
+    problem_statement: problemStatement.data,
+    target_users: targetUsers.data ?? [],
+    goals: goals.data ?? [],
+    constraints: constraints.data ?? [],
+    value_proposition: valueProposition.data,
+    created_at: createdAt.data,
+    updated_at: updatedAt.data,
   });
 }
 
@@ -790,5 +1082,206 @@ export function decodeReviewHandoffResponse(
   return decodeOk({
     ...record.data,
     status: status.data,
+  });
+}
+
+export function decodeVisionDocumentNullable(
+  value: unknown,
+): DecodeResult<PlanningVisionDocument | null> {
+  if (value === null) {
+    return decodeOk(null);
+  }
+
+  return decodePlanningVisionDocument(value, "planning_vision");
+}
+
+export function decodeVisionDocument(
+  value: unknown,
+): DecodeResult<PlanningVisionDocument> {
+  return decodePlanningVisionDocument(value, "planning_vision");
+}
+
+export function decodeVisionRefineResult(
+  value: unknown,
+): DecodeResult<PlanningVisionRefineResult> {
+  const record = decodeRecord(value, "planning_vision_refine");
+  if (!record.ok) {
+    return record;
+  }
+
+  const updatedVision = decodePlanningVisionDocument(
+    record.data["updated_vision"],
+    "planning_vision_refine.updated_vision",
+  );
+  if (!updatedVision.ok) {
+    return updatedVision;
+  }
+
+  const refinement = decodeRecord(record.data["refinement"], "planning_vision_refine.refinement");
+  if (!refinement.ok) {
+    return refinement;
+  }
+
+  const mode = decodeStringField(
+    refinement.data,
+    "mode",
+    "planning_vision_refine.refinement",
+  );
+  if (!mode.ok) {
+    return mode;
+  }
+
+  const focus = decodeOptionalStringField(
+    refinement.data,
+    "focus",
+    "planning_vision_refine.refinement",
+  );
+  if (!focus.ok) {
+    return focus;
+  }
+
+  const rationale = decodeOptionalStringField(
+    refinement.data,
+    "rationale",
+    "planning_vision_refine.refinement",
+  );
+  if (!rationale.ok) {
+    return rationale;
+  }
+
+  const changes = decodeOptionalRecordField(
+    refinement.data,
+    "changes",
+    "planning_vision_refine.refinement",
+  );
+  if (!changes.ok) {
+    return changes;
+  }
+
+  return decodeOk({
+    ...record.data,
+    updated_vision: updatedVision.data,
+    refinement: {
+      ...refinement.data,
+      mode: mode.data,
+      focus: focus.data,
+      rationale: rationale.data,
+      changes: changes.data,
+    },
+  });
+}
+
+export function decodePlanningRequirementsList(
+  value: unknown,
+): DecodeResult<PlanningRequirementItem[]> {
+  const requirements = decodeArray(value, "planning_requirements");
+  if (!requirements.ok) {
+    return requirements;
+  }
+
+  const decoded: PlanningRequirementItem[] = [];
+  for (let index = 0; index < requirements.data.length; index += 1) {
+    const requirement = decodePlanningRequirementItem(
+      requirements.data[index],
+      `planning_requirements[${index}]`,
+    );
+    if (!requirement.ok) {
+      return requirement;
+    }
+    decoded.push(requirement.data);
+  }
+
+  return decodeOk(decoded);
+}
+
+export function decodePlanningRequirementDetail(
+  value: unknown,
+): DecodeResult<PlanningRequirementItem> {
+  return decodePlanningRequirementItem(value, "planning_requirement_detail");
+}
+
+export function decodePlanningRequirementsDraftResult(
+  value: unknown,
+): DecodeResult<PlanningRequirementsDraftResult> {
+  const record = decodeRecord(value, "planning_requirements_draft");
+  if (!record.ok) {
+    return record;
+  }
+
+  const requirements = decodePlanningRequirementsList(record.data["requirements"]);
+  if (!requirements.ok) {
+    return decodeError(`planning_requirements_draft.${requirements.message}`);
+  }
+
+  const appendedCount = decodeOptionalNumberField(
+    record.data,
+    "appended_count",
+    "planning_requirements_draft",
+  );
+  if (!appendedCount.ok) {
+    return appendedCount;
+  }
+
+  if (appendedCount.data === undefined) {
+    return decodeError("planning_requirements_draft.appended_count must be a number");
+  }
+
+  return decodeOk({
+    ...record.data,
+    requirements: requirements.data,
+    appended_count: appendedCount.data,
+  });
+}
+
+export function decodePlanningRequirementsRefineResult(
+  value: unknown,
+): DecodeResult<PlanningRequirementsRefineResult> {
+  const record = decodeRecord(value, "planning_requirements_refine");
+  if (!record.ok) {
+    return record;
+  }
+
+  const requirements = decodePlanningRequirementsList(record.data["requirements"]);
+  if (!requirements.ok) {
+    return decodeError(`planning_requirements_refine.${requirements.message}`);
+  }
+
+  const updatedIds = decodeStringArray(
+    record.data["updated_ids"],
+    "planning_requirements_refine.updated_ids",
+  );
+  if (!updatedIds.ok) {
+    return updatedIds;
+  }
+
+  const requestedIds = decodeStringArray(
+    record.data["requested_ids"],
+    "planning_requirements_refine.requested_ids",
+  );
+  if (!requestedIds.ok) {
+    return requestedIds;
+  }
+
+  const scope = decodeStringField(record.data, "scope", "planning_requirements_refine");
+  if (!scope.ok) {
+    return scope;
+  }
+
+  const focus = decodeOptionalStringField(record.data, "focus", "planning_requirements_refine");
+  if (!focus.ok) {
+    return focus;
+  }
+
+  if (scope.data !== "selected" && scope.data !== "all") {
+    return decodeError("planning_requirements_refine.scope must be selected or all");
+  }
+
+  return decodeOk({
+    ...record.data,
+    requirements: requirements.data,
+    updated_ids: updatedIds.data,
+    requested_ids: requestedIds.data,
+    scope: scope.data,
+    focus: focus.data,
   });
 }

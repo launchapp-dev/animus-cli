@@ -28,6 +28,9 @@
       "name": "Requirements"
     },
     {
+      "name": "Planning"
+    },
+    {
       "name": "Tasks"
     },
     {
@@ -570,6 +573,83 @@
             "$ref": "#/components/responses/CliErrorEnvelope"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Create requirement for active project",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "acceptance_criteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "linked_task_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "relative_path": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
       }
     },
     "/api/v1/requirements/{id}": {
@@ -586,6 +666,294 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Update requirement for active project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequirementId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "acceptance_criteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "priority": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "linked_task_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "relative_path": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Delete requirement for active project",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequirementId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/requirements/draft": {
+      "post": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Draft requirements from current vision",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "include_codebase_scan": {
+                    "type": "boolean"
+                  },
+                  "append_only": {
+                    "type": "boolean"
+                  },
+                  "max_requirements": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/requirements/refine": {
+      "post": {
+        "tags": [
+          "Requirements"
+        ],
+        "summary": "Refine selected or all requirements",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requirement_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "focus": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/vision": {
+      "get": {
+        "tags": [
+          "Planning"
+        ],
+        "summary": "Get current planning vision",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Planning"
+        ],
+        "summary": "Create or update planning vision",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "project_name": {
+                    "type": "string"
+                  },
+                  "problem_statement": {
+                    "type": "string"
+                  },
+                  "target_users": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "goals": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "constraints": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "value_proposition": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/vision/refine": {
+      "post": {
+        "tags": [
+          "Planning"
+        ],
+        "summary": "Refine vision heuristically",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "focus": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "400": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
           },
           "404": {
             "$ref": "#/components/responses/CliErrorEnvelope"

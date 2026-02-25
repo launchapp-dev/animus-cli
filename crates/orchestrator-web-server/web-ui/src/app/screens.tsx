@@ -442,7 +442,16 @@ export function RequirementDetailPage() {
       <ResourceStateView
         state={state}
         emptyMessage="Requirement detail payload is empty."
-        render={(data) => <JsonPanel title="Requirement" data={data} />}
+        render={(data) => (
+          <div className="grid">
+            <JsonPanel title="Requirement" data={data} />
+            <p>
+              <Link to={`/planning/requirements/${encodeURIComponent(requirementId)}`}>
+                Edit in Planning Workspace
+              </Link>
+            </p>
+          </div>
+        )}
       />
     </RouteSection>
   );

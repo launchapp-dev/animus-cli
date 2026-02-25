@@ -98,8 +98,16 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/projects/:id/load", post(projects_load_handler))
         .route("/projects/:id/archive", post(projects_archive_handler))
+        .route("/vision", get(vision_get_handler))
+        .route("/vision", post(vision_save_handler))
+        .route("/vision/refine", post(vision_refine_handler))
         .route("/requirements", get(requirements_list_handler))
+        .route("/requirements", post(requirements_create_handler))
+        .route("/requirements/draft", post(requirements_draft_handler))
+        .route("/requirements/refine", post(requirements_refine_handler))
         .route("/requirements/:id", get(requirements_get_handler))
+        .route("/requirements/:id", patch(requirements_patch_handler))
+        .route("/requirements/:id", delete(requirements_delete_handler))
         .route("/tasks", get(tasks_list_handler))
         .route("/tasks", post(tasks_create_handler))
         .route("/tasks/prioritized", get(tasks_prioritized_handler))
@@ -371,8 +379,59 @@ async fn projects_delete_handler(
     }
 }
 
+async fn vision_get_handler(State(state): State<AppState>) -> Response {
+    match state.api.vision_get().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn vision_save_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    match state.api.vision_save(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn vision_refine_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    match state.api.vision_refine(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
 async fn requirements_list_handler(State(state): State<AppState>) -> Response {
     match state.api.requirements_list().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn requirements_create_handler(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.requirements_create(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn requirements_draft_handler(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.requirements_draft(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn requirements_refine_handler(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.requirements_refine(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
@@ -383,6 +442,27 @@ async fn requirements_get_handler(
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     match state.api.requirements_get(&id).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn requirements_patch_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.requirements_patch(&id, body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn requirements_delete_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match state.api.requirements_delete(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
@@ -1048,6 +1128,162 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn planning_mutation_endpoints_round_trip_successfully() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let context = Arc::new(WebApiContext {
+            hub,
+            project_root: "/tmp/project".to_string(),
+            app_version: "test-version".to_string(),
+        });
+        let api = orchestrator_web_api::WebApiService::new(context);
+        let app = build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+        });
+
+        let vision_save_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/vision")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "project_name": "AO",
+                            "problem_statement": "Planning is fragmented",
+                            "target_users": ["PM"],
+                            "goals": ["Ship planning UI"],
+                            "constraints": ["Keep deterministic state"],
+                            "value_proposition": "Faster planning loops"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(vision_save_response.status(), axum::http::StatusCode::OK);
+
+        let vision_refine_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/vision/refine")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "focus": "quality gates"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(vision_refine_response.status(), axum::http::StatusCode::OK);
+
+        let requirement_create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/requirements")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Planning route coverage",
+                            "description": "Add deep links for planning surfaces",
+                            "acceptance_criteria": ["Route is directly addressable"],
+                            "priority": "must",
+                            "status": "draft"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            requirement_create_response.status(),
+            axum::http::StatusCode::OK
+        );
+
+        let requirement_create_body = to_bytes(requirement_create_response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let requirement_create_payload: Value = serde_json::from_slice(&requirement_create_body)
+            .expect("response should be valid json");
+        let requirement_id = requirement_create_payload["data"]["id"]
+            .as_str()
+            .expect("created requirement should include an id")
+            .to_string();
+
+        let requirement_patch_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/requirements/{requirement_id}"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "status": "planned",
+                            "title": "Planning route and mutation coverage"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            requirement_patch_response.status(),
+            axum::http::StatusCode::OK
+        );
+
+        let requirement_refine_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/requirements/refine")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "requirement_ids": [requirement_id]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            requirement_refine_response.status(),
+            axum::http::StatusCode::OK
+        );
+
+        let requirement_delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/requirements/{requirement_id}"))
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            requirement_delete_response.status(),
+            axum::http::StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
     async fn project_tasks_endpoint_returns_not_found_for_unknown_project() {
         let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
         let context = Arc::new(WebApiContext {
@@ -1155,6 +1391,11 @@ mod tests {
             "/projects",
             "/projects/proj-1",
             "/projects/proj-1/requirements/REQ-1",
+            "/planning",
+            "/planning/vision",
+            "/planning/requirements",
+            "/planning/requirements/new",
+            "/planning/requirements/REQ-1",
             "/tasks",
             "/tasks/TASK-1",
             "/workflows",

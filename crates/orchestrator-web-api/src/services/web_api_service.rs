@@ -7,9 +7,10 @@ use anyhow::{anyhow, Context};
 use chrono::Utc;
 use orchestrator_core::{
     AgentHandoffRequestInput, DaemonStatus, DependencyType, FileServiceHub, HandoffTargetRole,
-    Priority, ProjectCreateInput, ProjectMetadata, ProjectType, RequirementStatus, RiskLevel,
-    ServiceHub, TaskCreateInput, TaskFilter, TaskStatus, TaskType, TaskUpdateInput,
-    WorkflowRunInput,
+    Priority, ProjectCreateInput, ProjectMetadata, ProjectType, RequirementItem,
+    RequirementPriority, RequirementStatus, RequirementType, RequirementsDraftInput,
+    RequirementsRefineInput, RiskLevel, ServiceHub, TaskCreateInput, TaskFilter, TaskStatus,
+    TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowRunInput,
 };
 use orchestrator_web_contracts::DaemonEventRecord;
 use serde::de::DeserializeOwned;
@@ -22,6 +23,7 @@ use crate::models::{WebApiContext, WebApiError};
 
 const EVENT_SCHEMA: &str = "ao.daemon.event.v1";
 const DEFAULT_UPDATED_BY: &str = "ao-web";
+const DEFAULT_REQUIREMENT_SOURCE: &str = "ao-web";
 
 #[derive(Clone)]
 pub struct WebApiService {
@@ -210,6 +212,266 @@ impl WebApiService {
         Ok(json!(
             self.context.hub.planning().get_requirement(id).await?
         ))
+    }
+
+    pub async fn vision_get(&self) -> Result<Value, WebApiError> {
+        Ok(json!(self.context.hub.planning().get_vision().await?))
+    }
+
+    pub async fn vision_save(&self, body: Value) -> Result<Value, WebApiError> {
+        let mut input: VisionDraftInput = parse_json_body(body)?;
+        normalize_vision_input(&mut input);
+
+        let vision = self.context.hub.planning().draft_vision(input).await?;
+        self.publish_event("vision-save", json!({ "vision_id": vision.id }));
+        Ok(json!(vision))
+    }
+
+    pub async fn vision_refine(&self, body: Value) -> Result<Value, WebApiError> {
+        let request: VisionRefineRequest = parse_json_body(body)?;
+        let focus = normalize_optional_string(request.focus);
+        let planning = self.context.hub.planning();
+
+        let Some(current) = planning.get_vision().await? else {
+            return Err(WebApiError::new(
+                "not_found",
+                "vision not found; create a vision before refining",
+                3,
+            ));
+        };
+
+        let (refined_input, refinement_changes, rationale) =
+            refine_vision_heuristically(&current, focus.as_deref());
+        let updated_vision = planning.draft_vision(refined_input).await?;
+
+        self.publish_event(
+            "vision-refine",
+            json!({
+                "vision_id": updated_vision.id,
+                "mode": "heuristic",
+                "focus": focus,
+            }),
+        );
+
+        Ok(json!({
+            "updated_vision": updated_vision,
+            "refinement": {
+                "mode": "heuristic",
+                "focus": focus,
+                "rationale": rationale,
+                "changes": refinement_changes,
+            }
+        }))
+    }
+
+    pub async fn requirements_create(&self, body: Value) -> Result<Value, WebApiError> {
+        let request: RequirementCreateRequest = parse_json_body(body)?;
+        let mut title = request.title.trim().to_string();
+        if title.is_empty() {
+            return Err(WebApiError::new(
+                "invalid_input",
+                "requirement title is required",
+                2,
+            ));
+        }
+        title.shrink_to_fit();
+
+        let mut requirement_id = String::new();
+        if let Some(id) = normalize_optional_string(request.id) {
+            if self
+                .context
+                .hub
+                .planning()
+                .get_requirement(&id)
+                .await
+                .is_ok()
+            {
+                return Err(WebApiError::new(
+                    "conflict",
+                    format!("requirement already exists: {id}"),
+                    4,
+                ));
+            }
+            requirement_id = id;
+        }
+
+        let now = Utc::now();
+        let requirement = RequirementItem {
+            id: requirement_id,
+            title,
+            description: request.description.unwrap_or_default(),
+            body: normalize_optional_string(request.body),
+            legacy_id: None,
+            category: normalize_optional_string(request.category),
+            requirement_type: parse_requirement_type_opt(request.requirement_type.as_deref())?,
+            acceptance_criteria: normalize_string_list(request.acceptance_criteria),
+            priority: parse_requirement_priority_opt(request.priority.as_deref())?
+                .unwrap_or(RequirementPriority::Should),
+            status: parse_requirement_status_opt(request.status.as_deref())?
+                .unwrap_or(RequirementStatus::Draft),
+            source: normalize_optional_string(request.source)
+                .unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string()),
+            tags: normalize_string_list(request.tags),
+            links: Default::default(),
+            comments: Vec::new(),
+            relative_path: normalize_optional_string(request.relative_path),
+            linked_task_ids: normalize_string_list(request.linked_task_ids),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let created = self
+            .context
+            .hub
+            .planning()
+            .upsert_requirement(requirement)
+            .await?;
+        self.publish_event(
+            "requirement-create",
+            json!({ "requirement_id": created.id, "status": created.status }),
+        );
+        Ok(json!(created))
+    }
+
+    pub async fn requirements_patch(&self, id: &str, body: Value) -> Result<Value, WebApiError> {
+        let request: RequirementPatchRequest = parse_json_body(body)?;
+        let mut requirement = self.context.hub.planning().get_requirement(id).await?;
+
+        if let Some(title) = request.title {
+            let title = title.trim().to_string();
+            if title.is_empty() {
+                return Err(WebApiError::new(
+                    "invalid_input",
+                    "requirement title must be non-empty when provided",
+                    2,
+                ));
+            }
+            requirement.title = title;
+        }
+
+        if let Some(description) = request.description {
+            requirement.description = description;
+        }
+
+        if let Some(body) = request.body {
+            requirement.body = normalize_optional_string(Some(body));
+        }
+
+        if let Some(category) = request.category {
+            requirement.category = normalize_optional_string(Some(category));
+        }
+
+        if let Some(requirement_type) = request.requirement_type {
+            requirement.requirement_type =
+                parse_requirement_type_opt(Some(requirement_type.as_str()))?;
+        }
+
+        if let Some(criteria) = request.acceptance_criteria {
+            requirement.acceptance_criteria = normalize_string_list(criteria);
+        }
+
+        if let Some(priority) = request.priority {
+            requirement.priority = parse_requirement_priority(&priority)?;
+        }
+
+        if let Some(status) = request.status {
+            requirement.status = parse_requirement_status(&status)?;
+        }
+
+        if let Some(source) = request.source {
+            requirement.source = normalize_optional_string(Some(source))
+                .unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string());
+        }
+
+        if let Some(tags) = request.tags {
+            requirement.tags = normalize_string_list(tags);
+        }
+
+        if let Some(linked_task_ids) = request.linked_task_ids {
+            requirement.linked_task_ids = normalize_string_list(linked_task_ids);
+        }
+
+        if let Some(relative_path) = request.relative_path {
+            requirement.relative_path = normalize_optional_string(Some(relative_path));
+        }
+
+        let updated = self
+            .context
+            .hub
+            .planning()
+            .upsert_requirement(requirement)
+            .await?;
+        self.publish_event(
+            "requirement-update",
+            json!({ "requirement_id": updated.id, "status": updated.status }),
+        );
+        Ok(json!(updated))
+    }
+
+    pub async fn requirements_delete(&self, id: &str) -> Result<Value, WebApiError> {
+        self.context.hub.planning().delete_requirement(id).await?;
+        self.publish_event("requirement-delete", json!({ "requirement_id": id }));
+        Ok(json!({ "message": "requirement deleted", "id": id }))
+    }
+
+    pub async fn requirements_draft(&self, body: Value) -> Result<Value, WebApiError> {
+        let request: RequirementsDraftRequest = parse_json_body(body)?;
+        let input = RequirementsDraftInput {
+            include_codebase_scan: request.include_codebase_scan,
+            append_only: request.append_only,
+            max_requirements: request.max_requirements.unwrap_or_default(),
+        };
+
+        let result = self
+            .context
+            .hub
+            .planning()
+            .draft_requirements(input)
+            .await?;
+        self.publish_event(
+            "requirements-draft",
+            json!({ "appended_count": result.appended_count }),
+        );
+        Ok(json!(result))
+    }
+
+    pub async fn requirements_refine(&self, body: Value) -> Result<Value, WebApiError> {
+        let request: RequirementsRefineRequest = parse_json_body(body)?;
+        let requirement_ids = normalize_string_list(request.requirement_ids);
+        let focus = normalize_optional_string(request.focus);
+
+        let refined = self
+            .context
+            .hub
+            .planning()
+            .refine_requirements(RequirementsRefineInput {
+                requirement_ids: requirement_ids.clone(),
+                focus: focus.clone(),
+            })
+            .await?;
+
+        let mut updated_ids: Vec<String> = refined
+            .iter()
+            .map(|requirement| requirement.id.clone())
+            .collect();
+        updated_ids.sort();
+        updated_ids.dedup();
+
+        self.publish_event(
+            "requirements-refine",
+            json!({
+                "scope": if requirement_ids.is_empty() { "all" } else { "selected" },
+                "updated_count": updated_ids.len(),
+            }),
+        );
+
+        Ok(json!({
+            "requirements": refined,
+            "updated_ids": updated_ids,
+            "requested_ids": requirement_ids,
+            "scope": if requirement_ids.is_empty() { "all" } else { "selected" },
+            "focus": focus,
+        }))
     }
 
     pub async fn projects_requirements(&self) -> Result<Value, WebApiError> {
@@ -773,6 +1035,97 @@ struct ProjectPatchRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct VisionRefineRequest {
+    #[serde(default)]
+    focus: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequirementCreateRequest {
+    #[serde(default)]
+    id: Option<String>,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    requirement_type: Option<String>,
+    #[serde(default)]
+    acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    linked_task_ids: Vec<String>,
+    #[serde(default)]
+    relative_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RequirementPatchRequest {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    requirement_type: Option<String>,
+    #[serde(default)]
+    acceptance_criteria: Option<Vec<String>>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    linked_task_ids: Option<Vec<String>>,
+    #[serde(default)]
+    relative_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequirementsDraftRequest {
+    #[serde(default = "default_true_flag")]
+    include_codebase_scan: bool,
+    #[serde(default = "default_true_flag")]
+    append_only: bool,
+    #[serde(default)]
+    max_requirements: Option<usize>,
+}
+
+impl Default for RequirementsDraftRequest {
+    fn default() -> Self {
+        Self {
+            include_codebase_scan: true,
+            append_only: true,
+            max_requirements: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RequirementsRefineRequest {
+    #[serde(default)]
+    requirement_ids: Vec<String>,
+    #[serde(default)]
+    focus: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TaskCreateRequest {
     title: String,
     #[serde(default)]
@@ -895,6 +1248,154 @@ fn enum_as_string<T: serde::Serialize>(value: &T) -> Result<String, WebApiError>
         .unwrap_or_else(|| "unknown".to_string()))
 }
 
+fn default_true_flag() -> bool {
+    true
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn normalize_string_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !normalized.iter().any(|existing| existing == trimmed) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    normalized
+}
+
+fn extract_project_name_from_markdown(markdown: &str) -> Option<String> {
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("- Name:") {
+            let name = name.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn normalize_vision_input(input: &mut VisionDraftInput) {
+    input.project_name = normalize_optional_string(input.project_name.take());
+    input.problem_statement = input.problem_statement.trim().to_string();
+    input.target_users = normalize_string_list(std::mem::take(&mut input.target_users));
+    input.goals = normalize_string_list(std::mem::take(&mut input.goals));
+    input.constraints = normalize_string_list(std::mem::take(&mut input.constraints));
+    input.value_proposition = normalize_optional_string(input.value_proposition.take());
+}
+
+fn refine_vision_heuristically(
+    current: &VisionDocument,
+    focus: Option<&str>,
+) -> (VisionDraftInput, Value, String) {
+    let mut goals = current.goals.clone();
+    let mut constraints = current.constraints.clone();
+    let mut goals_added = Vec::new();
+    let mut constraints_added = Vec::new();
+    let mut notes = Vec::new();
+
+    let goals_haystack = goals.join(" ").to_ascii_lowercase();
+    if !goals_haystack.contains("success metric") && !goals_haystack.contains("kpi") {
+        let addition = "Define measurable success metrics (activation, retention, and business impact) with explicit go/no-go thresholds.".to_string();
+        goals.push(addition.clone());
+        goals_added.push(addition);
+        notes.push("added measurable success metric guidance".to_string());
+    }
+
+    let constraints_haystack = constraints.join(" ").to_ascii_lowercase();
+    if !constraints_haystack.contains("traceable")
+        && !constraints_haystack.contains("machine-readable")
+    {
+        let addition =
+            "Requirements, tasks, and workflow artifacts must remain traceable and machine-readable."
+                .to_string();
+        constraints.push(addition.clone());
+        constraints_added.push(addition);
+        notes.push("added traceability constraint".to_string());
+    }
+
+    let mut normalized_focus = None;
+    if let Some(focus) = focus {
+        let focus = focus.trim();
+        if !focus.is_empty() {
+            normalized_focus = Some(focus.to_string());
+            let focus_lower = focus.to_ascii_lowercase();
+            let already_present = constraints
+                .iter()
+                .any(|constraint| constraint.to_ascii_lowercase().contains(&focus_lower));
+
+            if !already_present {
+                let addition = format!(
+                    "Refinement focus must be reflected in requirement acceptance criteria: {focus}."
+                );
+                constraints.push(addition.clone());
+                constraints_added.push(addition);
+            }
+            notes.push("captured requested refinement focus".to_string());
+        }
+    }
+
+    let project_name = extract_project_name_from_markdown(&current.markdown);
+    let value_proposition = match current.value_proposition.clone() {
+        Some(value) => Some(value),
+        None => {
+            notes.push("filled missing value proposition".to_string());
+            Some(
+                "Deliver measurable value for target users while preserving deterministic execution quality."
+                    .to_string(),
+            )
+        }
+    };
+
+    let mut refined_input = VisionDraftInput {
+        project_name,
+        problem_statement: current.problem_statement.clone(),
+        target_users: current.target_users.clone(),
+        goals,
+        constraints,
+        value_proposition,
+        complexity_assessment: current.complexity_assessment.clone(),
+    };
+    normalize_vision_input(&mut refined_input);
+
+    let rationale = if notes.is_empty() {
+        "No heuristic deltas were required; retained current vision content.".to_string()
+    } else {
+        format!(
+            "Heuristic refinement {}.",
+            notes
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    (
+        refined_input,
+        json!({
+            "goals_added": goals_added,
+            "constraints_added": constraints_added,
+            "focus": normalized_focus,
+        }),
+        rationale,
+    )
+}
+
 fn build_task_filter(
     task_type: Option<String>,
     status: Option<String>,
@@ -953,6 +1454,94 @@ fn parse_task_status(value: &str) -> Result<TaskStatus, WebApiError> {
         }
     };
     Ok(parsed)
+}
+
+fn parse_requirement_priority(value: &str) -> Result<RequirementPriority, WebApiError> {
+    let parsed = match value.trim().to_ascii_lowercase().as_str() {
+        "must" => RequirementPriority::Must,
+        "should" => RequirementPriority::Should,
+        "could" => RequirementPriority::Could,
+        "wont" | "won't" => RequirementPriority::Wont,
+        _ => {
+            return Err(WebApiError::new(
+                "invalid_input",
+                format!("invalid requirement priority: {value}"),
+                2,
+            ))
+        }
+    };
+
+    Ok(parsed)
+}
+
+fn parse_requirement_priority_opt(
+    value: Option<&str>,
+) -> Result<Option<RequirementPriority>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    Ok(Some(parse_requirement_priority(value)?))
+}
+
+fn parse_requirement_status(value: &str) -> Result<RequirementStatus, WebApiError> {
+    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+    let parsed = match normalized.as_str() {
+        "draft" => RequirementStatus::Draft,
+        "refined" => RequirementStatus::Refined,
+        "planned" => RequirementStatus::Planned,
+        "in-progress" => RequirementStatus::InProgress,
+        "done" => RequirementStatus::Done,
+        "po-review" => RequirementStatus::PoReview,
+        "em-review" => RequirementStatus::EmReview,
+        "needs-rework" => RequirementStatus::NeedsRework,
+        "approved" => RequirementStatus::Approved,
+        "implemented" => RequirementStatus::Implemented,
+        "deprecated" => RequirementStatus::Deprecated,
+        _ => {
+            return Err(WebApiError::new(
+                "invalid_input",
+                format!("invalid requirement status: {value}"),
+                2,
+            ))
+        }
+    };
+
+    Ok(parsed)
+}
+
+fn parse_requirement_status_opt(
+    value: Option<&str>,
+) -> Result<Option<RequirementStatus>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    Ok(Some(parse_requirement_status(value)?))
+}
+
+fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<RequirementType>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+    let parsed = match normalized.as_str() {
+        "product" => RequirementType::Product,
+        "functional" => RequirementType::Functional,
+        "non-functional" => RequirementType::NonFunctional,
+        "technical" => RequirementType::Technical,
+        "other" => RequirementType::Other,
+        _ => {
+            return Err(WebApiError::new(
+                "invalid_input",
+                format!("invalid requirement_type: {value}"),
+                2,
+            ))
+        }
+    };
+
+    Ok(Some(parsed))
 }
 
 fn parse_handoff_target_role(value: &str) -> Result<HandoffTargetRole, WebApiError> {

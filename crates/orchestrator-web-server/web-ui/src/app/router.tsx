@@ -2,6 +2,13 @@ import { Suspense, lazy } from "react";
 import type { ReactNode } from "react";
 import { createBrowserRouter, Navigate, RouterProvider, useRouteError } from "react-router-dom";
 
+import {
+  PlanningEntryRedirectPage,
+  PlanningRequirementCreatePage,
+  PlanningRequirementDetailPage,
+  PlanningRequirementsPage,
+  PlanningVisionPage,
+} from "./planning-screens";
 import { AppShellLayout } from "./shell";
 
 type ScreensModule = typeof import("./screens");
@@ -44,6 +51,11 @@ export const APP_ROUTE_PATHS = [
   "/projects",
   "/projects/:projectId",
   "/projects/:projectId/requirements/:requirementId",
+  "/planning",
+  "/planning/vision",
+  "/planning/requirements",
+  "/planning/requirements/new",
+  "/planning/requirements/:requirementId",
   "/tasks",
   "/tasks/:taskId",
   "/workflows",
@@ -83,6 +95,26 @@ const router = createBrowserRouter([
       {
         path: "projects/:projectId/requirements/:requirementId",
         element: withRouteSuspense(<RequirementDetailPage />),
+      },
+      {
+        path: "planning",
+        element: <PlanningEntryRedirectPage />,
+      },
+      {
+        path: "planning/vision",
+        element: <PlanningVisionPage />,
+      },
+      {
+        path: "planning/requirements",
+        element: <PlanningRequirementsPage />,
+      },
+      {
+        path: "planning/requirements/new",
+        element: <PlanningRequirementCreatePage />,
+      },
+      {
+        path: "planning/requirements/:requirementId",
+        element: <PlanningRequirementDetailPage />,
       },
       {
         path: "tasks",

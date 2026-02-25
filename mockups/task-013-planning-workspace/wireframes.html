@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-013 Planning Workspace Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-013: Vision and Requirements Planning Workspace</h1>
+      <p>
+        Concrete wireframes for planning authoring, refinement, list/detail navigation,
+        and deterministic deep-link handoff from project requirement surfaces.
+      </p>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="desktop-board-title">
+        <h2 class="board-title" id="desktop-board-title">
+          Desktop Planning Shell + Route States
+        </h2>
+
+        <div class="planning-shell">
+          <aside class="shell-sidebar" aria-label="Primary navigation">
+            <div class="brand">
+              <p class="brand-name">AO Planning Console</p>
+              <p class="brand-subtitle">Route-stable authoring workspace</p>
+            </div>
+
+            <ul class="primary-nav">
+              <li><a class="nav-link" href="#">Dashboard</a></li>
+              <li><a class="nav-link" href="#">Daemon</a></li>
+              <li><a class="nav-link" href="#">Projects</a></li>
+              <li><a class="nav-link" href="#" aria-current="page">Planning</a></li>
+              <li><a class="nav-link" href="#">Tasks</a></li>
+              <li><a class="nav-link" href="#">Workflows</a></li>
+              <li><a class="nav-link" href="#">Events</a></li>
+              <li><a class="nav-link" href="#">Review Handoff</a></li>
+            </ul>
+          </aside>
+
+          <div class="shell-main">
+            <header class="shell-topbar">
+              <div class="topbar-row">
+                <p class="breadcrumbs">planning / requirements / REQ-AbC-017</p>
+                <span class="active-id">ID case preserved: REQ-AbC-017</span>
+              </div>
+
+              <form class="project-context" aria-label="Project context selector">
+                <label for="desktop-project-context">Project context</label>
+                <div class="context-row">
+                  <select id="desktop-project-context" name="desktop-project-context">
+                    <option>alpha-launch (route param)</option>
+                    <option>beta-hardening (cached selection)</option>
+                    <option>gamma-ops (server active)</option>
+                  </select>
+                  <span class="source-tag">source: route-param</span>
+                </div>
+                <p class="source-note">
+                  Precedence: route param -> cached selection -> <code>/api/v1/projects/active</code>
+                </p>
+              </form>
+            </header>
+
+            <section class="shell-content" aria-label="Planning route wireframes">
+              <div class="state-banner info">
+                <strong>Planning Entry Redirect:</strong>
+                <code>/planning</code> routes immediately to <code>/planning/vision</code>
+                and preserves deep-link refresh behavior for all planning pages.
+              </div>
+
+              <div class="route-card-grid">
+                <article class="route-card">
+                  <h3>Vision Workspace</h3>
+                  <p class="route-path">/planning/vision</p>
+                  <div class="state-chip-row">
+                    <span class="state-chip loading">loading</span>
+                    <span class="state-chip empty">empty-first-run</span>
+                    <span class="state-chip pending">save/refine pending</span>
+                    <span class="state-chip error">envelope error</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Requirements Workspace</h3>
+                  <p class="route-path">/planning/requirements</p>
+                  <div class="state-chip-row">
+                    <span class="state-chip loading">loading</span>
+                    <span class="state-chip empty">empty list</span>
+                    <span class="state-chip pending">batch refine pending</span>
+                    <span class="state-chip success">summary ready</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>New Requirement</h3>
+                  <p class="route-path">/planning/requirements/new</p>
+                  <div class="state-chip-row">
+                    <span class="state-chip">initial</span>
+                    <span class="state-chip pending">submit pending</span>
+                    <span class="state-chip error">validation</span>
+                    <span class="state-chip success">create redirect</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Requirement Detail</h3>
+                  <p class="route-path">/planning/requirements/:requirementId</p>
+                  <div class="state-chip-row">
+                    <span class="state-chip loading">loading</span>
+                    <span class="state-chip">edit ready</span>
+                    <span class="state-chip not-found">not_found</span>
+                    <span class="state-chip pending">delete confirm</span>
+                    <span class="state-chip error">envelope error</span>
+                  </div>
+                </article>
+
+                <article class="route-card">
+                  <h3>Project Requirement Handoff</h3>
+                  <p class="route-path">/projects/:projectId/requirements/:requirementId</p>
+                  <div class="state-chip-row">
+                    <span class="state-chip">project context</span>
+                    <span class="state-chip success">planning handoff link</span>
+                    <span class="state-chip not-found">recoverable missing state</span>
+                  </div>
+                </article>
+              </div>
+
+              <div class="workspace-grid">
+                <section class="panel" aria-labelledby="requirements-workspace-title">
+                  <h3 id="requirements-workspace-title">Requirements Workspace</h3>
+                  <p>
+                    Stable order by requirement ID with keyboard-selectable batch actions.
+                  </p>
+
+                  <div class="selection-toolbar">
+                    <button class="button" type="button">New Requirement</button>
+                    <button class="button-ghost" type="button">Refine Selected (2)</button>
+                    <button class="button-ghost" type="button">Refine All</button>
+                  </div>
+
+                  <div class="dialog-sample" role="dialog" aria-modal="true" aria-labelledby="refine-all-dialog-title" aria-describedby="refine-all-dialog-body">
+                    <h4 id="refine-all-dialog-title">Refine all requirements?</h4>
+                    <p id="refine-all-dialog-body">
+                      This action targets all requirements currently in the workspace.
+                      Confirm before submitting <code>scope=all</code>.
+                    </p>
+                    <div class="dialog-actions">
+                      <button class="button-ghost" type="button">Cancel</button>
+                      <button class="button" type="button">Confirm Refine All</button>
+                    </div>
+                  </div>
+
+                  <div class="mutation-status" role="status" aria-live="polite">
+                    mutation: <code>pending</code> -> running <code>POST /api/v1/requirements/refine</code>
+                    for <code>[REQ-016, REQ-AbC-017]</code>
+                  </div>
+
+                  <ul class="requirement-list" aria-label="Requirement list">
+                    <li class="requirement-row">
+                      <label class="selection-cell">
+                        <input aria-label="Select REQ-016" type="checkbox" checked />
+                        <span class="visually-hidden">Select REQ-016</span>
+                      </label>
+                      <div>
+                        <p class="requirement-id">REQ-016</p>
+                        <p class="requirement-title">Introduce scope guard for workflow phase edits</p>
+                        <p class="requirement-meta">priority: must | status: planned</p>
+                      </div>
+                      <button class="open-link" type="button">Open</button>
+                    </li>
+
+                    <li class="requirement-row active">
+                      <label class="selection-cell">
+                        <input aria-label="Select REQ-AbC-017" type="checkbox" checked />
+                        <span class="visually-hidden">Select REQ-AbC-017</span>
+                      </label>
+                      <div>
+                        <p class="requirement-id">REQ-AbC-017</p>
+                        <p class="requirement-title">Planning route deep-link fidelity</p>
+                        <p class="requirement-meta">priority: must | status: in-progress</p>
+                      </div>
+                      <button class="open-link" type="button">Open</button>
+                    </li>
+
+                    <li class="requirement-row">
+                      <label class="selection-cell">
+                        <input aria-label="Select REQ-018" type="checkbox" />
+                        <span class="visually-hidden">Select REQ-018</span>
+                      </label>
+                      <div>
+                        <p class="requirement-id">REQ-018</p>
+                        <p class="requirement-title">Vision authoring form with refine feedback</p>
+                        <p class="requirement-meta">priority: should | status: refined</p>
+                      </div>
+                      <button class="open-link" type="button">Open</button>
+                    </li>
+                  </ul>
+
+                  <div class="state-banner success" role="status" aria-live="polite">
+                    <strong>Refine Result:</strong> updated 2 requirements. Failed 0.
+                  </div>
+
+                  <ul class="summary-list">
+                    <li><code>REQ-016</code> expanded acceptance checklist</li>
+                    <li><code>REQ-AbC-017</code> normalized deep-link copy and recovery hints</li>
+                  </ul>
+                </section>
+
+                <section class="panel" aria-labelledby="vision-workspace-title">
+                  <h3 id="vision-workspace-title">Vision Workspace</h3>
+                  <p>Single-screen create/update/refine loop with deterministic inline feedback.</p>
+
+                  <div class="state-banner warning">
+                    <strong>Empty State:</strong> no vision document found yet. Complete required fields to create one.
+                  </div>
+
+                  <form class="form-grid" aria-label="Vision authoring form">
+                    <div class="form-section">
+                      <h4>Problem Frame</h4>
+                      <div class="form-row">
+                        <label for="vision-project-name">Project Name</label>
+                        <input id="vision-project-name" name="vision-project-name" type="text" value="AO Standalone Daemon" />
+                      </div>
+                      <div class="form-row">
+                        <label for="vision-problem-statement">Problem Statement</label>
+                        <textarea id="vision-problem-statement" name="vision-problem-statement">Operators need a deterministic planning workspace that supports fast write-edit loops without breaking deep-link flows.</textarea>
+                      </div>
+                      <div class="form-row">
+                        <label for="vision-target-users">Target Users</label>
+                        <textarea id="vision-target-users" name="vision-target-users">Product owner, delivery lead, implementation engineer.</textarea>
+                      </div>
+                    </div>
+
+                    <div class="form-section">
+                      <h4>Outcomes and Constraints</h4>
+                      <div class="form-row">
+                        <label for="vision-goals">Goals</label>
+                        <textarea id="vision-goals" name="vision-goals">Frictionless planning entry, reliable deep links, transparent mutation states.</textarea>
+                      </div>
+                      <div class="form-row">
+                        <label for="vision-constraints">Constraints</label>
+                        <textarea id="vision-constraints" name="vision-constraints">Envelope contract must stay ao.cli.v1; all endpoints under /api/v1; no direct .ao file edits.</textarea>
+                      </div>
+                      <div class="form-row">
+                        <label for="vision-value-proposition">Value Proposition</label>
+                        <textarea id="vision-value-proposition" name="vision-value-proposition">Planning work becomes auditable, keyboard-friendly, and resilient across refresh/deep-link paths.</textarea>
+                      </div>
+                    </div>
+
+                    <p class="inline-error" id="vision-error" role="alert">
+                      code=invalid_input | message=Problem statement is required | exitCode=2
+                    </p>
+
+                    <div class="form-actions">
+                      <button class="button" type="button" disabled>Saving...</button>
+                      <button class="button-ghost" type="button">Refine Vision</button>
+                    </div>
+
+                    <p class="inline-help">
+                      Save keeps form values on failure and exposes envelope fields inline.
+                    </p>
+                  </form>
+                </section>
+              </div>
+
+              <div class="workspace-grid">
+                <section class="panel" aria-labelledby="new-requirement-title">
+                  <h3 id="new-requirement-title">New Requirement Form</h3>
+                  <p>Route: <code>/planning/requirements/new</code></p>
+
+                  <form class="form-grid" aria-label="Create requirement form">
+                    <div class="form-row">
+                      <label for="new-requirement-title-input">Title</label>
+                      <input id="new-requirement-title-input" name="new-requirement-title-input" type="text" value="Add deterministic planning route loaders" />
+                    </div>
+
+                    <div class="form-row">
+                      <label for="new-requirement-priority">Priority</label>
+                      <select id="new-requirement-priority" name="new-requirement-priority">
+                        <option>must</option>
+                        <option selected>should</option>
+                        <option>could</option>
+                        <option>wont</option>
+                      </select>
+                    </div>
+
+                    <div class="form-row">
+                      <label for="new-requirement-description">Description</label>
+                      <textarea id="new-requirement-description" name="new-requirement-description">Add planning routes with explicit loading, empty, error, and not_found states, plus create/edit/delete/refine actions.</textarea>
+                      <small>Use concise acceptance language; include deep-link behavior.</small>
+                    </div>
+
+                    <p class="inline-error" role="alert">
+                      code=invalid_input | message=Title must be at least 6 characters | exitCode=2
+                    </p>
+
+                    <div class="form-actions">
+                      <button class="button" type="button">Create Requirement</button>
+                      <button class="button-ghost" type="button">Cancel</button>
+                    </div>
+                  </form>
+                </section>
+
+                <section class="panel" aria-labelledby="detail-delete-title">
+                  <h3 id="detail-delete-title">Requirement Detail and Delete Safety</h3>
+                  <p>
+                    Route: <code>/planning/requirements/REQ-AbC-017</code> with scoped refine and explicit delete confirmation.
+                  </p>
+
+                  <div class="selection-toolbar">
+                    <button class="button" type="button">Save Changes</button>
+                    <button class="button-ghost" type="button">Refine This Requirement</button>
+                    <button class="button-danger" type="button">Delete Requirement</button>
+                  </div>
+
+                  <div class="dialog-sample" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-body">
+                    <h4 id="delete-dialog-title">Delete REQ-AbC-017?</h4>
+                    <p id="delete-dialog-body">
+                      This permanently removes the requirement from planning surfaces.
+                      Continue only if this ID should no longer resolve.
+                    </p>
+                    <div class="dialog-actions">
+                      <button class="button-ghost" type="button">Cancel</button>
+                      <button class="button-danger" type="button">Confirm Delete</button>
+                    </div>
+                    <p class="inline-help">
+                      Dialog behavior: initial focus on cancel, focus trap while open, and escape-to-close.
+                    </p>
+                  </div>
+
+                  <div class="state-banner error" role="alert">
+                    <strong>Recoverable not_found:</strong> <code>REQ-AbC-017</code> no longer exists.
+                    Return to <a href="#">Requirements List</a> or create a replacement.
+                  </div>
+
+                  <div class="handoff-card">
+                    <p><strong>Project Surface Handoff</strong></p>
+                    <p>
+                      From <code>/projects/alpha-launch/requirements/REQ-AbC-017</code>,
+                      show a visible action to open the planning editor.
+                    </p>
+                    <div class="handoff-link-row">
+                      <button class="button-link" type="button">Edit in Planning Workspace</button>
+                      <span class="source-tag">target: /planning/requirements/REQ-AbC-017</span>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div class="state-banner error" role="alert">
+                Shared envelope error shape in all screens: code, message, exitCode.
+                Example: <code>{"code":"unavailable","message":"planning refine timeout","exitCode":5}</code>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-board-title">
+        <h2 class="board-title" id="mobile-board-title">
+          Mobile 320px Planning Flows (No Horizontal Scroll)
+        </h2>
+
+        <div class="mobile-lab">
+          <div class="mobile-grid">
+            <article class="phone-frame" aria-label="Mobile planning requirements list">
+              <header class="phone-header">
+                <button class="menu-button" type="button" aria-label="Open menu">Menu</button>
+                <h3 class="phone-title">Planning / Requirements</h3>
+              </header>
+
+              <div class="phone-content">
+                <div class="mobile-panel">
+                  <h4>Batch Actions</h4>
+                  <p>New, refine selected, and refine all stack vertically for thumb reach.</p>
+                </div>
+
+                <button class="button" type="button">New Requirement</button>
+                <button class="button-ghost" type="button">Refine Selected (1)</button>
+                <button class="button-ghost" type="button">Refine All</button>
+
+                <ul class="mobile-list" aria-label="Mobile requirements list">
+                  <li>
+                    <strong>REQ-021</strong>
+                    <p>Keyboard-first checklist for planning forms</p>
+                  </li>
+                  <li>
+                    <strong>REQ-AbC-017</strong>
+                    <p>Case-preserving deep links from project and planning routes</p>
+                  </li>
+                </ul>
+              </div>
+            </article>
+
+            <article class="phone-frame" aria-label="Mobile vision authoring">
+              <header class="phone-header">
+                <button class="menu-button" type="button" aria-label="Open menu">Menu</button>
+                <h3 class="phone-title">Planning / Vision</h3>
+              </header>
+
+              <div class="phone-content">
+                <div class="state-banner pending">
+                  refine pending: generating revised goals and constraints
+                </div>
+
+                <div class="mobile-panel">
+                  <h4>Required Fields</h4>
+                  <p>Project name, problem, target users, goals, constraints, value proposition.</p>
+                </div>
+
+                <div class="mobile-panel">
+                  <h4>Safety Confirmation</h4>
+                  <p>Refine All opens a confirmation sheet before calling the all-scope mutation.</p>
+                </div>
+
+                <button class="button" type="button">Save Vision</button>
+                <button class="button-ghost" type="button">Refine Vision</button>
+
+                <div class="state-banner success">
+                  save success: persisted to <code>/api/v1/vision</code>
+                </div>
+              </div>
+            </article>
+
+            <article class="phone-frame" aria-label="Mobile requirement deep-link recovery">
+              <header class="phone-header">
+                <button class="menu-button" type="button" aria-label="Open menu">Menu</button>
+                <h3 class="phone-title">Planning / Requirement / REQ-AbC-017</h3>
+              </header>
+
+              <div class="phone-content">
+                <div class="state-banner error" role="alert">
+                  not_found: requirement was deleted or never existed.
+                </div>
+
+                <button class="button-link" type="button">Back to Requirements List</button>
+                <button class="button" type="button">Create Replacement Requirement</button>
+
+                <div class="mobile-panel">
+                  <h4>Deep-link integrity</h4>
+                  <p>
+                    Requirement ID is displayed exactly as typed in the URL.
+                    Casing is not normalized by the client router.
+                  </p>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="state-matrix-title">
+        <h2 class="board-title" id="state-matrix-title">Planning State and Endpoint Matrix</h2>
+
+        <div class="shell-content">
+          <div class="state-matrix-wrap">
+            <table class="state-matrix">
+              <thead>
+                <tr>
+                  <th>Route</th>
+                  <th>Read Dependencies</th>
+                  <th>Primary Mutations</th>
+                  <th>Required States</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>/planning/vision</code></td>
+                  <td><code>GET /api/v1/vision</code></td>
+                  <td><code>POST /api/v1/vision</code>, <code>POST /api/v1/vision/refine</code></td>
+                  <td>loading, empty, ready, pending, success, error</td>
+                </tr>
+                <tr>
+                  <td><code>/planning/requirements</code></td>
+                  <td><code>GET /api/v1/requirements</code></td>
+                  <td><code>POST /api/v1/requirements/refine</code>, <code>POST /api/v1/requirements/draft</code></td>
+                  <td>loading, empty, selection-active, pending, success, error</td>
+                </tr>
+                <tr>
+                  <td><code>/planning/requirements/new</code></td>
+                  <td>none (form-first)</td>
+                  <td><code>POST /api/v1/requirements</code></td>
+                  <td>initial, validation-error, pending, success-redirect, failure</td>
+                </tr>
+                <tr>
+                  <td><code>/planning/requirements/:requirementId</code></td>
+                  <td><code>GET /api/v1/requirements/:id</code></td>
+                  <td><code>PATCH /api/v1/requirements/:id</code>, <code>DELETE /api/v1/requirements/:id</code>, <code>POST /api/v1/requirements/refine</code></td>
+                  <td>loading, ready, pending, not_found, delete-confirm, error</td>
+                </tr>
+                <tr>
+                  <td><code>/projects/:projectId/requirements/:requirementId</code></td>
+                  <td><code>GET /api/v1/project-requirements/:projectId/:requirementId</code></td>
+                  <td>navigation handoff only</td>
+                  <td>loading, ready, not_found, planning-link-visible</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="doc-footer">
+      Wireframes emphasize deterministic state feedback, keyboard-first controls,
+      route-stable deep links, and responsive planning behavior down to 320px.
+    </footer>
+  </body>
+</html>

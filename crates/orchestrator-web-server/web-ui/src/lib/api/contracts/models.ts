@@ -125,3 +125,135 @@ export type WorkflowCheckpointDetail = JsonRecord;
 export type ReviewHandoffResponse = JsonRecord & {
   status: string;
 };
+
+export type RequirementPriorityValue = "must" | "should" | "could" | "wont" | "unknown";
+
+export type RequirementStatusValue =
+  | "draft"
+  | "refined"
+  | "planned"
+  | "in-progress"
+  | "done"
+  | "po-review"
+  | "em-review"
+  | "needs-rework"
+  | "approved"
+  | "implemented"
+  | "deprecated"
+  | "unknown";
+
+export type RequirementTypeValue =
+  | "product"
+  | "functional"
+  | "non-functional"
+  | "technical"
+  | "other"
+  | "unknown";
+
+export type PlanningVisionDraftInput = {
+  project_name?: string;
+  problem_statement: string;
+  target_users: string[];
+  goals: string[];
+  constraints: string[];
+  value_proposition?: string;
+};
+
+export type PlanningVisionRefineInput = {
+  focus?: string;
+};
+
+export type PlanningVisionDocument = JsonRecord & {
+  id: string;
+  project_root: string;
+  markdown: string;
+  problem_statement: string;
+  target_users: string[];
+  goals: string[];
+  constraints: string[];
+  value_proposition?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlanningVisionRefineResult = JsonRecord & {
+  updated_vision: PlanningVisionDocument;
+  refinement: JsonRecord & {
+    mode: string;
+    focus?: string;
+    rationale?: string;
+    changes?: JsonRecord;
+  };
+};
+
+export type PlanningRequirementItem = JsonRecord & {
+  id: string;
+  title: string;
+  description: string;
+  body?: string;
+  category?: string;
+  requirement_type?: RequirementTypeValue;
+  acceptance_criteria: string[];
+  priority: RequirementPriorityValue;
+  status: RequirementStatusValue;
+  source: string;
+  tags: string[];
+  linked_task_ids: string[];
+  relative_path?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlanningRequirementCreateInput = {
+  id?: string;
+  title: string;
+  description?: string;
+  body?: string;
+  category?: string;
+  requirement_type?: RequirementTypeValue | "non_functional";
+  acceptance_criteria?: string[];
+  priority?: "must" | "should" | "could" | "wont" | "won't";
+  status?:
+    | "draft"
+    | "refined"
+    | "planned"
+    | "in-progress"
+    | "in_progress"
+    | "done"
+    | "po-review"
+    | "em-review"
+    | "needs-rework"
+    | "approved"
+    | "implemented"
+    | "deprecated";
+  source?: string;
+  tags?: string[];
+  linked_task_ids?: string[];
+  relative_path?: string;
+};
+
+export type PlanningRequirementUpdateInput = Partial<PlanningRequirementCreateInput>;
+
+export type PlanningRequirementsDraftInput = {
+  include_codebase_scan?: boolean;
+  append_only?: boolean;
+  max_requirements?: number;
+};
+
+export type PlanningRequirementsDraftResult = JsonRecord & {
+  requirements: PlanningRequirementItem[];
+  appended_count: number;
+};
+
+export type PlanningRequirementsRefineInput = {
+  requirement_ids?: string[];
+  focus?: string;
+};
+
+export type PlanningRequirementsRefineResult = JsonRecord & {
+  requirements: PlanningRequirementItem[];
+  updated_ids: string[];
+  requested_ids: string[];
+  scope: "selected" | "all";
+  focus?: string;
+};
