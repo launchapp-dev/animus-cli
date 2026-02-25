@@ -630,21 +630,13 @@ pub(super) async fn run_workflow_phase_with_agent(
                     .expect("json object")
                     .insert("policy".to_string(), policy);
             }
-            inject_codex_search_launch_flag(
+            inject_cli_launch_overrides(
                 &mut runtime_contract,
                 context
                     .get("tool")
                     .and_then(Value::as_str)
                     .unwrap_or("codex"),
-                phase_runtime_settings.and_then(|settings| settings.web_search),
-            );
-            inject_codex_reasoning_effort(
-                &mut runtime_contract,
-                context
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or("codex"),
-                phase_runtime_settings.and_then(|settings| settings.reasoning_effort.as_deref()),
+                phase_runtime_settings,
             );
             context
                 .as_object_mut()
@@ -1104,19 +1096,29 @@ pub(super) async fn run_workflow_phase(
 
     match definition.mode {
         orchestrator_core::PhaseExecutionMode::Agent => {
-            let runtime_settings =
-                definition
-                    .runtime
-                    .as_ref()
-                    .map(|runtime| WorkflowPhaseRuntimeSettings {
-                        tool: runtime.tool.clone(),
-                        model: runtime.model.clone(),
-                        fallback_models: runtime.fallback_models.clone(),
-                        reasoning_effort: runtime.reasoning_effort.clone(),
-                        web_search: runtime.web_search,
-                        timeout_secs: runtime.timeout_secs,
-                        max_attempts: runtime.max_attempts,
-                    });
+            let runtime_settings = Some(WorkflowPhaseRuntimeSettings {
+                tool: runtime_loaded
+                    .config
+                    .phase_tool_override(phase_id)
+                    .map(ToOwned::to_owned),
+                model: runtime_loaded
+                    .config
+                    .phase_model_override(phase_id)
+                    .map(ToOwned::to_owned),
+                fallback_models: runtime_loaded.config.phase_fallback_models(phase_id),
+                reasoning_effort: runtime_loaded
+                    .config
+                    .phase_reasoning_effort(phase_id)
+                    .map(ToOwned::to_owned),
+                web_search: runtime_loaded.config.phase_web_search(phase_id),
+                network_access: runtime_loaded.config.phase_network_access(phase_id),
+                timeout_secs: runtime_loaded.config.phase_timeout_secs(phase_id),
+                max_attempts: runtime_loaded.config.phase_max_attempts(phase_id),
+                extra_args: runtime_loaded.config.phase_extra_args(phase_id),
+                codex_config_overrides: runtime_loaded
+                    .config
+                    .phase_codex_config_overrides(phase_id),
+            });
 
             let routing_complexity = routing_complexity(task_complexity);
             let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(

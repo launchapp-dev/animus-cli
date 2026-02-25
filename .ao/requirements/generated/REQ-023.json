@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "AO supports multiple auth profiles per provider with explicit ordering and stored usage/cooldown state.",
+    "On retryable failures, runtime rotates to the next eligible profile using bounded backoff before escalating to model fallback.",
+    "When profile rotation is exhausted, runtime falls back through a configured model chain and emits structured failover events.",
+    "Session-level pinning/override behavior is documented and test-covered so operators can force a specific profile/model when needed.",
+    "CLI commands expose profile health/status and failover diagnostics for troubleshooting."
+  ],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-02-25T19:50:53.193064Z",
+  "description": "Agent execution reliability improves by rotating credentials within a provider and failing over across configured models when rate limits, auth errors, or provider outages occur.\n\nImplementation boundary: orchestrator-cli plus agent-runner runtime contract and state handling; excludes provider-specific SDK additions unrelated to failover.",
+  "id": "REQ-023",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-023"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "must",
+  "status": "draft",
+  "tags": [],
+  "title": "Implement auth-profile rotation and model failover for agent runs",
+  "type": null,
+  "updated_at": "2026-02-25T19:51:03.512167Z"
+}

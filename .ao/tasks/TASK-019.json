@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-25T23:56:17.822314Z",
     "created_at": "2026-02-24T20:06:43.324702Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-25T15:04:44.362764Z",
-    "updated_at": "2026-02-25T15:08:04.504829Z",
-    "updated_by": "ao-cli",
-    "version": 4
+    "updated_at": "2026-02-25T23:56:17.822317Z",
+    "updated_by": "ao-daemon",
+    "version": 7
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Implement structured observability and diagnostics panel",
   "type": "feature",

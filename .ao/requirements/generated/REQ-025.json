@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "Runtime supports configurable sandbox modes with documented defaults and predictable behavior across main vs non-main sessions.",
+    "Operators can define per-agent or per-task tool allow/deny rules, enforced before tool execution.",
+    "Elevated/host-level execution paths require explicit policy opt-in and produce auditable events.",
+    "ao doctor surfaces unsafe policy combinations (for example unrestricted tools with untrusted input paths).",
+    "Integration tests validate isolation and policy enforcement under representative workflows."
+  ],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-02-25T19:50:54.986620Z",
+  "description": "AO needs explicit sandbox modes and tool allow/deny policies to reduce blast radius when running against untrusted inputs or high-risk automations.\n\nImplementation boundary: runtime policy enforcement in agent-runner and surfaced controls in ao CLI.",
+  "id": "REQ-025",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-025"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "must",
+  "status": "draft",
+  "tags": [],
+  "title": "Enforce policy-based sandbox and tool restrictions per agent/task",
+  "type": null,
+  "updated_at": "2026-02-25T19:51:06.700208Z"
+}

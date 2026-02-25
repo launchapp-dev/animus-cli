@@ -94,6 +94,32 @@ async fn file_hub_persists_projects_with_rich_payload() {
     );
 }
 
+#[test]
+fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _hub = FileServiceHub::new(temp.path()).expect("create hub");
+
+    let state_path = temp.path().join(".ao").join("core-state.json");
+    let mut raw: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&state_path).expect("core-state should be readable"),
+    )
+    .expect("core-state should parse");
+    raw.as_object_mut()
+        .expect("core-state is object")
+        .insert(
+            "__sentinel".to_string(),
+            serde_json::json!({"source":"regression-test"}),
+        );
+    std::fs::write(&state_path, serde_json::to_string_pretty(&raw).expect("serialize state"))
+        .expect("write state with sentinel");
+    let before = std::fs::read_to_string(&state_path).expect("read sentinel state");
+
+    let _reloaded = FileServiceHub::new(temp.path()).expect("reload hub");
+    let after = std::fs::read_to_string(&state_path).expect("read reloaded state");
+
+    assert_eq!(before, after, "hub startup should not rewrite core-state");
+}
+
 #[tokio::test]
 async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     let temp = tempfile::tempdir().expect("tempdir");

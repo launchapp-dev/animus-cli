@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "AO provides CLI verbs to search, install, list, update, and publish skills against a registry-compatible API.",
+    "Skill resolution supports clear precedence across bundled, user-managed, and workspace-local skill directories.",
+    "Installed skills are tracked with a lockfile containing version and integrity metadata for reproducible environments.",
+    "Update workflows include dry-run/force semantics and detect local divergence before overwrite.",
+    "Security controls exist for untrusted skills, including review guidance and configurable trust/allowlist policy hooks."
+  ],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-02-25T19:50:54.023037Z",
+  "description": "AO should support a first-class skill ecosystem with discoverable, versioned skill bundles and deterministic local installs so teams can reuse agent capabilities safely.\n\nImplementation boundary: AO CLI and runtime skill lifecycle; excludes desktop shell integrations.",
+  "id": "REQ-024",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-024"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "should",
+  "status": "draft",
+  "tags": [],
+  "title": "Add versioned AO skill registry workflows with install/update/publish",
+  "type": null,
+  "updated_at": "2026-02-25T19:52:40.730284Z"
+}

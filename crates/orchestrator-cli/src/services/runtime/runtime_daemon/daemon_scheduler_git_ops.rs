@@ -1109,6 +1109,18 @@ fn preferred_worktree_base_ref(project_root: &str) -> String {
     "HEAD".to_string()
 }
 
+fn refresh_preferred_worktree_base_refs(project_root: &str) {
+    for branch in ["main", "master"] {
+        let _ = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(["fetch", "--no-tags", "origin", branch])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 pub(super) async fn ensure_task_execution_cwd(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
@@ -1195,6 +1207,7 @@ pub(super) async fn ensure_task_execution_cwd(
                 )
             })?
     } else {
+        refresh_preferred_worktree_base_refs(project_root);
         let base_ref = preferred_worktree_base_ref(project_root);
         ProcessCommand::new("git")
             .arg("-C")

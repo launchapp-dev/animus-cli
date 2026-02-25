@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-02-25T04:04:04.388862Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "merge gate: auto-merge failed: git operation 'create merge worktree' failed in /Users/samishukri/ao-cli: git worktree add /Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/__merge-main main",
+  "blocked_reason": null,
   "branch_name": "ao/task-008",
   "cancelled": false,
   "checklist": [],
@@ -19,15 +19,15 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-25T23:56:17.614014Z",
     "created_at": "2026-02-24T19:48:30.745668Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-25T03:27:07.572358Z",
-    "updated_at": "2026-02-25T04:04:04.388876Z",
+    "updated_at": "2026-02-25T23:56:17.614017Z",
     "updated_by": "ao-daemon",
-    "version": 13
+    "version": 14
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "done",
   "tags": [],
   "title": "Add contract tests for JSON output envelope stability",
   "type": "test",

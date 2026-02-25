@@ -65,9 +65,15 @@ struct LegacyPhaseRuntimeSettings {
     #[serde(default)]
     web_search: Option<bool>,
     #[serde(default)]
+    network_access: Option<bool>,
+    #[serde(default)]
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_attempts: Option<usize>,
+    #[serde(default)]
+    extra_args: Vec<String>,
+    #[serde(default)]
+    codex_config_overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -99,9 +105,15 @@ struct LegacyAgentProfile {
     #[serde(default)]
     web_search: Option<bool>,
     #[serde(default)]
+    network_access: Option<bool>,
+    #[serde(default)]
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_attempts: Option<usize>,
+    #[serde(default)]
+    extra_args: Vec<String>,
+    #[serde(default)]
+    codex_config_overrides: Vec<String>,
     #[serde(default)]
     phase_directive: Option<String>,
     #[serde(default)]
@@ -515,8 +527,11 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         fallback_models: profile.fallback_models.clone(),
                         reasoning_effort: profile.reasoning_effort.clone(),
                         web_search: profile.web_search,
+                        network_access: profile.network_access,
                         timeout_secs: profile.timeout_secs,
                         max_attempts: profile.max_attempts,
+                        extra_args: profile.extra_args.clone(),
+                        codex_config_overrides: profile.codex_config_overrides.clone(),
                     },
                 )
             })
@@ -570,8 +585,11 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                 fallback_models: settings.fallback_models.clone(),
                 reasoning_effort: settings.reasoning_effort.clone(),
                 web_search: settings.web_search,
+                network_access: settings.network_access,
                 timeout_secs: settings.timeout_secs,
                 max_attempts: settings.max_attempts,
+                extra_args: settings.extra_args.clone(),
+                codex_config_overrides: settings.codex_config_overrides.clone(),
             }
         });
 

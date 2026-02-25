@@ -129,6 +129,7 @@ fn requirement_needs_refinement(requirement: &RequirementItem) -> bool {
     runtime_support::requirement_needs_refinement(requirement)
 }
 
+#[cfg(test)]
 fn inject_codex_search_launch_flag(
     runtime_contract: &mut Value,
     tool_id: &str,
@@ -137,12 +138,30 @@ fn inject_codex_search_launch_flag(
     runtime_support::inject_codex_search_launch_flag(runtime_contract, tool_id, web_search_override)
 }
 
+#[cfg(test)]
 fn inject_codex_reasoning_effort(
     runtime_contract: &mut Value,
     tool_id: &str,
     reasoning_override: Option<&str>,
 ) {
     runtime_support::inject_codex_reasoning_effort(runtime_contract, tool_id, reasoning_override)
+}
+
+#[cfg(test)]
+fn inject_codex_network_access(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    network_access_override: Option<bool>,
+) {
+    runtime_support::inject_codex_network_access(runtime_contract, tool_id, network_access_override)
+}
+
+fn inject_cli_launch_overrides(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) {
+    runtime_support::inject_cli_launch_overrides(runtime_contract, tool_id, phase_runtime_settings)
 }
 
 #[cfg(test)]
@@ -753,6 +772,122 @@ mod tests {
     }
 
     #[test]
+    fn inject_codex_network_access_enabled_by_default() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let _network = EnvVarGuard::set("AO_CODEX_NETWORK_ACCESS", None);
+        let mut contract = build_runtime_contract("codex", "gpt-5.3-codex", "hello")
+            .expect("runtime contract should build");
+        inject_codex_network_access(&mut contract, "codex", None);
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"-c"));
+        assert!(args.contains(&"sandbox_workspace_write.network_access=true"));
+    }
+
+    #[test]
+    fn inject_codex_network_access_respects_disable_toggle() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let _network = EnvVarGuard::set("AO_CODEX_NETWORK_ACCESS", Some("false"));
+        let mut contract = build_runtime_contract("codex", "gpt-5.3-codex", "hello")
+            .expect("runtime contract should build");
+        inject_codex_network_access(&mut contract, "codex", None);
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"sandbox_workspace_write.network_access=false"));
+    }
+
+    #[test]
+    fn inject_cli_launch_overrides_applies_claude_extra_args_from_env() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let _extra_args = EnvVarGuard::set(
+            "AO_CLAUDE_EXTRA_ARGS_JSON",
+            Some("[\"--max-turns\", \"2\"]"),
+        );
+        let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        inject_cli_launch_overrides(&mut contract, "claude", None);
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--max-turns"));
+        assert!(args.contains(&"2"));
+    }
+
+    #[test]
+    fn inject_cli_launch_overrides_applies_codex_config_and_extra_args_from_phase_settings() {
+        let mut contract = build_runtime_contract("codex", "gpt-5.3-codex", "hello")
+            .expect("runtime contract should build");
+        let runtime_settings = WorkflowPhaseRuntimeSettings {
+            tool: None,
+            model: None,
+            fallback_models: vec![],
+            reasoning_effort: None,
+            web_search: None,
+            network_access: Some(true),
+            timeout_secs: None,
+            max_attempts: None,
+            extra_args: vec!["--search".to_string()],
+            codex_config_overrides: vec![
+                "sandbox_workspace_write.network_access=false".to_string(),
+                "model_reasoning_effort=\"high\"".to_string(),
+            ],
+        };
+        inject_cli_launch_overrides(&mut contract, "codex", Some(&runtime_settings));
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--search"));
+        assert!(args.contains(&"sandbox_workspace_write.network_access=false"));
+        assert!(args.contains(&"model_reasoning_effort=\"high\""));
+    }
+
+    #[test]
+    fn inject_cli_launch_overrides_applies_gemini_extra_args_from_phase_settings() {
+        let mut contract = build_runtime_contract("gemini", "gemini-2.5-pro", "hello")
+            .expect("runtime contract should build");
+        let runtime_settings = WorkflowPhaseRuntimeSettings {
+            tool: None,
+            model: None,
+            fallback_models: vec![],
+            reasoning_effort: None,
+            web_search: None,
+            network_access: None,
+            timeout_secs: None,
+            max_attempts: None,
+            extra_args: vec!["--experimental-foo".to_string(), "on".to_string()],
+            codex_config_overrides: vec![],
+        };
+        inject_cli_launch_overrides(&mut contract, "gemini", Some(&runtime_settings));
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--experimental-foo"));
+        assert!(args.contains(&"on"));
+    }
+
+    #[test]
     fn phase_runtime_settings_lookup_matches_pipeline_and_phase() {
         let config = WorkflowRuntimeConfigLite {
             default_pipeline_id: "standard".to_string(),
@@ -766,8 +901,11 @@ mod tests {
                         fallback_models: Vec::new(),
                         reasoning_effort: Some("xhigh".to_string()),
                         web_search: Some(true),
+                        network_access: None,
                         timeout_secs: None,
                         max_attempts: None,
+                        extra_args: vec![],
+                        codex_config_overrides: vec![],
                     },
                 )]),
             }],

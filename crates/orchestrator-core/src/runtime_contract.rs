@@ -164,6 +164,9 @@ pub fn build_cli_launch_contract(
                 "exec".to_string(),
                 "--json".to_string(),
                 "--full-auto".to_string(),
+                // Ensure workflow agents can reach external package registries/docs when needed.
+                "-c".to_string(),
+                "sandbox_workspace_write.network_access=true".to_string(),
                 "--skip-git-repo-check".to_string(),
             ];
             if has_specific_model {
@@ -398,6 +401,8 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         assert!(codex_args.contains(&"--json"));
+        assert!(codex_args.contains(&"-c"));
+        assert!(codex_args.contains(&"sandbox_workspace_write.network_access=true"));
 
         let claude = build_cli_launch_contract("claude", "claude-opus-4-1", "hello", None, None)
             .expect("claude launch contract should build");

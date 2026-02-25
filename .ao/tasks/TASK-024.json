@@ -6,29 +6,29 @@
   "blocked_by": null,
   "blocked_phase": null,
   "blocked_reason": null,
-  "branch_name": "ao/task-007",
+  "branch_name": "ao/task-024",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Add automated policy checks and docs updates to enforce Rust-only dependency boundaries.",
+  "description": "Add search/install/list/update/publish skills workflow, precedence resolution, and reproducible lockfile behavior per REQ-024.",
   "estimated_effort": null,
-  "id": "TASK-007",
+  "id": "TASK-024",
   "impact_area": [],
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": "2026-02-25T23:56:18.458390Z",
-    "created_at": "2026-02-24T19:48:30.630741Z",
+    "completed_at": null,
+    "created_at": "2026-02-25T19:52:14.457121Z",
     "created_by": "ao-cli",
-    "started_at": "2026-02-25T03:27:07.612244Z",
-    "updated_at": "2026-02-25T23:56:18.458393Z",
-    "updated_by": "ao-daemon",
-    "version": 14
+    "started_at": "2026-02-25T22:52:55.489451Z",
+    "updated_at": "2026-02-25T23:51:48.657474Z",
+    "updated_by": "ao-cli",
+    "version": 9
   },
   "paused": false,
-  "priority": "high",
+  "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
     "max_memory_mb": null,
@@ -36,10 +36,10 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "done",
+  "status": "in-progress",
   "tags": [],
-  "title": "Implement dependency policy checks for Rust-only guardrail",
-  "type": "chore",
+  "title": "Implement versioned skill registry lifecycle commands",
+  "type": "feature",
   "workflow_metadata": {
     "requires_architecture": false,
     "requires_design": false,
@@ -48,5 +48,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-007"
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-024"
 }

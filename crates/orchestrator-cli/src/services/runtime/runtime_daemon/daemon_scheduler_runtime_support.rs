@@ -13,9 +13,15 @@ pub(super) struct WorkflowPhaseRuntimeSettings {
     #[serde(default)]
     pub(super) web_search: Option<bool>,
     #[serde(default)]
+    pub(super) network_access: Option<bool>,
+    #[serde(default)]
     pub(super) timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) max_attempts: Option<usize>,
+    #[serde(default)]
+    pub(super) extra_args: Vec<String>,
+    #[serde(default)]
+    pub(super) codex_config_overrides: Vec<String>,
 }
 
 #[cfg(test)]
@@ -185,6 +191,217 @@ fn codex_exec_insert_index(args: &[Value]) -> usize {
         .unwrap_or(0)
 }
 
+fn launch_prompt_insert_index(args: &[Value]) -> usize {
+    args.len().saturating_sub(1)
+}
+
+fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
+    let key_prefix = format!("{key}=");
+    let target = format!("{key}={value_expr}");
+
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        let Some(flag) = args[index].as_str() else {
+            index += 1;
+            continue;
+        };
+        if flag == "-c" || flag == "--config" {
+            if let Some(existing) = args.get(index + 1).and_then(Value::as_str) {
+                if existing.starts_with(&key_prefix) {
+                    args[index + 1] = Value::String(target);
+                    return;
+                }
+            }
+        }
+        index += 1;
+    }
+
+    let insert_at = codex_exec_insert_index(args);
+    args.insert(insert_at, Value::String("-c".to_string()));
+    args.insert(insert_at + 1, Value::String(target));
+}
+
+fn codex_network_access_enabled(network_access_override: Option<bool>) -> bool {
+    network_access_override.unwrap_or_else(|| {
+        std::env::var("AO_CODEX_NETWORK_ACCESS")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .map(|value| !matches!(value.as_str(), "0" | "false" | "no" | "off"))
+            .unwrap_or(true)
+    })
+}
+
+fn parse_env_string_list_json(
+    key: &str,
+    fallback_key: Option<&str>,
+    split_by_semicolon: bool,
+) -> Vec<String> {
+    let parse_json = |raw: &str| {
+        serde_json::from_str::<Vec<String>>(raw)
+            .ok()
+            .unwrap_or_default()
+    };
+    let normalize = |items: Vec<String>| {
+        items
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+    };
+
+    if let Ok(raw) = std::env::var(key) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return normalize(parse_json(trimmed));
+        }
+    }
+
+    let Some(fallback_key) = fallback_key else {
+        return Vec::new();
+    };
+
+    let Ok(raw) = std::env::var(fallback_key) else {
+        return Vec::new();
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    if split_by_semicolon {
+        return normalize(trimmed.split(';').map(ToOwned::to_owned).collect());
+    }
+
+    normalize(trimmed.split_whitespace().map(ToOwned::to_owned).collect())
+}
+
+fn cli_tool_extra_args_env_keys(tool_id: &str) -> Option<(&'static str, &'static str)> {
+    match tool_id.trim().to_ascii_lowercase().as_str() {
+        "codex" => Some(("AO_CODEX_EXTRA_ARGS_JSON", "AO_CODEX_EXTRA_ARGS")),
+        "claude" => Some(("AO_CLAUDE_EXTRA_ARGS_JSON", "AO_CLAUDE_EXTRA_ARGS")),
+        "gemini" => Some(("AO_GEMINI_EXTRA_ARGS_JSON", "AO_GEMINI_EXTRA_ARGS")),
+        "opencode" | "open-code" => {
+            Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS"))
+        }
+        _ => None,
+    }
+}
+
+fn resolved_phase_extra_args(
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) -> Vec<String> {
+    if let Some(settings) = phase_runtime_settings {
+        let explicit = settings
+            .extra_args
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if !explicit.is_empty() {
+            return explicit;
+        }
+    }
+
+    let mut resolved =
+        parse_env_string_list_json("AO_AI_CLI_EXTRA_ARGS_JSON", Some("AO_AI_CLI_EXTRA_ARGS"), false);
+    if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool_id) {
+        resolved.extend(parse_env_string_list_json(
+            json_key,
+            Some(plain_key),
+            false,
+        ));
+    }
+
+    resolved
+}
+
+fn parse_codex_override_entry(entry: &str) -> Option<(String, String)> {
+    let trimmed = entry.trim();
+    let (key, value_expr) = trimmed.split_once('=')?;
+    let key = key.trim();
+    let value_expr = value_expr.trim();
+    if key.is_empty() || value_expr.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value_expr.to_string()))
+}
+
+fn resolved_codex_config_overrides(
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) -> Vec<(String, String)> {
+    let from_settings = phase_runtime_settings
+        .map(|settings| settings.codex_config_overrides.as_slice())
+        .unwrap_or_default();
+    let overrides: Vec<(String, String)> = from_settings
+        .iter()
+        .filter_map(|entry| parse_codex_override_entry(entry))
+        .collect();
+
+    if !overrides.is_empty() {
+        return overrides;
+    }
+
+    parse_env_string_list_json(
+        "AO_CODEX_EXTRA_CONFIG_OVERRIDES_JSON",
+        Some("AO_CODEX_EXTRA_CONFIG_OVERRIDES"),
+        true,
+    )
+    .iter()
+    .filter_map(|entry| parse_codex_override_entry(entry))
+    .collect()
+}
+
+fn inject_cli_extra_args(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) {
+    let extra_args = resolved_phase_extra_args(tool_id, phase_runtime_settings);
+    if extra_args.is_empty() {
+        return;
+    }
+
+    let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+
+    let mut insert_at = launch_prompt_insert_index(args);
+    for extra_arg in extra_args {
+        args.insert(insert_at, Value::String(extra_arg));
+        insert_at += 1;
+    }
+}
+
+fn inject_codex_extra_config_overrides(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) {
+    if !tool_id.eq_ignore_ascii_case("codex") {
+        return;
+    }
+
+    let overrides = resolved_codex_config_overrides(phase_runtime_settings);
+    if overrides.is_empty() {
+        return;
+    }
+
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        for (key, value_expr) in overrides {
+            ensure_codex_config_override(args, &key, &value_expr);
+        }
+    }
+}
+
 pub(super) fn inject_codex_search_launch_flag(
     runtime_contract: &mut Value,
     tool_id: &str,
@@ -253,4 +470,51 @@ pub(super) fn inject_codex_reasoning_effort(
             );
         }
     }
+}
+
+pub(super) fn inject_codex_network_access(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    network_access_override: Option<bool>,
+) {
+    if !tool_id.eq_ignore_ascii_case("codex") {
+        return;
+    }
+
+    let value_expr = if codex_network_access_enabled(network_access_override) {
+        "true"
+    } else {
+        "false"
+    };
+
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        ensure_codex_config_override(args, "sandbox_workspace_write.network_access", value_expr);
+    }
+}
+
+pub(super) fn inject_cli_launch_overrides(
+    runtime_contract: &mut Value,
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+) {
+    inject_codex_search_launch_flag(
+        runtime_contract,
+        tool_id,
+        phase_runtime_settings.and_then(|settings| settings.web_search),
+    );
+    inject_codex_reasoning_effort(
+        runtime_contract,
+        tool_id,
+        phase_runtime_settings.and_then(|settings| settings.reasoning_effort.as_deref()),
+    );
+    inject_codex_network_access(
+        runtime_contract,
+        tool_id,
+        phase_runtime_settings.and_then(|settings| settings.network_access),
+    );
+    inject_codex_extra_config_overrides(runtime_contract, tool_id, phase_runtime_settings);
+    inject_cli_extra_args(runtime_contract, tool_id, phase_runtime_settings);
 }

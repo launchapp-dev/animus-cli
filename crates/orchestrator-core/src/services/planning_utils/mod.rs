@@ -168,7 +168,6 @@ pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
     let cargo_toml_path = project_root.join("Cargo.toml");
     if cargo_toml_path.exists() {
         insight.detected_stacks.push("rust".to_string());
-        if let Ok(content) = std::fs::read_to_string(cargo_toml_path) {}
     }
 
     let mut stack_set = std::collections::BTreeSet::new();

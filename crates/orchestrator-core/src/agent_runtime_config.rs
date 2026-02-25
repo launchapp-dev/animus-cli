@@ -62,9 +62,15 @@ pub struct AgentRuntimeOverrides {
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
+    pub network_access: Option<bool>,
+    #[serde(default)]
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub codex_config_overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,9 +90,15 @@ pub struct AgentProfile {
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
+    pub network_access: Option<bool>,
+    #[serde(default)]
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_attempts: Option<usize>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub codex_config_overrides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +221,16 @@ fn trim_nonempty(value: Option<&str>) -> Option<&str> {
         .filter(|candidate| !candidate.is_empty())
 }
 
+fn normalized_nonempty_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 impl AgentRuntimeConfig {
     pub fn has_phase_definition(&self, phase_id: &str) -> bool {
         self.phase_execution(phase_id).is_some()
@@ -321,6 +343,16 @@ impl AgentRuntimeConfig {
             })
     }
 
+    pub fn phase_network_access(&self, phase_id: &str) -> Option<bool> {
+        self.phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .and_then(|runtime| runtime.network_access)
+            .or_else(|| {
+                self.phase_agent_profile(phase_id)
+                    .and_then(|profile| profile.network_access)
+            })
+    }
+
     pub fn phase_timeout_secs(&self, phase_id: &str) -> Option<u64> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
@@ -339,6 +371,36 @@ impl AgentRuntimeConfig {
                 self.phase_agent_profile(phase_id)
                     .and_then(|profile| profile.max_attempts)
             })
+    }
+
+    pub fn phase_extra_args(&self, phase_id: &str) -> Vec<String> {
+        if let Some(args) = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| normalized_nonempty_values(&runtime.extra_args))
+            .filter(|args| !args.is_empty())
+        {
+            return args;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| normalized_nonempty_values(&profile.extra_args))
+            .unwrap_or_default()
+    }
+
+    pub fn phase_codex_config_overrides(&self, phase_id: &str) -> Vec<String> {
+        if let Some(overrides) = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| normalized_nonempty_values(&runtime.codex_config_overrides))
+            .filter(|overrides| !overrides.is_empty())
+        {
+            return overrides;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| normalized_nonempty_values(&profile.codex_config_overrides))
+            .unwrap_or_default()
     }
 
     pub fn phase_output_json_schema(&self, phase_id: &str) -> Option<&Value> {
@@ -475,8 +537,11 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     fallback_models: vec![],
                     reasoning_effort: None,
                     web_search: None,
+                    network_access: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    extra_args: vec![],
+                    codex_config_overrides: vec![],
                 },
             ),
             (
@@ -489,8 +554,11 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     fallback_models: vec![],
                     reasoning_effort: None,
                     web_search: None,
+                    network_access: None,
                     timeout_secs: None,
                     max_attempts: None,
+                    extra_args: vec![],
+                    codex_config_overrides: vec![],
                 },
             ),
         ]),
@@ -758,6 +826,13 @@ fn validate_phase_definition(
     definition: &PhaseExecutionDefinition,
     config: &AgentRuntimeConfig,
 ) -> Result<()> {
+    fn is_valid_codex_config_override(value: &str) -> bool {
+        let Some((key, expr)) = value.split_once('=') else {
+            return false;
+        };
+        !key.trim().is_empty() && !expr.trim().is_empty()
+    }
+
     if let Some(directive) = definition.directive.as_deref() {
         if directive.trim().is_empty() {
             return Err(anyhow!(
@@ -968,12 +1043,37 @@ fn validate_phase_definition(
                 phase_id
             ));
         }
+
+        if runtime.extra_args.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!(
+                "phases['{}'].runtime.extra_args must not contain empty values",
+                phase_id
+            ));
+        }
+
+        if runtime
+            .codex_config_overrides
+            .iter()
+            .any(|value| !is_valid_codex_config_override(value.trim()))
+        {
+            return Err(anyhow!(
+                "phases['{}'].runtime.codex_config_overrides values must use key=value syntax",
+                phase_id
+            ));
+        }
     }
 
     Ok(())
 }
 
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
+    fn is_valid_codex_config_override(value: &str) -> bool {
+        let Some((key, expr)) = value.split_once('=') else {
+            return false;
+        };
+        !key.trim().is_empty() && !expr.trim().is_empty()
+    }
+
     if config.schema.trim() != AGENT_RUNTIME_CONFIG_SCHEMA_ID {
         return Err(anyhow!(
             "schema must be '{}' (got '{}')",
@@ -1054,6 +1154,24 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         if profile.timeout_secs == Some(0) {
             return Err(anyhow!(
                 "agents['{}'].timeout_secs must be greater than 0 when set",
+                agent_id
+            ));
+        }
+
+        if profile.extra_args.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!(
+                "agents['{}'].extra_args must not contain empty values",
+                agent_id
+            ));
+        }
+
+        if profile
+            .codex_config_overrides
+            .iter()
+            .any(|value| !is_valid_codex_config_override(value.trim()))
+        {
+            return Err(anyhow!(
+                "agents['{}'].codex_config_overrides values must use key=value syntax",
                 agent_id
             ));
         }

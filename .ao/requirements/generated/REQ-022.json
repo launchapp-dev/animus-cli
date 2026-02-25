@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "A new top-level onboarding command (or equivalent guided flow) walks users through quickstart and advanced setup paths.",
+    "A non-interactive mode supports scripted setup with explicit flags and deterministic exit codes.",
+    "When config is invalid or legacy, onboarding halts with actionable remediation through existing ao doctor pathways.",
+    "Onboarding writes configuration only through AO service APIs/commands and never requires manual .ao JSON edits.",
+    "Automated tests cover first-run setup, rerun-with-keep behavior, and safe reset behavior."
+  ],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-02-25T19:50:24.194250Z",
+  "description": "Operators can bootstrap AO consistently on a clean machine or repo using a guided CLI flow that configures project root, runner/daemon defaults, model setup, and safety settings without manual file edits.\n\nImplementation boundary: orchestrator-cli UX and config orchestration only; no desktop-wrapper dependencies.",
+  "id": "REQ-022",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-022"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "must",
+  "status": "draft",
+  "tags": [],
+  "title": "Add guided onboarding and configuration wizard for AO",
+  "type": null,
+  "updated_at": "2026-02-25T19:51:02.713102Z"
+}

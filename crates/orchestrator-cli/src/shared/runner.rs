@@ -384,8 +384,24 @@ pub(crate) fn build_runtime_contract(tool: &str, model: &str, prompt: &str) -> O
         mcp_endpoint.as_deref(),
         mcp_agent_id.as_deref(),
     )?;
-    inject_codex_reasoning_effort_override(&mut runtime_contract, tool);
+    inject_cli_launch_overrides_from_env(&mut runtime_contract, tool);
     Some(runtime_contract)
+}
+
+fn parse_env_flag_enabled(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(default_value)
+}
+
+fn codex_web_search_enabled() -> bool {
+    parse_env_flag_enabled("AO_CODEX_WEB_SEARCH", true)
+}
+
+fn codex_network_access_enabled() -> bool {
+    parse_env_flag_enabled("AO_CODEX_NETWORK_ACCESS", true)
 }
 
 fn env_codex_reasoning_effort_override() -> Option<String> {
@@ -393,6 +409,152 @@ fn env_codex_reasoning_effort_override() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn parse_env_string_list_json(
+    key: &str,
+    fallback_key: Option<&str>,
+    split_by_semicolon: bool,
+) -> Vec<String> {
+    let parse_json = |raw: &str| {
+        serde_json::from_str::<Vec<String>>(raw)
+            .ok()
+            .unwrap_or_default()
+    };
+    let normalize = |items: Vec<String>| {
+        items
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+    };
+
+    if let Ok(raw) = std::env::var(key) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return normalize(parse_json(trimmed));
+        }
+    }
+
+    let Some(fallback_key) = fallback_key else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::env::var(fallback_key) else {
+        return Vec::new();
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    if split_by_semicolon {
+        return normalize(trimmed.split(';').map(ToOwned::to_owned).collect());
+    }
+
+    normalize(trimmed.split_whitespace().map(ToOwned::to_owned).collect())
+}
+
+fn launch_prompt_insert_index(args: &[Value]) -> usize {
+    args.len().saturating_sub(1)
+}
+
+fn codex_exec_insert_index(args: &[Value]) -> usize {
+    args.iter()
+        .position(|item| item.as_str().is_some_and(|value| value == "exec"))
+        .unwrap_or(0)
+}
+
+fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
+    let key_prefix = format!("{key}=");
+    let target = format!("{key}={value_expr}");
+
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        let flag = args[index].as_str().unwrap_or_default();
+        let value = args[index + 1].as_str().unwrap_or_default();
+        if (flag == "-c" || flag == "--config") && value.starts_with(&key_prefix) {
+            args[index + 1] = Value::String(target);
+            return;
+        }
+        index += 1;
+    }
+
+    let insert_at = codex_exec_insert_index(args);
+    args.insert(insert_at, Value::String("-c".to_string()));
+    args.insert(insert_at + 1, Value::String(target));
+}
+
+fn parse_codex_override_entry(entry: &str) -> Option<(String, String)> {
+    let trimmed = entry.trim();
+    let (key, value_expr) = trimmed.split_once('=')?;
+    let key = key.trim();
+    let value_expr = value_expr.trim();
+    if key.is_empty() || value_expr.is_empty() {
+        return None;
+    }
+    Some((key.to_string(), value_expr.to_string()))
+}
+
+fn resolved_codex_extra_overrides() -> Vec<(String, String)> {
+    parse_env_string_list_json(
+        "AO_CODEX_EXTRA_CONFIG_OVERRIDES_JSON",
+        Some("AO_CODEX_EXTRA_CONFIG_OVERRIDES"),
+        true,
+    )
+    .iter()
+    .filter_map(|entry| parse_codex_override_entry(entry))
+    .collect()
+}
+
+fn cli_tool_extra_args_env_keys(tool: &str) -> Option<(&'static str, &'static str)> {
+    match tool.trim().to_ascii_lowercase().as_str() {
+        "codex" => Some(("AO_CODEX_EXTRA_ARGS_JSON", "AO_CODEX_EXTRA_ARGS")),
+        "claude" => Some(("AO_CLAUDE_EXTRA_ARGS_JSON", "AO_CLAUDE_EXTRA_ARGS")),
+        "gemini" => Some(("AO_GEMINI_EXTRA_ARGS_JSON", "AO_GEMINI_EXTRA_ARGS")),
+        "opencode" | "open-code" => {
+            Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS"))
+        }
+        _ => None,
+    }
+}
+
+fn resolved_extra_args(tool: &str) -> Vec<String> {
+    let mut args =
+        parse_env_string_list_json("AO_AI_CLI_EXTRA_ARGS_JSON", Some("AO_AI_CLI_EXTRA_ARGS"), false);
+    if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool) {
+        args.extend(parse_env_string_list_json(
+            json_key,
+            Some(plain_key),
+            false,
+        ));
+    }
+    args
+}
+
+fn inject_codex_search_launch_flag(runtime_contract: &mut Value, tool: &str) {
+    if !tool.eq_ignore_ascii_case("codex") || !codex_web_search_enabled() {
+        return;
+    }
+
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        let has_search_flag = args
+            .iter()
+            .any(|item| item.as_str().is_some_and(|value| value == "--search"));
+        if !has_search_flag {
+            let insert_at = codex_exec_insert_index(args);
+            args.insert(insert_at, Value::String("--search".to_string()));
+        }
+    }
+
+    if let Some(capabilities) = runtime_contract
+        .pointer_mut("/cli/capabilities")
+        .and_then(Value::as_object_mut)
+    {
+        capabilities.insert("supports_web_search".to_string(), Value::Bool(true));
+    }
 }
 
 fn inject_codex_reasoning_effort_override(runtime_contract: &mut Value, tool: &str) {
@@ -420,12 +582,72 @@ fn inject_codex_reasoning_effort_override(runtime_contract: &mut Value, tool: &s
         index += 1;
     }
 
-    let insert_at = args.len().saturating_sub(1);
+    let insert_at = codex_exec_insert_index(args);
     args.insert(insert_at, Value::String("-c".to_string()));
     args.insert(
         insert_at + 1,
         Value::String(format!("model_reasoning_effort={effort}")),
     );
+}
+
+fn inject_codex_network_access_override(runtime_contract: &mut Value, tool: &str) {
+    if !tool.eq_ignore_ascii_case("codex") {
+        return;
+    }
+    let value_expr = if codex_network_access_enabled() {
+        "true"
+    } else {
+        "false"
+    };
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        ensure_codex_config_override(args, "sandbox_workspace_write.network_access", value_expr);
+    }
+}
+
+fn inject_codex_extra_config_overrides(runtime_contract: &mut Value, tool: &str) {
+    if !tool.eq_ignore_ascii_case("codex") {
+        return;
+    }
+    let overrides = resolved_codex_extra_overrides();
+    if overrides.is_empty() {
+        return;
+    }
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        for (key, value_expr) in overrides {
+            ensure_codex_config_override(args, &key, &value_expr);
+        }
+    }
+}
+
+fn inject_cli_extra_args_from_env(runtime_contract: &mut Value, tool: &str) {
+    let extra_args = resolved_extra_args(tool);
+    if extra_args.is_empty() {
+        return;
+    }
+    if let Some(args) = runtime_contract
+        .pointer_mut("/cli/launch/args")
+        .and_then(Value::as_array_mut)
+    {
+        let mut insert_at = launch_prompt_insert_index(args);
+        for extra_arg in extra_args {
+            args.insert(insert_at, Value::String(extra_arg));
+            insert_at += 1;
+        }
+    }
+}
+
+fn inject_cli_launch_overrides_from_env(runtime_contract: &mut Value, tool: &str) {
+    inject_codex_search_launch_flag(runtime_contract, tool);
+    inject_codex_reasoning_effort_override(runtime_contract, tool);
+    inject_codex_network_access_override(runtime_contract, tool);
+    inject_codex_extra_config_overrides(runtime_contract, tool);
+    inject_cli_extra_args_from_env(runtime_contract, tool);
 }
 
 pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool) -> Result<()> {

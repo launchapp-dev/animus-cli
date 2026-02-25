@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "AO supports at least two channel connectors with a consistent adapter contract and pluggable extension path.",
+    "Operators can subscribe specific event types (workflow checkpoints, run failures, task state changes) per connector.",
+    "Connector credentials/tokens are stored in scoped config with clear redaction in logs and JSON outputs.",
+    "Delivery failures include retry/backoff policy and observable dead-letter/error reporting.",
+    "Documentation includes setup, security posture, and operational troubleshooting for each supported connector."
+  ],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-02-25T19:50:55.851278Z",
+  "description": "Operators should be able to route AO task/workflow/run events to messaging channels (for example Slack, Discord, Teams, Telegram) for faster response and remote awareness.\n\nImplementation boundary: AO event routing and connector adapters with secure credential handling.",
+  "id": "REQ-026",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-026"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "could",
+  "status": "draft",
+  "tags": [],
+  "title": "Add multi-channel notification connectors for workflow and run events",
+  "type": null,
+  "updated_at": "2026-02-25T19:51:07.561819Z"
+}
