@@ -8,6 +8,10 @@ export type ApiError = {
   code: string;
   message: string;
   exitCode: number;
+  correlationId?: string;
+  httpStatus?: number;
+  requestPath?: string;
+  method?: string;
 };
 
 export type ApiResult<TData> = ApiOk<TData> | ApiError;

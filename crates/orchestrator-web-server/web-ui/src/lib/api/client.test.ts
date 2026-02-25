@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, requestAo } from "./client";
+import {
+  listFailedTelemetryEvents,
+  resetCorrelationSequenceForTests,
+  resetTelemetryStoreForTests,
+} from "../telemetry";
 
 function okEnvelope(data: unknown) {
   return {
@@ -10,8 +15,16 @@ function okEnvelope(data: unknown) {
   };
 }
 
-function jsonResponse(payload: unknown): Response {
+function jsonResponse(
+  payload: unknown,
+  options: {
+    status?: number;
+    headers?: Record<string, string>;
+  } = {},
+): Response {
   return {
+    status: options.status ?? 200,
+    headers: new Headers(options.headers),
     json: async () => payload,
   } as Response;
 }
@@ -22,9 +35,11 @@ describe("requestAo", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
+    resetTelemetryStoreForTests();
+    resetCorrelationSequenceForTests();
   });
 
-  it("applies AO JSON headers and preserves caller headers", async () => {
+  it("applies AO JSON headers, preserves caller headers, and injects correlation header", async () => {
     fetchMock.mockResolvedValue(jsonResponse(okEnvelope({ id: "TASK-011" })));
 
     await requestAo<{ id: string }>("/api/v1/tasks/TASK-011", {
@@ -38,30 +53,39 @@ describe("requestAo", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 
+    const headers = new Headers(init.headers);
     expect(path).toBe("/api/v1/tasks/TASK-011");
     expect(init.method).toBe("POST");
-    expect(init.headers).toEqual({
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Authorization: "Bearer token",
-    });
+    expect(headers.get("Accept")).toBe("application/json");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Authorization")).toBe("Bearer token");
+    expect(headers.get("X-AO-Correlation-ID")).toBeTruthy();
   });
 
-  it("maps network failures to unavailable API errors", async () => {
+  it("maps network failures to unavailable errors and keeps diagnostics metadata", async () => {
     fetchMock.mockRejectedValue(new Error("network offline"));
 
     const result = await requestAo("/api/v1/system/info");
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "error",
       code: "network_error",
       message: "network offline",
       exitCode: 5,
+      method: "GET",
+      requestPath: "/api/v1/system/info",
     });
+    if (result.kind === "error") {
+      expect(result.correlationId).toBeTruthy();
+    }
   });
 
-  it("maps invalid JSON responses to deterministic invalid_json errors", async () => {
+  it("maps invalid JSON responses to deterministic invalid_json errors with context", async () => {
     fetchMock.mockResolvedValue({
+      status: 500,
+      headers: new Headers({
+        "X-AO-Correlation-ID": "server-correlation-123",
+      }),
       json: async () => {
         throw new SyntaxError("Unexpected token <");
       },
@@ -74,6 +98,76 @@ describe("requestAo", () => {
       code: "invalid_json",
       message: "Invalid JSON response for /api/v1/system/info: Unexpected token <",
       exitCode: 1,
+      correlationId: "server-correlation-123",
+      httpStatus: 500,
+      method: "GET",
+      requestPath: "/api/v1/system/info",
+    });
+  });
+
+  it("captures failure telemetry with normalized error, correlation id, and redacted request body", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        {
+          schema: "ao.cli.v1",
+          ok: false,
+          error: {
+            code: "conflict",
+            message: "daemon already running",
+            exit_code: 4,
+          },
+        },
+        {
+          status: 409,
+          headers: {
+            "X-AO-Correlation-ID": "srv-cid-42",
+          },
+        },
+      ),
+    );
+
+    const result = await requestAo(
+      "/api/v1/daemon/start",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          token: "super-secret",
+        }),
+      },
+      undefined,
+      { actionName: "daemon.start" },
+    );
+
+    expect(result).toEqual({
+      kind: "error",
+      code: "conflict",
+      message: "daemon already running",
+      exitCode: 4,
+      correlationId: "srv-cid-42",
+      httpStatus: 409,
+      method: "POST",
+      requestPath: "/api/v1/daemon/start",
+    });
+
+    const failureEvents = listFailedTelemetryEvents();
+    expect(failureEvents).toHaveLength(1);
+    expect(failureEvents[0]).toMatchObject({
+      eventType: "request_failure",
+      action: "daemon.start",
+      method: "POST",
+      path: "/api/v1/daemon/start",
+      correlationId: "srv-cid-42",
+      httpStatus: 409,
+      error: {
+        code: "conflict",
+        message: "daemon already running",
+        exitCode: 4,
+      },
+      request: {
+        body: {
+          token: "[REDACTED]",
+        },
+      },
     });
   });
 });
@@ -85,6 +179,8 @@ describe("api endpoint contract", () => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockResolvedValue(jsonResponse(okEnvelope({})));
+    resetTelemetryStoreForTests();
+    resetCorrelationSequenceForTests();
   });
 
   it("uses stable read endpoints for shell routes", async () => {
@@ -94,9 +190,7 @@ describe("api endpoint contract", () => {
     await api.workflowsList();
     await api.projectsActive();
 
-    const requestedPaths = fetchMock.mock.calls.map(
-      (call) => call[0] as string,
-    );
+    const requestedPaths = fetchMock.mock.calls.map((call) => call[0] as string);
 
     expect(requestedPaths).toEqual([
       "/api/v1/daemon/status",
@@ -125,7 +219,7 @@ describe("api endpoint contract", () => {
 
     const result = await api.tasksList();
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "error",
       code: "invalid_payload",
       message: "Invalid payload for /api/v1/tasks: tasks must be an array",
@@ -148,11 +242,13 @@ describe("api endpoint contract", () => {
 
     const result = await api.tasksById("TASK-404");
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "error",
       code: "not_found",
       message: "task not found",
       exitCode: 3,
+      method: "GET",
+      requestPath: "/api/v1/tasks/TASK-404",
     });
   });
 });

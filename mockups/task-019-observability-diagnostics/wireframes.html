@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-019 Observability and Diagnostics Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-019: Structured Observability and Diagnostics Panel</h1>
+      <p>
+        Concrete wireframes for failed-action diagnostics on <code>/daemon</code> and
+        <code>/reviews/handoff</code>, including correlation IDs, redaction-safe
+        payload previews, and mobile-safe interaction at <code>320px</code>.
+      </p>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="daemon-board-title">
+        <h2 class="board-title" id="daemon-board-title">
+          Daemon Controls + Diagnostics (Desktop, Failure Expanded)
+        </h2>
+        <div class="route-shell desktop">
+          <header class="route-header">
+            <p class="breadcrumbs">Daemon / Controls / Action Feedback</p>
+            <div class="state-strip" aria-label="Action states">
+              <span class="state-chip">idle</span>
+              <span class="state-chip pending">pending</span>
+              <span class="state-chip success">success</span>
+              <span class="state-chip error">failure</span>
+            </div>
+          </header>
+
+          <div class="wireframe-columns">
+            <article class="action-surface" aria-labelledby="daemon-controls-title">
+              <h3 id="daemon-controls-title">Daemon Lifecycle Controls</h3>
+              <p>
+                Most recent action: <strong>Stop daemon</strong> failed after
+                <strong>1280ms</strong>.
+              </p>
+              <div class="action-row">
+                <button type="button">Start</button>
+                <button type="button">Pause</button>
+                <button type="button">Resume</button>
+                <button type="button" class="danger">Stop</button>
+                <button type="button">Clear Logs</button>
+              </div>
+
+              <div class="inline-status" role="status">
+                Action state: running <code>daemon.stop</code> request...
+              </div>
+
+              <div class="inline-error" role="alert">
+                <strong>daemon_action_failed</strong>
+                <p>
+                  unavailable: Runner socket timeout while stopping daemon.
+                  <span>exit code 5</span>
+                </p>
+              </div>
+
+              <div class="surface-note">
+                Retry controls stay in context while diagnostics history is preserved.
+              </div>
+            </article>
+
+            <aside
+              class="diagnostics-panel"
+              role="region"
+              aria-labelledby="daemon-diagnostics-title"
+              aria-describedby="daemon-diagnostics-help"
+            >
+              <div class="diag-header">
+                <h3 id="daemon-diagnostics-title">Diagnostics Panel</h3>
+                <button type="button" class="ghost-btn">Clear diagnostics</button>
+              </div>
+              <p class="assistive-note" id="daemon-diagnostics-help">
+                Expand a failure row to inspect sanitized request and response details.
+                Copy controls keep focus in place for keyboard-only triage.
+              </p>
+              <p class="diag-summary">
+                2 recent failures. Most recent at 2026-02-25 16:41:04 UTC.
+              </p>
+              <p class="diag-retention">Bounded local retention: newest 25 failures.</p>
+
+              <div class="sr-update" aria-live="polite">
+                New failure added: daemon.stop unavailable, correlation ID
+                ao-corr-20260225-164103-8f1a9d2c.
+              </div>
+
+              <ol class="failure-list" aria-label="Recent failed actions">
+                <li class="failure-item expanded">
+                  <button
+                    type="button"
+                    class="failure-summary"
+                    aria-expanded="true"
+                    aria-controls="daemon-failure-1"
+                  >
+                    <span class="failure-title">daemon.stop</span>
+                    <span class="failure-meta">POST /api/v1/daemon/stop</span>
+                    <span class="failure-meta">unavailable | 503 | 1280ms</span>
+                    <span class="failure-time">2026-02-25 16:41:04 UTC</span>
+                  </button>
+
+                  <div id="daemon-failure-1" class="failure-detail">
+                    <div class="detail-grid">
+                      <div class="detail-card">
+                        <h4>Correlation</h4>
+                        <div class="copy-row">
+                          <code>ao-corr-20260225-164103-8f1a9d2c</code>
+                          <button
+                            type="button"
+                            aria-label="Copy correlation ID for daemon stop failure"
+                          >
+                            Copy ID
+                          </button>
+                          <span class="copy-feedback" role="status">Copied</span>
+                        </div>
+                        <p class="detail-note">
+                          Response canonical correlation:
+                          <code>ao-srv-9ba21e56</code>
+                        </p>
+                        <p class="copy-fallback">
+                          Clipboard blocked fallback: correlation value remains selectable for manual copy.
+                        </p>
+                      </div>
+
+                      <div class="detail-card">
+                        <h4>Request Metadata</h4>
+                        <dl class="meta-list">
+                          <div>
+                            <dt>Timestamp</dt>
+                            <dd>2026-02-25 16:41:04 UTC</dd>
+                          </div>
+                          <div>
+                            <dt>Duration</dt>
+                            <dd>1280ms</dd>
+                          </div>
+                          <div>
+                            <dt>HTTP status</dt>
+                            <dd>503</dd>
+                          </div>
+                          <div>
+                            <dt>Request</dt>
+                            <dd>POST /api/v1/daemon/stop</dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      <div class="detail-card">
+                        <h4>Normalized Error</h4>
+                        <pre>{
+  "code": "unavailable",
+  "message": "Runner socket timeout",
+  "exitCode": 5
+}</pre>
+                      </div>
+                    </div>
+
+                    <div class="payload-grid">
+                      <section class="payload-card" aria-label="Sanitized request summary">
+                        <h4>Request (sanitized)</h4>
+                        <pre>{
+  "method": "POST",
+  "path": "/api/v1/daemon/stop",
+  "headers": {
+    "accept": "application/json",
+    "content-type": "application/json",
+    "x-ao-correlation-id": "ao-corr-20260225-164103-8f1a9d2c",
+    "authorization": "[REDACTED]"
+  },
+  "query": {},
+  "body": {}
+}</pre>
+                      </section>
+
+                      <section class="payload-card" aria-label="Sanitized response summary">
+                        <h4>Response (sanitized)</h4>
+                        <pre>{
+  "status": 503,
+  "headers": {
+    "x-ao-correlation-id": "ao-srv-9ba21e56"
+  },
+  "body": {
+    "schema": "ao.cli.v1",
+    "ok": false,
+    "error": {
+      "code": "unavailable",
+      "message": "Runner socket timeout",
+      "exit_code": 5
+    }
+  }
+}</pre>
+                      </section>
+                    </div>
+                  </div>
+                </li>
+
+                <li class="failure-item">
+                  <button
+                    type="button"
+                    class="failure-summary"
+                    aria-expanded="false"
+                    aria-controls="daemon-failure-2"
+                  >
+                    <span class="failure-title">daemon.clear_logs</span>
+                    <span class="failure-meta">POST /api/v1/daemon/clear-logs</span>
+                    <span class="failure-meta">conflict | 409 | 304ms</span>
+                    <span class="failure-time">2026-02-25 16:20:51 UTC</span>
+                  </button>
+                </li>
+              </ol>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="handoff-board-title">
+        <h2 class="board-title" id="handoff-board-title">
+          Review Handoff + Diagnostics Continuity (Desktop, Copy Feedback)
+        </h2>
+        <div class="route-shell desktop">
+          <header class="route-header">
+            <p class="breadcrumbs">Reviews / Handoff / Submit</p>
+            <div class="state-strip" aria-label="Submission states">
+              <span class="state-chip">idle</span>
+              <span class="state-chip pending">submitting</span>
+              <span class="state-chip success">submit-success</span>
+              <span class="state-chip error">submit-failure</span>
+            </div>
+          </header>
+
+          <div class="wireframe-columns">
+            <article class="action-surface" aria-labelledby="handoff-form-title">
+              <h3 id="handoff-form-title">Review Handoff Submission</h3>
+              <form class="wireframe-form" aria-describedby="handoff-error">
+                <label for="run-id">Run ID</label>
+                <input id="run-id" value="run_7kqp12" readonly />
+
+                <label for="target-role">Target Role</label>
+                <select id="target-role" aria-label="Target role">
+                  <option>reviewer</option>
+                </select>
+
+                <label for="question">Question</label>
+                <textarea id="question" rows="3">Can QA approve this handoff?</textarea>
+
+                <label for="context-json">Context JSON</label>
+                <textarea id="context-json" rows="4">{"requester":"ops","api_key":"redacted-at-source"}</textarea>
+
+                <div class="action-row">
+                  <button type="submit">Submit Handoff</button>
+                </div>
+              </form>
+
+              <div class="inline-error" role="alert" id="handoff-error">
+                <strong>review_handoff_failed</strong>
+                <p>
+                  conflict: reviewer queue already has active handoff. <span>exit code 4</span>
+                </p>
+              </div>
+            </article>
+
+            <aside
+              class="diagnostics-panel"
+              role="region"
+              aria-labelledby="handoff-diagnostics-title"
+              aria-describedby="handoff-diagnostics-help"
+            >
+              <div class="diag-header">
+                <h3 id="handoff-diagnostics-title">Diagnostics Panel</h3>
+                <button type="button" class="ghost-btn">Clear diagnostics</button>
+              </div>
+              <p class="assistive-note" id="handoff-diagnostics-help">
+                Diagnostics history is shared across routes for the current session and
+                stays bounded to the newest failures.
+              </p>
+              <p class="diag-summary">3 recent failures across local session routes.</p>
+              <p class="diag-retention">Bounded local retention: newest 25 failures.</p>
+              <div class="sr-update" aria-live="polite">
+                New failure added: review.handoff.submit conflict with correlation
+                ao-srv-ecf5211b.
+              </div>
+              <ol class="failure-list" aria-label="Recent failed actions">
+                <li class="failure-item expanded">
+                  <button
+                    type="button"
+                    class="failure-summary"
+                    aria-expanded="true"
+                    aria-controls="handoff-failure-1"
+                  >
+                    <span class="failure-title">review.handoff.submit</span>
+                    <span class="failure-meta">POST /api/v1/review/handoff</span>
+                    <span class="failure-meta">conflict | 409 | 442ms</span>
+                    <span class="failure-time">2026-02-25 16:48:13 UTC</span>
+                  </button>
+
+                  <div id="handoff-failure-1" class="failure-detail">
+                    <div class="detail-grid">
+                      <div class="detail-card">
+                        <h4>Correlation</h4>
+                        <div class="copy-row">
+                          <code>ao-srv-ecf5211b</code>
+                          <button
+                            type="button"
+                            aria-label="Copy correlation ID for review handoff failure"
+                          >
+                            Copy ID
+                          </button>
+                          <span class="copy-feedback" role="status">Copied</span>
+                        </div>
+                        <p class="copy-fallback">
+                          Clipboard blocked fallback: select and copy the correlation value manually.
+                        </p>
+                      </div>
+
+                      <div class="detail-card">
+                        <h4>Request Metadata</h4>
+                        <dl class="meta-list">
+                          <div>
+                            <dt>Timestamp</dt>
+                            <dd>2026-02-25 16:48:13 UTC</dd>
+                          </div>
+                          <div>
+                            <dt>Duration</dt>
+                            <dd>442ms</dd>
+                          </div>
+                          <div>
+                            <dt>HTTP status</dt>
+                            <dd>409</dd>
+                          </div>
+                          <div>
+                            <dt>Request</dt>
+                            <dd>POST /api/v1/review/handoff</dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      <div class="detail-card">
+                        <h4>Normalized Error</h4>
+                        <pre>{
+  "code": "conflict",
+  "message": "active handoff already exists",
+  "exitCode": 4
+}</pre>
+                      </div>
+                    </div>
+
+                    <div class="payload-grid">
+                      <section class="payload-card" aria-label="Sanitized request summary">
+                        <h4>Request (sanitized)</h4>
+                        <pre>{
+  "method": "POST",
+  "path": "/api/v1/review/handoff",
+  "query": {
+    "session": "[REDACTED]"
+  },
+  "body": {
+    "run_id": "run_7kqp12",
+    "target_role": "reviewer",
+    "question": "Can QA approve this handoff?",
+    "context": {
+      "requester": "ops",
+      "api_key": "[REDACTED]"
+    }
+  }
+}</pre>
+                      </section>
+
+                      <section class="payload-card" aria-label="Sanitized response summary">
+                        <h4>Response (sanitized)</h4>
+                        <pre>{
+  "status": 409,
+  "headers": {
+    "x-ao-correlation-id": "ao-srv-ecf5211b"
+  },
+  "bodyPreview": "[NON_JSON_PAYLOAD]"
+}</pre>
+                      </section>
+                    </div>
+                  </div>
+                </li>
+
+                <li class="failure-item">
+                  <button
+                    type="button"
+                    class="failure-summary"
+                    aria-expanded="false"
+                    aria-controls="handoff-failure-2"
+                  >
+                    <span class="failure-title">daemon.stop</span>
+                    <span class="failure-meta">POST /api/v1/daemon/stop</span>
+                    <span class="failure-meta">unavailable | 503 | 1280ms</span>
+                    <span class="failure-time">2026-02-25 16:41:04 UTC</span>
+                  </button>
+                </li>
+              </ol>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="empty-board-title">
+        <h2 class="board-title" id="empty-board-title">
+          Diagnostics Empty + Clear Confirmed
+        </h2>
+        <div class="route-shell compact">
+          <aside
+            class="diagnostics-panel"
+            role="region"
+            aria-labelledby="empty-diagnostics-title"
+            aria-describedby="empty-diagnostics-help"
+          >
+            <div class="diag-header">
+              <h3 id="empty-diagnostics-title">Diagnostics Panel</h3>
+              <button type="button" class="ghost-btn" disabled>Clear diagnostics</button>
+            </div>
+            <p class="assistive-note" id="empty-diagnostics-help">
+              Empty state stays explicit so operators know diagnostics is active but currently clear.
+            </p>
+            <p class="diag-summary">No failed actions in this local session.</p>
+            <div class="empty-state" role="status">
+              <h4>All clear</h4>
+              <p>
+                Trigger daemon controls or review submission actions to populate
+                diagnostics. New failures will appear first.
+              </p>
+              <p class="clear-confirm">Clear confirmed at 2026-02-25 17:03:09 UTC.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-board-title">
+        <h2 class="board-title" id="mobile-board-title">
+          Mobile 320px Triage (No Horizontal Scroll)
+        </h2>
+        <div class="phone-wrap">
+          <article class="phone-frame" aria-label="320px mobile diagnostics wireframe">
+            <header class="phone-header">
+              <div>
+                <p class="phone-crumb">/daemon</p>
+                <h3>Diagnostics</h3>
+              </div>
+              <button type="button" aria-label="Open menu">Menu</button>
+            </header>
+
+            <section class="phone-actions" aria-label="Daemon controls">
+              <button type="button">Start</button>
+              <button type="button">Pause</button>
+              <button type="button">Resume</button>
+              <button type="button" class="danger">Stop</button>
+              <button type="button">Clear Logs</button>
+            </section>
+
+            <section
+              class="phone-diagnostics"
+              role="region"
+              aria-labelledby="mobile-diagnostics-title"
+              aria-describedby="mobile-diagnostics-help"
+            >
+              <div class="diag-header">
+                <h4 id="mobile-diagnostics-title">Recent failures</h4>
+                <button type="button" class="ghost-btn">Clear</button>
+              </div>
+              <p class="assistive-note" id="mobile-diagnostics-help">
+                Mobile diagnostics keep one-column summaries first, then expandable details.
+              </p>
+              <p class="diag-summary">2 failures. Latest 22s ago.</p>
+              <p class="sr-only" aria-live="polite">
+                New failure added: daemon.stop unavailable with correlation
+                ao-corr-20260225-164103-8f1a9d2c.
+              </p>
+
+              <div class="phone-card" role="group" aria-label="daemon stop failure">
+                <button
+                  type="button"
+                  class="failure-summary"
+                  aria-expanded="true"
+                  aria-controls="mobile-failure-1"
+                >
+                  <span class="failure-title">daemon.stop</span>
+                  <span class="failure-meta">unavailable | 503 | 1280ms</span>
+                  <span class="failure-meta">POST /api/v1/daemon/stop</span>
+                  <span class="failure-time">2026-02-25 16:41:04 UTC</span>
+                </button>
+
+                <div id="mobile-failure-1" class="failure-detail">
+                  <div class="copy-row stacked">
+                    <code>ao-corr-20260225-164103-8f1a9d2c</code>
+                    <button
+                      type="button"
+                      aria-label="Copy correlation ID for daemon stop failure on mobile"
+                    >
+                      Copy correlation ID
+                    </button>
+                    <span class="copy-feedback" role="status">Copied</span>
+                    <p class="copy-fallback">
+                      If copy is blocked, long-press/select the ID and copy manually.
+                    </p>
+                  </div>
+                  <pre>{
+  "metadata": {
+    "method": "POST",
+    "path": "/api/v1/daemon/stop",
+    "status": 503,
+    "durationMs": 1280
+  },
+  "error": {
+    "code": "unavailable",
+    "message": "Runner socket timeout",
+    "exitCode": 5
+  },
+  "request": {
+    "query": {
+      "session": "[REDACTED]"
+    },
+    "body": {
+      "secret": "[REDACTED]"
+    }
+  },
+  "response": {
+    "bodyPreview": "[NON_JSON_PAYLOAD]"
+  }
+}</pre>
+                </div>
+              </div>
+            </section>
+          </article>
+
+          <aside class="mobile-notes">
+            <h3>Mobile intent checklist</h3>
+            <ul>
+              <li>All controls meet or exceed 44px touch target size.</li>
+              <li>Long IDs and paths wrap; no sideways page scroll at 320px.</li>
+              <li>Expand/collapse and copy remain keyboard operable.</li>
+              <li>Failure announcements are polite and non-disruptive.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

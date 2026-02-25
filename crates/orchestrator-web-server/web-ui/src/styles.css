@@ -183,6 +183,127 @@ code {
   margin-top: 0.75rem;
 }
 
+.diagnostics-panel {
+  margin-top: 1rem;
+}
+
+.diagnostics-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.diagnostics-description {
+  color: var(--muted);
+}
+
+.diagnostics-summary {
+  margin: 0.5rem 0 0.75rem;
+  color: var(--muted);
+}
+
+.diagnostics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.diagnostics-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.diagnostics-toggle {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  text-align: left;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem;
+  color: inherit;
+}
+
+.diagnostics-toggle:hover {
+  background: #eef5ff;
+}
+
+.diagnostics-action {
+  font-weight: 700;
+}
+
+.diagnostics-code {
+  color: #7f1f1f;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.84rem;
+}
+
+.diagnostics-meta {
+  color: var(--muted);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-detail {
+  border-top: 1px solid var(--line);
+  padding: 0.8rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.diagnostics-metadata {
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.diagnostics-metadata-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 165px) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.diagnostics-metadata-row dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.diagnostics-metadata-row dd {
+  margin: 0;
+}
+
+.diagnostics-correlation {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.diagnostics-correlation code {
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-copy-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.diagnostics-error-message {
+  margin: 0;
+}
+
+.diagnostics-payloads {
+  align-items: start;
+}
+
 .error-box {
   border: 1px solid var(--danger-line);
   background: var(--danger-soft);
@@ -304,5 +425,9 @@ pre {
   .project-frame label,
   .project-frame select {
     width: 100%;
+  }
+
+  .diagnostics-metadata-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

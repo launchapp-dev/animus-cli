@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useProjectContext } from "./project-context";
+import { DiagnosticsPanel } from "./diagnostics-panel";
 import { api, firstApiError, RequestJsonValue } from "../lib/api/client";
 import { ApiError } from "../lib/api/envelope";
 import { ResourceState, useApiResource } from "../lib/api/use-api-resource";
@@ -126,6 +127,8 @@ export function DaemonPage() {
           }}
         />
       ) : null}
+
+      <DiagnosticsPanel title="Daemon Diagnostics" actionPrefixes={["daemon."]} />
 
       <div className="grid two">
         <ResourceStateView
@@ -535,6 +538,10 @@ export function ReviewHandoffPage() {
 
       {submitState.kind === "error" ? <ErrorState error={submitState.error} /> : null}
       {submitState.kind === "ok" ? <JsonPanel title="Response" data={submitState.data} /> : null}
+      <DiagnosticsPanel
+        title="Review Handoff Diagnostics"
+        actionPrefixes={["reviews.handoff"]}
+      />
     </RouteSection>
   );
 }
