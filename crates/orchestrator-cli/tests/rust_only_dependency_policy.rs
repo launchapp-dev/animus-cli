@@ -91,6 +91,49 @@ native-webkit = { version = "0.1", package = "webkit2gtk" }
 }
 
 #[test]
+fn rust_only_dependency_policy_detects_prefix_and_build_dependencies_case_insensitively() {
+    let fixture_root = tempfile::tempdir().expect("tempdir should create");
+    write_file(
+        &fixture_root.path().join("Cargo.toml"),
+        r#"
+[workspace]
+members = ["crates/app"]
+resolver = "2"
+"#,
+    );
+    write_file(
+        &fixture_root.path().join("crates/app/Cargo.toml"),
+        r#"
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+plugin-shell = { version = "2", package = "TAURI-PLUGIN-SHELL" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-webview = { version = "0.1", package = "WebView2" }
+"#,
+    );
+
+    let violations = collect_workspace_policy_violations(fixture_root.path())
+        .expect("policy scan should succeed for fixture");
+
+    assert_eq!(violations.len(), 2);
+    assert!(violations.iter().any(|violation| {
+        violation.section == "build-dependencies"
+            && violation.dependency_key == "plugin-shell"
+            && violation.resolved_package == "TAURI-PLUGIN-SHELL"
+    }));
+    assert!(violations.iter().any(|violation| {
+        violation.section == "target.cfg(target_os = \"windows\").dependencies"
+            && violation.dependency_key == "windows-webview"
+            && violation.resolved_package == "WebView2"
+    }));
+}
+
+#[test]
 fn rust_only_dependency_policy_violation_output_is_sorted_deterministically() {
     let fixture_root = tempfile::tempdir().expect("tempdir should create");
     write_file(
