@@ -115,3 +115,45 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+
+    #[test]
+    fn classify_error_marks_validation_failures_as_invalid_input() {
+        let (code, exit_code) =
+            classify_error(&anyhow!("missing required arguments were not provided"));
+        assert_eq!(code, "invalid_input");
+        assert_eq!(exit_code, 2);
+    }
+
+    #[test]
+    fn classify_error_marks_not_found_failures() {
+        let (code, exit_code) = classify_error(&anyhow!("task not found: TASK-123"));
+        assert_eq!(code, "not_found");
+        assert_eq!(exit_code, 3);
+    }
+
+    #[test]
+    fn classify_error_marks_conflicts() {
+        let (code, exit_code) = classify_error(&anyhow!("resource already exists"));
+        assert_eq!(code, "conflict");
+        assert_eq!(exit_code, 4);
+    }
+
+    #[test]
+    fn classify_error_marks_unavailable_connectivity_paths() {
+        let (code, exit_code) = classify_error(&anyhow!("failed to connect to daemon"));
+        assert_eq!(code, "unavailable");
+        assert_eq!(exit_code, 5);
+    }
+
+    #[test]
+    fn classify_error_defaults_to_internal() {
+        let (code, exit_code) = classify_error(&anyhow!("unexpected panic in scheduler loop"));
+        assert_eq!(code, "internal");
+        assert_eq!(exit_code, 1);
+    }
+}

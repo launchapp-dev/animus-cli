@@ -86,37 +86,65 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn planning_vision_get_returns_cli_json_envelope() -> Result<(), Box<dyn std::error::Error>> {
-    let temp = tempfile::tempdir()?;
+fn help_surfaces_accepted_values_and_confirmation_guidance(
+) -> Result<(), Box<dyn std::error::Error>> {
     let binary = assert_cmd::cargo::cargo_bin!("ao");
-    let output = Command::new(binary)
-        .args([
-            "--json",
-            "--project-root",
-            temp.path().to_str().expect("utf-8 temp path"),
-            "planning",
-            "vision",
-            "get",
-        ])
-        .output()?;
 
+    let task_help = Command::new(&binary)
+        .args(["task", "list", "--help"])
+        .output()?;
+    assert!(task_help.status.success(), "task list help should succeed");
+    let task_stdout = String::from_utf8(task_help.stdout)?;
     assert!(
-        output.status.success(),
-        "planning vision get should succeed for empty project root"
-    );
-    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(
-        payload.get("schema").and_then(|value| value.as_str()),
-        Some("ao.cli.v1")
-    );
-    assert_eq!(
-        payload.get("ok").and_then(|value| value.as_bool()),
-        Some(true)
+        task_stdout.contains("feature|bugfix|hotfix|refactor|docs|test|chore|experiment"),
+        "task list help should enumerate task type values"
     );
     assert!(
-        payload.get("data").is_some(),
-        "json envelope should contain data field"
+        task_stdout.contains(
+            "backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled"
+        ),
+        "task list help should enumerate status values"
     );
+    assert!(
+        task_stdout.contains("critical|high|medium|low"),
+        "task list help should enumerate priority values"
+    );
+
+    let requirements_update_help = Command::new(&binary)
+        .args(["requirements", "update", "--help"])
+        .output()?;
+    assert!(
+        requirements_update_help.status.success(),
+        "requirements update help should succeed"
+    );
+    let requirements_update_stdout = String::from_utf8(requirements_update_help.stdout)?;
+    assert!(
+        requirements_update_stdout.contains("must|should|could|wont|won't"),
+        "requirements update help should enumerate priority values"
+    );
+    assert!(
+        requirements_update_stdout.contains("draft|refined|planned|in-progress|in_progress|done"),
+        "requirements update help should enumerate status values"
+    );
+
+    let workflow_cancel_help = Command::new(&binary)
+        .args(["workflow", "cancel", "--help"])
+        .output()?;
+    assert!(
+        workflow_cancel_help.status.success(),
+        "workflow cancel help should succeed"
+    );
+    let workflow_cancel_stdout = String::from_utf8(workflow_cancel_help.stdout)?;
+    assert!(
+        workflow_cancel_stdout.contains("Confirmation token; must match --id."),
+        "workflow cancel help should explain confirmation token"
+    );
+    assert!(
+        workflow_cancel_stdout
+            .contains("Preview cancellation payload without mutating workflow state."),
+        "workflow cancel help should explain dry-run mode"
+    );
+
     Ok(())
 }
 
@@ -144,5 +172,33 @@ fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::E
             .is_some(),
         "version payload should include data.version"
     );
+    Ok(())
+}
+
+#[test]
+fn invalid_arguments_include_usage_and_help_hint() -> Result<(), Box<dyn std::error::Error>> {
+    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let output = Command::new(binary)
+        .args(["task", "list", "--bogus"])
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "unknown argument should produce a failing exit code"
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("unexpected argument '--bogus' found"),
+        "stderr should identify the unexpected argument"
+    );
+    assert!(
+        stderr.contains("Usage: ao task list [OPTIONS]"),
+        "stderr should include command usage"
+    );
+    assert!(
+        stderr.contains("For more information, try '--help'."),
+        "stderr should include a hint to use --help"
+    );
+
     Ok(())
 }

@@ -204,9 +204,7 @@ fn discover_profiles(model_filter: Option<&str>, tool_filter: Option<&str>) -> V
         .map(|(model_id, tool)| build_profile(&model_id, &tool))
         .collect();
 
-    profiles.sort_by(|left, right| {
-        profile_sort_rank(left).cmp(&profile_sort_rank(right))
-    });
+    profiles.sort_by(|left, right| profile_sort_rank(left).cmp(&profile_sort_rank(right)));
     profiles
 }
 
@@ -319,7 +317,8 @@ mod tests {
     fn ordered_defaults_start_with_tool_default_model() {
         let defaults = ordered_default_model_specs();
         for tool in ["claude", "codex", "gemini", "opencode"] {
-            let expected = protocol::default_model_for_tool(tool).expect("tool should have default");
+            let expected =
+                protocol::default_model_for_tool(tool).expect("tool should have default");
             let first_for_tool = defaults
                 .iter()
                 .find_map(|(model_id, tool_id)| (tool_id == tool).then_some(model_id.as_str()))

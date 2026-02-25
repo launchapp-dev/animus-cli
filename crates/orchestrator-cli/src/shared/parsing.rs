@@ -7,8 +7,7 @@ use crate::{event_matches_run, run_dir};
 
 const TASK_STATUS_EXPECTED: &str =
     "backlog|todo, ready, in-progress|in_progress, blocked, on-hold|on_hold, done, cancelled";
-const TASK_TYPE_EXPECTED: &str =
-    "feature, bugfix, hotfix, refactor, docs, test, chore, experiment";
+const TASK_TYPE_EXPECTED: &str = "feature, bugfix, hotfix, refactor, docs, test, chore, experiment";
 const PRIORITY_EXPECTED: &str = "critical, high, medium, low";
 const DEPENDENCY_TYPE_EXPECTED: &str =
     "blocks-by|blocks_by, blocked-by|blocked_by, related-to|related_to";
@@ -237,7 +236,13 @@ pub(crate) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<Proje
         "library" => ProjectType::Library,
         "infrastructure" => ProjectType::Infrastructure,
         "other" | "greenfield" | "existing" => ProjectType::Other,
-        _ => return Err(invalid_value_error("project_type", value, PROJECT_TYPE_EXPECTED)),
+        _ => {
+            return Err(invalid_value_error(
+                "project_type",
+                value,
+                PROJECT_TYPE_EXPECTED,
+            ))
+        }
     };
 
     Ok(Some(project_type))
@@ -296,6 +301,24 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("invalid priority"));
         assert!(message.contains("critical, high, medium, low"));
+        assert!(message.contains("--help"));
+    }
+
+    #[test]
+    fn parse_priority_rejects_empty_values_with_explicit_placeholder() {
+        let err = parse_priority_opt(Some("   ")).expect_err("empty priority should fail");
+        let message = err.to_string();
+        assert!(message.contains("invalid priority '<empty>'"));
+        assert!(message.contains("--help"));
+    }
+
+    #[test]
+    fn parse_dependency_type_rejects_unknown_values_with_actionable_message() {
+        let err =
+            parse_dependency_type("unrelated").expect_err("unknown dependency type should fail");
+        let message = err.to_string();
+        assert!(message.contains("invalid dependency_type"));
+        assert!(message.contains("blocks-by|blocks_by"));
         assert!(message.contains("--help"));
     }
 
