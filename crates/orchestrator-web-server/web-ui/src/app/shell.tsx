@@ -18,6 +18,7 @@ export const PRIMARY_NAV_ITEMS = [
   { to: "/events", label: "Events" },
   { to: "/reviews/handoff", label: "Review Handoff" },
 ] as const;
+export const MAIN_CONTENT_ID = "main-content";
 
 export function AppShellLayout() {
   const routeProjectId = useRouteProjectId();
@@ -34,6 +35,7 @@ function AppShellFrame() {
   const navigate = useNavigate();
   const location = useLocation();
   const previousSection = useRef<string | null>(null);
+  const mainContentRef = useRef<HTMLElement | null>(null);
 
   const projectContext = useProjectContext();
 
@@ -62,7 +64,26 @@ function AppShellFrame() {
     }
 
     previousSection.current = section;
+    mainContentRef.current?.focus();
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isMobileMenuOpen]);
 
   const onProjectSelectionChange = (projectId: string) => {
     const normalizedProjectId = projectId.length > 0 ? projectId : null;
@@ -74,73 +95,84 @@ function AppShellFrame() {
   };
 
   return (
-    <div className="app-layout">
-      {isMobileMenuOpen ? (
-        <button
-          aria-label="Close navigation menu"
-          className="mobile-overlay"
-          onClick={() => setIsMobileMenuOpen(false)}
-          type="button"
-        />
-      ) : null}
+    <div className="app-shell">
+      <a className="skip-link" href={`#${MAIN_CONTENT_ID}`}>
+        Skip to main content
+      </a>
 
-      <aside className="sidebar" data-open={isMobileMenuOpen}>
-        <h1 className="brand">AO Web</h1>
-        <p className="brand-subtitle">Agent Orchestrator web shell</p>
+      <div className="app-layout">
+        {isMobileMenuOpen ? (
+          <button
+            aria-label="Close navigation menu"
+            className="mobile-overlay"
+            onClick={() => setIsMobileMenuOpen(false)}
+            type="button"
+          />
+        ) : null}
 
-        <nav aria-label="Primary" className="primary-nav" id="primary-navigation">
-          {PRIMARY_NAV_ITEMS.map((item) => (
-            <NavLink key={item.to} to={item.to}>
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
+        <aside
+          aria-label="Primary navigation"
+          className="sidebar"
+          data-open={isMobileMenuOpen}
+        >
+          <h1 className="brand">AO Web</h1>
+          <p className="brand-subtitle">Agent Orchestrator web shell</p>
 
-      <div className="main-column">
-        <header className="topbar">
-          <div className="mobile-actions">
-            <button
-              type="button"
-              aria-expanded={isMobileMenuOpen}
-              aria-controls="primary-navigation"
-              onClick={() => setIsMobileMenuOpen((current) => !current)}
-            >
-              Menu
-            </button>
-          </div>
+          <nav aria-label="Primary" className="primary-nav" id="primary-navigation">
+            {PRIMARY_NAV_ITEMS.map((item) => (
+              <NavLink key={item.to} onClick={() => setIsMobileMenuOpen(false)} to={item.to}>
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </aside>
 
-          <div className="topbar-row">
-            <p className="breadcrumbs" aria-live="polite">
-              {breadcrumb}
-            </p>
-          </div>
-
-          <div className="project-frame">
-            <label>
-              <span className="visually-hidden">Select active project</span>
-              <select
-                value={projectContext.activeProjectId ?? ""}
-                onChange={(event) => onProjectSelectionChange(event.target.value)}
+        <div className="main-column">
+          <header className="topbar">
+            <div className="mobile-actions">
+              <button
+                type="button"
+                aria-expanded={isMobileMenuOpen}
+                aria-controls="primary-navigation"
+                aria-label={isMobileMenuOpen ? "Close primary navigation" : "Open primary navigation"}
+                onClick={() => setIsMobileMenuOpen((current) => !current)}
               >
-                <option value="">No active project</option>
-                {projectContext.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                Menu
+              </button>
+            </div>
 
-            <span className="badge" aria-label="Active project source">
-              {projectContext.activeProjectId ?? "none"} ({projectContext.source})
-            </span>
-          </div>
-        </header>
+            <div className="topbar-row">
+              <p className="breadcrumbs" aria-live="polite">
+                {breadcrumb}
+              </p>
+            </div>
 
-        <main className="content-scroll" id="main-content" tabIndex={-1}>
-          <Outlet />
-        </main>
+            <div className="project-frame">
+              <label>
+                <span className="visually-hidden">Select active project</span>
+                <select
+                  value={projectContext.activeProjectId ?? ""}
+                  onChange={(event) => onProjectSelectionChange(event.target.value)}
+                >
+                  <option value="">No active project</option>
+                  {projectContext.projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <span className="badge" aria-label="Active project source">
+                {projectContext.activeProjectId ?? "none"} ({projectContext.source})
+              </span>
+            </div>
+          </header>
+
+          <main className="content-scroll" id={MAIN_CONTENT_ID} ref={mainContentRef} tabIndex={-1}>
+            <Outlet />
+          </main>
+        </div>
       </div>
     </div>
   );
