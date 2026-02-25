@@ -72,16 +72,34 @@ pub(crate) async fn handle_task_control(
                 );
             }
             if args.dry_run {
+                let task_id = task.id.clone();
+                let task_status = task.status.clone();
+                let task_paused = task.paused;
+                let task_cancelled = task.cancelled;
                 return print_value(
                     serde_json::json!({
+                        "operation": "task-control.cancel",
+                        "target": {
+                            "task_id": task_id.clone(),
+                        },
                         "action": "task-control.cancel",
                         "dry_run": true,
                         "destructive": true,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "mark task as cancelled",
+                            "set task status to cancelled",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao task-control cancel --task-id {} --confirm {}' to apply",
+                            task_id,
+                            task_id
+                        ),
                         "task": {
-                            "task_id": task.id,
-                            "status": task.status,
-                            "paused": task.paused,
-                            "cancelled": task.cancelled,
+                            "task_id": task_id,
+                            "status": task_status,
+                            "paused": task_paused,
+                            "cancelled": task_cancelled,
                         },
                     }),
                     json,
@@ -127,7 +145,11 @@ pub(crate) async fn handle_task_control(
                 .map(|deadline| {
                     chrono::DateTime::parse_from_rfc3339(deadline)
                         .map(|value| value.with_timezone(&Utc).to_rfc3339())
-                        .with_context(|| format!("invalid deadline format: {deadline}"))
+                        .with_context(|| {
+                            format!(
+                                "invalid deadline format '{deadline}'; expected RFC 3339 timestamp such as 2026-03-01T09:30:00Z"
+                            )
+                        })
                 })
                 .transpose()?;
             task.deadline = normalized;

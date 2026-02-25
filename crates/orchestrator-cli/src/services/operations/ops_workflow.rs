@@ -768,10 +768,22 @@ fn preview_phase_removal(project_root: &str, phase_id: &str) -> Result<Value> {
         .collect();
 
     Ok(serde_json::json!({
+        "operation": "workflow.phases.remove",
+        "target": {
+            "phase_id": normalized_phase_id,
+        },
         "action": "workflow.phases.remove",
         "dry_run": true,
         "destructive": true,
         "requires_confirmation": true,
+        "planned_effects": [
+            "remove phase runtime definition",
+        ],
+        "next_step": format!(
+            "rerun 'ao workflow phases remove --phase {} --confirm {}' to apply",
+            phase_id,
+            phase_id
+        ),
         "phase_id": normalized_phase_id,
         "can_remove": blocking_pipelines.is_empty(),
         "blocking_pipelines": blocking_pipelines,
@@ -980,12 +992,26 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Pause(args) => {
             let workflow = workflows.get(&args.id).await?;
             if args.dry_run {
+                let workflow_id = workflow.id.clone();
                 return print_value(
                     serde_json::json!({
+                        "operation": "workflow.pause",
+                        "target": {
+                            "workflow_id": workflow_id.clone(),
+                        },
                         "action": "workflow.pause",
                         "dry_run": true,
                         "destructive": true,
-                        "workflow_id": workflow.id,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "pause workflow execution",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao workflow pause --id {} --confirm {}' to apply",
+                            workflow_id,
+                            workflow_id
+                        ),
+                        "workflow_id": workflow_id,
                         "status": workflow.status,
                         "current_phase": workflow.current_phase,
                     }),
@@ -998,12 +1024,26 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Cancel(args) => {
             let workflow = workflows.get(&args.id).await?;
             if args.dry_run {
+                let workflow_id = workflow.id.clone();
                 return print_value(
                     serde_json::json!({
+                        "operation": "workflow.cancel",
+                        "target": {
+                            "workflow_id": workflow_id.clone(),
+                        },
                         "action": "workflow.cancel",
                         "dry_run": true,
                         "destructive": true,
-                        "workflow_id": workflow.id,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "cancel workflow execution",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao workflow cancel --id {} --confirm {}' to apply",
+                            workflow_id,
+                            workflow_id
+                        ),
+                        "workflow_id": workflow_id,
                         "status": workflow.status,
                         "current_phase": workflow.current_phase,
                     }),

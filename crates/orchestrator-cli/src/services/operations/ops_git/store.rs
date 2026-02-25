@@ -144,7 +144,7 @@ pub(super) fn ensure_confirmation(
 ) -> Result<()> {
     let confirmation_id = confirmation_id.ok_or_else(|| {
         anyhow!(
-            "CONFIRMATION_REQUIRED: request and approve a git confirmation for '{}' on '{}' and rerun with --confirmation-id",
+            "CONFIRMATION_REQUIRED: request and approve a git confirmation for '{}' on '{}', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
             operation_type,
             repo_name
         )

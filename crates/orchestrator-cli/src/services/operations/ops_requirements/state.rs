@@ -187,13 +187,30 @@ fn next_requirement_id_local(requirements: &HashMap<String, RequirementItem>) ->
     format!("REQ-{next_seq:03}")
 }
 
+const REQUIREMENT_PRIORITY_EXPECTED: &str = "must, should, could, wont|won't";
+const REQUIREMENT_STATUS_EXPECTED: &str = "draft, refined, planned, in-progress|in_progress, done";
+
+fn invalid_requirement_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
+    let value = value.trim();
+    let normalized_value = if value.is_empty() { "<empty>" } else { value };
+    anyhow!(
+        "invalid requirement {domain} '{normalized_value}'; expected one of: {expected}; run the command with --help for accepted values"
+    )
+}
+
 fn parse_requirement_priority(value: &str) -> Result<RequirementPriority> {
     let parsed = match value.trim().to_ascii_lowercase().as_str() {
         "must" => RequirementPriority::Must,
         "should" => RequirementPriority::Should,
         "could" => RequirementPriority::Could,
         "wont" | "won't" => RequirementPriority::Wont,
-        _ => anyhow::bail!("invalid requirement priority: {value}"),
+        _ => {
+            return Err(invalid_requirement_value_error(
+                "priority",
+                value,
+                REQUIREMENT_PRIORITY_EXPECTED,
+            ))
+        }
     };
     Ok(parsed)
 }
@@ -205,7 +222,13 @@ fn parse_requirement_status(value: &str) -> Result<RequirementStatus> {
         "planned" => RequirementStatus::Planned,
         "in-progress" | "in_progress" => RequirementStatus::InProgress,
         "done" => RequirementStatus::Done,
-        _ => anyhow::bail!("invalid requirement status: {value}"),
+        _ => {
+            return Err(invalid_requirement_value_error(
+                "status",
+                value,
+                REQUIREMENT_STATUS_EXPECTED,
+            ))
+        }
     };
     Ok(parsed)
 }

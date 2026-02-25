@@ -20,6 +20,9 @@ React shell and route architecture for `TASK-011`.
   `../docs/task-019-observability-diagnostics-ux-brief.md`,
   `../docs/task-019-observability-diagnostics-mockup-review.md`,
   `../docs/task-019-observability-diagnostics-implementation-notes.md`
+- `TASK-017` requirements and implementation notes:
+  `../docs/task-017-accessibility-responsive-performance-requirements.md`,
+  `../docs/task-017-accessibility-responsive-performance-implementation-notes.md`
 
 ## Commands
 

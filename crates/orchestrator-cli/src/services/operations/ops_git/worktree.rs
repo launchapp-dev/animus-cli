@@ -57,14 +57,25 @@ pub(super) fn handle_git_worktree(
                 cmd.push("--force");
             }
             if args.dry_run {
+                let repo = args.repo.clone();
+                let worktree_name = args.worktree_name.clone();
                 return print_value(
                     serde_json::json!({
+                        "operation": "git.worktree.remove",
+                        "target": {
+                            "repo": repo.clone(),
+                            "worktree_name": worktree_name.clone(),
+                        },
                         "action": "git.worktree.remove",
                         "dry_run": true,
                         "destructive": true,
-                        "repo": args.repo,
+                        "planned_effects": [
+                            "remove git worktree from repository",
+                        ],
+                        "next_step": "request/approve a git confirmation, then rerun with --confirmation-id <id>",
+                        "repo": repo,
                         "repo_path": repo_path.display().to_string(),
-                        "worktree_name": args.worktree_name,
+                        "worktree_name": worktree_name,
                         "worktree_path": worktree_path.display().to_string(),
                         "force": args.force,
                         "requires_confirmation": true,
@@ -114,16 +125,36 @@ pub(super) fn handle_git_worktree(
                 cmd.push("--force");
             }
             if args.dry_run {
+                let repo = args.repo.clone();
+                let worktree_name = args.worktree_name.clone();
+                let remote = args.remote.clone();
+                let branch_name = branch.trim().to_string();
+                let next_step = if args.force {
+                    "request/approve a git confirmation, then rerun with --confirmation-id <id>"
+                } else {
+                    "rerun without --dry-run to execute git worktree push"
+                };
                 return print_value(
                     serde_json::json!({
+                        "operation": "git.worktree.push",
+                        "target": {
+                            "repo": repo.clone(),
+                            "worktree_name": worktree_name.clone(),
+                            "remote": remote.clone(),
+                            "branch": branch_name.clone(),
+                        },
                         "action": "git.worktree.push",
                         "dry_run": true,
                         "destructive": args.force,
-                        "repo": args.repo,
-                        "worktree_name": args.worktree_name,
+                        "planned_effects": [
+                            "push worktree branch updates to remote",
+                        ],
+                        "next_step": next_step,
+                        "repo": repo,
+                        "worktree_name": worktree_name,
                         "worktree_path": worktree_path.display().to_string(),
-                        "remote": args.remote,
-                        "branch": branch.trim(),
+                        "remote": remote,
+                        "branch": branch_name,
                         "force": args.force,
                         "requires_confirmation": args.force,
                         "command": cmd,

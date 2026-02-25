@@ -155,15 +155,33 @@ pub(super) fn handle_git_push(args: GitPushArgs, project_root: &str, json: bool)
         cmd.push("--force");
     }
     if args.dry_run {
+        let repo = args.repo.clone();
+        let remote = args.remote.clone();
+        let branch = args.branch.clone();
+        let next_step = if args.force {
+            "request/approve a git confirmation, then rerun with --confirmation-id <id>".to_string()
+        } else {
+            "rerun without --dry-run to execute git push".to_string()
+        };
         return print_value(
             serde_json::json!({
+                "operation": "git.push",
+                "target": {
+                    "repo": repo.clone(),
+                    "remote": remote.clone(),
+                    "branch": branch.clone(),
+                },
                 "action": "git.push",
                 "dry_run": true,
                 "destructive": args.force,
-                "repo": args.repo,
+                "planned_effects": [
+                    "push branch updates to remote",
+                ],
+                "next_step": next_step,
+                "repo": repo,
                 "repo_path": repo_path.display().to_string(),
-                "remote": args.remote,
-                "branch": args.branch,
+                "remote": remote,
+                "branch": branch,
                 "force": args.force,
                 "requires_confirmation": args.force,
                 "command": cmd,

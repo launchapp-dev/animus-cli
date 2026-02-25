@@ -1,11 +1,23 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
+const INPUT_JSON_PRECEDENCE_HELP: &str =
+    "JSON payload for this command. When provided, values in this payload override individual CLI flags.";
+
 #[derive(Debug, Parser)]
 #[command(name = "ao", about = "Agent Orchestrator CLI", version)]
 pub(crate) struct Cli {
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Emit machine-readable JSON output using the ao.cli.v1 envelope."
+    )]
     pub(crate) json: bool,
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Project root directory. Overrides PROJECT_ROOT and default root resolution."
+    )]
     pub(crate) project_root: Option<String>,
 
     #[command(subcommand)]
@@ -14,164 +26,257 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Show the installed `ao` version.
     Version,
+    /// Manage daemon lifecycle and automation settings.
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// Run and inspect agent executions.
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Manage project registration and metadata.
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Manage tasks, dependencies, and status.
     Task {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Run and control workflow execution.
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
+    /// Draft and refine project vision artifacts.
     Vision {
         #[command(subcommand)]
         command: VisionCommand,
     },
+    /// Draft and manage project requirements.
     Requirements {
         #[command(subcommand)]
         command: RequirementsCommand,
     },
+    /// Manage architecture entities, edges, and graph metadata.
     Architecture {
         #[command(subcommand)]
         command: ArchitectureCommand,
     },
+    /// Generate or execute task plans from requirements.
     Execute {
         #[command(subcommand)]
         command: ExecuteCommand,
     },
+    /// Planning facade for vision and requirements workflows.
     Planning {
         #[command(subcommand)]
         command: PlanningCommand,
     },
+    /// Record and inspect review decisions and handoffs.
     Review {
         #[command(subcommand)]
         command: ReviewCommand,
     },
+    /// Run and inspect QA evaluations and approvals.
     Qa {
         #[command(subcommand)]
         command: QaCommand,
     },
+    /// Inspect and search execution history.
     History {
         #[command(subcommand)]
         command: HistoryCommand,
     },
+    /// Inspect and retry recorded operational errors.
     Errors {
         #[command(subcommand)]
         command: ErrorsCommand,
     },
+    /// Apply operational task controls such as cancel, priority, and deadline.
     TaskControl {
         #[command(subcommand)]
         command: TaskControlCommand,
     },
+    /// Manage Git repositories, worktrees, and confirmation requests.
     Git {
         #[command(subcommand)]
         command: GitCommand,
     },
+    /// Inspect model availability, validation, and evaluations.
     Model {
         #[command(subcommand)]
         command: ModelCommand,
     },
+    /// Inspect runner health and orphaned runs.
     Runner {
         #[command(subcommand)]
         command: RunnerCommand,
     },
+    /// Inspect run output and artifacts.
     Output {
         #[command(subcommand)]
         command: OutputCommand,
     },
+    /// Run the AO MCP service endpoint.
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Serve and open the AO web UI.
     Web {
         #[command(subcommand)]
         command: WebCommand,
     },
+    /// Launch the terminal UI.
     Tui(TuiArgs),
+    /// Run environment and configuration diagnostics.
     Doctor,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum McpCommand {
+    /// Start the MCP server in the current process.
     Serve,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WebCommand {
+    /// Start the AO web server.
     Serve(WebServeArgs),
+    /// Open the AO web UI URL in a browser.
     Open(WebOpenArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WebServeArgs {
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(
+        long,
+        value_name = "HOST",
+        default_value = "127.0.0.1",
+        help = "Host interface to bind the web server."
+    )]
     pub(crate) host: String,
-    #[arg(long, default_value_t = 4173)]
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 4173,
+        help = "Port to bind the web server."
+    )]
     pub(crate) port: u16,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Open the web UI in a browser after startup."
+    )]
     pub(crate) open: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Override static assets directory.")]
     pub(crate) assets_dir: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Serve API endpoints only without static assets."
+    )]
     pub(crate) api_only: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WebOpenArgs {
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(
+        long,
+        value_name = "HOST",
+        default_value = "127.0.0.1",
+        help = "Host name for the web URL."
+    )]
     pub(crate) host: String,
-    #[arg(long, default_value_t = 4173)]
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value_t = 4173,
+        help = "Port for the web URL."
+    )]
     pub(crate) port: u16,
-    #[arg(long, default_value = "/")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = "/",
+        help = "Path to open, such as / or /runs."
+    )]
     pub(crate) path: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TuiArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "MODEL_ID",
+        help = "Model id to use for interactive runs."
+    )]
     pub(crate) model: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TOOL",
+        help = "CLI provider, such as codex or claude."
+    )]
     pub(crate) tool: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run without full-screen UI rendering."
+    )]
     pub(crate) headless: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Optional initial prompt to pre-fill in the UI."
+    )]
     pub(crate) prompt: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DaemonCommand {
+    /// Start the daemon in detached/background mode.
     Start(DaemonStartArgs),
+    /// Run the daemon in the current foreground process.
     Run(DaemonRunArgs),
+    /// Stop the running daemon.
     Stop,
+    /// Show daemon runtime status.
     Status,
+    /// Show daemon health diagnostics.
     Health,
+    /// Pause daemon scheduling.
     Pause,
+    /// Resume daemon scheduling.
     Resume,
+    /// Stream or tail daemon event history.
     Events(DaemonEventsArgs),
+    /// Read daemon logs.
     Logs(LogArgs),
+    /// Clear daemon logs.
     ClearLogs,
+    /// List daemon-managed agents.
     Agents,
+    /// Update daemon automation configuration.
     Config(DaemonConfigArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
+    /// Start an agent run.
     Run(AgentRunArgs),
+    /// Control an existing agent run.
     Control(AgentControlArgs),
+    /// Read status for a run id.
     Status(AgentStatusArgs),
+    /// Check model availability/status through the runner.
     ModelStatus(AgentModelStatusArgs),
+    /// Inspect runner process availability.
     RunnerStatus(AgentRunnerStatusArgs),
 }
 
@@ -358,25 +463,41 @@ pub(crate) enum RunnerScopeArg {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ProjectCommand {
+    /// List registered projects.
     List,
+    /// Show the active project.
     Active,
+    /// Get a project by id.
     Get(IdArgs),
+    /// Create a new project entry.
     Create(ProjectCreateArgs),
+    /// Mark a project as active.
     Load(IdArgs),
+    /// Rename a project.
     Rename(ProjectRenameArgs),
+    /// Archive a project.
     Archive(IdArgs),
+    /// Remove a project.
     Remove(IdArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct ProjectCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Human-friendly project name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Filesystem path to the project root."
+    )]
     pub(crate) path: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Project type: web-app|mobile-app|desktop-app|full-stack-platform|library|infrastructure|other (aliases accepted)."
+    )]
     pub(crate) project_type: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -396,31 +517,59 @@ pub(crate) struct ProjectRenameArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TaskCommand {
+    /// List tasks with optional filters.
     List(TaskListArgs),
+    /// List tasks sorted by priority/urgency.
     Prioritized,
+    /// Get the next ready task.
     Next,
+    /// Show task statistics.
     Stats,
+    /// Get a task by id.
     Get(IdArgs),
+    /// Create a task.
     Create(TaskCreateArgs),
+    /// Update a task.
     Update(TaskUpdateArgs),
+    /// Delete a task (confirmation required).
     Delete(TaskDeleteArgs),
+    /// Assign a generic assignee string to a task.
     Assign(TaskAssignArgs),
+    /// Assign an agent role to a task.
     AssignAgent(TaskAssignAgentArgs),
+    /// Assign a human user to a task.
     AssignHuman(TaskAssignHumanArgs),
+    /// Add a checklist item.
     ChecklistAdd(TaskChecklistAddArgs),
+    /// Mark a checklist item complete/incomplete.
     ChecklistUpdate(TaskChecklistUpdateArgs),
+    /// Add a task dependency edge.
     DependencyAdd(TaskDependencyAddArgs),
+    /// Remove a task dependency edge.
     DependencyRemove(TaskDependencyRemoveArgs),
+    /// Set task status.
     Status(TaskStatusArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskListArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Task type filter: feature|bugfix|hotfix|refactor|docs|test|chore|experiment."
+    )]
     pub(crate) task_type: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "STATUS",
+        help = "Status filter: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
+    )]
     pub(crate) status: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Priority filter: critical|high|medium|low."
+    )]
     pub(crate) priority: Option<String>,
     #[arg(long)]
     pub(crate) assignee_type: Option<String>,
@@ -436,17 +585,30 @@ pub(crate) struct TaskListArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TITLE", help = "Task title.")]
     pub(crate) title: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        value_name = "TEXT",
+        default_value = "",
+        help = "Task description."
+    )]
     pub(crate) description: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Task type: feature|bugfix|hotfix|refactor|docs|test|chore|experiment."
+    )]
     pub(crate) task_type: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Task priority: critical|high|medium|low."
+    )]
     pub(crate) priority: Option<String>,
     #[arg(long = "linked-architecture-entity")]
     pub(crate) linked_architecture_entity: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -458,9 +620,17 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) title: Option<String>,
     #[arg(long)]
     pub(crate) description: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Task priority: critical|high|medium|low."
+    )]
     pub(crate) priority: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "STATUS",
+        help = "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
+    )]
     pub(crate) status: Option<String>,
     #[arg(long)]
     pub(crate) assignee: Option<String>,
@@ -468,7 +638,7 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) linked_architecture_entity: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) replace_linked_architecture_entities: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -476,9 +646,17 @@ pub(crate) struct TaskUpdateArgs {
 pub(crate) struct TaskDeleteArgs {
     #[arg(long)]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Confirmation token; must match --id."
+    )]
     pub(crate) confirm: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview deletion payload without mutating task state."
+    )]
     pub(crate) dry_run: bool,
 }
 
@@ -540,7 +718,11 @@ pub(crate) struct TaskDependencyAddArgs {
     pub(crate) id: String,
     #[arg(long)]
     pub(crate) dependency_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to."
+    )]
     pub(crate) dependency_type: String,
     #[arg(long, default_value = "ao-cli")]
     pub(crate) updated_by: String,
@@ -560,95 +742,134 @@ pub(crate) struct TaskDependencyRemoveArgs {
 pub(crate) struct TaskStatusArgs {
     #[arg(long)]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "STATUS",
+        help = "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
+    )]
     pub(crate) status: String,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
+    /// List workflows.
     List,
+    /// Get workflow details.
     Get(IdArgs),
+    /// Show workflow decisions.
     Decisions(IdArgs),
+    /// List and inspect workflow checkpoints.
     Checkpoints {
         #[command(subcommand)]
         command: WorkflowCheckpointCommand,
     },
+    /// Start a workflow for a task.
     Run(WorkflowRunArgs),
+    /// Resume a paused workflow.
     Resume(IdArgs),
+    /// Check whether a workflow can be resumed.
     ResumeStatus(IdArgs),
+    /// Pause an active workflow (confirmation required).
     Pause(WorkflowPauseArgs),
+    /// Cancel a workflow (confirmation required).
     Cancel(WorkflowCancelArgs),
+    /// Manual actions for a specific workflow phase.
     Phase {
         #[command(subcommand)]
         command: WorkflowPhaseCommand,
     },
+    /// Manage workflow phase definitions.
     Phases {
         #[command(subcommand)]
         command: WorkflowPhasesCommand,
     },
+    /// Manage workflow pipeline definitions.
     Pipelines {
         #[command(subcommand)]
         command: WorkflowPipelinesCommand,
     },
+    /// Read and validate workflow configuration.
     Config {
         #[command(subcommand)]
         command: WorkflowConfigCommand,
     },
+    /// Read and update workflow state machine configuration.
     StateMachine {
         #[command(subcommand)]
         command: WorkflowStateMachineCommand,
     },
+    /// Read and update workflow agent runtime configuration.
     AgentRuntime {
         #[command(subcommand)]
         command: WorkflowAgentRuntimeCommand,
     },
+    /// Update a pipeline by id.
     UpdatePipeline(WorkflowPipelineUpdateArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowPhaseCommand {
+    /// Approve a pending phase gate.
     Approve(WorkflowPhaseApproveArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowPhasesCommand {
+    /// List configured workflow phases.
     List,
+    /// Get a workflow phase by id.
     Get(WorkflowPhaseGetArgs),
+    /// Create or replace a workflow phase definition.
     Upsert(WorkflowPhaseUpsertArgs),
+    /// Remove a workflow phase definition (confirmation required).
     Remove(WorkflowPhaseRemoveArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowPipelinesCommand {
+    /// List configured workflow pipelines.
     List,
+    /// Create or replace a workflow pipeline definition.
     Upsert(WorkflowPipelineUpsertArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowConfigCommand {
+    /// Read resolved workflow config.
     Get,
+    /// Validate workflow config shape and references.
     Validate,
+    /// Migrate legacy workflow config to v2.
     MigrateV2,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowStateMachineCommand {
+    /// Read workflow state-machine config.
     Get,
+    /// Validate workflow state-machine config.
     Validate,
+    /// Replace workflow state-machine config JSON.
     Set(WorkflowStateMachineSetArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowAgentRuntimeCommand {
+    /// Read workflow agent-runtime config.
     Get,
+    /// Validate workflow agent-runtime config.
     Validate,
+    /// Replace workflow agent-runtime config JSON.
     Set(WorkflowAgentRuntimeSetArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum VisionCommand {
+    /// Draft a project vision.
     Draft(VisionDraftArgs),
+    /// Refine the existing project vision.
     Refine(VisionRefineArgs),
+    /// Read the current project vision.
     Get,
 }
 
@@ -706,21 +927,31 @@ pub(crate) struct VisionRefineArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RequirementsCommand {
+    /// Draft requirements from project context.
     Draft(RequirementsDraftArgs),
+    /// List requirements.
     List,
+    /// Get a requirement by id.
     Get(IdArgs),
+    /// Refine existing requirements.
     Refine(RequirementsRefineArgs),
+    /// Create a requirement.
     Create(RequirementCreateArgs),
+    /// Update a requirement.
     Update(RequirementUpdateArgs),
+    /// Delete a requirement.
     Delete(IdArgs),
+    /// View or replace the requirement dependency graph.
     Graph {
         #[command(subcommand)]
         command: RequirementGraphCommand,
     },
+    /// Manage requirement mockups and linked assets.
     Mockups {
         #[command(subcommand)]
         command: MockupCommand,
     },
+    /// Scan and apply requirement recommendations.
     Recommendations {
         #[command(subcommand)]
         command: RecommendationCommand,
@@ -729,13 +960,18 @@ pub(crate) enum RequirementsCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ArchitectureCommand {
+    /// Read architecture graph and metadata.
     Get,
+    /// Replace architecture graph JSON.
     Set(ArchitectureSetArgs),
+    /// Suggest architecture links for a task.
     Suggest(ArchitectureSuggestArgs),
+    /// Manage architecture entities.
     Entity {
         #[command(subcommand)]
         command: ArchitectureEntityCommand,
     },
+    /// Manage architecture edges.
     Edge {
         #[command(subcommand)]
         command: ArchitectureEdgeCommand,
@@ -756,10 +992,15 @@ pub(crate) struct ArchitectureSuggestArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ArchitectureEntityCommand {
+    /// List architecture entities.
     List,
+    /// Get an architecture entity by id.
     Get(IdArgs),
+    /// Create an architecture entity.
     Create(ArchitectureEntityCreateArgs),
+    /// Update an architecture entity.
     Update(ArchitectureEntityUpdateArgs),
+    /// Delete an architecture entity.
     Delete(IdArgs),
 }
 
@@ -807,8 +1048,11 @@ pub(crate) struct ArchitectureEntityUpdateArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ArchitectureEdgeCommand {
+    /// List architecture edges.
     List,
+    /// Create an architecture edge.
     Create(ArchitectureEdgeCreateArgs),
+    /// Delete an architecture edge.
     Delete(IdArgs),
 }
 
@@ -878,17 +1122,21 @@ pub(crate) struct RequirementsRefineArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TITLE", help = "Requirement title.")]
     pub(crate) title: String,
     #[arg(long, default_value = "")]
     pub(crate) description: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Requirement priority: must|should|could|wont|won't."
+    )]
     pub(crate) priority: Option<String>,
     #[arg(long)]
     pub(crate) source: Option<String>,
     #[arg(long = "acceptance-criterion")]
     pub(crate) acceptance_criterion: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -900,9 +1148,17 @@ pub(crate) struct RequirementUpdateArgs {
     pub(crate) title: Option<String>,
     #[arg(long)]
     pub(crate) description: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Requirement priority: must|should|could|wont|won't."
+    )]
     pub(crate) priority: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "STATUS",
+        help = "Requirement status: draft|refined|planned|in-progress|in_progress|done."
+    )]
     pub(crate) status: Option<String>,
     #[arg(long)]
     pub(crate) source: Option<String>,
@@ -912,13 +1168,15 @@ pub(crate) struct RequirementUpdateArgs {
     pub(crate) acceptance_criterion: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) replace_acceptance_criteria: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RequirementGraphCommand {
+    /// Read the requirement graph.
     Get,
+    /// Replace the requirement graph with provided JSON.
     Save(RequirementGraphSaveArgs),
 }
 
@@ -930,9 +1188,13 @@ pub(crate) struct RequirementGraphSaveArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum MockupCommand {
+    /// List requirement mockups.
     List,
+    /// Create a mockup record.
     Create(MockupCreateArgs),
+    /// Link a mockup to requirements or flows.
     Link(MockupLinkArgs),
+    /// Get a mockup file by relative path.
     GetFile(MockupFileArgs),
 }
 
@@ -972,10 +1234,15 @@ pub(crate) struct MockupFileArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RecommendationCommand {
+    /// Run recommendation scan over current project context.
     Scan(RecommendationScanArgs),
+    /// List saved recommendation reports.
     List,
+    /// Apply a recommendation report.
     Apply(RecommendationApplyArgs),
+    /// Read recommendation config.
     ConfigGet,
+    /// Update recommendation config.
     ConfigUpdate(RecommendationConfigUpdateArgs),
 }
 
@@ -1005,7 +1272,9 @@ pub(crate) struct RecommendationConfigUpdateArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ExecuteCommand {
+    /// Generate task execution plan from requirements.
     Plan(ExecutePlanArgs),
+    /// Generate and immediately run workflows from requirements.
     Run(ExecuteRunArgs),
 }
 
@@ -1039,10 +1308,12 @@ pub(crate) struct ExecuteRunArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlanningCommand {
+    /// Vision planning commands.
     Vision {
         #[command(subcommand)]
         command: PlanningVisionCommand,
     },
+    /// Requirements planning commands.
     Requirements {
         #[command(subcommand)]
         command: PlanningRequirementsCommand,
@@ -1051,17 +1322,25 @@ pub(crate) enum PlanningCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlanningVisionCommand {
+    /// Draft a project vision.
     Draft(VisionDraftArgs),
+    /// Refine existing project vision.
     Refine(VisionRefineArgs),
+    /// Read current project vision.
     Get,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum PlanningRequirementsCommand {
+    /// Draft requirements from project context.
     Draft(RequirementsDraftArgs),
+    /// List requirements.
     List,
+    /// Get a requirement by id.
     Get(IdArgs),
+    /// Refine requirements.
     Refine(RequirementsRefineArgs),
+    /// Execute requirements planning into tasks/workflows.
     Execute(PlanningExecuteArgs),
 }
 
@@ -1083,11 +1362,17 @@ pub(crate) struct PlanningExecuteArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ReviewCommand {
+    /// Compute review status for an entity.
     Entity(ReviewEntityArgs),
+    /// Record a review decision.
     Record(ReviewRecordArgs),
+    /// Compute review status for a task.
     TaskStatus(TaskIdArgs),
+    /// Compute review status for a requirement.
     RequirementStatus(IdArgs),
+    /// Record a handoff between roles for a run.
     Handoff(ReviewHandoffArgs),
+    /// Record dual-approval for a task.
     DualApprove(ReviewDualApproveArgs),
 }
 
@@ -1139,9 +1424,13 @@ pub(crate) struct ReviewDualApproveArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum QaCommand {
+    /// Evaluate QA gates for a workflow phase.
     Evaluate(QaEvaluateArgs),
+    /// Get QA evaluation result for a workflow phase.
     Get(QaPhaseArgs),
+    /// List QA evaluations for a workflow.
     List(QaWorkflowArgs),
+    /// Manage QA approvals.
     Approval {
         #[command(subcommand)]
         command: QaApprovalCommand,
@@ -1182,7 +1471,9 @@ pub(crate) struct QaWorkflowArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum QaApprovalCommand {
+    /// Add a QA gate approval.
     Add(QaApprovalAddArgs),
+    /// List QA gate approvals.
     List(QaApprovalListArgs),
 }
 
@@ -1210,10 +1501,15 @@ pub(crate) struct QaApprovalListArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum HistoryCommand {
+    /// List history records for a task.
     Task(HistoryTaskArgs),
+    /// Get a history record by id.
     Get(IdArgs),
+    /// List recent history records.
     Recent(HistoryRecentArgs),
+    /// Search history records.
     Search(HistorySearchArgs),
+    /// Remove old history records.
     Cleanup(HistoryCleanupArgs),
 }
 
@@ -1257,10 +1553,15 @@ pub(crate) struct HistoryCleanupArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ErrorsCommand {
+    /// List recorded errors.
     List(ErrorsListArgs),
+    /// Get an error by id.
     Get(IdArgs),
+    /// Show error summary stats.
     Stats,
+    /// Retry an error by id.
     Retry(IdArgs),
+    /// Remove old error records.
     Cleanup(ErrorsCleanupArgs),
 }
 
@@ -1284,10 +1585,15 @@ pub(crate) struct ErrorsCleanupArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TaskControlCommand {
+    /// Pause a task.
     Pause(TaskIdArgs),
+    /// Resume a paused task.
     Resume(TaskIdArgs),
+    /// Cancel a task (confirmation required).
     Cancel(TaskControlCancelArgs),
+    /// Set task priority.
     SetPriority(TaskControlPriorityArgs),
+    /// Set or clear task deadline.
     SetDeadline(TaskControlDeadlineArgs),
 }
 
@@ -1301,9 +1607,17 @@ pub(crate) struct TaskIdArgs {
 pub(crate) struct TaskControlCancelArgs {
     #[arg(long)]
     pub(crate) task_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Confirmation token; must match --task-id."
+    )]
     pub(crate) confirm: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview cancellation payload without mutating task state."
+    )]
     pub(crate) dry_run: bool,
 }
 
@@ -1311,7 +1625,11 @@ pub(crate) struct TaskControlCancelArgs {
 pub(crate) struct TaskControlPriorityArgs {
     #[arg(long)]
     pub(crate) task_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PRIORITY",
+        help = "Priority value: critical|high|medium|low."
+    )]
     pub(crate) priority: String,
 }
 
@@ -1325,19 +1643,27 @@ pub(crate) struct TaskControlDeadlineArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitCommand {
+    /// Manage repo registry entries.
     Repo {
         #[command(subcommand)]
         command: GitRepoCommand,
     },
+    /// List repository branches.
     Branches(GitRepoArgs),
+    /// Show repository status.
     Status(GitRepoArgs),
+    /// Commit staged/untracked changes.
     Commit(GitCommitArgs),
+    /// Push branch updates.
     Push(GitPushArgs),
+    /// Pull branch updates.
     Pull(GitPullArgs),
+    /// Manage git worktrees.
     Worktree {
         #[command(subcommand)]
         command: GitWorktreeCommand,
     },
+    /// Manage confirmation requests/outcomes for destructive git operations.
     Confirm {
         #[command(subcommand)]
         command: GitConfirmCommand,
@@ -1537,13 +1863,18 @@ pub(crate) struct GitConfirmOutcomeArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelCommand {
+    /// Check model availability for one or more model ids.
     Availability(ModelAvailabilityArgs),
+    /// Show configured model and API-key status.
     Status(ModelStatusArgs),
+    /// Validate model selection for a task or explicit list.
     Validate(ModelValidateArgs),
+    /// Manage cached model roster metadata.
     Roster {
         #[command(subcommand)]
         command: ModelRosterCommand,
     },
+    /// Run and inspect model evaluations.
     Eval {
         #[command(subcommand)]
         command: ModelEvalCommand,
@@ -1576,13 +1907,17 @@ pub(crate) struct ModelValidateArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelRosterCommand {
+    /// Refresh model roster from providers.
     Refresh,
+    /// Get current model roster snapshot.
     Get,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelEvalCommand {
+    /// Run model evaluation.
     Run(ModelEvalRunArgs),
+    /// Show latest model evaluation report.
     Report,
 }
 
@@ -1594,17 +1929,22 @@ pub(crate) struct ModelEvalRunArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunnerCommand {
+    /// Show runner process health.
     Health,
+    /// Detect and clean orphaned runner processes.
     Orphans {
         #[command(subcommand)]
         command: RunnerOrphanCommand,
     },
+    /// Show runner restart statistics.
     RestartStats,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunnerOrphanCommand {
+    /// Detect orphaned runner processes.
     Detect,
+    /// Clean orphaned runner processes.
     Cleanup(RunnerOrphanCleanupArgs),
 }
 
@@ -1616,12 +1956,19 @@ pub(crate) struct RunnerOrphanCleanupArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum OutputCommand {
+    /// Read run event payloads.
     Run(OutputRunArgs),
+    /// List artifacts for an execution id.
     Artifacts(OutputArtifactsArgs),
+    /// Download an artifact payload.
     Download(OutputDownloadArgs),
+    /// List artifact file ids for an execution.
     Files(OutputFilesArgs),
+    /// Read aggregated JSONL output streams for a run.
     Jsonl(OutputJsonlArgs),
+    /// Inspect run output with optional task/phase filtering.
     Monitor(OutputMonitorArgs),
+    /// Infer CLI provider details from run output.
     Cli(OutputCliArgs),
 }
 
@@ -1677,7 +2024,9 @@ pub(crate) struct OutputCliArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCheckpointCommand {
+    /// List checkpoints for a workflow.
     List(IdArgs),
+    /// Get a specific checkpoint for a workflow.
     Get(WorkflowCheckpointGetArgs),
 }
 
@@ -1691,11 +2040,15 @@ pub(crate) struct WorkflowCheckpointGetArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowRunArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Task id to run the workflow for."
+    )]
     pub(crate) task_id: String,
     #[arg(long)]
     pub(crate) pipeline_id: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1703,9 +2056,17 @@ pub(crate) struct WorkflowRunArgs {
 pub(crate) struct WorkflowPauseArgs {
     #[arg(long)]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "WORKFLOW_ID",
+        help = "Confirmation token; must match --id."
+    )]
     pub(crate) confirm: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview pause payload without mutating workflow state."
+    )]
     pub(crate) dry_run: bool,
 }
 
@@ -1713,9 +2074,17 @@ pub(crate) struct WorkflowPauseArgs {
 pub(crate) struct WorkflowCancelArgs {
     #[arg(long)]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "WORKFLOW_ID",
+        help = "Confirmation token; must match --id."
+    )]
     pub(crate) confirm: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview cancellation payload without mutating workflow state."
+    )]
     pub(crate) dry_run: bool,
 }
 
@@ -1747,9 +2116,17 @@ pub(crate) struct WorkflowPhaseUpsertArgs {
 pub(crate) struct WorkflowPhaseRemoveArgs {
     #[arg(long)]
     pub(crate) phase: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PHASE_ID",
+        help = "Confirmation token; must match --phase."
+    )]
     pub(crate) confirm: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview phase removal impact without mutating workflow config."
+    )]
     pub(crate) dry_run: bool,
 }
 

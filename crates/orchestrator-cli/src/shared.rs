@@ -145,10 +145,16 @@ mod tests {
     #[test]
     fn classify_error_maps_expected_exit_codes() {
         let invalid = anyhow!("invalid status");
+        let clap_required = anyhow!("error: required arguments were not provided: --id <ID>");
+        let clap_unexpected = anyhow!("error: unexpected argument '--bogus' found");
+        let confirmation = anyhow!("CONFIRMATION_REQUIRED: rerun command with --confirm TASK-1");
         let unavailable = anyhow!("failed to connect to runner");
         let not_found = anyhow!("task not found");
 
         assert_eq!(classify_exit_code(&invalid), 2);
+        assert_eq!(classify_exit_code(&clap_required), 2);
+        assert_eq!(classify_exit_code(&clap_unexpected), 2);
+        assert_eq!(classify_exit_code(&confirmation), 2);
         assert_eq!(classify_exit_code(&not_found), 3);
         assert_eq!(classify_exit_code(&unavailable), 5);
     }

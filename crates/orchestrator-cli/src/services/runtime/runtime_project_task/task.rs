@@ -98,17 +98,35 @@ pub(crate) async fn handle_task(
         TaskCommand::Delete(args) => {
             let task = tasks.get(&args.id).await?;
             if args.dry_run {
+                let task_id = task.id.clone();
+                let task_title = task.title.clone();
+                let task_status = task.status.clone();
+                let task_paused = task.paused;
+                let task_cancelled = task.cancelled;
                 return print_value(
                     serde_json::json!({
+                        "operation": "task.delete",
+                        "target": {
+                            "task_id": task_id.clone(),
+                        },
                         "action": "task.delete",
                         "dry_run": true,
                         "destructive": true,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "delete task from project state",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao task delete --id {} --confirm {}' to apply",
+                            task_id,
+                            task_id
+                        ),
                         "task": {
-                            "id": task.id,
-                            "title": task.title,
-                            "status": task.status,
-                            "paused": task.paused,
-                            "cancelled": task.cancelled,
+                            "id": task_id.clone(),
+                            "title": task_title,
+                            "status": task_status,
+                            "paused": task_paused,
+                            "cancelled": task_cancelled,
                         },
                     }),
                     json,
