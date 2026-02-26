@@ -128,6 +128,7 @@ impl Runner {
             terminal_status,
         } = message;
         if let Some(entry) = self.running_agents.remove(&run_id) {
+            let terminal_status = normalize_terminal_status_for_cleanup(terminal_status, &run_id);
             self.finished_agents.insert(
                 run_id.clone(),
                 FinishedAgent {
@@ -235,6 +236,23 @@ impl Runner {
     }
 }
 
+fn normalize_terminal_status_for_cleanup(status: AgentStatus, run_id: &RunId) -> AgentStatus {
+    match status {
+        AgentStatus::Completed
+        | AgentStatus::Failed
+        | AgentStatus::Timeout
+        | AgentStatus::Terminated => status,
+        AgentStatus::Starting | AgentStatus::Running | AgentStatus::Paused => {
+            warn!(
+                run_id = %run_id.0.as_str(),
+                status = ?status,
+                "Cleanup received non-terminal status; coercing to failed"
+            );
+            AgentStatus::Failed
+        }
+    }
+}
+
 fn runner_build_id() -> Option<String> {
     std::env::var("AO_RUNNER_BUILD_ID")
         .ok()
@@ -271,6 +289,48 @@ mod tests {
         runner.cleanup_agent(CleanupMessage {
             run_id: run_id.clone(),
             terminal_status: AgentStatus::Failed,
+        });
+
+        let finished = runner
+            .finished_agents
+            .get(&run_id)
+            .expect("run should be persisted in finished map");
+        assert_eq!(finished.status, AgentStatus::Failed);
+    }
+
+    #[test]
+    fn handle_agent_status_returns_failed_after_failed_cleanup() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-query-failed".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        runner.cleanup_agent(CleanupMessage {
+            run_id: run_id.clone(),
+            terminal_status: AgentStatus::Failed,
+        });
+
+        let response = runner.handle_agent_status(AgentStatusRequest {
+            run_id: run_id.clone(),
+        });
+        match response {
+            AgentStatusQueryResponse::Status(status) => {
+                assert_eq!(status.run_id, run_id);
+                assert_eq!(status.status, AgentStatus::Failed);
+                assert!(status.completed_at.is_some());
+            }
+            AgentStatusQueryResponse::Error(_) => panic!("expected status response"),
+        }
+    }
+
+    #[test]
+    fn cleanup_agent_coerces_non_terminal_status_to_failed() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-cleanup-running".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        runner.cleanup_agent(CleanupMessage {
+            run_id: run_id.clone(),
+            terminal_status: AgentStatus::Running,
         });
 
         let finished = runner
