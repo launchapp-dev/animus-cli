@@ -9,18 +9,20 @@ pub(crate) use runner::*;
 pub(crate) use task_generation::*;
 
 #[cfg(test)]
+pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::AgentRunArgs;
     use anyhow::anyhow;
     use orchestrator_core::{DependencyType, TaskStatus};
+    use protocol::RunId;
+    use sha2::{Digest, Sha256};
     use std::path::Path;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn make_agent_run_args() -> AgentRunArgs {
         AgentRunArgs {
@@ -93,7 +95,9 @@ mod tests {
 
     #[test]
     fn runner_config_dir_prefers_explicit_override() {
-        let _lock = env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let override_dir = tempfile::tempdir().expect("tempdir should be created");
         let override_dir_value = override_dir.path().to_string_lossy().to_string();
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(&override_dir_value));
@@ -106,7 +110,9 @@ mod tests {
 
     #[test]
     fn runner_config_dir_defaults_to_project_scope() {
-        let _lock = env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
@@ -126,7 +132,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn runner_config_dir_shortens_long_unix_socket_paths() {
-        let _lock = env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
@@ -140,6 +148,81 @@ mod tests {
             resolved.join("agent-runner.sock").to_string_lossy().len() <= 100,
             "runner socket path should be shortened for unix sockets"
         );
+    }
+
+    #[test]
+    fn run_dir_defaults_to_scoped_runtime_runs_root() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let project_root = temp.path().join("project-root");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = RunId("trace-run-010".to_string());
+
+        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
+        let canonical = project_root
+            .canonicalize()
+            .expect("project path should canonicalize");
+        let mut hasher = Sha256::new();
+        hasher.update(canonical.to_string_lossy().as_bytes());
+        let digest = hasher.finalize();
+        let scope = format!(
+            "project-root-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
+        );
+        let expected = dirs::home_dir()
+            .expect("home directory should resolve")
+            .join(".ao")
+            .join(scope)
+            .join("runs")
+            .join(&run_id.0);
+
+        assert_eq!(resolved, expected);
+        assert_ne!(
+            resolved,
+            project_root.join(".ao").join("runs").join(&run_id.0)
+        );
+    }
+
+    #[test]
+    fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let override_dir = temp.path().join("override-config");
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let _config_override = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(override_dir.to_string_lossy().as_ref()),
+        );
+
+        let project_root = temp.path().join("project-root");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = RunId("trace-run-global-scope".to_string());
+
+        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
+        assert!(
+            resolved.starts_with(temp.path().join(".ao")),
+            "run directory should stay under ~/.ao repo-scoped runtime root"
+        );
+        assert!(
+            !resolved.starts_with(&override_dir),
+            "run directory should not use AO_CONFIG_DIR overrides"
+        );
+    }
+
+    #[test]
+    fn run_dir_uses_base_override_when_provided() {
+        let project_root = tempfile::tempdir().expect("tempdir should be created");
+        let override_root = tempfile::tempdir().expect("tempdir should be created");
+        let run_id = RunId("trace-run-override".to_string());
+
+        let resolved = run_dir(
+            project_root.path().to_string_lossy().as_ref(),
+            &run_id,
+            Some(override_root.path().to_string_lossy().as_ref()),
+        );
+        assert_eq!(resolved, override_root.path().join(&run_id.0));
     }
 
     #[test]
@@ -195,7 +278,9 @@ mod tests {
 
     #[test]
     fn build_runtime_contract_honors_codex_reasoning_override_env() {
-        let _lock = env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _override = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("high"));
         let contract = build_runtime_contract("codex", "gpt-5", "hello world")
             .expect("codex runtime contract should be generated");
@@ -253,7 +338,9 @@ mod tests {
 
     #[test]
     fn build_agent_context_accepts_managed_worktree_cwd() {
-        let _lock = env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
 

@@ -3,7 +3,7 @@ use orchestrator_core::{DependencyType, Priority, ProjectType, TaskStatus, TaskT
 use protocol::{AgentRunEvent, RunId};
 use serde_json::Value;
 
-use crate::{event_matches_run, run_dir};
+use crate::{ensure_safe_run_id, event_matches_run, run_dir};
 
 const TASK_STATUS_EXPECTED: &str =
     "backlog|todo, ready, in-progress|in_progress, blocked, on-hold|on_hold, done, cancelled";
@@ -61,6 +61,7 @@ pub(crate) fn read_agent_status(
     run_id: &str,
     jsonl_dir_override: Option<&str>,
 ) -> Result<Value> {
+    ensure_safe_run_id(run_id)?;
     let run_id = RunId(run_id.to_string());
     let events_path = run_dir(project_root, &run_id, jsonl_dir_override).join("events.jsonl");
     if !events_path.exists() {
@@ -251,6 +252,33 @@ pub(crate) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::{AgentRunEvent, RunId, Timestamp};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn parse_project_type_accepts_saas_alias() {
@@ -336,5 +364,147 @@ mod tests {
         assert!(message.contains("CONFIRMATION_REQUIRED"));
         assert!(message.contains("--confirm TASK-123"));
         assert!(message.contains("--dry-run"));
+    }
+
+    #[test]
+    fn read_agent_status_reads_scoped_events_and_reports_path() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+
+        let run_id = "trace-run-status-010";
+        let run_id_value = RunId(run_id.to_string());
+        let events_path = run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None)
+            .join("events.jsonl");
+
+        let started = serde_json::to_string(&AgentRunEvent::Started {
+            run_id: run_id_value.clone(),
+            timestamp: Timestamp::now(),
+        })
+        .expect("started event should serialize");
+        let other_started = serde_json::to_string(&AgentRunEvent::Started {
+            run_id: RunId("other-run".to_string()),
+            timestamp: Timestamp::now(),
+        })
+        .expect("started event should serialize");
+        let finished = serde_json::to_string(&AgentRunEvent::Finished {
+            run_id: run_id_value.clone(),
+            exit_code: Some(0),
+            duration_ms: 42,
+        })
+        .expect("finished event should serialize");
+        std::fs::create_dir_all(
+            events_path
+                .parent()
+                .expect("events path should include parent directory"),
+        )
+        .expect("events directory should be created");
+        std::fs::write(
+            &events_path,
+            format!("{started}\n{other_started}\n{finished}\n"),
+        )
+        .expect("events file should be written");
+
+        let status = read_agent_status(project_root.to_string_lossy().as_ref(), run_id, None)
+            .expect("status should be read from fallback event log");
+        assert_eq!(
+            status.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(status.get("event_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(status.get("duration_ms").and_then(Value::as_u64), Some(42));
+        assert_eq!(
+            status.get("events_path").and_then(Value::as_str),
+            Some(events_path.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn read_agent_status_keeps_lookup_repo_scoped_under_global_runner_scope() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let override_dir = temp.path().join("override-config");
+        let _ao_config = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(override_dir.to_string_lossy().as_ref()),
+        );
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+
+        let run_id = "trace-run-status-global-scope";
+        let run_id_value = RunId(run_id.to_string());
+        let canonical_events_path =
+            run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None)
+                .join("events.jsonl");
+        let override_events_path = override_dir.join("runs").join(run_id).join("events.jsonl");
+
+        let started = serde_json::to_string(&AgentRunEvent::Started {
+            run_id: run_id_value.clone(),
+            timestamp: Timestamp::now(),
+        })
+        .expect("started event should serialize");
+        let finished = serde_json::to_string(&AgentRunEvent::Finished {
+            run_id: run_id_value.clone(),
+            exit_code: Some(0),
+            duration_ms: 99,
+        })
+        .expect("finished event should serialize");
+        std::fs::create_dir_all(
+            canonical_events_path
+                .parent()
+                .expect("events path should include parent directory"),
+        )
+        .expect("canonical events directory should be created");
+        std::fs::write(&canonical_events_path, format!("{started}\n{finished}\n"))
+            .expect("canonical events file should be written");
+        std::fs::create_dir_all(
+            override_events_path
+                .parent()
+                .expect("override events path should include parent directory"),
+        )
+        .expect("override events directory should be created");
+        std::fs::write(
+            &override_events_path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&AgentRunEvent::Error {
+                    run_id: run_id_value.clone(),
+                    error: "override-runner-state".to_string(),
+                })
+                .expect("error event should serialize")
+            ),
+        )
+        .expect("override events file should be written");
+
+        let status = read_agent_status(project_root.to_string_lossy().as_ref(), run_id, None)
+            .expect("status should resolve from canonical scoped path");
+        assert_eq!(
+            status.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(status.get("event_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            status.get("events_path").and_then(Value::as_str),
+            Some(canonical_events_path.to_string_lossy().as_ref())
+        );
+        assert_ne!(
+            status.get("events_path").and_then(Value::as_str),
+            Some(override_events_path.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn read_agent_status_rejects_unsafe_run_id() {
+        let err = read_agent_status("/tmp/project", "../escape", None)
+            .expect_err("unsafe run id should be rejected");
+        assert!(err.to_string().contains("invalid run_id"));
     }
 }

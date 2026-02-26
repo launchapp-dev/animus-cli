@@ -11,7 +11,10 @@ fn assert_success_envelope(payload: &Value) {
         Some("ao.cli.v1")
     );
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
-    assert!(payload.get("data").is_some(), "success envelope should include data");
+    assert!(
+        payload.get("data").is_some(),
+        "success envelope should include data"
+    );
 }
 
 fn assert_error_envelope(payload: &Value, expected_code: &str, expected_exit_code: i32) {
@@ -135,7 +138,10 @@ fn json_error_envelope_maps_unavailable() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let (payload, status) = harness.run_json_err_with_exit(&["agent", "runner-status"])?;
-    assert_eq!(status, 5, "runner connection failure should exit with code 5");
+    assert_eq!(
+        status, 5,
+        "runner connection failure should exit with code 5"
+    );
     assert_error_envelope(&payload, "unavailable", 5);
     let message = payload
         .pointer("/error/message")
@@ -146,6 +152,25 @@ fn json_error_envelope_maps_unavailable() -> Result<()> {
             || message.contains("connection")
             || message.contains("timed out"),
         "unavailable message should mention runner connectivity: {message}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn json_error_envelope_maps_invalid_output_run_id() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let (payload, status) =
+        harness.run_json_err_with_exit(&["output", "jsonl", "--run-id", "../escape"])?;
+    assert_eq!(status, 2, "invalid run_id should exit with code 2");
+    assert_error_envelope(&payload, "invalid_input", 2);
+    assert!(
+        payload
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("invalid run_id")),
+        "invalid run_id message should be preserved in error envelope"
     );
 
     Ok(())
