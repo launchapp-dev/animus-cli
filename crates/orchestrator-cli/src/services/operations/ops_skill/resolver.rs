@@ -329,4 +329,71 @@ mod tests {
             .expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.6.0");
     }
+
+    #[test]
+    fn resolver_uses_lock_pin_before_project_default_when_cli_omits_constraints() {
+        let catalog = vec![
+            catalog_record("lint", "1.0.0", "lock-source", "project"),
+            catalog_record("lint", "2.0.0", "project-default-source", "project"),
+        ];
+        let lock_pin = SkillLockEntry {
+            name: "lint".to_string(),
+            version: "1.0.0".to_string(),
+            source: "lock-source".to_string(),
+            integrity: "sha256:lock".to_string(),
+            artifact: "lint-1.0.0.tgz".to_string(),
+            registry: Some("project".to_string()),
+        };
+        let project_default = SkillProjectConstraint {
+            name: "lint".to_string(),
+            version: Some("=2.0.0".to_string()),
+            source: Some("project-default-source".to_string()),
+            registry: Some("project".to_string()),
+            allow_prerelease: false,
+        };
+        let request = ResolveSkillRequest {
+            name: "lint",
+            cli_version: None,
+            cli_source: None,
+            cli_registry: None,
+            allow_prerelease: false,
+        };
+
+        let resolved =
+            resolve_skill_version(&request, &catalog, Some(&lock_pin), Some(&project_default))
+                .expect("resolution should succeed");
+        assert_eq!(resolved.selected.version, "1.0.0");
+        assert_eq!(resolved.selected.source, "lock-source");
+        assert!(resolved.used_lock_pin);
+        assert!(!resolved.used_project_default);
+    }
+
+    #[test]
+    fn resolver_uses_project_default_when_lock_pin_is_missing() {
+        let catalog = vec![
+            catalog_record("scan", "1.0.0", "default-source", "project"),
+            catalog_record("scan", "2.0.0", "other-source", "project"),
+        ];
+        let project_default = SkillProjectConstraint {
+            name: "scan".to_string(),
+            version: Some("=1.0.0".to_string()),
+            source: Some("default-source".to_string()),
+            registry: Some("project".to_string()),
+            allow_prerelease: false,
+        };
+        let request = ResolveSkillRequest {
+            name: "scan",
+            cli_version: None,
+            cli_source: None,
+            cli_registry: None,
+            allow_prerelease: false,
+        };
+
+        let resolved = resolve_skill_version(&request, &catalog, None, Some(&project_default))
+            .expect("resolution should succeed");
+        assert_eq!(resolved.selected.version, "1.0.0");
+        assert_eq!(resolved.selected.source, "default-source");
+        assert!(!resolved.used_lock_pin);
+        assert!(resolved.used_project_default);
+    }
 }

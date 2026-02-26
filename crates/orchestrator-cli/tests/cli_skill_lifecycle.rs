@@ -316,3 +316,218 @@ fn skill_error_contract_maps_invalid_not_found_and_conflict() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn skill_update_cli_constraints_override_lock_pins() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "fmt",
+        "--version",
+        "1.0.0",
+        "--source",
+        "local",
+    ])?;
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "fmt",
+        "--version",
+        "1.1.0",
+        "--source",
+        "local",
+    ])?;
+
+    harness.run_json_ok(&["skill", "install", "--name", "fmt", "--version", "=1.0.0"])?;
+
+    let lock_path = harness.project_root().join(".ao/state/skills-lock.v1.json");
+    let lock_before = fs::read(&lock_path).context("failed to read lock bytes before updates")?;
+
+    let no_override = harness.run_json_ok(&["skill", "update", "--name", "fmt"])?;
+    assert_eq!(
+        no_override
+            .pointer("/data/updated/0/version")
+            .and_then(Value::as_str),
+        Some("1.0.0"),
+        "lock pin should keep the previously resolved version when update has no override"
+    );
+    assert_eq!(
+        no_override
+            .pointer("/data/lock_changed")
+            .and_then(Value::as_bool),
+        Some(false),
+        "no-op update should not rewrite lock state"
+    );
+
+    let overridden =
+        harness.run_json_ok(&["skill", "update", "--name", "fmt", "--version", "=1.1.0"])?;
+    assert_eq!(
+        overridden
+            .pointer("/data/updated/0/version")
+            .and_then(Value::as_str),
+        Some("1.1.0"),
+        "cli version override must take precedence over lock pin"
+    );
+    assert_eq!(
+        overridden
+            .pointer("/data/lock_changed")
+            .and_then(Value::as_bool),
+        Some(true),
+        "override update should rewrite lock state"
+    );
+
+    let lock_after = fs::read(&lock_path).context("failed to read lock bytes after override")?;
+    assert_ne!(
+        lock_before, lock_after,
+        "lockfile bytes should change when resolved version changes"
+    );
+
+    let listed = harness.run_json_ok(&["skill", "list"])?;
+    assert_eq!(
+        listed.pointer("/data/0/version").and_then(Value::as_str),
+        Some("1.1.0"),
+        "list should reflect the updated installed version"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn skill_lockfile_entries_are_sorted_by_name_then_source() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "zskill",
+        "--version",
+        "1.0.0",
+        "--source",
+        "zeta",
+    ])?;
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "askill",
+        "--version",
+        "1.0.0",
+        "--source",
+        "zeta",
+    ])?;
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "askill",
+        "--version",
+        "1.0.0",
+        "--source",
+        "alpha",
+    ])?;
+
+    harness.run_json_ok(&["skill", "install", "--name", "zskill", "--source", "zeta"])?;
+    harness.run_json_ok(&["skill", "install", "--name", "askill", "--source", "zeta"])?;
+    harness.run_json_ok(&["skill", "install", "--name", "askill", "--source", "alpha"])?;
+
+    let lock_path = harness.project_root().join(".ao/state/skills-lock.v1.json");
+    let lock_json = read_json(&lock_path)?;
+    let entries = lock_json
+        .pointer("/entries")
+        .and_then(Value::as_array)
+        .context("lockfile entries should be an array")?;
+
+    let entry_keys: Vec<(String, String)> = entries
+        .iter()
+        .map(|entry| {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .context("lock entry should include name")?;
+            let source = entry
+                .get("source")
+                .and_then(Value::as_str)
+                .context("lock entry should include source")?;
+            Ok((name.to_string(), source.to_string()))
+        })
+        .collect::<Result<_>>()?;
+
+    assert_eq!(
+        entry_keys,
+        vec![
+            ("askill".to_string(), "alpha".to_string()),
+            ("askill".to_string(), "zeta".to_string()),
+            ("zskill".to_string(), "zeta".to_string()),
+        ],
+        "lock entries must have stable ordering by name then source"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn skill_error_contract_maps_registry_unavailable_to_exit_code_5() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    harness.run_json_ok(&[
+        "skill",
+        "publish",
+        "--name",
+        "offline-skill",
+        "--version",
+        "1.0.0",
+        "--source",
+        "local",
+    ])?;
+
+    let registry_path = harness
+        .project_root()
+        .join(".ao/state/skills-registry.v1.json");
+    let mut registry_json = read_json(&registry_path)?;
+    let registries = registry_json
+        .get_mut("registries")
+        .and_then(Value::as_array_mut)
+        .context("registry state should include registries array")?;
+    let project_registry = registries
+        .iter_mut()
+        .find(|entry| entry.get("id").and_then(Value::as_str) == Some("project"))
+        .context("project registry entry should exist")?;
+    project_registry["available"] = Value::Bool(false);
+    let rewritten = serde_json::to_string_pretty(&registry_json)
+        .context("failed to serialize unavailable registry fixture")?;
+    fs::write(&registry_path, rewritten).with_context(|| {
+        format!(
+            "failed to write unavailable registry fixture to {}",
+            registry_path.display()
+        )
+    })?;
+
+    let unavailable_payload =
+        harness.run_json_err(&["skill", "search", "--registry", "project"])?;
+    assert_eq!(
+        unavailable_payload
+            .pointer("/error/code")
+            .and_then(Value::as_str),
+        Some("unavailable")
+    );
+
+    let (unavailable_payload, unavailable_status) =
+        harness.run_json_err_with_exit(&["skill", "search", "--registry", "project"])?;
+    assert_eq!(
+        unavailable_status, 5,
+        "unavailable registry should map to unavailable exit code"
+    );
+    assert_eq!(
+        unavailable_payload
+            .pointer("/error/code")
+            .and_then(Value::as_str),
+        Some("unavailable")
+    );
+
+    Ok(())
+}
