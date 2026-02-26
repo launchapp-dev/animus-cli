@@ -145,6 +145,52 @@ fn help_surfaces_accepted_values_and_confirmation_guidance(
         "workflow cancel help should explain dry-run mode"
     );
 
+    let task_create_help = Command::new(&binary)
+        .args(["task", "create", "--help"])
+        .output()?;
+    assert!(
+        task_create_help.status.success(),
+        "task create help should succeed"
+    );
+    let task_create_stdout = String::from_utf8(task_create_help.stdout)?;
+    assert!(
+        task_create_stdout
+            .contains("When provided, values in this payload override individual CLI flags."),
+        "task create help should explain --input-json precedence"
+    );
+
+    let git_push_help = Command::new(&binary)
+        .args(["git", "push", "--help"])
+        .output()?;
+    assert!(
+        git_push_help.status.success(),
+        "git push help should succeed"
+    );
+    let git_push_stdout = String::from_utf8(git_push_help.stdout)?;
+    assert!(
+        git_push_stdout.contains("Force push (destructive and requires --confirmation-id)."),
+        "git push help should explain destructive --force behavior"
+    );
+    assert!(
+        git_push_stdout
+            .contains("Approved confirmation id required for destructive git operations."),
+        "git push help should explain --confirmation-id semantics"
+    );
+
+    let git_worktree_remove_help = Command::new(&binary)
+        .args(["git", "worktree", "remove", "--help"])
+        .output()?;
+    assert!(
+        git_worktree_remove_help.status.success(),
+        "git worktree remove help should succeed"
+    );
+    let git_worktree_remove_stdout = String::from_utf8(git_worktree_remove_help.stdout)?;
+    assert!(
+        git_worktree_remove_stdout
+            .contains("Preview command payload without changing repository state."),
+        "git worktree remove help should explain --dry-run behavior"
+    );
+
     Ok(())
 }
 

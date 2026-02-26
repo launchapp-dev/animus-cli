@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-002 CLI Help and Error Message Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-002: CLI Help and Error Message Polish</h1>
+      <p>
+        Wireframes for deterministic CLI guidance across help output, actionable validation
+        errors, destructive confirmation gates, and JSON-mode parity for automation.
+      </p>
+      <ul class="header-checklist" aria-label="Wireframe objectives">
+        <li>Intent-first help hierarchy at root, group, and command levels.</li>
+        <li>Recovery-first invalid input messaging with one-rerun guidance.</li>
+        <li>Stable `CONFIRMATION_REQUIRED` and dry-run preview contracts.</li>
+      </ul>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="help-board-title">
+        <h2 class="board-title" id="help-board-title">
+          Root + Group Help Hierarchy (Desktop)
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">CLI Help / Discovery / 30-second scan</p>
+            <div class="state-strip" aria-label="Help states">
+              <span class="state-chip">discovery</span>
+              <span class="state-chip active">selection</span>
+              <span class="state-chip success">ready</span>
+            </div>
+          </header>
+
+          <div class="surface-columns two">
+            <article class="terminal-pane" aria-labelledby="root-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="root-help-title">$ ao --help</p>
+              </div>
+              <pre>ao - Agent Orchestrator control plane CLI
+
+Purpose:
+  Coordinate daemon, project, task, workflow, review, and QA operations.
+
+Usage:
+  ao [OPTIONS] &lt;COMMAND&gt;
+
+Options:
+  --project-root &lt;PATH&gt;    Resolve AO state root for this invocation
+  --json                   Emit ao.cli.v1 machine envelope
+  -h, --help               Print help
+
+Core command groups:
+  daemon          Manage standalone daemon lifecycle and telemetry
+  agent           Execute or inspect agent runs
+  project         Manage AO project records
+  task            Create, update, and track project tasks
+  task-control    Apply task pause/resume/cancel operational controls
+  workflow        Run and control workflow phases
+  requirements    Draft and refine requirements
+  git             Safe repository and worktree operations</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="group-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="group-help-title">$ ao task --help</p>
+              </div>
+              <pre>task - Create, mutate, and inspect AO tasks
+
+Usage:
+  ao task &lt;COMMAND&gt;
+
+Commands:
+  list                 List tasks with optional status filters
+  prioritized          Show priority-ranked task queue
+  get                  Show full task details by id
+  create               Create a new task linked to requirement context
+  update               Update title, description, status, type, or deadline
+  delete               Remove a task (destructive; confirmation required)
+  add-dependency       Add dependency edge between tasks
+  assign-owner         Assign task ownership metadata
+
+Next step:
+  Run 'ao task update --help' to inspect accepted values and input precedence.</pre>
+            </article>
+          </div>
+
+          <aside class="annotation-panel" aria-labelledby="help-annotation-title">
+            <h3 id="help-annotation-title">Hierarchy intent</h3>
+            <ul>
+              <li>Every help surface starts with intent before flags.</li>
+              <li>Grouped commands reduce lookup cost for first-time operators.</li>
+              <li>Next-step hint directs users to the exact subcommand help path.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="command-help-title">
+        <h2 class="board-title" id="command-help-title">
+          Command Help + Argument Clarity
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">CLI Help / Task Update / Input contracts</p>
+            <div class="state-strip" aria-label="Command help states">
+              <span class="state-chip active">ready</span>
+              <span class="state-chip">format-check</span>
+              <span class="state-chip">execute</span>
+            </div>
+          </header>
+
+          <div class="surface-columns">
+            <article class="terminal-pane" aria-labelledby="command-pane-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="command-pane-title">$ ao task update --help</p>
+              </div>
+              <pre>update - Update an existing task using explicit flags or --input-json
+
+Usage:
+  ao task update --id &lt;TASK_ID&gt; [OPTIONS]
+
+Required:
+  --id &lt;TASK_ID&gt;           Task identifier (for example: TASK-002)
+
+Options:
+  --status &lt;STATUS&gt;        Task status. Accepted values:
+                           backlog|todo, ready, in-progress|in_progress, blocked,
+                           on-hold|on_hold, done, cancelled
+  --type &lt;TYPE&gt;            Task type. Accepted values:
+                           feature, bugfix, hotfix, refactor, docs, test, chore, experiment
+  --priority &lt;PRIORITY&gt;    Task priority: critical, high, medium, low
+  --deadline &lt;YYYY-MM-DD&gt;  Deadline in ISO date format
+  --input-json &lt;PATH&gt;      Load update payload from JSON file; when set, JSON values
+                           take precedence over individual field flags
+  --json                   Emit ao.cli.v1 envelope
+  -h, --help               Print help
+
+Examples:
+  ao task update --id TASK-002 --status in-progress --priority high
+  ao task update --id TASK-002 --input-json ./task-update.json --json</pre>
+            </article>
+
+            <aside class="checklist-panel" aria-labelledby="command-checklist-title">
+              <h3 id="command-checklist-title">Argument guidance checklist</h3>
+              <ul>
+                <li>Accepted values shown in deterministic order.</li>
+                <li>Alias forms (`in-progress|in_progress`) stay explicit.</li>
+                <li>`--input-json` precedence is called out in-line.</li>
+                <li>Examples include both human and `--json` automation paths.</li>
+              </ul>
+
+              <div class="info-card">
+                <h4>Expected operator result</h4>
+                <p>
+                  A valid command can be assembled without source-code lookup and rerun once if
+                  validation fails.
+                </p>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="validation-board-title">
+        <h2 class="board-title" id="validation-board-title">
+          Invalid Value Recovery + JSON Parity
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">CLI Errors / Parse Validation / One-rerun recovery</p>
+            <div class="state-strip" aria-label="Validation states">
+              <span class="state-chip error">error-shown</span>
+              <span class="state-chip success">corrected-rerun</span>
+            </div>
+          </header>
+
+          <div class="surface-columns two">
+            <article class="terminal-pane error" aria-labelledby="human-error-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="human-error-title">$ ao task update --id TASK-002 --status paused</p>
+              </div>
+              <pre>error: invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run 'ao task update --help'
+
+rerun:
+  ao task update --id TASK-002 --status in-progress</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="json-error-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="json-error-title">$ ao task update --id TASK-002 --status paused --json</p>
+              </div>
+              <pre>{
+  "schema": "ao.cli.v1",
+  "ok": false,
+  "error": {
+    "code": "invalid_input",
+    "message": "invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run 'ao task update --help'",
+    "exit_code": 2
+  }
+}</pre>
+            </article>
+          </div>
+
+          <aside class="annotation-panel" aria-labelledby="validation-annotation-title">
+            <h3 id="validation-annotation-title">Deterministic recovery contract</h3>
+            <ul>
+              <li>Error always includes domain, invalid token, accepted values, and rerun hint.</li>
+              <li>Clause order and punctuation stay stable for snapshot tests.</li>
+              <li>Human and JSON mode carry the same corrective meaning.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="destructive-board-title">
+        <h2 class="board-title" id="destructive-board-title">
+          Confirmation Required + Dry Run Preview
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">Destructive flow / Safety gate / Preview then confirm</p>
+            <div class="state-strip" aria-label="Destructive states">
+              <span class="state-chip error">confirmation-blocked</span>
+              <span class="state-chip active">preview-rendered</span>
+              <span class="state-chip success">confirmed-rerun</span>
+            </div>
+          </header>
+
+          <div class="surface-columns two">
+            <article class="terminal-pane error" aria-labelledby="confirmation-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="confirmation-title">$ ao git worktree remove --repo ao-cli --worktree-name task-task-002</p>
+              </div>
+              <pre>error: CONFIRMATION_REQUIRED: rerun 'ao git worktree remove --repo ao-cli --worktree-name task-task-002' with --confirmation-id CONF-7F3A; use --dry-run to preview changes
+
+preview command:
+  ao git worktree remove --repo ao-cli --worktree-name task-task-002 --dry-run
+
+task/workflow variant:
+  CONFIRMATION_REQUIRED: rerun 'ao workflow cancel --id WF-42' with --confirm WF-42; use --dry-run to preview changes</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="dry-run-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="dry-run-title">$ ao git worktree remove --repo ao-cli --worktree-name task-task-002 --dry-run --json</p>
+              </div>
+              <pre>{
+  "schema": "ao.cli.v1",
+  "ok": true,
+  "data": {
+    "operation": "git.worktree.remove",
+    "target": "task-task-002",
+    "destructive": true,
+    "dry_run": true,
+    "requires_confirmation": true,
+    "planned_effects": [
+      "validate worktree path exists",
+      "verify branch and worktree mapping",
+      "remove worktree and branch on confirmed rerun"
+    ],
+    "next_step": "rerun with --confirmation-id CONF-7F3A"
+  }
+}</pre>
+            </article>
+          </div>
+
+          <aside class="checklist-panel" aria-labelledby="safety-checklist-title">
+            <h3 id="safety-checklist-title">Safety guidance consistency</h3>
+            <ul>
+              <li>`CONFIRMATION_REQUIRED` token appears unchanged across groups.</li>
+              <li>Exact confirmation flag name is present in every blocking message.</li>
+              <li>`--confirmation-id &lt;id&gt;` guidance appears for request-based approvals.</li>
+              <li>`--confirm &lt;token&gt;` guidance remains explicit for task/workflow controls.</li>
+              <li>`--dry-run` path is always promoted before mutation.</li>
+              <li>Dry-run payload keeps shared keys in stable top-level order.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-board-title">
+        <h2 class="board-title" id="mobile-board-title">
+          Mobile 320px Terminal Guidance (No Horizontal Scroll)
+        </h2>
+        <div class="phone-wrap">
+          <article class="phone-frame" aria-label="320px terminal wireframe">
+            <header class="phone-header">
+              <div>
+                <p class="phone-crumb">ao task update</p>
+                <h3>Validation error</h3>
+              </div>
+              <button type="button" aria-label="Show help menu">Help</button>
+            </header>
+
+            <section class="phone-terminal" aria-label="Mobile terminal output">
+              <pre>$ ao task update --id
+TASK-002 --status paused
+
+error: invalid status
+'paused'; expected one
+of: backlog, todo,
+ready, in-progress,
+in_progress, blocked,
+on-hold, on_hold, done,
+cancelled; run
+'ao task update
+--help'</pre>
+            </section>
+
+            <section class="phone-actions" aria-label="Recovery actions">
+              <button type="button">Run command --help</button>
+              <button type="button">Use suggested rerun</button>
+            </section>
+
+            <section class="phone-terminal" aria-label="Suggested rerun">
+              <pre>ao task update --id
+TASK-002 --status
+in-progress</pre>
+            </section>
+          </article>
+
+          <aside class="mobile-notes">
+            <h3>Mobile intent checklist</h3>
+            <ul>
+              <li>Command lines and tokens wrap naturally at 320px.</li>
+              <li>No critical remediation token is truncated.</li>
+              <li>Action buttons remain keyboard and touch operable.</li>
+              <li>Recovery path stays explicit without color-dependent cues.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

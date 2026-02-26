@@ -1096,7 +1096,7 @@ pub(crate) struct RequirementsDraftArgs {
     pub(crate) timeout_secs: Option<u64>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) start_runner: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1116,7 +1116,7 @@ pub(crate) struct RequirementsRefineArgs {
     pub(crate) timeout_secs: Option<u64>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) start_runner: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1182,7 +1182,11 @@ pub(crate) enum RequirementGraphCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementGraphSaveArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Complete requirement graph JSON payload to persist."
+    )]
     pub(crate) input_json: String,
 }
 
@@ -1266,7 +1270,7 @@ pub(crate) struct RecommendationConfigUpdateArgs {
     pub(crate) mode: Option<String>,
     #[arg(long)]
     pub(crate) enabled: Option<bool>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1599,7 +1603,7 @@ pub(crate) enum TaskControlCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskIdArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
 }
 
@@ -1635,9 +1639,13 @@ pub(crate) struct TaskControlPriorityArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlDeadlineArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "RFC3339",
+        help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z."
+    )]
     pub(crate) deadline: Option<String>,
 }
 
@@ -1672,192 +1680,290 @@ pub(crate) enum GitCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitRepoCommand {
+    /// List registered repositories.
     List,
+    /// Get details for one repository.
     Get(GitRepoArgs),
+    /// Initialize and register a local repository.
     Init(GitRepoInitArgs),
+    /// Clone and register a repository.
     Clone(GitRepoCloneArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoInitArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Repository registration name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Optional filesystem path.")]
     pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoCloneArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "URL", help = "Git clone URL.")]
     pub(crate) url: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Repository registration name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Optional destination directory.")]
     pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitCommitArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Commit message.")]
     pub(crate) message: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitPushArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value = "main")]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        default_value = "main",
+        help = "Branch to push."
+    )]
     pub(crate) branch: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force push (destructive and requires --confirmation-id)."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required for destructive git operations."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitPullArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value = "main")]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        default_value = "main",
+        help = "Branch to pull."
+    )]
     pub(crate) branch: String,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitWorktreeCommand {
+    /// Create a repository worktree.
     Create(GitWorktreeCreateArgs),
+    /// List repository worktrees.
     List(GitRepoArgs),
+    /// Get one worktree by name.
     Get(GitWorktreeGetArgs),
+    /// Remove a worktree (confirmation required).
     Remove(GitWorktreeRemoveArgs),
+    /// Pull updates in a worktree.
     Pull(GitWorktreePullArgs),
+    /// Push updates from a worktree.
     Push(GitWorktreePushArgs),
+    /// Pull then push a worktree.
     Sync(GitWorktreeSyncArgs),
+    /// Show synchronization status for a worktree.
     SyncStatus(GitWorktreeGetArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree registration name.")]
     pub(crate) worktree_name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Filesystem path for the worktree.")]
     pub(crate) worktree_path: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        help = "Branch to check out in the worktree."
+    )]
     pub(crate) branch: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create the branch when it does not already exist."
+    )]
     pub(crate) create_branch: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeGetArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeRemoveArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force removal if the worktree is dirty."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required before removing a worktree."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreePullArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreePushArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force push (destructive and requires --confirmation-id)."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required for destructive git operations."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeSyncArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitConfirmCommand {
+    /// Request a confirmation record for a destructive git operation.
     Request(GitConfirmRequestArgs),
+    /// Approve or reject a confirmation request.
     Respond(GitConfirmRespondArgs),
+    /// Record operation outcome for a confirmation request.
     Outcome(GitConfirmOutcomeArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmRequestArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Operation type, for example force_push or remove_worktree."
+    )]
     pub(crate) operation_type: String,
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name.")]
     pub(crate) repo_name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Optional JSON context payload.")]
     pub(crate) context_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmRespondArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
     pub(crate) request_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Set to true to approve, false to reject.")]
     pub(crate) approved: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Optional reviewer comment.")]
     pub(crate) comment: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "USER", help = "Reviewer user id.")]
     pub(crate) user_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmOutcomeArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
     pub(crate) request_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Whether the operation succeeded.")]
     pub(crate) success: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Outcome message.")]
     pub(crate) message: String,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Optional JSON metadata payload.")]
     pub(crate) metadata_json: Option<String>,
 }
 
@@ -2108,7 +2214,11 @@ pub(crate) struct WorkflowPhaseGetArgs {
 pub(crate) struct WorkflowPhaseUpsertArgs {
     #[arg(long)]
     pub(crate) phase: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Phase runtime definition JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
@@ -2132,7 +2242,11 @@ pub(crate) struct WorkflowPhaseRemoveArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPipelineUpsertArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow pipeline definition JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
@@ -2146,18 +2260,26 @@ pub(crate) struct WorkflowPipelineUpdateArgs {
     pub(crate) description: Option<String>,
     #[arg(long = "phase")]
     pub(crate) phases: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowStateMachineSetArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow state-machine configuration JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow agent-runtime configuration JSON payload."
+    )]
     pub(crate) input_json: String,
 }

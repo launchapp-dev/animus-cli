@@ -12,13 +12,12 @@ const PRIORITY_EXPECTED: &str = "critical, high, medium, low";
 const DEPENDENCY_TYPE_EXPECTED: &str =
     "blocks-by|blocks_by, blocked-by|blocked_by, related-to|related_to";
 const PROJECT_TYPE_EXPECTED: &str = "web-app, mobile-app, desktop-app, full-stack-platform|full-stack|saas, library, infrastructure, other";
+pub(crate) const COMMAND_HELP_HINT: &str = "run '<command> --help'";
 
 fn invalid_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
     let value = value.trim();
     let normalized_value = if value.is_empty() { "<empty>" } else { value };
-    anyhow!(
-        "invalid {domain} '{normalized_value}'; expected one of: {expected}; run the command with --help for accepted values"
-    )
+    anyhow!("invalid {domain} '{normalized_value}'; expected one of: {expected}; {COMMAND_HELP_HINT}")
 }
 
 pub(crate) fn parse_input_json_or<T, F>(input_json: Option<String>, fallback: F) -> Result<T>
@@ -292,7 +291,7 @@ mod tests {
         assert!(message.contains("invalid status"));
         assert!(message.contains("expected one of"));
         assert!(message.contains("in-progress|in_progress"));
-        assert!(message.contains("--help"));
+        assert!(message.contains("run '<command> --help'"));
     }
 
     #[test]
@@ -301,7 +300,7 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("invalid priority"));
         assert!(message.contains("critical, high, medium, low"));
-        assert!(message.contains("--help"));
+        assert!(message.contains("run '<command> --help'"));
     }
 
     #[test]
@@ -309,7 +308,7 @@ mod tests {
         let err = parse_priority_opt(Some("   ")).expect_err("empty priority should fail");
         let message = err.to_string();
         assert!(message.contains("invalid priority '<empty>'"));
-        assert!(message.contains("--help"));
+        assert!(message.contains("run '<command> --help'"));
     }
 
     #[test]
@@ -319,7 +318,7 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("invalid dependency_type"));
         assert!(message.contains("blocks-by|blocks_by"));
-        assert!(message.contains("--help"));
+        assert!(message.contains("run '<command> --help'"));
     }
 
     #[test]

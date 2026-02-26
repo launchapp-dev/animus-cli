@@ -2,7 +2,7 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `4a3a282d-4175-4625-ac1e-261a1f3d5a5e`
+- Workflow ID: `4e289849-5501-4332-ba0d-e907038390ce`
 - Task: `TASK-002`
 
 ## Objective
@@ -39,11 +39,23 @@ In scope for implementation after this requirements phase:
 - Add tests that lock expected help text presence and actionable validation
   messages.
 
+### Scoped command matrix
+
+| Command group | In-scope surfaces | Required outcome |
+| --- | --- | --- |
+| `task` | lifecycle and mutation commands with enum-like args (`status`, `priority`, `type`) and destructive paths | explicit help text, accepted-value visibility, actionable errors, consistent confirmation guidance |
+| `task-control` | pause/resume/cancel/priority/deadline commands | explicit help text and deterministic validation guidance for malformed/invalid values |
+| `workflow` | run/resume/cancel/phases and config-related commands | explicit intent-focused help and consistent confirmation/dry-run guidance for destructive operations |
+| `requirements` | create/update/list/get and status/priority inputs | clear bounded-value guidance in help and parse-time errors |
+| `git` | repo/worktree operations with confirmation and force semantics | consistent confirmation-required wording and dry-run preview key contract |
+| root/global | top-level options and shared `--json` behavior | consistent wording for output mode expectations and input-json precedence |
+
 Out of scope for this task:
 - Adding new command families or renaming existing commands/flags.
 - Changing `.ao` state schema or persistence behavior.
 - Changing core domain semantics for tasks/workflows/git operations.
 - Introducing interactive wizard flows beyond existing CLI behavior.
+- Reworking command execution order, business rules, or side-effect timing.
 
 ## Constraints
 - Preserve `ao.cli.v1` envelope behavior for `--json` responses.
@@ -57,6 +69,8 @@ Out of scope for this task:
   `in-progress` and `in_progress`).
 - Keep dry-run operations side-effect free.
 - Keep changes scoped to `orchestrator-cli` docs/tests/handler UX behavior.
+- Keep message text deterministic and free of environment-specific content.
+- Preserve compatibility for existing automation that parses stable JSON fields.
 
 ## Functional Requirements
 
@@ -74,6 +88,7 @@ Out of scope for this task:
   project type, requirement status/priority), help output and/or argument parsing
   errors must clearly present accepted values.
 - Alias forms that remain supported must be discoverable.
+- Accepted values must be presented in deterministic order.
 
 ### FR-03: Actionable Validation Errors
 - Invalid-value errors must include:
@@ -83,6 +98,7 @@ Out of scope for this task:
   - a next-step hint (`--help` or concrete rerun guidance).
 - Missing-required input errors must identify the required flag and expected
   format.
+- Error punctuation and phrasing must be stable across runs to support snapshots.
 
 ### FR-04: Confirmation Guidance Consistency
 - Destructive flows must continue to emit `CONFIRMATION_REQUIRED`.
@@ -114,7 +130,19 @@ Out of scope for this task:
   - help output includes new command/argument guidance,
   - invalid-value errors include accepted values and remediation hints,
   - confirmation-required wording stays consistent across scoped destructive
-    commands.
+    commands,
+  - dry-run preview payloads include the shared key set in stable form.
+
+## Canonical Message Shapes
+
+### Invalid value
+- `invalid <domain> '<value>'; expected one of: <v1>, <v2>, ...; run '<command> --help'`
+
+### Confirmation required
+- `CONFIRMATION_REQUIRED: rerun '<command>' with <confirmation flag> <token>; use --dry-run to preview changes`
+
+These are canonical message shapes for deterministic testing. Command-specific
+details can vary, but key tokens and ordering must remain stable.
 
 ## Non-Functional Requirements
 
@@ -147,6 +175,10 @@ Out of scope for this task:
   no-mutation guarantee) remains intact.
 - `AC-10`: New/updated tests cover help-text presence, validation message
   clarity, and confirmation guidance consistency.
+- `AC-11`: Invalid-value and confirmation-required messages preserve canonical
+  token order required for deterministic assertions.
+- `AC-12`: No changes introduce non-deterministic text fragments (timestamps,
+  absolute temp paths, host-specific details) in static help/error output.
 
 ## Verification Matrix
 
@@ -158,6 +190,7 @@ Out of scope for this task:
 | Confirmation guidance consistency | E2E tests for task/workflow/git destructive commands |
 | Dry-run preview key stability | JSON assertions for preview payload key set |
 | Envelope + exit-code compatibility | Existing envelope tests + exit-code regression tests |
+| Canonical token ordering | Snapshot/assertion tests for canonical invalid-value and confirmation-required shapes |
 
 ## Deterministic Deliverables for Implementation Phase
 - Updated command/argument help metadata in `cli_types.rs`.

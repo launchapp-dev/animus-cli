@@ -1,5 +1,10 @@
 # TASK-002 Implementation Notes: CLI Help and Error Message Polish
 
+## Phase Context
+- Workflow phase: `requirements`
+- Workflow ID: `4e289849-5501-4332-ba0d-e907038390ce`
+- Task: `TASK-002`
+
 ## Purpose
 Translate `TASK-002` requirements into concrete implementation slices for
 `orchestrator-cli` with strict scope control and no behavior regressions in
@@ -25,6 +30,9 @@ core command execution.
   - add concise argument help text for high-impact flags.
   - document precedence for `--input-json` arguments.
   - use `value_name` and help text to clarify expected formats.
+- `crates/orchestrator-cli/tests/cli_smoke.rs`
+  - add assertions for scoped command `about` text and key argument help lines.
+  - add checks for `--input-json` precedence wording.
 
 ### Validation and message contracts
 - `crates/orchestrator-cli/src/shared/parsing.rs`
@@ -39,6 +47,8 @@ core command execution.
 - `crates/orchestrator-cli/src/shared/output.rs`
   - keep envelope and exit code mapping unchanged.
   - align non-JSON error prefixing/wording to remain concise and actionable.
+- `crates/orchestrator-cli/tests/cli_e2e.rs`
+  - add assertions for invalid-value guidance content and canonical token order.
 
 ### Confirmation and dry-run output alignment
 - `crates/orchestrator-cli/src/services/runtime/runtime_project_task/task.rs`
@@ -51,6 +61,13 @@ core command execution.
   - standardize dry-run payload common keys.
   - keep command-specific details while preserving stable top-level contract.
   - align `CONFIRMATION_REQUIRED` messaging structure across handlers.
+
+## Implementation Boundaries
+- Scope changes to user-visible help/error strings, validation-message helpers,
+  and deterministic test updates.
+- Do not modify command dispatch flow, persistence formats, or domain-state
+  transition logic.
+- Do not alter `.ao` data files directly.
 
 ## Suggested Message Contract
 
@@ -70,6 +87,7 @@ Preferred shape:
 Requirements:
 - include exact flag name expected by that command,
 - mention preview path when supported.
+- keep canonical token order so snapshots remain stable.
 
 ### Dry-run preview contract
 Shared top-level keys:
@@ -82,6 +100,15 @@ Shared top-level keys:
 - `next_step`
 
 Allow command-specific companion fields but keep shared keys stable.
+
+## Slice Plan
+1. Add/adjust `about` and argument help metadata in `cli_types.rs`.
+2. Introduce shared invalid-value formatting in `shared/parsing.rs` and update
+   parser call sites.
+3. Align confirmation-required message text in task/workflow/git paths.
+4. Normalize dry-run preview key contract where drift remains.
+5. Update smoke/e2e/unit tests for deterministic assertions.
+6. Run targeted tests and fix only regressions introduced by this task.
 
 ## Suggested Build Sequence
 1. Add/adjust command/argument help metadata in `cli_types.rs`.
@@ -105,6 +132,11 @@ Allow command-specific companion fields but keep shared keys stable.
   - verify accepted-values list appears in invalid-value errors.
   - verify alias values still parse correctly.
 
+### Targeted validation commands
+- `cargo test -p orchestrator-cli --test cli_smoke`
+- `cargo test -p orchestrator-cli --test cli_e2e`
+- `cargo test -p orchestrator-cli shared::parsing`
+
 ## Regression Guardrails
 - Avoid broad command-surface rewrites during this task.
 - Keep business logic changes minimal and message-contract focused.
@@ -119,3 +151,5 @@ Allow command-specific companion fields but keep shared keys stable.
 - Risk: output contract drift for existing automation.
   - Mitigation: preserve envelope shape and keep backward-compatible fields when
     adding normalized keys.
+- Risk: canonical message wording mismatch between handlers.
+  - Mitigation: use shared formatter/helper and assert token order in tests.
