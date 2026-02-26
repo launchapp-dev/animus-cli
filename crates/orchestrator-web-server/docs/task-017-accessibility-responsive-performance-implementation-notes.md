@@ -1,5 +1,11 @@
 # TASK-017 Implementation Notes: Accessibility, Responsive, and Performance Baselines
 
+## Phase Context
+- Workflow phase: `requirements`
+- Workflow ID: `d4b62fa3-9d50-474e-810c-28f0cc0b87df`
+- Task: `TASK-017`
+- Project root: `/Users/samishukri/ao-cli`
+
 ## Purpose
 Translate `TASK-017` requirements into deterministic implementation slices for
 the build phase while preserving existing route and API behavior.
@@ -27,10 +33,16 @@ the build phase while preserving existing route and API behavior.
   `src/app/*.test.ts(x)`, `src/lib/**/*.test.ts`
 
 ## Proposed Source Layout Additions
-- `crates/orchestrator-web-server/web-ui/src/app/shell.accessibility.test.tsx`
-  - skip link, drawer keyboard flow, focus-return assertions
-- `crates/orchestrator-web-server/web-ui/src/app/screens.accessibility.test.tsx`
-  - semantic status/error roles and review form error association
+- Prefer extending existing baseline files before adding new test files:
+  - `crates/orchestrator-web-server/web-ui/src/app/accessibility-responsive-baselines.test.ts`
+    - skip link, drawer keyboard flow, focus-return, breakpoint guardrails
+  - `crates/orchestrator-web-server/web-ui/src/app/shell.test.ts`
+    - route-nav topology and stable keyboard target identifiers
+  - `crates/orchestrator-web-server/web-ui/src/app/build-performance.test.ts`
+    - bundling/chunking guardrails plus size-budget wiring assertions
+- Optional targeted additions if baseline files become overloaded:
+  - `crates/orchestrator-web-server/web-ui/src/app/review-handoff-accessibility.test.tsx`
+    - field-level validation semantics and message association
 - `crates/orchestrator-web-server/web-ui/scripts/check-performance-budgets.mjs`
   - parse `embedded/index.html`, resolve referenced JS/CSS, enforce gzip budgets
 
@@ -94,11 +106,34 @@ the build phase while preserving existing route and API behavior.
 7. Run `npm run test` and `npm run build` in web-ui; fix regressions before
    finalizing.
 
+## Acceptance-to-Implementation Mapping
+| Acceptance criteria | Primary files |
+| --- | --- |
+| `AC-01`, `AC-02` | `src/app/shell.tsx`, `src/styles.css`, `src/app/accessibility-responsive-baselines.test.ts` |
+| `AC-03`, `AC-04`, `AC-05` | `src/app/screens.tsx`, `src/styles.css`, route-level tests in `src/app/*.test.ts(x)` |
+| `AC-06`, `AC-07`, `AC-08` | `src/styles.css`, `src/app/screens.tsx`, responsive/accessibility baseline tests |
+| `AC-09`, `AC-10` | `scripts/check-performance-budgets.mjs`, `src/app/build-performance.test.ts`, `src/app/router.tsx`, aggregate route loaders in `src/app/screens.tsx` |
+| `AC-11`, `AC-12` | `src/lib/events/use-daemon-events.ts`, `src/lib/telemetry/store.ts`, existing API/telemetry regression tests |
+
+## Build-Phase Validation Commands
+Run in `crates/orchestrator-web-server/web-ui`:
+1. `npm run test -- src/app/accessibility-responsive-baselines.test.ts`
+2. `npm run test -- src/app/build-performance.test.ts`
+3. `npm run test`
+4. `npm run build`
+5. `node scripts/check-performance-budgets.mjs` (added in build phase)
+
 ## Testing Targets
-- `src/app/shell*.test.tsx`
-  - skip link target and mobile drawer keyboard lifecycle
-- `src/app/screens*.test.tsx`
-  - state-role semantics and review form field associations
+- `src/app/accessibility-responsive-baselines.test.ts`
+  - shell landmarks, skip link, responsive guardrails, reduced-motion baseline
+- `src/app/shell.test.ts`
+  - stable navigation order and keyboard target constants
+- `src/app/router.test.ts`
+  - route topology regression guard (`TASK-011` compatibility)
+- `src/app/screens*.test.ts(x)` (add or extend in build phase)
+  - state-role semantics and review form field-level validation associations
+- `src/app/build-performance.test.ts`
+  - bundling/chunking guardrails and budget-check wiring expectations
 - `src/lib/events/use-daemon-events.test.ts` (if added/extended)
   - bounded event retention and display assumptions
 - `src/lib/telemetry/store.test.ts`

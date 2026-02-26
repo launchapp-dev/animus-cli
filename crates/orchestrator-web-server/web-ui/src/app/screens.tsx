@@ -442,6 +442,11 @@ export function ReviewHandoffPage() {
   const [targetRole, setTargetRole] = useState("em");
   const [question, setQuestion] = useState("");
   const [contextJson, setContextJson] = useState("{}");
+  const [validationErrors, setValidationErrors] = useState<{
+    runId?: string;
+    question?: string;
+    contextJson?: string;
+  }>({});
   const [submitState, setSubmitState] = useState<
     { kind: "idle" } | { kind: "ok"; data: unknown } | { kind: "error"; error: ApiError }
   >({ kind: "idle" });
@@ -449,34 +454,39 @@ export function ReviewHandoffPage() {
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
+    const nextValidationErrors: {
+      runId?: string;
+      question?: string;
+      contextJson?: string;
+    } = {};
+
+    if (runId.trim().length === 0) {
+      nextValidationErrors.runId = "Run ID is required.";
+    }
+
+    if (question.trim().length === 0) {
+      nextValidationErrors.question = "Question is required.";
+    }
+
     let contextPayload: unknown;
     try {
       contextPayload = JSON.parse(contextJson || "{}");
     } catch {
-      setSubmitState({
-        kind: "error",
-        error: {
-          kind: "error",
-          code: "invalid_context",
-          message: "Context must be valid JSON.",
-          exitCode: 2,
-        },
-      });
+      nextValidationErrors.contextJson = "Context JSON must be valid JSON.";
+      contextPayload = undefined;
+    }
+
+    if (contextPayload !== undefined && !isJsonValue(contextPayload)) {
+      nextValidationErrors.contextJson = "Context JSON must resolve to a valid JSON value.";
+    }
+
+    if (hasValidationErrors(nextValidationErrors)) {
+      setValidationErrors(nextValidationErrors);
+      setSubmitState({ kind: "idle" });
       return;
     }
 
-    if (!isJsonValue(contextPayload)) {
-      setSubmitState({
-        kind: "error",
-        error: {
-          kind: "error",
-          code: "invalid_context",
-          message: "Context must be a valid JSON value.",
-          exitCode: 2,
-        },
-      });
-      return;
-    }
+    setValidationErrors({});
 
     void api
       .reviewHandoff({
@@ -500,7 +510,24 @@ export function ReviewHandoffPage() {
       <form className="panel grid" onSubmit={onSubmit}>
         <label>
           Run ID
-          <input value={runId} onChange={(event) => setRunId(event.target.value)} />
+          <input
+            value={runId}
+            required
+            aria-invalid={validationErrors.runId ? true : undefined}
+            aria-describedby={validationErrors.runId ? "review-handoff-run-id-error" : undefined}
+            onChange={(event) => {
+              setRunId(event.target.value);
+              setValidationErrors((current) => ({
+                ...current,
+                runId: undefined,
+              }));
+            }}
+          />
+          {validationErrors.runId ? (
+            <span className="field-error" id="review-handoff-run-id-error">
+              {validationErrors.runId}
+            </span>
+          ) : null}
         </label>
 
         <label>
@@ -517,18 +544,44 @@ export function ReviewHandoffPage() {
           <textarea
             rows={3}
             required
+            aria-invalid={validationErrors.question ? true : undefined}
+            aria-describedby={validationErrors.question ? "review-handoff-question-error" : undefined}
             value={question}
-            onChange={(event) => setQuestion(event.target.value)}
+            onChange={(event) => {
+              setQuestion(event.target.value);
+              setValidationErrors((current) => ({
+                ...current,
+                question: undefined,
+              }));
+            }}
           />
+          {validationErrors.question ? (
+            <span className="field-error" id="review-handoff-question-error">
+              {validationErrors.question}
+            </span>
+          ) : null}
         </label>
 
         <label>
           Context JSON
           <textarea
             rows={4}
+            aria-invalid={validationErrors.contextJson ? true : undefined}
+            aria-describedby={validationErrors.contextJson ? "review-handoff-context-error" : undefined}
             value={contextJson}
-            onChange={(event) => setContextJson(event.target.value)}
+            onChange={(event) => {
+              setContextJson(event.target.value);
+              setValidationErrors((current) => ({
+                ...current,
+                contextJson: undefined,
+              }));
+            }}
           />
+          {validationErrors.contextJson ? (
+            <span className="field-error" id="review-handoff-context-error">
+              {validationErrors.contextJson}
+            </span>
+          ) : null}
         </label>
 
         <div className="panel-actions">
@@ -569,10 +622,15 @@ function RouteSection(props: {
   description: string;
   children: ReactNode;
 }) {
+  const sectionIdPrefix =
+    props.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "route-section";
+  const headingId = `${sectionIdPrefix}-heading`;
+  const descriptionId = `${sectionIdPrefix}-description`;
+
   return (
-    <section className="panel" aria-label={props.title}>
-      <h1>{props.title}</h1>
-      <p>{props.description}</p>
+    <section className="panel" aria-labelledby={headingId} aria-describedby={descriptionId}>
+      <h1 id={headingId}>{props.title}</h1>
+      <p id={descriptionId}>{props.description}</p>
       {props.children}
     </section>
   );
@@ -599,11 +657,19 @@ function ResourceStateView<TData>(props: {
 }
 
 function LoadingState(props: { message: string }) {
-  return <div className="loading-box">{props.message}</div>;
+  return (
+    <div className="loading-box" role="status" aria-live="polite" aria-atomic="true">
+      {props.message}
+    </div>
+  );
 }
 
 function EmptyState(props: { message: string }) {
-  return <div className="empty-box">{props.message}</div>;
+  return (
+    <div className="empty-box" role="status" aria-live="polite" aria-atomic="true">
+      {props.message}
+    </div>
+  );
 }
 
 function ErrorState(props: { error: ApiError }) {
@@ -644,4 +710,12 @@ function isJsonValue(value: unknown): value is RequestJsonValue {
   }
 
   return false;
+}
+
+function hasValidationErrors(errors: {
+  runId?: string;
+  question?: string;
+  contextJson?: string;
+}) {
+  return Boolean(errors.runId || errors.question || errors.contextJson);
 }

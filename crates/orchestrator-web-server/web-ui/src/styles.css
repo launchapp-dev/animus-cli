@@ -381,6 +381,11 @@ label {
   font-weight: 600;
 }
 
+.field-error {
+  color: #8f2020;
+  font-size: 0.86rem;
+}
+
 pre {
   overflow: auto;
   max-width: 100%;

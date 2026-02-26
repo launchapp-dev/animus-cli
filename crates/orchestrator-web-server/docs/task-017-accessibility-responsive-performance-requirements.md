@@ -2,13 +2,22 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `76f47953-faa8-4c3d-9d51-4c18241217c3`
+- Workflow ID: `d4b62fa3-9d50-474e-810c-28f0cc0b87df`
 - Task: `TASK-017`
+- Project root: `/Users/samishukri/ao-cli`
 
 ## Objective
 Define production-ready baseline requirements for the AO web UI so that primary
 workflows remain keyboard operable, semantically accessible, responsive across
 common viewport classes, and performant under realistic project data sizes.
+
+## Phase Clarification (Current Run)
+- This `requirements` phase is documentation-first and does not change runtime
+  behavior directly.
+- Deliverables in this phase are deterministic requirement/implementation notes
+  that unblock the build phase with concrete file targets and validation gates.
+- `.ao` state remains unchanged by manual edits; this phase updates repository
+  docs only.
 
 ## Existing Baseline
 - Current shell, route tree, and page screens are implemented under
@@ -50,6 +59,8 @@ Out of scope for this task:
 - Preserve diagnostics telemetry contracts introduced in `TASK-019`.
 - Keep `.ao` state mutation out of manual file edits.
 - Maintain usability at `320px` width without horizontal page scrolling.
+- Keep implementation aligned with current route-loading strategy (`lazy` route
+  exports + suspense fallback in `router.tsx`).
 
 ## Functional Requirements
 
@@ -158,6 +169,8 @@ Out of scope for this task:
 - `AC-11`: Event and diagnostics lists remain bounded to configured capacities.
 - `AC-12`: Existing route/API behavior remains compatible with current
   `TASK-011` and `TASK-019` contracts.
+- `AC-13`: Implementation phase includes deterministic repository-local
+  validation commands for accessibility/responsive/performance checks.
 
 ## Testable Acceptance Checklist
 - `T-01`: Component test verifies skip-link presence and target focus behavior.
@@ -179,6 +192,19 @@ Out of scope for this task:
   bounded.
 - `T-10`: Existing API/envelope/telemetry tests continue to pass without
   behavior regressions.
+
+## Implementation Validation Gates (Build Phase)
+- `V-01`: `npm run test -- src/app/accessibility-responsive-baselines.test.ts`
+  passes (shell landmarks, focus hooks, responsive breakpoint guards).
+- `V-02`: `npm run test -- src/app/build-performance.test.ts` passes (chunking
+  and warning-threshold guardrails).
+- `V-03`: `npm run build` succeeds for `web-ui`.
+- `V-04`: performance budget script (to be added in build phase) succeeds
+  against `crates/orchestrator-web-server/embedded/index.html` with:
+  - JS gzip `<= 110 KiB`
+  - CSS gzip `<= 8 KiB`
+- `V-05`: full `npm run test` remains green to protect route/API/telemetry
+  compatibility.
 
 ## Acceptance Verification Matrix
 | Requirement | Verification method |
@@ -202,6 +228,9 @@ Out of scope for this task:
   `web-ui` build output.
 - Keep deliverables compatible with existing embedded static serving flow in
   `crates/orchestrator-web-server/embedded/`.
+- Prefer extending existing baseline tests before creating new test files:
+  `src/app/accessibility-responsive-baselines.test.ts`,
+  `src/app/build-performance.test.ts`, and relevant screen-level tests.
 
 ## Deterministic Deliverables for Implementation Phase
 - Accessibility hardening updates in shell/screens/styles and related tests.

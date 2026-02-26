@@ -140,7 +140,13 @@ function RouteErrorBoundary() {
 
 function withRouteSuspense(element: ReactNode) {
   return (
-    <Suspense fallback={<section className="loading-box">Loading route...</section>}>
+    <Suspense
+      fallback={(
+        <section className="loading-box" role="status" aria-live="polite" aria-atomic="true">
+          Loading route...
+        </section>
+      )}
+    >
       {element}
     </Suspense>
   );

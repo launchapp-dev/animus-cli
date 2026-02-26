@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run check:performance-budgets",
     "preview": "vite preview",
+    "check:performance-budgets": "node scripts/check-performance-budgets.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -36,6 +36,9 @@ function AppShellFrame() {
   const location = useLocation();
   const previousSection = useRef<string | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const primaryNavRef = useRef<HTMLElement | null>(null);
+  const shouldRestoreMenuButtonFocus = useRef(false);
 
   const projectContext = useProjectContext();
 
@@ -53,6 +56,7 @@ function AppShellFrame() {
   }, [location.pathname]);
 
   useEffect(() => {
+    shouldRestoreMenuButtonFocus.current = false;
     setIsMobileMenuOpen(false);
   }, [location.pathname]);
 
@@ -68,12 +72,28 @@ function AppShellFrame() {
   }, [location.pathname]);
 
   useEffect(() => {
+    if (isMobileMenuOpen) {
+      const firstNavControl = primaryNavRef.current?.querySelector<HTMLElement>(
+        "a[href],button:not([disabled]),[tabindex]:not([tabindex='-1'])",
+      );
+      firstNavControl?.focus();
+      return;
+    }
+
+    if (shouldRestoreMenuButtonFocus.current) {
+      menuButtonRef.current?.focus();
+      shouldRestoreMenuButtonFocus.current = false;
+    }
+  }, [isMobileMenuOpen]);
+
+  useEffect(() => {
     if (!isMobileMenuOpen) {
       return;
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        shouldRestoreMenuButtonFocus.current = true;
         setIsMobileMenuOpen(false);
       }
     };
@@ -105,7 +125,10 @@ function AppShellFrame() {
           <button
             aria-label="Close navigation menu"
             className="mobile-overlay"
-            onClick={() => setIsMobileMenuOpen(false)}
+            onClick={() => {
+              shouldRestoreMenuButtonFocus.current = true;
+              setIsMobileMenuOpen(false);
+            }}
             type="button"
           />
         ) : null}
@@ -118,9 +141,21 @@ function AppShellFrame() {
           <h1 className="brand">AO Web</h1>
           <p className="brand-subtitle">Agent Orchestrator web shell</p>
 
-          <nav aria-label="Primary" className="primary-nav" id="primary-navigation">
+          <nav
+            aria-label="Primary"
+            className="primary-nav"
+            id="primary-navigation"
+            ref={primaryNavRef}
+          >
             {PRIMARY_NAV_ITEMS.map((item) => (
-              <NavLink key={item.to} onClick={() => setIsMobileMenuOpen(false)} to={item.to}>
+              <NavLink
+                key={item.to}
+                onClick={() => {
+                  shouldRestoreMenuButtonFocus.current = false;
+                  setIsMobileMenuOpen(false);
+                }}
+                to={item.to}
+              >
                 {item.label}
               </NavLink>
             ))}
@@ -135,7 +170,15 @@ function AppShellFrame() {
                 aria-expanded={isMobileMenuOpen}
                 aria-controls="primary-navigation"
                 aria-label={isMobileMenuOpen ? "Close primary navigation" : "Open primary navigation"}
-                onClick={() => setIsMobileMenuOpen((current) => !current)}
+                onClick={() =>
+                  setIsMobileMenuOpen((current) => {
+                    if (current) {
+                      shouldRestoreMenuButtonFocus.current = true;
+                    }
+                    return !current;
+                  })
+                }
+                ref={menuButtonRef}
               >
                 Menu
               </button>

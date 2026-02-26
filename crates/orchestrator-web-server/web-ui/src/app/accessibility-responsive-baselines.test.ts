@@ -15,7 +15,8 @@ describe("accessibility and responsive baselines", () => {
     expect(shellSource).toContain('<main className="content-scroll" id={MAIN_CONTENT_ID}');
     expect(shellSource).toContain("tabIndex={-1}");
     expect(shellSource).toContain('aria-label="Primary navigation"');
-    expect(shellSource).toContain('aria-label="Primary" className="primary-nav"');
+    expect(shellSource).toContain('aria-label="Primary"');
+    expect(shellSource).toContain('className="primary-nav"');
     expect(shellSource).toContain("aria-expanded={isMobileMenuOpen}");
     expect(shellSource).toContain('aria-controls="primary-navigation"');
     expect(shellSource).toContain('if (event.key === "Escape")');
@@ -28,7 +29,10 @@ describe("accessibility and responsive baselines", () => {
     expect(routerSource).toContain("lazy(async () => import(\"./screens\")");
     expect(routerSource).toContain("withRouteSuspense(<DashboardPage />)");
     expect(routerSource).toContain("withRouteSuspense(<ReviewHandoffPage />)");
-    expect(routerSource).toContain("<Suspense fallback={<section className=\"loading-box\">Loading route...</section>}>");
+    expect(routerSource).toContain("<Suspense");
+    expect(routerSource).toContain('className="loading-box"');
+    expect(routerSource).toContain('role="status"');
+    expect(routerSource).toContain('aria-live="polite"');
   });
 
   it("keeps focus visibility, responsive breakpoints, and reduced-motion safeguards", () => {
