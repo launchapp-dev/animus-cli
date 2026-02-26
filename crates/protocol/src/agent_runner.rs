@@ -93,6 +93,26 @@ pub struct AgentStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum AgentStatusQueryResponse {
+    Status(AgentStatusResponse),
+    Error(AgentStatusErrorResponse),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatusErrorResponse {
+    pub run_id: RunId,
+    pub code: AgentStatusErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatusErrorCode {
+    NotFound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStatusRequest {
     pub models: Vec<ModelId>,
 }

@@ -1,5 +1,7 @@
 use anyhow::Result;
-use protocol::{AgentStatusRequest, ModelStatusRequest, RunnerStatusRequest};
+use protocol::{
+    AgentStatusQueryResponse, AgentStatusRequest, ModelStatusRequest, RunnerStatusRequest,
+};
 use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -57,12 +59,24 @@ pub(crate) async fn handle_agent_status_request<W: AsyncWrite + Unpin>(
         "Handling agent status request"
     );
     let response = runner.lock().await.handle_agent_status(req);
-    debug!(
-        connection_id,
-        run_id = %response.run_id.0.as_str(),
-        status = ?response.status,
-        "Sending agent status response"
-    );
+    match &response {
+        AgentStatusQueryResponse::Status(status) => {
+            debug!(
+                connection_id,
+                run_id = %status.run_id.0.as_str(),
+                status = ?status.status,
+                "Sending agent status response"
+            );
+        }
+        AgentStatusQueryResponse::Error(error) => {
+            debug!(
+                connection_id,
+                run_id = %error.run_id.0.as_str(),
+                error_code = ?error.code,
+                "Sending agent status error response"
+            );
+        }
+    }
     write_json_line(writer, &response).await?;
     Ok(())
 }
