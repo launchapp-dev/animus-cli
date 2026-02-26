@@ -16,6 +16,159 @@
     </header>
 
     <main class="board-grid">
+      <section class="board" aria-labelledby="command-center-title">
+        <h2 class="board-title" id="command-center-title">
+          Release Gate Command Center (Desktop + Tablet)
+        </h2>
+        <div class="route-shell">
+          <div class="command-shell">
+            <aside class="command-nav" aria-label="Release workflow surfaces">
+              <h3>Workflow Surfaces</h3>
+              <button class="nav-item active" type="button">Release gate topology</button>
+              <button class="nav-item" type="button">PR checks + smoke triage</button>
+              <button class="nav-item" type="button">Release checklist</button>
+              <button class="nav-item" type="button">Rollback validation</button>
+              <button class="nav-item" type="button">Release decision</button>
+              <p class="command-note">
+                Tablet mode collapses this rail into a horizontal button strip.
+              </p>
+            </aside>
+
+            <section class="command-main" aria-labelledby="command-main-title">
+              <header class="command-main-header">
+                <div>
+                  <p class="breadcrumbs">Release / command-center / run #1097</p>
+                  <h3 id="command-main-title">Tag <code>v0.18.0</code> gate dashboard</h3>
+                  <p class="panel-note">
+                    Deterministic release decision for commit
+                    <code>75fb84d</code>. Downstream build/publish remains blocked until
+                    <code>web-ui-gates</code> passes.
+                  </p>
+                </div>
+                <div class="status-strip" aria-label="Decision drawer states">
+                  <span class="status-chip blocked">missing-evidence</span>
+                  <span class="status-chip passed">ready-for-go</span>
+                  <span class="status-chip failed">blocked</span>
+                </div>
+              </header>
+
+              <div class="metric-grid" role="list" aria-label="Gate metrics">
+                <article class="metric-card" role="listitem">
+                  <h4>Required gates</h4>
+                  <p><strong>1 / 3</strong> complete</p>
+                  <p class="metric-detail">
+                    <code>web-ui-gates</code> failed, build/publish blocked.
+                  </p>
+                </article>
+                <article class="metric-card" role="listitem">
+                  <h4>Smoke assertion failures</h4>
+                  <p><strong>1</strong> active blocker</p>
+                  <p class="metric-detail"><code>T-06 api_only=true rejects /dashboard</code></p>
+                </article>
+                <article class="metric-card" role="listitem">
+                  <h4>Rollback readiness</h4>
+                  <p><strong>pending</strong></p>
+                  <p class="metric-detail">Validation run #1101 has not started.</p>
+                </article>
+              </div>
+
+              <div class="command-columns">
+                <article class="panel" aria-labelledby="recent-runs-title">
+                  <h4 id="recent-runs-title">Recent Release Gate Runs</h4>
+                  <div class="table-wrap">
+                    <table class="wire-table" aria-label="Recent release gate runs">
+                      <thead>
+                        <tr>
+                          <th scope="col">Run</th>
+                          <th scope="col">Trigger</th>
+                          <th scope="col">Started</th>
+                          <th scope="col">Status</th>
+                          <th scope="col">Primary blocker</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <th scope="row">#1103</th>
+                          <td>workflow dispatch</td>
+                          <td>2026-02-26 02:44 UTC</td>
+                          <td><span class="status-inline passed">passed</span></td>
+                          <td>none</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">#1098</th>
+                          <td>workflow dispatch</td>
+                          <td>2026-02-25 19:15 UTC</td>
+                          <td><span class="status-inline running">running</span></td>
+                          <td>rollback validation summary pending</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">#1097</th>
+                          <td>tag push</td>
+                          <td>2026-02-25 18:03 UTC</td>
+                          <td><span class="status-inline failed">failed</span></td>
+                          <td><code>T-06</code> deep-link rejection mismatch</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">#1096</th>
+                          <td>tag push</td>
+                          <td>2026-02-25 17:12 UTC</td>
+                          <td><span class="status-inline blocked">blocked</span></td>
+                          <td>awaiting smoke rerun artifacts</td>
+                        </tr>
+                        <tr>
+                          <th scope="row">#1095</th>
+                          <td>tag push</td>
+                          <td>2026-02-25 15:41 UTC</td>
+                          <td><span class="status-inline passed">passed</span></td>
+                          <td>none</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p class="next-action">
+                    Selected run: <code>#1097</code>. Open smoke artifacts before changing
+                    decision state.
+                  </p>
+                </article>
+
+                <aside class="panel decision-drawer" aria-labelledby="decision-drawer-title">
+                  <h4 id="decision-drawer-title">Decision Drawer (No-Go state)</h4>
+                  <p class="panel-note">
+                    Decision cannot move to <code>ready-for-go</code> until all required
+                    evidence links are attached.
+                  </p>
+                  <p>
+                    Current state: <span class="status-inline blocked">blocked</span>
+                  </p>
+                  <ol class="drawer-list">
+                    <li>
+                      Matrix evidence:
+                      <span class="status-inline passed">linked</span>
+                    </li>
+                    <li>
+                      Smoke evidence:
+                      <span class="status-inline failed">failed</span>
+                    </li>
+                    <li>
+                      Rollback validation:
+                      <span class="status-inline running">pending dispatch</span>
+                    </li>
+                  </ol>
+                  <div class="callout danger" role="alert">
+                    Release decision locked to <strong>No-Go</strong> while smoke and rollback
+                    evidence are incomplete.
+                  </div>
+                  <div class="drawer-actions">
+                    <button type="button">Mark No-Go</button>
+                    <button type="button">Queue rollback validation</button>
+                  </div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
       <section class="board" aria-labelledby="checks-board-title">
         <h2 class="board-title" id="checks-board-title">
           PR Checks + Matrix + Smoke Failure (Desktop)
@@ -40,9 +193,19 @@
                 Workflow trigger paths:
                 <code>crates/orchestrator-web-server/**</code>,
                 <code>.github/workflows/web-ui-ci.yml</code>,
-                <code>.github/workflows/release.yml</code>.
+                <code>.github/workflows/release.yml</code>,
+                <code>.github/workflows/release-rollback-validation.yml</code>,
+                <code>.github/release-checklists/web-gui-release.md</code>.
                 Trigger events: <code>pull_request</code> and <code>push</code>.
               </p>
+
+              <h4>Required Check Name Contract</h4>
+              <ul class="state-list">
+                <li><code>web-ui-matrix (node 20.x)</code> is a required branch-protection check.</li>
+                <li><code>web-ui-matrix (node 22.x)</code> is a required branch-protection check.</li>
+                <li><code>web-ui-smoke-e2e</code> is a required branch-protection check.</li>
+                <li><code>Web UI Gates</code> is the required release gate check label.</li>
+              </ul>
 
               <div class="table-wrap">
                 <table class="wire-table" aria-label="Web UI CI matrix">
@@ -59,13 +222,13 @@
                   </thead>
                   <tbody>
                     <tr>
-                      <th scope="row">web-ui-matrix (ubuntu)</th>
+                      <th scope="row">web-ui-matrix (node 20.x)</th>
                       <td>20.x</td>
                       <td>2m 46s</td>
                       <td><span class="status-inline passed">passed</span></td>
                     </tr>
                     <tr>
-                      <th scope="row">web-ui-matrix (ubuntu)</th>
+                      <th scope="row">web-ui-matrix (node 22.x)</th>
                       <td>22.x</td>
                       <td>2m 52s</td>
                       <td><span class="status-inline passed">passed</span></td>
@@ -84,7 +247,7 @@
               <ul class="assertion-list">
                 <li><code>T-04</code>: <code>/</code>, <code>/dashboard</code>, <code>/projects</code>, and <code>/reviews/handoff</code> return <code>200</code> + <code>text/html</code>.</li>
                 <li><code>T-05</code>: <code>/api/v1/system/info</code> returns success envelope (<code>schema=ao.cli.v1</code>, <code>ok=true</code>).</li>
-                <li><code>T-06</code>: <code>api_only=true</code> rejects deep-link <code>/dashboard</code> with deterministic error envelope.</li>
+                <li><code>T-06</code>: <code>api_only=true</code> rejects deep-link <code>/dashboard</code> with deterministic error envelope (<code>code=not_found</code>, <code>exit_code=3</code>).</li>
               </ul>
 
               <div class="callout danger" role="alert">
@@ -160,7 +323,7 @@ Received:
 
           <div class="pipeline-grid">
             <article class="pipeline-lane failed" aria-labelledby="lane-gates-title">
-              <h3 id="lane-gates-title">1. web-ui-gates</h3>
+              <h3 id="lane-gates-title">1. Web UI Gates (<code>web-ui-gates</code> job)</h3>
               <p class="lane-status">status: failed</p>
               <ul>
                 <li>npm ci: passed</li>
@@ -192,6 +355,16 @@ Received:
           <div class="callout info">
             Passing scenario preserves existing artifact naming and tag publish behavior.
           </div>
+          <div class="callout info">
+            Scope lock for TASK-018 implementation: only
+            <code>.github/workflows/web-ui-ci.yml</code>,
+            <code>.github/workflows/release.yml</code>,
+            <code>.github/workflows/release-rollback-validation.yml</code>,
+            <code>.github/release-checklists/web-gui-release.md</code>,
+            <code>crates/orchestrator-web-server/web-ui/package.json</code>, and
+            <code>crates/orchestrator-web-server/web-ui/scripts/smoke-e2e.mjs</code>
+            can change.
+          </div>
         </div>
       </section>
 
@@ -202,8 +375,8 @@ Received:
         <div class="route-shell compact">
           <form class="checklist-form" aria-describedby="checklist-help">
             <p id="checklist-help" class="panel-note">
-              Checklist order: Metadata -> Preflight -> CI Gate Evidence -> Decision ->
-              Rollback Readiness -> Post-release Verification.
+              Checklist order: Metadata, Preflight, CI Gate Evidence, Decision,
+              Rollback Readiness, Post-release Verification.
             </p>
 
             <fieldset>
@@ -252,18 +425,22 @@ Received:
             <fieldset>
               <legend>Decision</legend>
               <label class="inline-radio">
-                <input type="radio" name="decision" checked />
+                <input type="radio" name="decision" />
                 <span>Go</span>
               </label>
               <label class="inline-radio">
-                <input type="radio" name="decision" />
+                <input type="radio" name="decision" checked />
                 <span>No-Go</span>
               </label>
               <label for="decision-notes">Decision notes</label>
               <textarea
                 id="decision-notes"
                 rows="3"
-              >Go contingent on rollback validation run #1101 success.</textarea>
+              >No-Go while smoke assertion T-06 is unresolved. Re-evaluate after rollback validation run #1101 and rerun of web-ui-smoke-e2e.</textarea>
+              <label class="checkline">
+                <input type="checkbox" />
+                <span>Operator go/no-go sign-off recorded after all required evidence links are verified.</span>
+              </label>
             </fieldset>
 
             <fieldset>
@@ -307,6 +484,10 @@ Received:
                 <p id="rollback-dispatch-help" class="panel-note">
                   Run both refs in one workflow to compare release candidate health against
                   known-good rollback baseline.
+                </p>
+                <p class="hint">
+                  Dispatch states: <code>idle</code>, <code>validation-error</code>, and
+                  <code>submitted</code>.
                 </p>
                 <label for="candidate-ref">candidate_ref</label>
                 <input id="candidate-ref" value="v0.18.0-rc.2" readonly />
@@ -356,6 +537,92 @@ mutation=none publish=disabled</pre>
                 rollback path is validated.
               </div>
             </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="go-ready-board-title">
+        <h2 class="board-title" id="go-ready-board-title">
+          Release Decision - Go Ready (All Gates Passed)
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">Release / command-center / run #1103</p>
+            <p class="run-ref">state: <span class="status-inline passed">ready-for-go</span></p>
+          </header>
+
+          <div class="decision-grid">
+            <article class="panel decision-card" aria-labelledby="decision-evidence-title">
+              <h3 id="decision-evidence-title">Required Evidence</h3>
+              <div class="table-wrap">
+                <table class="wire-table" aria-label="Release evidence table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Evidence lane</th>
+                      <th scope="col">Run</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Operator state</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <th scope="row">Frontend matrix</th>
+                      <td>#1103 / web-ui-matrix (node 20.x), web-ui-matrix (node 22.x)</td>
+                      <td><span class="status-inline passed">passed</span></td>
+                      <td><span class="status-inline passed">downloaded</span></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Smoke E2E</th>
+                      <td>#1103 / web-ui-smoke-e2e</td>
+                      <td><span class="status-inline passed">passed</span></td>
+                      <td><span class="status-inline passed">downloaded</span></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Rollback validation</th>
+                      <td>#1101 / release-rollback-validation</td>
+                      <td><span class="status-inline passed">both-passed</span></td>
+                      <td><span class="status-inline passed">linked</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel decision-card" aria-labelledby="decision-signoff-title">
+              <h3 id="decision-signoff-title">Operator Sign-off</h3>
+              <p class="panel-note">
+                Sign-off remains disabled until all required confirmations are checked.
+              </p>
+              <form class="dispatch-form" aria-describedby="go-ready-help">
+                <p id="go-ready-help" class="hint">
+                  Keyboard-first flow: tab through checkboxes, then submit using Enter on
+                  focused primary action.
+                </p>
+                <label class="checkline">
+                  <input type="checkbox" checked />
+                  <span>Matrix + smoke runs mapped to this release commit SHA.</span>
+                </label>
+                <label class="checkline">
+                  <input type="checkbox" checked />
+                  <span>Rollback comparison confirms candidate and rollback refs are healthy.</span>
+                </label>
+                <label class="checkline">
+                  <input type="checkbox" checked />
+                  <span>Post-release smoke rerun plan prepared for tagged artifact.</span>
+                </label>
+                <label for="go-notes">Go notes</label>
+                <textarea id="go-notes" rows="3">All web-ui gates passed on run #1103 after fixing T-06 assertion expectation.</textarea>
+                <div class="decision-actions">
+                  <button type="button">Record Go Sign-off</button>
+                  <button type="button">Reopen Decision</button>
+                </div>
+              </form>
+            </article>
+          </div>
+
+          <div class="callout success" role="status">
+            Release decision ready: downstream packaging and publish gates can proceed with
+            standard naming and immutable evidence links.
           </div>
         </div>
       </section>

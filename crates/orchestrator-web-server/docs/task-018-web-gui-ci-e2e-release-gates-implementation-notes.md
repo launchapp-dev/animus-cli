@@ -1,120 +1,145 @@
 # TASK-018 Implementation Notes: Web GUI CI Matrix, Smoke E2E, and Release Gates
 
+## Phase Context
+- Workflow phase: `requirements`
+- Workflow ID: `1b83370a-3c2c-42f2-aea0-43c84bf0002d`
+- Task: `TASK-018`
+
 ## Purpose
-Translate `TASK-018` requirements into deterministic implementation slices for
-CI/release hardening without changing web API contracts or release artifact
-formats.
+Translate `TASK-018` requirements into deterministic implementation and
+validation slices for CI/release hardening, without changing web API contracts
+or release artifact formats.
 
 ## Non-Negotiable Constraints
-- Keep existing release triggers and publish semantics in
+- Preserve release triggers and publish semantics in
   `.github/workflows/release.yml`.
-- Preserve release artifact naming conventions already consumed by operators.
-- Keep checks repository-local and reproducible from this repo.
-- Use lockfile-faithful installs (`npm ci`) in CI.
+- Preserve release artifact naming conventions consumed by operators.
+- Keep checks repository-local and reproducible from this repository.
+- Use lockfile-faithful installs (`npm ci`) in CI jobs.
+- Keep rollback validation read-only (no tag/release mutation).
 - Do not manually edit `.ao` JSON state files.
 
 ## Baseline Integration Points
-- Existing release workflow:
+- Frontend CI workflow:
+  `.github/workflows/web-ui-ci.yml`
+- Release workflow:
   `.github/workflows/release.yml`
-- Web UI scripts and lockfile:
-  `crates/orchestrator-web-server/web-ui/package.json`,
+- Rollback validation workflow:
+  `.github/workflows/release-rollback-validation.yml`
+- Release checklist:
+  `.github/release-checklists/web-gui-release.md`
+- Smoke script + package scripts:
+  `crates/orchestrator-web-server/web-ui/scripts/smoke-e2e.mjs`,
+  `crates/orchestrator-web-server/web-ui/package.json`
+- Web UI lockfile:
   `crates/orchestrator-web-server/web-ui/package-lock.json`
-- Web UI build target:
-  `crates/orchestrator-web-server/web-ui/vite.config.ts`
-- Embedded asset output:
-  `crates/orchestrator-web-server/embedded/`
-- Existing web-server route behavior tests:
-  `crates/orchestrator-web-server/src/services/web_server.rs`
 
-## Proposed Source Layout Additions
+## Scope-Locked Edit Surface
+Allowed implementation file edits:
 - `.github/workflows/web-ui-ci.yml`
-  - frontend matrix workflow for test/build and smoke E2E.
+- `.github/workflows/release.yml` (web UI gate section only)
 - `.github/workflows/release-rollback-validation.yml`
-  - manual rollback confidence workflow using smoke checks.
 - `.github/release-checklists/web-gui-release.md`
-  - release-governance checklist with explicit gate evidence.
-- `crates/orchestrator-web-server/web-ui/scripts/smoke-e2e.mjs`
-  - deterministic smoke script that starts the AO web server and validates key
-    routes/API behavior.
 - `crates/orchestrator-web-server/web-ui/package.json`
-  - add `test:e2e:smoke` script.
+- `crates/orchestrator-web-server/web-ui/scripts/smoke-e2e.mjs`
 
-## CI Workflow Design Notes
+Protected surfaces (must not change in TASK-018 implementation):
+- Release packaging matrix targets/archives in `release.yml`.
+- Publish-on-tag behavior and release artifact naming.
+- `/api/v1` envelope and API contracts beyond smoke validation assertions.
 
-### 1) `web-ui-ci.yml` topology
-- Job A: `web-ui-matrix`
-  - matrix: Node `20.x` and `22.x` (ubuntu).
-  - run `npm ci`, `npm run test`, `npm run build`.
-- Job B: `web-ui-smoke-e2e`
-  - single-run job (non-matrix) to reduce runtime/cost.
-  - runs after one successful matrix build job or after a dedicated setup step.
-  - executes `npm run test:e2e:smoke`.
-- Workflow permissions:
-  - default `contents: read`.
+## Deterministic Workflow Topology
 
-### 2) Release gating in `release.yml`
-- Add `web-ui-gates` job before existing `build` matrix.
-- Move web GUI checks into `web-ui-gates`:
-  - `npm ci`,
-  - `npm run test`,
-  - `npm run build`,
-  - `npm run test:e2e:smoke`.
-- Update dependency graph:
-  - `build` needs `web-ui-gates`,
-  - `publish` continues to need `build`.
-- Preserve existing packaging scripts and artifact upload steps.
+### 1) `web-ui-ci.yml`
+- `web-ui-matrix`:
+  - Node `20.x` and `22.x`, `ubuntu-latest`.
+  - Runs `npm ci`, `npm run test`, `npm run build`.
+- `web-ui-smoke-e2e`:
+  - depends on `web-ui-matrix`,
+  - runs smoke (`npm run test:e2e:smoke`) and uploads smoke diagnostics on
+    failure.
+- Workflow-level defaults:
+  - `contents: read`,
+  - deterministic concurrency group (`web-ui-ci-${{ github.ref }}`).
+- Required check names remain stable:
+  - `web-ui-matrix (node 20.x)`,
+  - `web-ui-matrix (node 22.x)`,
+  - `web-ui-smoke-e2e`.
 
-### 3) Rollback validation workflow
-- `workflow_dispatch` with required refs:
+### 2) `release.yml` gating behavior
+- `web-ui-gates` runs first and performs:
+  - `npm ci`, `npm run test`, `npm run build`, `npm run test:e2e:smoke`.
+- `build` matrix is hard-blocked via `needs: web-ui-gates`.
+- `publish` remains tag-gated and downstream of `build`.
+- Existing packaging matrix targets, archive formats, and artifact naming remain
+  unchanged.
+- Required gate check remains `Web UI Gates`.
+
+### 3) `release-rollback-validation.yml`
+- `workflow_dispatch` inputs:
   - `candidate_ref`,
   - `rollback_ref`.
-- Per-ref smoke validation:
-  - checkout ref,
-  - run web GUI smoke script,
-  - append pass/fail status to workflow summary.
-- Never mutate tags/releases from rollback workflow.
+- Per-ref smoke jobs:
+  - `candidate_smoke`,
+  - `rollback_smoke`.
+- `summary` job:
+  - writes auditable step-summary evidence,
+  - enforces both smoke outcomes are `success`,
+  - never performs publish/tag mutation actions.
 
-## Smoke Harness Notes
-- Script should be deterministic and self-cleaning:
-  - spawn AO web server process,
-  - wait for readiness with bounded timeout,
-  - assert expected status/content-type/envelope fields,
-  - trap process termination for pass/fail paths.
-- Required assertions:
-  - UI routes return `200` + `text/html`,
-  - `/api/v1/system/info` returns `ao.cli.v1` success envelope,
-  - `api_only=true` rejects UI deep links.
-- Write smoke logs to a predictable temp file path so CI can upload artifacts on
-  failure.
+### 4) Release checklist governance
+- Checklist captures run URLs and go/no-go evidence for:
+  - `web-ui-ci.yml` matrix,
+  - smoke E2E,
+  - release `web-ui-gates`,
+  - rollback-validation run,
+  - embedded asset regeneration.
 
-## Suggested Implementation Sequence
-1. Add release checklist markdown artifact.
-2. Add smoke E2E script and `package.json` command.
-3. Add `web-ui-ci.yml` matrix + smoke jobs.
-4. Integrate blocking `web-ui-gates` into `release.yml`.
-5. Add `release-rollback-validation.yml`.
-6. Run local smoke script and targeted workflow lint/validation.
-7. Validate release workflow graph for fail-closed behavior.
+## Smoke Harness Behavior Contract
+- Spawns AO web server via `cargo run -p orchestrator-cli -- web serve` with
+  explicit host/port.
+- Waits for readiness using `/api/v1/system/info` with bounded timeout.
+- Validates UI routes (`/`, `/dashboard`, `/projects`, `/reviews/handoff`) for
+  `200` + `text/html`.
+- Validates `/api/v1/system/info` envelope fields (`schema=ao.cli.v1`,
+  `ok=true`).
+- Validates `--api-only` deep-link rejection (`404`, `not_found`,
+  `exit_code=3`).
+- Always terminates spawned processes and writes deterministic artifacts:
+  - `smoke-assertions.txt`,
+  - `<server>.stdout.log`,
+  - `<server>.stderr.log`.
+
+## Suggested Implementation/Verification Sequence
+1. Confirm checklist file includes all required evidence fields.
+2. Confirm smoke script + `test:e2e:smoke` script contract matches requirements.
+3. Validate `web-ui-ci.yml` matrix and smoke topology.
+4. Validate `release.yml` dependency graph remains fail-closed.
+5. Validate rollback workflow inputs, summary evidence, and pass criteria.
+6. Verify required check-name stability against branch protection contract.
+7. Run local smoke test and targeted workflow lint/checks.
 
 ## Testing Targets
-- Local:
-  - `cd crates/orchestrator-web-server/web-ui && npm ci`
+- Local web UI checks:
+  - `cd crates/orchestrator-web-server/web-ui`
+  - `npm ci`
   - `npm run test`
   - `npm run build`
   - `npm run test:e2e:smoke`
-- CI:
-  - verify matrix job fanout and pass/fail behavior,
-  - verify release job blocking on web GUI gate failure,
-  - verify rollback workflow summary for both refs.
+- Workflow structure checks:
+  - verify `web-ui-gates -> build -> publish` dependencies,
+  - verify required check names are unchanged (`web-ui-matrix (node 20.x)`,
+    `web-ui-matrix (node 22.x)`, `web-ui-smoke-e2e`, `Web UI Gates`),
+  - verify rollback summary enforcement,
+  - verify smoke-failure artifact upload paths and retention.
 
 ## Regression Guardrails
-- Do not change release artifact filenames/paths consumed by existing release
-  automation.
-- Do not alter `/api/v1` envelope semantics during smoke instrumentation.
-- Avoid workflow drift by centralizing repeated commands in npm scripts.
-- Keep CI path filters constrained so unrelated changes do not over-trigger runs.
+- Do not alter release artifact filenames/paths.
+- Do not alter `/api/v1` envelope semantics while extending smoke checks.
+- Keep workflow check names stable for branch protection configuration.
+- Keep repeated command logic in package scripts where possible.
 
 ## Deferred Follow-Ups (Not in TASK-018)
-- Full browser-matrix E2E (multi-engine Playwright).
-- Visual regression snapshots.
-- Automated rollback execution beyond validation.
+- Full multi-browser E2E suite.
+- Visual-regression snapshot pipeline.
+- Automated rollback execution beyond validation evidence.

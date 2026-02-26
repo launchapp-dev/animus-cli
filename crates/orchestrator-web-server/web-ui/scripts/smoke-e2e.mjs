@@ -4,11 +4,11 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const HOST = "127.0.0.1";
-const READY_TIMEOUT_MS = 60_000;
+const READY_TIMEOUT_MS = parsePositiveInt(process.env.SMOKE_READY_TIMEOUT_MS, 5 * 60_000);
 const POLL_INTERVAL_MS = 500;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -22,6 +22,18 @@ const ARTIFACT_DIR = process.env.SMOKE_ARTIFACT_DIR
 const REPORT_PATH = path.join(ARTIFACT_DIR, "smoke-assertions.txt");
 const reportLines = [];
 const activeServers = new Set();
+
+function parsePositiveInt(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
 
 function record(status, label, detail = "") {
   const line = detail ? `[${status}] ${label}: ${detail}` : `[${status}] ${label}`;
@@ -42,6 +54,15 @@ function tail(text, maxChars = 1_200) {
     return "";
   }
   return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function toErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 async function pickOpenPort(host) {
@@ -74,6 +95,7 @@ function createServer({ name, port, apiOnly }) {
 
   const args = [
     "run",
+    "--locked",
     "-p",
     "orchestrator-cli",
     "--",
@@ -205,35 +227,78 @@ async function fetchAndParse(url) {
   return { response, contentType, text, json };
 }
 
+function getServerExitDetail(server) {
+  if (server.child.exitCode === null && server.child.signalCode === null) {
+    return null;
+  }
+
+  const reasonParts = [];
+  if (server.child.exitCode !== null) {
+    reasonParts.push(`code ${server.child.exitCode}`);
+  }
+  if (server.child.signalCode !== null) {
+    reasonParts.push(`signal ${server.child.signalCode}`);
+  }
+
+  const logParts = [];
+  const stdoutTail = tail(server.stdout);
+  const stderrTail = tail(server.stderr);
+  if (stdoutTail) {
+    logParts.push(`stdout tail:\n${stdoutTail}`);
+  }
+  if (stderrTail) {
+    logParts.push(`stderr tail:\n${stderrTail}`);
+  }
+
+  const reason = reasonParts.join(", ");
+  const logs = logParts.length > 0 ? ` ${logParts.join("\n")}` : "";
+  return `${reason}.${logs}`;
+}
+
 async function waitForReady(server) {
   const endpoint = `http://${HOST}:${server.port}/api/v1/system/info`;
   const deadline = Date.now() + READY_TIMEOUT_MS;
+  let lastReadinessError = null;
+  let lastReadinessObservation = null;
 
   while (Date.now() < deadline) {
     if (server.spawnError) {
       throw new Error(`${server.name} spawn failed: ${server.spawnError}`);
     }
 
-    if (server.child.exitCode !== null) {
-      throw new Error(
-        `${server.name} exited before readiness check (code ${server.child.exitCode}). stderr tail:\n${tail(server.stderr)}`,
-      );
+    const exitDetail = getServerExitDetail(server);
+    if (exitDetail) {
+      throw new Error(`${server.name} exited before readiness check (${exitDetail})`);
     }
 
     try {
-      const { response, json } = await fetchAndParse(endpoint);
+      const { response, contentType, text, json } = await fetchAndParse(endpoint);
       if (response.status === 200 && json?.schema === "ao.cli.v1" && json?.ok === true) {
         record("PASS", `${server.name} readiness`, endpoint);
         return;
       }
-    } catch {
+      if (contentType.includes("application/json")) {
+        lastReadinessObservation = `status ${response.status}, schema ${json?.schema ?? "<missing>"}, ok ${json?.ok ?? "<missing>"}`;
+      } else {
+        lastReadinessObservation = `status ${response.status}, content-type ${contentType || "<missing>"}, body tail ${tail(text, 200)}`;
+      }
+    } catch (error) {
+      lastReadinessError = toErrorMessage(error);
       // Server startup in progress; retry until timeout.
     }
 
     await sleep(POLL_INTERVAL_MS);
   }
 
-  throw new Error(`${server.name} did not become ready within ${READY_TIMEOUT_MS}ms`);
+  const details = [];
+  if (lastReadinessObservation) {
+    details.push(`last readiness observation: ${tail(lastReadinessObservation, 400)}`);
+  }
+  if (lastReadinessError) {
+    details.push(`last readiness error: ${tail(lastReadinessError, 400)}`);
+  }
+  const detail = details.length > 0 ? ` ${details.join("; ")}` : "";
+  throw new Error(`${server.name} did not become ready within ${READY_TIMEOUT_MS}ms.${detail}`);
 }
 
 async function assertUiRoutes(baseUrl) {
@@ -319,27 +384,49 @@ async function writeReport() {
   await writeFile(REPORT_PATH, output, "utf8");
 }
 
+async function prepareArtifactDir() {
+  const artifactPath = path.resolve(ARTIFACT_DIR);
+  const rootPath = path.parse(artifactPath).root;
+  if (artifactPath === rootPath) {
+    throw new Error(`refusing to clean root path as artifact dir: ${artifactPath}`);
+  }
+
+  if (artifactPath === REPO_ROOT || artifactPath === WEB_UI_DIR) {
+    throw new Error(`refusing to clean protected path as artifact dir: ${artifactPath}`);
+  }
+
+  if (!isWithin(REPO_ROOT, artifactPath)) {
+    throw new Error(`artifact dir must be inside repository root: ${artifactPath}`);
+  }
+
+  await rm(artifactPath, { recursive: true, force: true });
+  await mkdir(artifactPath, { recursive: true });
+}
+
 async function main() {
-  await mkdir(ARTIFACT_DIR, { recursive: true });
-  record("PASS", "repo root", REPO_ROOT);
-  record("PASS", "artifact dir", ARTIFACT_DIR);
+  let artifactDirReady = false;
 
   try {
+    await prepareArtifactDir();
+    artifactDirReady = true;
+    record("PASS", "repo root", REPO_ROOT);
+    record("PASS", "artifact dir", ARTIFACT_DIR);
+
     await runUiSmoke();
     await runApiOnlySmoke();
     record("PASS", "smoke suite", "all assertions passed");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     record("FAIL", "smoke suite", message);
     throw error;
   } finally {
     await stopAllServers();
-    await writeReport();
+    if (artifactDirReady) {
+      await writeReport();
+    }
   }
 }
 
-main().catch(async () => {
-  await stopAllServers();
-  await writeReport();
+main().catch(() => {
   process.exitCode = 1;
 });

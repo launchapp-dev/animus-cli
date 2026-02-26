@@ -2,8 +2,22 @@
 
 ## Phase
 - Workflow phase: `ux-research`
-- Workflow ID: `d17af114-e8ad-496e-9b4e-c8582fb72797`
+- Workflow ID: `1b83370a-3c2c-42f2-aea0-43c84bf0002d`
 - Task: `TASK-018`
+- Project root: `/Users/samishukri/ao-cli`
+
+## Inputs and Scope Basis
+- Source requirements:
+  - `crates/orchestrator-web-server/docs/task-018-web-gui-ci-e2e-release-gates-requirements.md`
+- Source user flows and wireframes:
+  - `mockups/task-018-web-gui-ci-e2e-release-gates/README.md`
+  - `mockups/task-018-web-gui-ci-e2e-release-gates/wireframes.html`
+
+This brief covers operator experience for:
+- frontend CI matrix visibility,
+- smoke E2E failure triage,
+- release go/no-go checklist decisions,
+- rollback validation confidence.
 
 ## UX Objective
 Design a deterministic release-gating experience that lets operators answer three
@@ -25,11 +39,11 @@ validation paths.
 | On-call responder | Validate rollback candidate quickly during incidents | Can run rollback validation and compare candidate vs rollback outcomes in one summary view |
 
 ## UX Principles for This Phase
-1. Gate visibility first: required checks must be easy to find and interpret.
-2. Deterministic naming: jobs, steps, and artifacts use stable names for fast lookup.
-3. Evidence over intuition: each decision point links to concrete run output.
-4. Progressive detail: default view shows pass/fail and next action, with deep logs available on demand.
-5. Accessible status language: do not rely on color alone; include explicit textual outcome.
+1. Clarity first: pass/fail state and blocking dependencies are visible at top of each screen.
+2. Deterministic naming: workflows, jobs, and artifacts use stable labels for quick lookup.
+3. Evidence over intuition: every gate decision links to specific run output or checklist evidence URL.
+4. Progressive disclosure: summary first, diagnostics/details on demand.
+5. Accessible outcomes: status must be understandable by text alone, not color-only signaling.
 
 ## Information Architecture
 
@@ -42,12 +56,12 @@ validation paths.
 
 ### Required Evidence Artifacts
 1. Web UI matrix results (Node `20.x`, `22.x`).
-2. Smoke E2E pass/fail output and assertion report.
+2. Smoke E2E pass/fail output and assertion report (`smoke-assertions.txt`).
 3. Smoke failure logs (stdout/stderr + assertion report).
 4. Release gate completion status before build/publish jobs.
 5. Rollback validation summary for `candidate_ref` and `rollback_ref`.
 
-## Key Screens and Interaction Contracts
+## Key Screens, States, and Interactions
 
 | Screen | Goal | Primary interactions | Required states |
 | --- | --- | --- | --- |
@@ -58,7 +72,22 @@ validation paths.
 | Rollback validation dispatch form | Launch deterministic candidate vs rollback smoke validation | Enter `candidate_ref`, enter `rollback_ref`, trigger run | idle, validation-error, submitted |
 | Rollback validation run summary | Compare candidate and fallback confidence | Read per-ref outcome, inspect logs/artifacts, copy summary into incident/release notes | running, candidate-failed, rollback-failed, both-passed |
 
-## Critical User Flows
+## Screen Priority and Hierarchy
+
+| Priority | Screen | Above-the-fold requirement |
+| --- | --- | --- |
+| P0 | `release.yml` and `web-ui-ci.yml` run summaries | Show overall gate verdict, blocker reason, and direct link to failing job/log first |
+| P0 | Smoke failure triage details | Show failed assertion label, impacted route/API, and artifact links in first viewport |
+| P1 | Release checklist (`web-gui-release.md`) | Show current decision state (`No-Go` by default) and missing-evidence items at top |
+| P1 | Rollback validation dispatch + summary | Show candidate and rollback refs with per-ref pass/fail verdict in fixed order |
+| P2 | PR Checks list | Keep stable required check names and one-click drilldown into failing run |
+
+Hierarchy rules:
+1. Lead with gate verdict (`passed`, `failed`, `blocked`) before diagnostics.
+2. Surface actionable next step immediately under verdict (`inspect logs`, `rerun smoke`, `block release`).
+3. Keep audit links grouped after verdict and actions, not mixed into narrative text.
+
+## Critical User Flows (From Requirements + Wireframes)
 
 ### Flow A: Pull Request Gate Triage
 1. PR author opens Checks tab after pushing web GUI changes.
@@ -84,13 +113,39 @@ validation paths.
 3. Workflow runs smoke checks for both refs and emits side-by-side summary.
 4. Operator uses summary to confirm rollback readiness without mutating tags/releases.
 
-## Layout, Hierarchy, and Spacing Guidance
+## Flow-to-Screen Mapping
 
-### GitHub Run Summary Content Order
-1. Overall gate outcome.
-2. Matrix/smoke results.
-3. Failure evidence links.
-4. Next-action guidance (retry/fix/escalate).
+| Flow | Entry screen | Decision point | Output artifact |
+| --- | --- | --- | --- |
+| Flow A: Pull Request Gate Triage | PR Checks list | Are required checks green? | Check run URL + pass/fail state |
+| Flow B: Release Go/No-Go Decision | `release.yml` run summary | Is `web-ui-gates` successful and checklist evidence complete? | Signed checklist decision |
+| Flow C: Smoke Failure Diagnosis | Failed smoke job details | Is failure from route/assertion/server startup? | `smoke-assertions.txt` + server stdout/stderr logs |
+| Flow D: Rollback Validation Confidence | Rollback validation dispatch form | Did both refs pass smoke validation? | `$GITHUB_STEP_SUMMARY` with candidate/rollback outcomes |
+
+## Interaction Contracts
+
+| Interaction | Expected behavior | Recovery affordance |
+| --- | --- | --- |
+| Open failed smoke step | Show failing assertion label, route/API context, and artifact pointers within one scroll view | Keep deterministic assertion names and link to uploaded smoke artifacts |
+| Download smoke artifacts | Provide stable artifact names for logs and assertions | Retain for finite window (`retention-days: 7`) and document names in checklist |
+| Complete release checklist | Require evidence URL fields before go/no-go sign-off | Block "ready-for-go" state until mandatory evidence slots are filled |
+| Run rollback validation | Keep candidate and rollback outputs separated with explicit headings | Fail run if either ref fails and include both outcomes in summary |
+
+## Deterministic State Transition Rules
+
+| Entity | Allowed transitions | Block condition |
+| --- | --- | --- |
+| `web-ui-matrix` check | `queued -> running -> passed|failed|cancelled` | None; terminal state must be explicit text |
+| `web-ui-smoke-e2e` check | `queued -> running -> passed|failed|cancelled` | `failed` requires artifact links in run output |
+| Release decision state | `draft -> blocked|ready-for-go -> signed-off` | Cannot move to `ready-for-go` when any required evidence URL is missing |
+| Rollback validation state | `idle -> submitted -> both-passed|candidate-failed|rollback-failed` | Any failed ref forces `No-Go` release recommendation |
+
+State model constraints:
+1. Do not alias or rename required check names (`web-ui-matrix (node 20.x)`, `web-ui-matrix (node 22.x)`, `web-ui-smoke-e2e`, `Web UI Gates`).
+2. Terminal failure states must include one-line remediation guidance.
+3. Summary order is fixed: verdict, blockers, artifacts, next action.
+
+## Layout, Hierarchy, and Spacing Guidance
 
 ### Checklist Authoring Structure
 - Keep sections in this order: Metadata -> Preflight -> CI Gate Evidence ->
@@ -102,25 +157,23 @@ validation paths.
 - Avoid wide multi-column tables in step summaries; prefer bullet lists and short key-value lines.
 - Keep artifact names concise and predictable to reduce truncation on mobile GitHub views.
 - Ensure important statuses appear near the top of each summary to avoid long-scroll hunting.
+- Keep content single-column at `320px-767px`; allow two-column supporting metadata only at `>=768px`.
+- Reserve consistent vertical spacing rhythm (`8px` multiples) between status, action, and evidence blocks.
 
 ## Accessibility Constraints (Non-Negotiable)
-1. All workflow and checklist statuses must include explicit text (`passed`, `failed`, `blocked`) and not color-only meaning.
-2. Checklist headings must follow logical order with no skipped heading level.
-3. Every checklist checkbox label must be descriptive enough when read out of context by a screen reader.
-4. Evidence links must use meaningful text or nearby labels that explain what the link proves.
-5. Workflow summary output must remain understandable in plain text without requiring screenshots.
-6. Input descriptions for `workflow_dispatch` fields must clearly distinguish `candidate_ref` vs `rollback_ref`.
-7. Failure guidance must identify the next action in words, not just symbols or iconography.
-8. Any copied command/reference text should be monospaced and line-break safe.
-
-## Interaction Details
-
-| Interaction | Expected behavior | Error prevention/recovery |
-| --- | --- | --- |
-| Open failed smoke step | User quickly sees failed assertion and route/API context | Always include deterministic assertion labels and artifact pointers |
-| Download smoke artifacts | User retrieves logs from a stable artifact name | Upload logs on failure path with finite retention and documented name |
-| Complete release checklist | User records evidence URLs and decision notes | Checklist requires explicit go/no-go acknowledgment |
-| Run rollback validation | User compares candidate vs rollback results | Keep per-ref outcomes separated and clearly titled in summary |
+1. All statuses include explicit text (`passed`, `failed`, `blocked`, `cancelled`) and never rely on color only.
+2. Checklist and summary headings use ordered levels with no skipped structure.
+3. Checkbox and control labels are descriptive out of context for screen reader users.
+4. Evidence links include meaning in adjacent label text (what the evidence proves).
+5. Run summaries remain plain-text legible without screenshots or custom styling.
+6. `workflow_dispatch` field help text must clearly distinguish `candidate_ref` vs `rollback_ref`.
+7. Failure guidance includes concrete next action language (`inspect logs`, `rerun smoke`, `block release`).
+8. Keyboard navigation must reach all actionable elements with visible focus treatment.
+9. Mobile layout at `320px` must avoid horizontal scrolling for primary triage and checklist flows.
+10. Status announcements and updates should be compatible with polite live-region behavior.
+11. Focus indicators must remain visible at `>=2px` equivalent thickness and `>=3:1` contrast against adjacent colors.
+12. Interactive controls and checklist targets must preserve a minimum `44px x 44px` touch target.
+13. Text conveying gate status and decisions must meet at least `4.5:1` contrast in default themes.
 
 ## Risks and Mitigations
 
@@ -130,6 +183,17 @@ validation paths.
 | Smoke failures lack context | Slow recovery and reruns | Upload deterministic logs plus assertion report on failure |
 | Checklist becomes stale or incomplete | Lost release auditability | Mandatory evidence URL slots and explicit decision section |
 | Rollback refs are entered incorrectly | False confidence in rollback readiness | Clear input labels/descriptions and per-ref summary headings |
+
+## Requirements Traceability (UX to Acceptance Criteria)
+
+| Acceptance Criterion | UX coverage in this brief |
+| --- | --- |
+| `AC-01`, `AC-02`, `AC-03` | PR checks and `web-ui-ci.yml` run summary screens with matrix + smoke interactions |
+| `AC-04`, `AC-05` | Smoke failure triage flow and interaction contracts with assertion-level diagnostics |
+| `AC-06`, `AC-07`, `AC-08` | Release workflow gate topology screen and go/no-go decision flow |
+| `AC-09` | Release checklist screen, hierarchy, and mandatory evidence fields |
+| `AC-10`, `AC-11` | Rollback dispatch + summary screens with per-ref outcomes and fail-closed behavior |
+| `AC-12` | Failure artifact interaction contract and deterministic evidence artifacts section |
 
 ## UX Acceptance Checklist for Implementation Phase
 - PR checks clearly expose web UI matrix and smoke outcome as required gates.

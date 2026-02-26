@@ -20,6 +20,7 @@ jobs:
   web-ui-gates:
     name: Web UI Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout

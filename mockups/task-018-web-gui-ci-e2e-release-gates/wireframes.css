@@ -110,6 +110,125 @@ code {
   max-width: 860px;
 }
 
+.command-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.command-nav {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f7fbfd;
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.command-nav h3 {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.nav-item {
+  width: 100%;
+  text-align: left;
+  border-color: var(--line);
+  background: #f3f8fa;
+  color: #1a4253;
+  font-weight: 600;
+}
+
+.nav-item.active {
+  border-color: #7ca8bf;
+  background: #e6f1f8;
+  color: #0f4763;
+}
+
+.command-note {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.command-main {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.command-main-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.command-main-header h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.metric-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.metric-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f9fdfe;
+  padding: var(--space-3);
+}
+
+.metric-card h4 {
+  margin: 0 0 4px;
+  font-size: 0.86rem;
+  color: #2f4b58;
+}
+
+.metric-card p {
+  margin: 0;
+}
+
+.metric-detail {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  color: #42606d;
+}
+
+.command-columns {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(280px, 1.2fr) minmax(280px, 1fr);
+}
+
+.decision-drawer .panel-note {
+  margin-bottom: var(--space-2);
+}
+
+.drawer-list {
+  margin: var(--space-2) 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  font-size: 0.87rem;
+  color: #2c4654;
+}
+
+.drawer-list .status-inline {
+  margin-left: var(--space-2);
+}
+
+.drawer-actions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
 .route-header {
   display: flex;
   gap: var(--space-3);
@@ -297,6 +416,12 @@ code {
   background: var(--info-bg);
 }
 
+.callout.success {
+  border-color: #97caab;
+  color: #1d5e3d;
+  background: #e6f6ec;
+}
+
 .next-action {
   margin: var(--space-3) 0 0;
   color: #1e3f4d;
@@ -406,6 +531,30 @@ code {
 .pipeline-lane.blocked {
   border-color: #c2b2d2;
   background: #f9f6fd;
+}
+
+.decision-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(320px, 1.2fr) minmax(280px, 1fr);
+}
+
+.decision-card {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.decision-actions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.decision-actions button:first-child {
+  border-color: #8db9a1;
+  background: #deefdf;
+  color: #204a2f;
 }
 
 fieldset {
@@ -600,7 +749,30 @@ a:focus-visible {
     padding-right: var(--space-4);
   }
 
+  .command-shell,
+  .command-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .command-nav {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    align-items: center;
+  }
+
+  .command-nav h3,
+  .command-note {
+    grid-column: 1 / -1;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
   .board-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .decision-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -619,6 +791,20 @@ a:focus-visible {
   .board-title {
     font-size: 0.94rem;
     padding: var(--space-3);
+  }
+
+  .command-nav {
+    padding: var(--space-2);
+    gap: 6px;
+  }
+
+  .nav-item {
+    font-size: 0.84rem;
+    padding: 8px 10px;
+  }
+
+  .metric-card {
+    padding: var(--space-2) var(--space-3);
   }
 
   .wire-table th,

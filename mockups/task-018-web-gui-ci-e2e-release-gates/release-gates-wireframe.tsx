@@ -2,7 +2,13 @@ import { useMemo, useState, type ReactNode } from "react";
 
 type GateStatus = "queued" | "running" | "passed" | "failed" | "blocked" | "cancelled";
 type ChecklistStatus = "draft" | "ready-for-go" | "blocked" | "signed-off";
-type RollbackOutcome = "idle" | "submitted" | "candidate-failed" | "rollback-failed" | "both-passed";
+type RollbackOutcome =
+  | "idle"
+  | "validation-error"
+  | "submitted"
+  | "candidate-failed"
+  | "rollback-failed"
+  | "both-passed";
 type EvidenceState = "missing" | "linked" | "downloaded";
 type TriggerEvent = "pull_request" | "push";
 type TraceabilityId =
@@ -17,7 +23,9 @@ type TraceabilityId =
   | "AC-09"
   | "AC-10"
   | "AC-11"
-  | "AC-12";
+  | "AC-12"
+  | "AC-13"
+  | "AC-14";
 
 type GateJob = {
   id: string;
@@ -80,6 +88,7 @@ type ChecklistModel = {
 };
 
 type RollbackValidationModel = {
+  dispatchState: "idle" | "validation-error" | "submitted";
   candidateRef: string;
   rollbackRef: string;
   candidateStatus: GateStatus;
@@ -88,10 +97,36 @@ type RollbackValidationModel = {
   rollbackDetails: string;
 };
 
+type CommandSurface = "release-topology" | "checks" | "checklist" | "rollback" | "release-decision";
+type DecisionDrawerState = "missing-evidence" | "ready-for-go" | "blocked";
+type CommandTrigger = "tag_push" | "workflow_dispatch";
+
+type CommandCenterRun = {
+  id: string;
+  trigger: CommandTrigger;
+  startedAtUtc: string;
+  status: GateStatus;
+  blocker: string | null;
+};
+
+type GoDecisionEvidenceItem = {
+  lane: "matrix" | "smoke" | "rollback";
+  runRef: string;
+  status: GateStatus;
+  operatorState: EvidenceState;
+  details: string;
+};
+
+type GoDecisionConfirmations = {
+  matrixAndSmokeMatched: boolean;
+  rollbackValidated: boolean;
+  postReleasePlanPrepared: boolean;
+};
+
 const webUiCiJobs: GateJob[] = [
   {
     id: "matrix-20",
-    name: "web-ui-matrix",
+    name: "web-ui-matrix (node 20.x)",
     nodeVersion: "20.x",
     runtime: "2m 46s",
     status: "passed",
@@ -99,7 +134,7 @@ const webUiCiJobs: GateJob[] = [
   },
   {
     id: "matrix-22",
-    name: "web-ui-matrix",
+    name: "web-ui-matrix (node 22.x)",
     nodeVersion: "22.x",
     runtime: "2m 52s",
     status: "passed",
@@ -116,6 +151,13 @@ const webUiCiJobs: GateJob[] = [
 ];
 
 const workflowTriggerEvents: TriggerEvent[] = ["pull_request", "push"];
+const workflowTriggerPaths = [
+  "crates/orchestrator-web-server/**",
+  ".github/workflows/web-ui-ci.yml",
+  ".github/workflows/release.yml",
+  ".github/workflows/release-rollback-validation.yml",
+  ".github/release-checklists/web-gui-release.md",
+];
 const gateLifecycleStates: GateStatus[] = [
   "queued",
   "running",
@@ -155,7 +197,7 @@ const smokeAssertions: SmokeAssertion[] = [
     id: "t06-api-only",
     label: "T-06 api_only=true rejects /dashboard",
     status: "failed",
-    details: "received code=invalid_input, expected code=not_found",
+    details: "received code=invalid_input, exit_code=2; expected code=not_found, exit_code=3",
   },
 ];
 
@@ -178,7 +220,7 @@ const releaseSnapshot: ReleaseGateSnapshot = {
   ref: "refs/tags/v0.18.0",
   gateJob: {
     id: "web-ui-gates",
-    name: "web-ui-gates",
+    name: "Web UI Gates",
     runtime: "6m 55s",
     status: "failed",
     details: "Smoke E2E assertion T-06 failed",
@@ -218,12 +260,13 @@ const initialChecklist: ChecklistModel = {
   embeddedAssetsVerified: true,
   rollbackPreconditionsVerified: false,
   postReleaseVerified: false,
-  decision: "go",
-  notes: "Go contingent on rollback validation run #1101 success.",
+  decision: "no-go",
+  notes: "No-Go while smoke assertion T-06 is unresolved.",
   signedOff: false,
 };
 
 const rollbackSample: RollbackValidationModel = {
+  dispatchState: "submitted",
   candidateRef: "v0.18.0-rc.2",
   rollbackRef: "v0.17.4",
   candidateStatus: "failed",
@@ -231,6 +274,100 @@ const rollbackSample: RollbackValidationModel = {
   candidateDetails: "api_only assertion mismatch",
   rollbackDetails: "all smoke assertions passed",
 };
+
+const goReadyRun: CommandCenterRun = {
+  id: "#1103",
+  trigger: "workflow_dispatch",
+  startedAtUtc: "2026-02-26 02:44 UTC",
+  status: "passed",
+  blocker: null,
+};
+
+const goDecisionEvidence: GoDecisionEvidenceItem[] = [
+  {
+    lane: "matrix",
+    runRef: "#1103 / web-ui-matrix (node 20.x), web-ui-matrix (node 22.x)",
+    status: "passed",
+    operatorState: "downloaded",
+    details: "both matrix rows passed on same release commit SHA",
+  },
+  {
+    lane: "smoke",
+    runRef: "#1103 / web-ui-smoke-e2e",
+    status: "passed",
+    operatorState: "downloaded",
+    details: "all deterministic assertions including T-06 passed",
+  },
+  {
+    lane: "rollback",
+    runRef: "#1101 / release-rollback-validation",
+    status: "passed",
+    operatorState: "linked",
+    details: "candidate_ref and rollback_ref both passed smoke",
+  },
+];
+
+const commandSurfaces: Array<{ id: CommandSurface; label: string }> = [
+  { id: "release-topology", label: "Release gate topology" },
+  { id: "checks", label: "PR checks + smoke triage" },
+  { id: "checklist", label: "Release checklist" },
+  { id: "rollback", label: "Rollback validation" },
+  { id: "release-decision", label: "Release decision" },
+];
+
+const requiredCheckNames = [
+  "web-ui-matrix (node 20.x)",
+  "web-ui-matrix (node 22.x)",
+  "web-ui-smoke-e2e",
+  "Web UI Gates",
+];
+
+const scopeLockedImplementationFiles = [
+  ".github/workflows/web-ui-ci.yml",
+  ".github/workflows/release.yml",
+  ".github/workflows/release-rollback-validation.yml",
+  ".github/release-checklists/web-gui-release.md",
+  "crates/orchestrator-web-server/web-ui/package.json",
+  "crates/orchestrator-web-server/web-ui/scripts/smoke-e2e.mjs",
+];
+
+const commandCenterRuns: CommandCenterRun[] = [
+  {
+    id: "#1103",
+    trigger: "workflow_dispatch",
+    startedAtUtc: "2026-02-26 02:44 UTC",
+    status: "passed",
+    blocker: null,
+  },
+  {
+    id: "#1098",
+    trigger: "workflow_dispatch",
+    startedAtUtc: "2026-02-25 19:15 UTC",
+    status: "running",
+    blocker: "rollback validation summary pending",
+  },
+  {
+    id: "#1097",
+    trigger: "tag_push",
+    startedAtUtc: "2026-02-25 18:03 UTC",
+    status: "failed",
+    blocker: "T-06 deep-link rejection mismatch",
+  },
+  {
+    id: "#1096",
+    trigger: "tag_push",
+    startedAtUtc: "2026-02-25 17:12 UTC",
+    status: "blocked",
+    blocker: "awaiting smoke rerun artifacts",
+  },
+  {
+    id: "#1095",
+    trigger: "tag_push",
+    startedAtUtc: "2026-02-25 15:41 UTC",
+    status: "passed",
+    blocker: null,
+  },
+];
 
 export const acceptanceTraceability: Record<TraceabilityId, string[]> = {
   "AC-01": [
@@ -240,15 +377,19 @@ export const acceptanceTraceability: Record<TraceabilityId, string[]> = {
   "AC-03": ["Smoke job represented as required gate in CI and release contexts."],
   "AC-04": ["Smoke assertions include route HTML and /api/v1/system/info envelope checks."],
   "AC-05": ["api_only deep-link rejection assertion included as explicit row."],
-  "AC-06": ["Release gate screen models blocking web-ui-gates prerequisite."],
+  "AC-06": [
+    "Release gate topology and command-center screens model blocking web-ui-gates prerequisite.",
+  ],
   "AC-07": ["Build and publish statuses derive to blocked when gate fails."],
   "AC-08": ["Passing path note keeps artifact naming/publish behavior unchanged."],
   "AC-09": [
-    "Checklist component follows Metadata -> Preflight -> CI Gate Evidence -> Decision -> Rollback Readiness -> Post-release Verification order.",
+    "Checklist and command-center decision flows model both no-go and go-ready evidence progression before sign-off.",
   ],
   "AC-10": ["Rollback dispatch requires candidate_ref and rollback_ref values."],
   "AC-11": ["Rollback summary exposes per-ref pass/fail state for audit."],
   "AC-12": ["Smoke failure artifact references are deterministic and bounded retention."],
+  "AC-13": ["Required checks are modeled with exact branch-protection names, including Web UI Gates."],
+  "AC-14": ["Mockups include explicit implementation scope-lock guidance for allowed TASK-018 edit surfaces."],
 };
 
 function statusText(status: GateStatus): string {
@@ -259,8 +400,43 @@ function evidenceStateText(state: EvidenceState): string {
   return state;
 }
 
+function triggerText(trigger: CommandTrigger): string {
+  if (trigger === "workflow_dispatch") {
+    return "workflow dispatch";
+  }
+
+  return "tag push";
+}
+
 function isGateBlocking(status: GateStatus): boolean {
   return status === "failed" || status === "blocked" || status === "cancelled";
+}
+
+function toDecisionDrawerState(
+  runStatus: GateStatus,
+  evidenceStates: EvidenceState[],
+): DecisionDrawerState {
+  if (isGateBlocking(runStatus)) {
+    return "blocked";
+  }
+
+  if (evidenceStates.some((state) => state === "missing")) {
+    return "missing-evidence";
+  }
+
+  return "ready-for-go";
+}
+
+function decisionDrawerGateStatus(state: DecisionDrawerState): GateStatus {
+  if (state === "ready-for-go") {
+    return "passed";
+  }
+
+  if (state === "blocked") {
+    return "failed";
+  }
+
+  return "running";
 }
 
 function toChecklistStatus(model: ChecklistModel): ChecklistStatus {
@@ -288,6 +464,14 @@ function toChecklistStatus(model: ChecklistModel): ChecklistStatus {
 }
 
 function toRollbackOutcome(model: RollbackValidationModel): RollbackOutcome {
+  if (model.dispatchState === "validation-error") {
+    return "validation-error";
+  }
+
+  if (model.dispatchState === "idle") {
+    return "idle";
+  }
+
   if (model.candidateStatus === "passed" && model.rollbackStatus === "passed") {
     return "both-passed";
   }
@@ -303,8 +487,139 @@ function toRollbackOutcome(model: RollbackValidationModel): RollbackOutcome {
   return "submitted";
 }
 
+function toRollbackEvidenceState(status: GateStatus): EvidenceState {
+  if (status === "passed") {
+    return "downloaded";
+  }
+
+  if (status === "queued" || status === "running") {
+    return "linked";
+  }
+
+  return "missing";
+}
+
 function StatusBadge(props: { status: GateStatus }): ReactNode {
   return <span aria-label={`status ${statusText(props.status)}`}>{statusText(props.status)}</span>;
+}
+
+export function ReleaseGateCommandCenterScreen(): ReactNode {
+  const [activeSurface, setActiveSurface] = useState<CommandSurface>("release-topology");
+  const [selectedRunId, setSelectedRunId] = useState<string>("#1097");
+  const selectedRun = useMemo(
+    () => commandCenterRuns.find((run) => run.id === selectedRunId) ?? commandCenterRuns[0],
+    [selectedRunId],
+  );
+
+  if (!selectedRun) {
+    return (
+      <section aria-label="Release gate command center wireframe">
+        <h1>Release Gate Command Center</h1>
+        <p role="alert">No release runs are available for selection.</p>
+      </section>
+    );
+  }
+
+  const matrixEvidenceState: EvidenceState = "linked";
+  const smokeEvidenceState: EvidenceState =
+    selectedRun.status === "failed" || selectedRun.status === "passed" ? "downloaded" : "linked";
+  const rollbackEvidenceState: EvidenceState = toRollbackEvidenceState(selectedRun.status);
+  const decisionState = toDecisionDrawerState(selectedRun.status, [
+    matrixEvidenceState,
+    smokeEvidenceState,
+    rollbackEvidenceState,
+  ]);
+  const completedGates =
+    selectedRun.status === "passed" ? 3 : selectedRun.status === "running" ? 2 : 1;
+
+  return (
+    <section aria-label="Release gate command center wireframe">
+      <h1>Release Gate Command Center</h1>
+      <p>Selected release run: {selectedRun.id}</p>
+      <p>
+        Surface: <strong>{commandSurfaces.find((surface) => surface.id === activeSurface)?.label}</strong>
+      </p>
+
+      <nav aria-label="Command center surfaces">
+        <ul>
+          {commandSurfaces.map((surface) => (
+            <li key={surface.id}>
+              <button
+                type="button"
+                aria-pressed={activeSurface === surface.id}
+                onClick={() => setActiveSurface(surface.id)}
+              >
+                {surface.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <h2>Gate metrics</h2>
+      <ul>
+        <li>
+          required gates complete: {completedGates}/3 [{statusText(selectedRun.status)}]
+        </li>
+        <li>
+          smoke blocker: {selectedRun.blocker ?? "none"}
+        </li>
+        <li>
+          rollback readiness evidence: {evidenceStateText(rollbackEvidenceState)}
+        </li>
+      </ul>
+
+      <h2>Recent release runs</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>run</th>
+            <th>trigger</th>
+            <th>started</th>
+            <th>status</th>
+            <th>blocker</th>
+            <th>select</th>
+          </tr>
+        </thead>
+        <tbody>
+          {commandCenterRuns.map((run) => (
+            <tr key={run.id}>
+              <td>{run.id}</td>
+              <td>{triggerText(run.trigger)}</td>
+              <td>{run.startedAtUtc}</td>
+              <td>
+                <StatusBadge status={run.status} />
+              </td>
+              <td>{run.blocker ?? "none"}</td>
+              <td>
+                <button type="button" onClick={() => setSelectedRunId(run.id)}>
+                  {selectedRun.id === run.id ? "selected" : "select"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>Decision drawer</h2>
+      <p>
+        decision state: <StatusBadge status={decisionDrawerGateStatus(decisionState)} /> ({decisionState})
+      </p>
+      <ul>
+        <li>matrix evidence: {evidenceStateText(matrixEvidenceState)}</li>
+        <li>smoke evidence: {evidenceStateText(smokeEvidenceState)}</li>
+        <li>rollback evidence: {evidenceStateText(rollbackEvidenceState)}</li>
+      </ul>
+
+      {decisionState === "ready-for-go" ? (
+        <p role="status">All evidence is attached. Run can move to go decision.</p>
+      ) : (
+        <p role="alert">
+          Decision remains no-go until smoke and rollback evidence are complete.
+        </p>
+      )}
+    </section>
+  );
 }
 
 export function WebUiCiRunScreen(): ReactNode {
@@ -317,7 +632,23 @@ export function WebUiCiRunScreen(): ReactNode {
         Required checks for deterministic web GUI quality gates before merge and release.
       </p>
       <p>trigger events: {workflowTriggerEvents.join(", ")}</p>
+      <p>trigger paths:</p>
+      <ul>
+        {workflowTriggerPaths.map((path) => (
+          <li key={path}>
+            <code>{path}</code>
+          </li>
+        ))}
+      </ul>
       <p>workflow lifecycle states: {gateLifecycleStates.map(statusText).join(", ")}</p>
+      <p>required check names:</p>
+      <ul>
+        {requiredCheckNames.map((name) => (
+          <li key={name}>
+            <code>{name}</code>
+          </li>
+        ))}
+      </ul>
 
       <table>
         <thead>
@@ -382,7 +713,8 @@ export function ReleaseGateTopologyScreen(): ReactNode {
       <h1>Release Gate Topology</h1>
       <p>ref: {releaseSnapshot.ref}</p>
       <p>
-        web-ui-gates: <StatusBadge status={releaseSnapshot.gateJob.status} /> (
+        {releaseSnapshot.gateJob.name} (<code>{releaseSnapshot.gateJob.id}</code> job key):{" "}
+        <StatusBadge status={releaseSnapshot.gateJob.status} /> (
         {releaseSnapshot.gateJob.details})
       </p>
       <p>
@@ -401,6 +733,16 @@ export function ReleaseGateTopologyScreen(): ReactNode {
           Gate passed. Existing artifact naming and publish behavior remains unchanged.
         </p>
       )}
+
+      <h2>TASK-018 scope lock</h2>
+      <p>Implementation edits are restricted to these files:</p>
+      <ul>
+        {scopeLockedImplementationFiles.map((path) => (
+          <li key={path}>
+            <code>{path}</code>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -602,6 +944,10 @@ export function RollbackValidationScreen(): ReactNode {
       <p>
         Input fields: <code>candidate_ref</code> and <code>rollback_ref</code>.
       </p>
+      <p>
+        dispatch states: <code>idle</code>, <code>validation-error</code>, <code>submitted</code>.
+        current: <strong>{model.dispatchState}</strong>
+      </p>
       <p>Run compares refs side-by-side and does not mutate tags/releases.</p>
 
       <table>
@@ -632,6 +978,123 @@ export function RollbackValidationScreen(): ReactNode {
 
       <pre>{deterministicSummary.join("\n")}</pre>
       <p role="status">overall outcome: {outcome}</p>
+    </section>
+  );
+}
+
+export function ReleaseGoDecisionScreen(): ReactNode {
+  const [operator, setOperator] = useState<string>("sam.i");
+  const [notes, setNotes] = useState<string>(
+    "All web-ui gates passed on run #1103 after fixing T-06 assertion expectation.",
+  );
+  const [confirmations, setConfirmations] = useState<GoDecisionConfirmations>({
+    matrixAndSmokeMatched: true,
+    rollbackValidated: true,
+    postReleasePlanPrepared: true,
+  });
+
+  const evidenceReady = goDecisionEvidence.every((item) => item.status === "passed");
+  const confirmationsComplete =
+    confirmations.matrixAndSmokeMatched &&
+    confirmations.rollbackValidated &&
+    confirmations.postReleasePlanPrepared;
+  const canSignOff =
+    evidenceReady && confirmationsComplete && operator.trim().length > 0 && notes.trim().length > 0;
+
+  return (
+    <section aria-label="Release go decision wireframe">
+      <h1>Release Decision (Go Ready)</h1>
+      <p>
+        selected run: {goReadyRun.id} ({triggerText(goReadyRun.trigger)})
+      </p>
+      <p>started: {goReadyRun.startedAtUtc}</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>lane</th>
+            <th>run</th>
+            <th>status</th>
+            <th>operator state</th>
+            <th>details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {goDecisionEvidence.map((item) => (
+            <tr key={item.lane}>
+              <td>{item.lane}</td>
+              <td>{item.runRef}</td>
+              <td>
+                <StatusBadge status={item.status} />
+              </td>
+              <td>{evidenceStateText(item.operatorState)}</td>
+              <td>{item.details}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <form>
+        <fieldset>
+          <legend>Operator Sign-off</legend>
+          <label>
+            Operator
+            <input value={operator} onChange={(event) => setOperator(event.currentTarget.value)} />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmations.matrixAndSmokeMatched}
+              onChange={(event) =>
+                setConfirmations((current) => ({
+                  ...current,
+                  matrixAndSmokeMatched: event.currentTarget.checked,
+                }))
+              }
+            />
+            Matrix + smoke runs mapped to current release commit SHA.
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmations.rollbackValidated}
+              onChange={(event) =>
+                setConfirmations((current) => ({
+                  ...current,
+                  rollbackValidated: event.currentTarget.checked,
+                }))
+              }
+            />
+            Rollback comparison confirms candidate and rollback refs are healthy.
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmations.postReleasePlanPrepared}
+              onChange={(event) =>
+                setConfirmations((current) => ({
+                  ...current,
+                  postReleasePlanPrepared: event.currentTarget.checked,
+                }))
+              }
+            />
+            Post-release smoke rerun plan prepared for tagged artifact.
+          </label>
+          <label>
+            Go notes
+            <textarea value={notes} rows={3} onChange={(event) => setNotes(event.currentTarget.value)} />
+          </label>
+          <button type="button" disabled={!canSignOff}>
+            Record Go Sign-off
+          </button>
+        </fieldset>
+      </form>
+
+      {canSignOff ? (
+        <p role="status">All release gates and confirmations are complete. Go sign-off can be recorded.</p>
+      ) : (
+        <p role="alert">Sign-off is blocked until evidence and required confirmations are complete.</p>
+      )}
     </section>
   );
 }

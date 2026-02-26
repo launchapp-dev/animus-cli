@@ -9,6 +9,8 @@ on:
       - ".github/workflows/release-rollback-validation.yml"
       - ".github/release-checklists/web-gui-release.md"
   push:
+    tags-ignore:
+      - "*"
     paths:
       - "crates/orchestrator-web-server/**"
       - ".github/workflows/web-ui-ci.yml"
@@ -27,6 +29,7 @@ jobs:
   web-ui-matrix:
     name: web-ui-matrix (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +64,7 @@ jobs:
     name: web-ui-smoke-e2e
     runs-on: ubuntu-latest
     needs: web-ui-matrix
-    if: always()
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

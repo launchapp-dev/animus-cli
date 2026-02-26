@@ -19,14 +19,15 @@ jobs:
   candidate_smoke:
     name: candidate-smoke
     runs-on: ubuntu-latest
-    outputs:
-      outcome: ${{ steps.smoke.outcome }}
+    timeout-minutes: 25
 
     steps:
       - name: Checkout candidate ref
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.candidate_ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -61,14 +62,15 @@ jobs:
   rollback_smoke:
     name: rollback-smoke
     runs-on: ubuntu-latest
-    outputs:
-      outcome: ${{ steps.smoke.outcome }}
+    timeout-minutes: 25
 
     steps:
       - name: Checkout rollback ref
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.rollback_ref }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -103,6 +105,7 @@ jobs:
   summary:
     name: rollback-validation-summary
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs:
       - candidate_smoke
       - rollback_smoke
@@ -116,9 +119,9 @@ jobs:
             echo "## Release Rollback Validation"
             echo ""
             echo "- candidate_ref: \`${{ inputs.candidate_ref }}\`"
-            echo "- candidate_smoke: \`${{ needs.candidate_smoke.outputs.outcome }}\`"
+            echo "- candidate_smoke: \`${{ needs.candidate_smoke.result }}\`"
             echo "- rollback_ref: \`${{ inputs.rollback_ref }}\`"
-            echo "- rollback_smoke: \`${{ needs.rollback_smoke.outputs.outcome }}\`"
+            echo "- rollback_smoke: \`${{ needs.rollback_smoke.result }}\`"
             echo "- mutation: \`none\`"
             echo "- publish: \`disabled\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -126,7 +129,7 @@ jobs:
       - name: Enforce pass criteria
         shell: bash
         run: |
-          if [[ "${{ needs.candidate_smoke.outputs.outcome }}" != "success" || "${{ needs.rollback_smoke.outputs.outcome }}" != "success" ]]; then
+          if [[ "${{ needs.candidate_smoke.result }}" != "success" || "${{ needs.rollback_smoke.result }}" != "success" ]]; then
             echo "candidate_ref and rollback_ref smoke validations must both pass." >&2
             exit 1
           fi
