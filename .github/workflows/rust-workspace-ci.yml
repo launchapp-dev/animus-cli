@@ -1,0 +1,54 @@
+name: Rust Workspace CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-workspace-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-check:
+    name: cargo-check (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - orchestrator-cli
+          - orchestrator-core
+          - agent-runner
+          - llm-cli-wrapper
+          - llm-mcp-server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check package
+        run: cargo check --locked -p ${{ matrix.package }}
+
+  smoke-help:
+    name: smoke-help
+    runs-on: ubuntu-latest
+    needs: cargo-check
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Smoke test ao help
+        run: cargo run --locked -p orchestrator-cli -- --help
+
+      - name: Smoke test llm-cli-wrapper help
+        run: cargo run --locked -p llm-cli-wrapper -- --help
