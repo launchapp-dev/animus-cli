@@ -40,8 +40,8 @@ impl IpcServer {
 
         let runner_clone = Arc::clone(&runner);
         tokio::spawn(async move {
-            while let Some(run_id) = cleanup_rx.recv().await {
-                runner_clone.lock().await.cleanup_agent(&run_id);
+            while let Some(message) = cleanup_rx.recv().await {
+                runner_clone.lock().await.cleanup_agent(message);
             }
         });
 

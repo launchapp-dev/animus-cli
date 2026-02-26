@@ -8,9 +8,9 @@ mod supervisor;
 
 use event_persistence::RunEventPersistence;
 use protocol::{
-    AgentRunEvent, AgentRunRequest, AgentStatus, AgentStatusRequest, AgentStatusResponse,
-    ModelStatusRequest, ModelStatusResponse, RunId, RunnerStatusResponse, Timestamp,
-    PROTOCOL_VERSION,
+    AgentRunEvent, AgentRunRequest, AgentStatus, AgentStatusErrorCode, AgentStatusErrorResponse,
+    AgentStatusQueryResponse, AgentStatusRequest, AgentStatusResponse, ModelStatusRequest,
+    ModelStatusResponse, RunId, RunnerStatusResponse, Timestamp, PROTOCOL_VERSION,
 };
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
@@ -29,14 +29,20 @@ struct FinishedAgent {
     status: AgentStatus,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CleanupMessage {
+    pub run_id: RunId,
+    pub terminal_status: AgentStatus,
+}
+
 pub struct Runner {
     running_agents: HashMap<RunId, RunningAgent>,
     finished_agents: HashMap<RunId, FinishedAgent>,
-    cleanup_tx: mpsc::Sender<RunId>,
+    cleanup_tx: mpsc::Sender<CleanupMessage>,
 }
 
 impl Runner {
-    pub fn new(cleanup_tx: mpsc::Sender<RunId>) -> Self {
+    pub fn new(cleanup_tx: mpsc::Sender<CleanupMessage>) -> Self {
         Self {
             running_agents: HashMap::new(),
             finished_agents: HashMap::new(),
@@ -102,21 +108,32 @@ impl Runner {
         let supervisor = Supervisor::new();
         let cleanup_tx = self.cleanup_tx.clone();
         tokio::spawn(async move {
-            supervisor.spawn_agent(req, run_event_tx, cancel_rx).await;
-            if cleanup_tx.send(run_id.clone()).await.is_err() {
+            let terminal_status = supervisor.spawn_agent(req, run_event_tx, cancel_rx).await;
+            if cleanup_tx
+                .send(CleanupMessage {
+                    run_id: run_id.clone(),
+                    terminal_status,
+                })
+                .await
+                .is_err()
+            {
                 warn!(run_id = %run_id.0.as_str(), "Failed to enqueue cleanup for run");
             }
         });
     }
 
-    pub fn cleanup_agent(&mut self, run_id: &RunId) {
-        if let Some(entry) = self.running_agents.remove(run_id) {
+    pub fn cleanup_agent(&mut self, message: CleanupMessage) {
+        let CleanupMessage {
+            run_id,
+            terminal_status,
+        } = message;
+        if let Some(entry) = self.running_agents.remove(&run_id) {
             self.finished_agents.insert(
                 run_id.clone(),
                 FinishedAgent {
                     started_at: entry.started_at,
                     completed_at: Timestamp::now(),
-                    status: AgentStatus::Completed,
+                    status: terminal_status,
                 },
             );
             info!(
@@ -149,7 +166,7 @@ impl Runner {
         }
     }
 
-    pub fn handle_agent_status(&self, req: AgentStatusRequest) -> AgentStatusResponse {
+    pub fn handle_agent_status(&self, req: AgentStatusRequest) -> AgentStatusQueryResponse {
         if let Some(entry) = self.running_agents.get(&req.run_id) {
             let now = Timestamp::now();
             let elapsed_ms = now
@@ -157,13 +174,13 @@ impl Runner {
                 .signed_duration_since(entry.started_at.0)
                 .num_milliseconds()
                 .max(0) as u64;
-            return AgentStatusResponse {
+            return AgentStatusQueryResponse::Status(AgentStatusResponse {
                 run_id: req.run_id,
                 status: AgentStatus::Running,
                 elapsed_ms,
                 started_at: entry.started_at.clone(),
                 completed_at: None,
-            };
+            });
         }
 
         if let Some(entry) = self.finished_agents.get(&req.run_id) {
@@ -173,23 +190,21 @@ impl Runner {
                 .signed_duration_since(entry.started_at.0)
                 .num_milliseconds()
                 .max(0) as u64;
-            return AgentStatusResponse {
+            return AgentStatusQueryResponse::Status(AgentStatusResponse {
                 run_id: req.run_id,
                 status: entry.status,
                 elapsed_ms,
                 started_at: entry.started_at.clone(),
                 completed_at: Some(entry.completed_at.clone()),
-            };
+            });
         }
 
-        let now = Timestamp::now();
-        AgentStatusResponse {
-            run_id: req.run_id,
-            status: AgentStatus::Failed,
-            elapsed_ms: 0,
-            started_at: now.clone(),
-            completed_at: Some(now),
-        }
+        let run_id = req.run_id;
+        AgentStatusQueryResponse::Error(AgentStatusErrorResponse {
+            message: format!("run not found: {}", run_id.0),
+            run_id,
+            code: AgentStatusErrorCode::NotFound,
+        })
     }
 
     pub fn stop_agent(&mut self, run_id: &RunId) -> bool {
@@ -225,4 +240,80 @@ fn runner_build_id() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_runner() -> Runner {
+        let (cleanup_tx, _cleanup_rx) = mpsc::channel(1);
+        Runner::new(cleanup_tx)
+    }
+
+    fn insert_running_agent(runner: &mut Runner, run_id: &RunId) {
+        let (cancel_tx, _cancel_rx) = oneshot::channel();
+        runner.running_agents.insert(
+            run_id.clone(),
+            RunningAgent {
+                cancel_tx,
+                started_at: Timestamp::now(),
+            },
+        );
+    }
+
+    #[test]
+    fn cleanup_agent_persists_terminal_status_from_cleanup_message() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-cleanup-failed".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        runner.cleanup_agent(CleanupMessage {
+            run_id: run_id.clone(),
+            terminal_status: AgentStatus::Failed,
+        });
+
+        let finished = runner
+            .finished_agents
+            .get(&run_id)
+            .expect("run should be persisted in finished map");
+        assert_eq!(finished.status, AgentStatus::Failed);
+    }
+
+    #[test]
+    fn cleanup_agent_does_not_override_terminated_status() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-terminated".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        assert!(runner.stop_agent(&run_id));
+        runner.cleanup_agent(CleanupMessage {
+            run_id: run_id.clone(),
+            terminal_status: AgentStatus::Completed,
+        });
+
+        let finished = runner
+            .finished_agents
+            .get(&run_id)
+            .expect("terminated run should be persisted in finished map");
+        assert_eq!(finished.status, AgentStatus::Terminated);
+    }
+
+    #[test]
+    fn handle_agent_status_returns_not_found_for_unknown_run() {
+        let runner = make_runner();
+        let run_id = RunId("run-missing".to_string());
+        let response = runner.handle_agent_status(AgentStatusRequest {
+            run_id: run_id.clone(),
+        });
+
+        match response {
+            AgentStatusQueryResponse::Error(error) => {
+                assert_eq!(error.run_id, run_id);
+                assert_eq!(error.code, AgentStatusErrorCode::NotFound);
+                assert_eq!(error.message, "run not found: run-missing");
+            }
+            AgentStatusQueryResponse::Status(_) => panic!("expected not_found error"),
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use protocol::{AgentRunEvent, AgentRunRequest, Timestamp};
+use protocol::{AgentRunEvent, AgentRunRequest, AgentStatus, Timestamp};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -18,7 +18,7 @@ impl Supervisor {
         req: AgentRunRequest,
         event_tx: mpsc::Sender<AgentRunEvent>,
         cancel_rx: tokio::sync::oneshot::Receiver<()>,
-    ) {
+    ) -> AgentStatus {
         let run_id = req.run_id.clone();
         let start_time = Instant::now();
         let request_timeout_secs = req.timeout_secs;
@@ -70,7 +70,7 @@ impl Supervisor {
                     error: format!("Workspace validation failed: {}", e),
                 };
                 let _ = event_tx.send(error_evt).await;
-                return;
+                return AgentStatus::Failed;
             }
             info!(
                 run_id = %run_id.0.as_str(),
@@ -161,6 +161,7 @@ impl Supervisor {
                     duration_ms,
                     "Agent completed"
                 );
+                status_from_exit_code(exit_code)
             }
             Err(e) => {
                 let error_evt = AgentRunEvent::Error {
@@ -169,7 +170,31 @@ impl Supervisor {
                 };
                 let _ = event_tx.send(error_evt).await;
                 error!(run_id = %run_id.0.as_str(), error = %e, "Agent failed");
+                AgentStatus::Failed
             }
         }
+    }
+}
+
+fn status_from_exit_code(exit_code: i32) -> AgentStatus {
+    if exit_code == 0 {
+        AgentStatus::Completed
+    } else {
+        AgentStatus::Failed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_from_exit_code_maps_success_to_completed() {
+        assert_eq!(status_from_exit_code(0), AgentStatus::Completed);
+    }
+
+    #[test]
+    fn status_from_exit_code_maps_non_zero_to_failed() {
+        assert_eq!(status_from_exit_code(1), AgentStatus::Failed);
     }
 }

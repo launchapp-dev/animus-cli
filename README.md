@@ -186,6 +186,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - Runner lifecycle regression planning artifacts for TASK-003 live in `crates/orchestrator-core/docs/`:
   - `task-003-runner-lifecycle-regression-requirements.md`
   - `task-003-runner-lifecycle-regression-implementation-notes.md`
+- Runner status propagation planning artifacts for TASK-030 live in `crates/orchestrator-cli/docs/`:
+  - `task-030-runner-status-requirements.md`
+  - `task-030-runner-status-implementation-notes.md`
 - Daemon notification connector planning artifacts for TASK-026 live in `crates/orchestrator-cli/docs/`:
   - `task-026-event-notification-connector-framework-requirements.md`
   - `task-026-event-notification-connector-framework-implementation-notes.md`
