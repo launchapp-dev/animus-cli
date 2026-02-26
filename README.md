@@ -180,6 +180,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - CLI JSON envelope contract planning artifacts for TASK-008 live in `crates/orchestrator-cli/docs/`:
   - `task-008-json-envelope-contract-requirements.md`
   - `task-008-json-envelope-contract-implementation-notes.md`
+- Runner lifecycle regression planning artifacts for TASK-003 live in `crates/orchestrator-core/docs/`:
+  - `task-003-runner-lifecycle-regression-requirements.md`
+  - `task-003-runner-lifecycle-regression-implementation-notes.md`
 - Daemon notification connector planning artifacts for TASK-026 live in `crates/orchestrator-cli/docs/`:
   - `task-026-event-notification-connector-framework-requirements.md`
   - `task-026-event-notification-connector-framework-implementation-notes.md`
