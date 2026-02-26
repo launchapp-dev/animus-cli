@@ -856,6 +856,42 @@ mod tests {
     }
 
     #[test]
+    fn inject_cli_launch_overrides_respects_claude_bypass_disable_toggle() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
+        let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        inject_cli_launch_overrides(&mut contract, "claude", None);
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--permission-mode"));
+        assert!(!args.contains(&"bypassPermissions"));
+    }
+
+    #[test]
+    fn inject_cli_launch_overrides_treats_empty_claude_bypass_value_as_disabled() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
+        let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        inject_cli_launch_overrides(&mut contract, "claude", None);
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--permission-mode"));
+        assert!(!args.contains(&"bypassPermissions"));
+    }
+
+    #[test]
     fn inject_cli_launch_overrides_applies_claude_extra_args_from_env() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let _extra_args = EnvVarGuard::set(
