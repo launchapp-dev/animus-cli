@@ -1,106 +1,79 @@
 # TASK-022 Implementation Notes: Guided Onboarding and Config Wizard
 
 ## Purpose
-Translate TASK-022 requirements into an implementation plan that preserves AO's
-repository safety and output contracts while introducing onboarding and
-doctor-based remediation.
+Translate TASK-022 requirements into an implementation-phase checklist that is
+aligned with the current repository state and keeps changes repository-safe.
+
+## Current Status (Already Landed)
+- `ao setup` command and args are wired (`SetupArgs`, `main.rs`, `ops_setup.rs`).
+- `ao doctor --fix` is wired with deterministic action reporting (`DoctorArgs`,
+  `ops_doctor.rs`).
+- Doctor checks/remediation metadata exist in `orchestrator-core` (`doctor.rs`).
+- Daemon config read/write/update uses typed APIs with atomic writes
+  (`daemon_config.rs`), and runtime daemon/scheduler paths consume those APIs.
+- End-to-end coverage exists in `crates/orchestrator-cli/tests/setup_doctor_e2e.rs`.
 
 ## Non-Negotiable Constraints
-- Keep changes Rust-only in workspace crates.
-- Keep `.ao` mutations behind AO APIs (no ad-hoc JSON edits in handlers).
-- Preserve `ao.cli.v1` envelope and exit-code classification behavior.
-- Keep unrelated command behavior unchanged.
+- Keep changes Rust-only under `crates/`.
+- Keep `.ao` mutations behind AO APIs (no ad-hoc manual JSON edits).
+- Preserve `ao.cli.v1` envelope + exit-code behavior.
+- Keep command behavior outside setup/doctor/daemon-config alignment unchanged.
 
-## Proposed Change Surface
+## Implementation Delta for Next Phase
 
-### CLI command and dispatch wiring
-- `crates/orchestrator-cli/src/cli_types.rs`
-  - add onboarding command args and non-interactive flags.
-  - extend `Doctor` command args to support remediation mode.
-- `crates/orchestrator-cli/src/main.rs`
-  - route onboarding and doctor commands through dedicated operation handlers.
-- `crates/orchestrator-cli/src/services/operations.rs`
-  - register a new onboarding operations module (and optionally split doctor out
-    of planning module).
+### 1. Contract hardening (no command-surface churn)
+- Keep `setup` and `doctor` command names/flags stable.
+- Ensure setup/doctor payload keys remain deterministic and backwards-safe for
+  automation callers.
+- If output shape changes are required, gate them behind explicit versioned
+  fields instead of breaking existing keys.
 
-### Onboarding/doctor operations layer
-- `crates/orchestrator-cli/src/services/operations/ops_onboarding.rs` (new)
-  - implement setup plan/apply flow.
-  - implement non-interactive validation contract.
-  - normalize onboarding output payloads for JSON/non-JSON modes.
-- `crates/orchestrator-cli/src/services/operations/ops_doctor.rs` (new or
-  extracted)
-  - keep `ao doctor` read-only mode.
-  - implement remediation mode with deterministic result reporting.
-- `crates/orchestrator-cli/src/services/operations/ops_planning/mod.rs`
-  - remove migrated doctor handling to avoid cross-domain coupling.
+### 2. Diagnostics/remediation quality
+- Keep doctor checks stable by check ID and remediation metadata.
+- Extend checks/remediation only for safe local fixes; do not add external
+  installer behavior.
+- Ensure setup blocked-item derivation remains tied to actionable doctor checks.
 
-### Core diagnostics and config APIs
-- `crates/orchestrator-core/src/doctor.rs`
-  - extend check catalog and remediation metadata.
-  - add execution path for safe, local remediation actions.
-- `crates/orchestrator-core/src/lib.rs`
-  - export onboarding/doctor/config helper APIs used by CLI handlers.
-- `crates/orchestrator-core/src/config/` or `services/` additions (new files)
-  - typed load/update/save helpers for onboarding-owned config surfaces.
-  - guarantee atomic writes and path safety.
+### 3. Config write boundary enforcement
+- Maintain `orchestrator-core` as the only writer for daemon config paths.
+- Avoid introducing direct filesystem writes to `.ao/pm-config.json` in CLI
+  handlers.
+- Preserve atomic write semantics in all new config mutation branches.
 
-### Daemon config alignment
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon.rs`
-  - replace direct `.ao/pm-config.json` `std::fs` writes with typed config API.
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs`
-  - replace raw JSON parse of `pm-config` with shared typed loader.
+### 4. Test coverage maintenance
+- Keep `setup_doctor_e2e` as the primary acceptance harness for:
+  - guided/non-interactive guardrails,
+  - plan/apply payload contract,
+  - idempotent apply behavior,
+  - doctor diagnostics and fix action reporting.
+- Add focused tests only when introducing new check IDs, remediation actions, or
+  payload fields.
 
 ## Implementation Sequence
-1. Add CLI types and command wiring for onboarding + doctor remediation.
-2. Add core typed config APIs for onboarding-owned config domains.
-3. Migrate daemon config write/read paths to typed APIs.
-4. Implement onboarding plan/apply logic with non-interactive validation.
-5. Expand doctor checks and remediation execution.
-6. Normalize output payloads and failure messages.
-7. Add tests for acceptance criteria and regressions.
-8. Run `cargo check` + targeted CLI tests.
+1. Re-validate scope against `task-022-...-requirements.md` acceptance criteria.
+2. Apply minimal code changes within existing setup/doctor/core config files.
+3. Update/add tests alongside behavior changes.
+4. Run targeted checks for touched crates/tests.
+5. Confirm no unrelated command behavior drift.
 
-## Onboarding Payload Guidance
-Keep payload keys stable for deterministic automation:
-- `mode`: `guided|non_interactive`
-- `dry_run`: boolean
-- `doctor`: check summary
-- `planned_changes`: ordered list of config actions
-- `applied_changes`: ordered list for apply mode
-- `unchanged`: ordered list of no-op domains
-- `blocked`: actionable blockers requiring operator intervention
-- `next_step`: concrete command guidance
-
-## Doctor Remediation Payload Guidance
-Recommended remediation result shape:
-- `check_id`
-- `status_before`
-- `status_after`
-- `action`: `applied|skipped|failed|manual_required`
-- `details`
-- `error` (optional)
-
-## Testing Plan
-- Add/extend tests in:
-  - `crates/orchestrator-cli/tests/cli_smoke.rs`
-  - `crates/orchestrator-cli/tests/cli_e2e.rs`
-  - targeted unit tests under `crates/orchestrator-core/src/*` for doctor/config helpers
-- Minimum test matrix:
-  - onboarding guided/non-interactive mode routing,
-  - non-interactive missing-input validation failure,
-  - deterministic plan/apply payload keys,
-  - doctor remediation execution/reporting,
-  - daemon config persistence compatibility,
-  - idempotent re-run semantics.
+## File Boundaries
+- CLI/setup:
+  - `crates/orchestrator-cli/src/cli_types.rs`
+  - `crates/orchestrator-cli/src/main.rs`
+  - `crates/orchestrator-cli/src/services/operations/ops_setup.rs`
+  - `crates/orchestrator-cli/src/services/operations/ops_doctor.rs`
+- Core:
+  - `crates/orchestrator-core/src/doctor.rs`
+  - `crates/orchestrator-core/src/daemon_config.rs`
+  - `crates/orchestrator-core/src/lib.rs` (exports only as needed)
+- Tests:
+  - `crates/orchestrator-cli/tests/setup_doctor_e2e.rs`
+  - related module tests in setup/doctor/core files
 
 ## Risks and Mitigations
-- Risk: onboarding introduces command-surface ambiguity.
-  - Mitigation: explicit mode flags and stable output schema.
-- Risk: remediation mutates configs unexpectedly.
-  - Mitigation: plan-first model + explicit apply + per-action reporting.
-- Risk: duplicated config parsers drift over time.
-  - Mitigation: single typed API for read/write paths used by CLI + scheduler.
-- Risk: regressions in existing daemon automation behavior.
-  - Mitigation: regression tests around current `pm-config` behavior and defaults.
-
+- Risk: payload drift breaks automation callers.
+  - Mitigation: preserve existing keys and add assertions in e2e tests.
+- Risk: remediation expands into unsafe side effects.
+  - Mitigation: restrict fixes to local, deterministic file/bootstrap actions.
+- Risk: daemon config behavior regresses under idempotent reruns.
+  - Mitigation: keep idempotence assertions and atomic-write tests intact.

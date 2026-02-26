@@ -350,7 +350,7 @@ fn binary_in_path(binary: &str) -> bool {
         #[cfg(windows)]
         {
             let direct = dir.join(binary);
-            if direct.exists() {
+            if path_is_executable(&direct) {
                 return true;
             }
             let lower_binary = binary.to_ascii_lowercase();
@@ -359,7 +359,7 @@ fn binary_in_path(binary: &str) -> bool {
                     continue;
                 }
                 let candidate = dir.join(format!("{binary}{ext}"));
-                if candidate.exists() {
+                if path_is_executable(&candidate) {
                     return true;
                 }
             }
@@ -367,14 +367,29 @@ fn binary_in_path(binary: &str) -> bool {
         }
         #[cfg(not(windows))]
         {
-            dir.join(binary).exists()
+            path_is_executable(&dir.join(binary))
         }
     })
+}
+
+#[cfg(unix)]
+fn path_is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn path_is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn run_for_project_reports_warns_for_missing_bootstrap_files() {
@@ -439,5 +454,35 @@ mod tests {
                 "check `{id}` should be ok"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_is_executable_requires_execute_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let file_path = temp.path().join("candidate");
+        fs::write(&file_path, "echo test").expect("file should be created");
+
+        let mut perms = fs::metadata(&file_path)
+            .expect("file metadata should be read")
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&file_path, perms).expect("permissions should be updated");
+        assert!(
+            !path_is_executable(&file_path),
+            "file without execute bit should not be executable"
+        );
+
+        let mut perms = fs::metadata(&file_path)
+            .expect("file metadata should be read")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&file_path, perms).expect("permissions should be updated");
+        assert!(
+            path_is_executable(&file_path),
+            "file with execute bit should be executable"
+        );
     }
 }

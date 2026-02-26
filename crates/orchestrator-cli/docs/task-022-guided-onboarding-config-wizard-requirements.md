@@ -2,159 +2,122 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `d8efdd60-29a4-4c22-b04b-ffbc09c47f09`
+- Workflow ID: `2525eccd-7658-4192-a0a0-e843a04c30e1`
 - Task: `TASK-022`
+- Project root: `/Users/samishukri/ao-cli`
 
 ## Objective
-Deliver a production-ready AO onboarding flow that supports:
-- guided setup for first-run operators,
-- deterministic non-interactive setup for CI/automation,
-- doctor-driven diagnostics and remediation,
-- API-only configuration writes (no direct ad-hoc file mutation from command handlers).
+Deliver a production-ready AO onboarding flow that provides:
+- guided setup for first-run operators (`ao setup` on interactive terminals),
+- deterministic non-interactive setup for automation (`ao setup --non-interactive ...`),
+- doctor-driven diagnostics and explicit safe remediation (`ao doctor`, `ao doctor --fix`),
+- API-only writes for onboarding/daemon config surfaces.
 
-## Existing Baseline Audit
+## Current Repository Snapshot
 
-| Surface | Current path | Current behavior | Gap for TASK-022 |
+| Surface | Current path(s) | Current behavior | Status for TASK-022 |
 | --- | --- | --- | --- |
-| Doctor command wiring | `crates/orchestrator-cli/src/main.rs`, `crates/orchestrator-cli/src/services/operations/ops_planning/mod.rs` | `ao doctor` returns a basic report plus daemon health | no remediation contract, no fix execution path |
-| Core doctor checks | `crates/orchestrator-core/src/doctor.rs` | only `cwd_resolvable` and `project_root_env` checks | insufficient setup diagnostics for onboarding |
-| Daemon config writes | `crates/orchestrator-cli/src/services/runtime/runtime_daemon.rs` | direct `std::fs` write to `.ao/pm-config.json` | violates API-only config-write goal |
-| Daemon config reads | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs` | direct parse of `.ao/pm-config.json` | duplicated parsing logic, no typed config boundary |
-| Config API precedent | `crates/orchestrator-cli/src/services/operations/ops_workflow.rs` + `orchestrator_core::write_*` APIs | workflow/runtime config writes go through core APIs | onboarding/daemon config should align with this pattern |
+| Setup command surface | `crates/orchestrator-cli/src/cli_types.rs`, `crates/orchestrator-cli/src/main.rs`, `crates/orchestrator-cli/src/services/operations/ops_setup.rs` | `ao setup` supports guided/non-interactive, `--plan`, `--doctor-fix` | implemented |
+| Doctor command surface | `crates/orchestrator-cli/src/cli_types.rs`, `crates/orchestrator-cli/src/services/operations/ops_doctor.rs`, `crates/orchestrator-core/src/doctor.rs` | `ao doctor` diagnostics + `--fix` remediation action reporting | implemented |
+| Daemon config API boundary | `crates/orchestrator-core/src/daemon_config.rs`, `crates/orchestrator-cli/src/services/runtime/runtime_daemon.rs`, `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs` | typed load/update/write helpers used by setup/daemon/scheduler paths | implemented |
+| Atomic config persistence | `crates/orchestrator-core/src/daemon_config.rs` | temp-file write + atomic rename for `.ao/pm-config.json` | implemented |
+| Acceptance-oriented tests | `crates/orchestrator-cli/tests/setup_doctor_e2e.rs`, module tests in `ops_setup.rs`, `ops_doctor.rs`, `doctor.rs`, `daemon_config.rs` | guardrails, plan/apply contract, idempotence, doctor payload/action checks | implemented |
 
-## Scope
-In scope for implementation after this phase:
-- Add a dedicated onboarding command flow (recommended surface: `ao setup`) with:
-  - guided mode for interactive terminals,
-  - non-interactive mode for automation.
-- Define and implement doctor remediation semantics:
-  - read-only diagnostics mode,
-  - explicit remediation apply mode for safe, deterministic fixes.
-- Standardize config writes touched by onboarding through typed API boundaries in `orchestrator-core`.
-- Remove direct config file writes from CLI command handlers in onboarding-related paths.
-- Add acceptance tests for interactive guardrails, non-interactive determinism, remediation behavior, and config persistence semantics.
+## Scope Locked for This Task
+In scope:
+- Maintain `ao setup` as the onboarding command (no command rename in this task).
+- Preserve and harden two onboarding modes:
+  - guided (`ao setup` on TTY),
+  - non-interactive (`--non-interactive` + explicit `--auto-*` flags).
+- Preserve and harden setup plan/apply contract:
+  - read-only plan stage,
+  - explicit apply stage with deterministic changed/unchanged domain metadata.
+- Preserve and harden doctor diagnostics/remediation contract:
+  - stable check IDs/status/details/remediation metadata,
+  - explicit `--fix` execution mode with deterministic action results.
+- Keep onboarding/daemon config writes routed through `orchestrator-core` helpers.
 
-Out of scope for TASK-022:
-- Web UI onboarding flows.
-- Desktop wrapper integrations.
-- Manual editing of `.ao/*.json` state/config files.
-- Auto-installing external CLIs/package managers as part of remediation.
+Out of scope:
+- Web UI onboarding or desktop wrapper onboarding.
+- Auto-installing third-party CLIs/package managers.
+- Manual edits to `.ao/*.json` project state/config files.
+- Command-surface redesign beyond `setup` and `doctor`.
 
 ## Constraints
-- Preserve `ao.cli.v1` output envelope behavior for `--json`.
-- Preserve current exit code semantics (`2/3/4/5/1`) and classify validation failures as invalid input.
-- Preserve project root resolution precedence and repository safety rules.
-- Keep remediation deterministic and explicit; no hidden side effects.
-- Keep writes atomic and project-root scoped.
-- Do not expose secrets (API keys/tokens) in output payloads or logs.
+- Preserve `ao.cli.v1` envelope behavior for `--json`.
+- Preserve existing exit-code mapping (`2/3/4/5/1`); validation failures stay `invalid_input` (`2`).
+- Keep repository safety: project-root scoped writes only, no hidden side effects.
+- Keep remediation deterministic and explicit (`--fix` is opt-in).
+- Keep config writes atomic.
+- Do not expose secrets in setup/doctor output.
 
-## Functional Requirements
+## Functional Contract
 
-### FR-01: Onboarding Command Modes
-- Add onboarding entrypoint with two modes:
-  - guided interactive mode (TTY-driven),
-  - non-interactive mode (`--non-interactive`) with explicit inputs.
-- Non-interactive mode must never prompt.
-- Guided mode must have deterministic step ordering and explicit completion summary.
+### FR-01: Mode Selection and Prompting
+- Guided mode is selected when `--non-interactive` is absent.
+- Guided mode must fail fast when stdin/stdout are not interactive terminals.
+- Non-interactive mode must not prompt and must require explicit `--auto-merge`, `--auto-pr`, and `--auto-commit-before-merge`.
 
-### FR-02: Setup Plan + Apply Contract
-- Onboarding must support a read-only plan stage and an apply stage.
-- Plan output must include:
-  - detected environment/config status,
-  - required changes,
-  - blocked items requiring operator action.
-- Apply stage must return deterministic mutation metadata: which config domains changed and which were unchanged.
+### FR-02: Setup Plan/Apply Payload Contract
+- Plan stage (`--plan`) returns:
+  - `stage = "plan"`,
+  - `mode`,
+  - environment summary,
+  - required daemon-config changes,
+  - blocked items from doctor findings.
+- Apply stage returns:
+  - `stage = "apply"`,
+  - deterministic changed/unchanged domain metadata,
+  - doctor before/after summaries when applicable.
 
 ### FR-03: Doctor Diagnostics and Remediation
-- Extend doctor checks beyond current baseline to cover onboarding-critical readiness:
-  - project root/config bootstrap presence,
-  - runner reachability,
-  - model CLI/API-key availability signal,
-  - key AO config validity.
-- Each check must include:
-  - stable check ID,
-  - status (`ok|warn|fail`),
-  - human-readable details,
-  - remediation availability metadata.
-- Add explicit remediation execution mode (for example `ao doctor --fix`) that applies only safe, local fixes.
+- `ao doctor` must return stable checks with:
+  - `id`,
+  - `status` (`ok|warn|fail`),
+  - `details`,
+  - `remediation` (`id`, `available`, `details`, optional `command`).
+- `ao doctor --fix` must report remediation actions deterministically with:
+  - `id`,
+  - `status` (`applied|skipped|failed`),
+  - `details`.
 
 ### FR-04: API-Only Config Writes
-- Onboarding and daemon-related config mutations must flow through typed API helpers in `orchestrator-core`.
-- CLI handlers must not directly call `std::fs::write` for onboarding-owned config files.
-- Affected config surfaces include at minimum:
-  - `.ao/config.json`,
-  - `.ao/pm-config.json`,
-  - any onboarding-updated state/config artifacts in `.ao/state/*`.
+- Setup/daemon config mutations must use `orchestrator-core` daemon config APIs.
+- CLI setup/doctor/daemon handlers must not directly write `.ao/pm-config.json`.
 
-### FR-05: Idempotence and Determinism
-- Running onboarding with identical effective inputs must be idempotent.
-- Re-run apply output must mark unchanged domains deterministically.
-- Failed writes must not leave partially written config files.
+### FR-05: Idempotence and Persistence Safety
+- Re-running setup apply with identical effective inputs must become no-op (`daemon_config_updated = false`).
+- Failed write paths must not leave partially-written daemon config files.
 
-### FR-06: Error and Output Contract
-- Missing required non-interactive input must fail with invalid-input semantics and actionable next steps.
-- Doctor/setup JSON payloads must be stable and testable.
-- Human-readable output must remain concise and actionable.
-
-### FR-07: Backward Compatibility
-- Existing command behavior outside onboarding/doctor-remediation/config-write alignment must remain unchanged.
-- Existing daemon automation behavior must remain compatible with pre-existing config values.
-
-## Non-Functional Requirements
-
-### NFR-01: Repository Safety
-- All mutations must stay within resolved project root and AO-approved config locations.
-- No destructive side effects outside explicit apply/fix operations.
-
-### NFR-02: Performance
-- Onboarding and doctor checks should complete quickly for local use and automation pipelines.
-- Diagnostics should avoid unnecessary process spawning or repeated expensive probes.
-
-### NFR-03: Testability
-- All acceptance behaviors must be assertable through CLI integration tests without manual intervention.
+### FR-06: Backward Compatibility
+- Behavior outside setup/doctor/daemon-config alignment remains unchanged.
+- Existing daemon automation semantics remain compatible with existing config values.
 
 ## Acceptance Criteria
-- `AC-01`: Onboarding command supports guided and non-interactive modes.
-- `AC-02`: Non-interactive mode performs zero prompts and fails deterministically when required input is missing.
-- `AC-03`: Onboarding exposes a read-only plan and explicit apply behavior.
-- `AC-04`: Doctor output includes stable check IDs, statuses, and remediation metadata.
-- `AC-05`: Doctor remediation mode applies safe fixes and reports applied/failed/skipped actions.
-- `AC-06`: Onboarding-owned config writes are routed through `orchestrator-core` API helpers.
-- `AC-07`: Direct ad-hoc config writes in onboarding/daemon-config paths are removed or replaced.
-- `AC-08`: Writes are atomic; failed mutations do not corrupt config files.
-- `AC-09`: JSON output follows `ao.cli.v1` envelope conventions.
-- `AC-10`: Existing unrelated command behavior remains unchanged.
-- `AC-11`: Sensitive values are redacted/withheld from onboarding/doctor output.
-- `AC-12`: Regression tests cover idempotent re-run behavior.
+- `AC-01`: `ao setup` supports guided and non-interactive modes.
+- `AC-02`: `ao setup --plan` in non-interactive terminal contexts fails guided mode with invalid input semantics.
+- `AC-03`: `ao setup --non-interactive --plan` without explicit `--auto-*` values fails deterministically with invalid input semantics.
+- `AC-04`: non-interactive setup plan output includes stable `stage`, `mode`, and `apply.applied=false` metadata.
+- `AC-05`: setup apply persists daemon config and idempotent re-run reports `daemon_config_updated=false`.
+- `AC-06`: doctor diagnostics include stable check/remediation fields.
+- `AC-07`: `ao doctor --fix` reports non-empty remediation action results with stable action fields.
+- `AC-08`: setup/doctor/daemon config write paths use `orchestrator-core` config helpers rather than ad-hoc file writes.
+- `AC-09`: daemon config persistence remains atomic.
+- `AC-10`: JSON output remains envelope-compatible with existing `ao.cli.v1` conventions.
 
-## Testable Acceptance Checklist
-- `T-01`: CLI test for guided onboarding mode selection behavior.
-- `T-02`: CLI test for non-interactive missing-input failure contract.
-- `T-03`: CLI test for onboarding plan output shape and stability.
-- `T-04`: CLI test for onboarding apply output with changed + unchanged domains.
-- `T-05`: CLI test for doctor diagnostics payload fields.
-- `T-06`: CLI test for doctor remediation apply path and result reporting.
-- `T-07`: Regression test that daemon automation config still drives scheduler behavior.
-- `T-08`: Regression test proving no partial writes on forced write failure path.
-- `T-09`: Regression test for unaffected command groups.
-
-## Acceptance Verification Matrix
-| Requirement area | Verification method |
+## Verification Matrix
+| Acceptance area | Verification method |
 | --- | --- |
-| Guided + non-interactive onboarding | CLI integration tests for mode routing and no-prompt behavior |
-| Doctor diagnostics/remediation contract | Unit + CLI tests for check payload and fix execution results |
-| API-only config writes | Static/behavioral tests around helper usage and persisted files |
-| Atomic persistence + idempotence | File-level regression tests and repeated-run assertions |
-| Envelope/error compatibility | JSON snapshot/assertion tests with exit-code checks |
+| `AC-01` to `AC-07` | `crates/orchestrator-cli/tests/setup_doctor_e2e.rs` and setup/doctor module tests |
+| `AC-08` | code-path audit in setup/doctor/runtime daemon handlers + daemon config API usage |
+| `AC-09` | `crates/orchestrator-core/src/daemon_config.rs` unit tests and atomic write implementation |
+| `AC-10` | CLI JSON envelope assertions in test harness usage |
 
-## Implementation Notes Input to Next Phase
-Primary implementation targets:
-- `crates/orchestrator-cli/src/cli_types.rs`
-- `crates/orchestrator-cli/src/main.rs`
-- `crates/orchestrator-cli/src/services/operations.rs`
-- `crates/orchestrator-cli/src/services/operations/ops_planning/mod.rs` (doctor extraction/cleanup)
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon.rs`
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs`
-- `crates/orchestrator-core/src/doctor.rs`
-- `crates/orchestrator-core/src/lib.rs` (new config API exports as needed)
-
+## Deterministic Deliverables for Next Phase
+- Keep all onboarding and remediation changes scoped to:
+  - `crates/orchestrator-cli/src/services/operations/ops_setup.rs`
+  - `crates/orchestrator-cli/src/services/operations/ops_doctor.rs`
+  - `crates/orchestrator-core/src/doctor.rs`
+  - `crates/orchestrator-core/src/daemon_config.rs`
+  - `crates/orchestrator-cli/tests/setup_doctor_e2e.rs`
+- Preserve repository-safe behavior and avoid broad command-surface churn.
