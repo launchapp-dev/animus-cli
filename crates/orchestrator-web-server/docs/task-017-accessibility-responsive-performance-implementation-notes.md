@@ -2,7 +2,7 @@
 
 ## Phase Context
 - Workflow phase: `requirements`
-- Workflow ID: `d4b62fa3-9d50-474e-810c-28f0cc0b87df`
+- Workflow ID: `c72031ac-7514-4ce3-aa08-72d1b70dbd71`
 - Task: `TASK-017`
 - Project root: `/Users/samishukri/ao-cli`
 
@@ -44,33 +44,33 @@ the build phase while preserving existing route and API behavior.
   - `crates/orchestrator-web-server/web-ui/src/app/review-handoff-accessibility.test.tsx`
     - field-level validation semantics and message association
 - `crates/orchestrator-web-server/web-ui/scripts/check-performance-budgets.mjs`
-  - parse `embedded/index.html`, resolve referenced JS/CSS, enforce gzip budgets
+  - existing baseline artifact; preserve deterministic parse of
+    `embedded/index.html` and extend only if asset-resolution logic needs refinement
 
 ## Accessibility Implementation Notes
 1. Shell-level keyboard flow (`shell.tsx`)
-- Add a skip link before shell chrome that targets `#main-content`.
-- Convert mobile drawer behavior into explicit keyboard lifecycle:
+- Preserve the skip link before shell chrome targeting `#main-content`.
+- Preserve mobile drawer keyboard lifecycle:
   - open -> focus first nav link,
   - `Escape` closes drawer,
   - close -> focus returns to menu button.
-- Ensure menu overlay interaction does not strand keyboard users.
+- Ensure menu overlay interaction never strands keyboard users.
 
 2. Semantic states and headings (`screens.tsx`)
-- Use heading IDs + `aria-labelledby` for route sections (instead of generic
-  unlabeled groupings).
-- Promote shared state render semantics:
+- Keep heading IDs + `aria-labelledby` for route sections as a hard requirement.
+- Preserve shared state render semantics:
   - loading/empty as status regions (`role="status"`),
   - errors retain `role="alert"`.
 - Ensure panel/list structures stay semantically meaningful when content updates.
 
 3. Review handoff form semantics (`screens.tsx`)
-- Provide field-level validation state and helper/error association:
+- Preserve field-level validation state and helper/error association:
   - `aria-invalid` on invalid controls,
   - `aria-describedby` linking to deterministic helper/error IDs.
 - Keep existing payload validation rules and API action shape unchanged.
 
 ## Responsive Implementation Notes
-- Extend CSS breakpoints to explicitly handle:
+- Harden CSS breakpoints to explicitly satisfy:
   - mobile (`320..599`),
   - tablet (`600..959`),
   - desktop (`>=960`).
@@ -81,7 +81,7 @@ the build phase while preserving existing route and API behavior.
 
 ## Performance Baseline Notes
 1. Bundle budgets
-- Add a repository-local checker script that:
+- Preserve repository-local checker behavior that:
   - reads `crates/orchestrator-web-server/embedded/index.html`,
   - resolves currently referenced JS/CSS assets,
   - calculates gzip byte size,
@@ -102,7 +102,7 @@ the build phase while preserving existing route and API behavior.
 3. Implement review form validation accessibility improvements.
 4. Implement responsive CSS refinements across viewport classes.
 5. Add/update accessibility component tests.
-6. Add deterministic performance budget script + test wiring.
+6. Preserve deterministic performance budget script + test wiring.
 7. Run `npm run test` and `npm run build` in web-ui; fix regressions before
    finalizing.
 
@@ -121,7 +121,7 @@ Run in `crates/orchestrator-web-server/web-ui`:
 2. `npm run test -- src/app/build-performance.test.ts`
 3. `npm run test`
 4. `npm run build`
-5. `node scripts/check-performance-budgets.mjs` (added in build phase)
+5. `node scripts/check-performance-budgets.mjs`
 
 ## Testing Targets
 - `src/app/accessibility-responsive-baselines.test.ts`
@@ -130,7 +130,7 @@ Run in `crates/orchestrator-web-server/web-ui`:
   - stable navigation order and keyboard target constants
 - `src/app/router.test.ts`
   - route topology regression guard (`TASK-011` compatibility)
-- `src/app/screens*.test.ts(x)` (add or extend in build phase)
+- `src/app/screens*.test.ts(x)` (extend existing first; add only if needed)
   - state-role semantics and review form field-level validation associations
 - `src/app/build-performance.test.ts`
   - bundling/chunking guardrails and budget-check wiring expectations

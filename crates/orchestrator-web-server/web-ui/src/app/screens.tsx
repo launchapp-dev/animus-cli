@@ -116,7 +116,11 @@ export function DaemonPage() {
         </button>
       </div>
 
-      {actionState.kind === "ok" ? <p>{actionState.message}</p> : null}
+      {actionState.kind === "ok" ? (
+        <p className="status-box" role="status" aria-live="polite" aria-atomic="true">
+          {actionState.message}
+        </p>
+      ) : null}
       {actionState.kind === "error" ? (
         <ErrorState
           error={{
@@ -450,6 +454,12 @@ export function ReviewHandoffPage() {
   const [submitState, setSubmitState] = useState<
     { kind: "idle" } | { kind: "ok"; data: unknown } | { kind: "error"; error: ApiError }
   >({ kind: "idle" });
+  const runIdHintId = "review-handoff-run-id-hint";
+  const runIdErrorId = "review-handoff-run-id-error";
+  const questionHintId = "review-handoff-question-hint";
+  const questionErrorId = "review-handoff-question-error";
+  const contextHintId = "review-handoff-context-hint";
+  const contextErrorId = "review-handoff-context-error";
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -510,11 +520,19 @@ export function ReviewHandoffPage() {
       <form className="panel grid" onSubmit={onSubmit}>
         <label>
           Run ID
+          <span className="field-hint" id={runIdHintId}>
+            Use the AO run identifier for the handoff target.
+          </span>
           <input
+            id="review-handoff-run-id"
+            name="runId"
             value={runId}
             required
             aria-invalid={validationErrors.runId ? true : undefined}
-            aria-describedby={validationErrors.runId ? "review-handoff-run-id-error" : undefined}
+            aria-describedby={buildDescribedBy(
+              runIdHintId,
+              validationErrors.runId ? runIdErrorId : undefined,
+            )}
             onChange={(event) => {
               setRunId(event.target.value);
               setValidationErrors((current) => ({
@@ -524,7 +542,7 @@ export function ReviewHandoffPage() {
             }}
           />
           {validationErrors.runId ? (
-            <span className="field-error" id="review-handoff-run-id-error">
+            <span className="field-error" id={runIdErrorId}>
               {validationErrors.runId}
             </span>
           ) : null}
@@ -532,7 +550,12 @@ export function ReviewHandoffPage() {
 
         <label>
           Target Role
-          <select value={targetRole} onChange={(event) => setTargetRole(event.target.value)}>
+          <select
+            id="review-handoff-target-role"
+            name="targetRole"
+            value={targetRole}
+            onChange={(event) => setTargetRole(event.target.value)}
+          >
             <option value="em">em</option>
             <option value="reviewer">reviewer</option>
             <option value="qa">qa</option>
@@ -541,11 +564,19 @@ export function ReviewHandoffPage() {
 
         <label>
           Question
+          <span className="field-hint" id={questionHintId}>
+            Explain what decision or feedback you need from the reviewer.
+          </span>
           <textarea
+            id="review-handoff-question"
+            name="question"
             rows={3}
             required
             aria-invalid={validationErrors.question ? true : undefined}
-            aria-describedby={validationErrors.question ? "review-handoff-question-error" : undefined}
+            aria-describedby={buildDescribedBy(
+              questionHintId,
+              validationErrors.question ? questionErrorId : undefined,
+            )}
             value={question}
             onChange={(event) => {
               setQuestion(event.target.value);
@@ -556,7 +587,7 @@ export function ReviewHandoffPage() {
             }}
           />
           {validationErrors.question ? (
-            <span className="field-error" id="review-handoff-question-error">
+            <span className="field-error" id={questionErrorId}>
               {validationErrors.question}
             </span>
           ) : null}
@@ -564,10 +595,18 @@ export function ReviewHandoffPage() {
 
         <label>
           Context JSON
+          <span className="field-hint" id={contextHintId}>
+            Optional metadata in valid JSON format. Defaults to an empty object.
+          </span>
           <textarea
+            id="review-handoff-context-json"
+            name="contextJson"
             rows={4}
             aria-invalid={validationErrors.contextJson ? true : undefined}
-            aria-describedby={validationErrors.contextJson ? "review-handoff-context-error" : undefined}
+            aria-describedby={buildDescribedBy(
+              contextHintId,
+              validationErrors.contextJson ? contextErrorId : undefined,
+            )}
             value={contextJson}
             onChange={(event) => {
               setContextJson(event.target.value);
@@ -578,7 +617,7 @@ export function ReviewHandoffPage() {
             }}
           />
           {validationErrors.contextJson ? (
-            <span className="field-error" id="review-handoff-context-error">
+            <span className="field-error" id={contextErrorId}>
               {validationErrors.contextJson}
             </span>
           ) : null}
@@ -590,7 +629,14 @@ export function ReviewHandoffPage() {
       </form>
 
       {submitState.kind === "error" ? <ErrorState error={submitState.error} /> : null}
-      {submitState.kind === "ok" ? <JsonPanel title="Response" data={submitState.data} /> : null}
+      {submitState.kind === "ok" ? (
+        <>
+          <p className="status-box" role="status" aria-live="polite" aria-atomic="true">
+            Review handoff submitted successfully.
+          </p>
+          <JsonPanel title="Response" data={submitState.data} />
+        </>
+      ) : null}
       <DiagnosticsPanel
         title="Review Handoff Diagnostics"
         actionPrefixes={["reviews.handoff"]}
@@ -718,4 +764,9 @@ function hasValidationErrors(errors: {
   contextJson?: string;
 }) {
   return Boolean(errors.runId || errors.question || errors.contextJson);
+}
+
+function buildDescribedBy(...ids: Array<string | undefined>) {
+  const resolvedIds = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+  return resolvedIds.length > 0 ? resolvedIds.join(" ") : undefined;
 }

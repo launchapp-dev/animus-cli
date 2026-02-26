@@ -390,6 +390,21 @@ label {
   font-size: 0.86rem;
 }
 
+.field-hint {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.status-box {
+  margin: 0.75rem 0 0;
+  border: 1px solid #bdd3f1;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: var(--primary-soft);
+  color: #173f6b;
+}
+
 pre {
   overflow: auto;
   max-width: 100%;

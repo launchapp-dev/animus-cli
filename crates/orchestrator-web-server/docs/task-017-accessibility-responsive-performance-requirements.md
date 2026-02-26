@@ -2,7 +2,7 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `d4b62fa3-9d50-474e-810c-28f0cc0b87df`
+- Workflow ID: `c72031ac-7514-4ce3-aa08-72d1b70dbd71`
 - Task: `TASK-017`
 - Project root: `/Users/samishukri/ao-cli`
 
@@ -28,9 +28,11 @@ common viewport classes, and performant under realistic project data sizes.
 - A diagnostics panel with sanitized failure details exists from `TASK-019`
   (`src/app/diagnostics-panel.tsx`).
 - Styling and responsive behavior is currently driven by `src/styles.css` with
-  a single main breakpoint (`<= 960px`).
-- Accessibility and responsive checks are present only as light baseline tests;
-  there is no explicit route performance budget enforcement.
+  coarse breakpoints (`<= 960px`, `<= 680px`) that need explicit acceptance
+  coverage for mobile/tablet/desktop viewport classes.
+- Repository-local performance budget enforcement exists via
+  `scripts/check-performance-budgets.mjs`, wired into `npm run build`; this
+  phase fixes thresholds and validation behavior as a stable contract.
 
 ## Scope
 In scope for implementation following this requirements phase:
@@ -57,6 +59,7 @@ Out of scope for this task:
 - Keep behavior deterministic and repository-local (no dependence on external
   runtime services for measurements).
 - Preserve diagnostics telemetry contracts introduced in `TASK-019`.
+- Preserve `web-ui` build wiring for `check:performance-budgets`.
 - Keep `.ao` state mutation out of manual file edits.
 - Maintain usability at `320px` width without horizontal page scrolling.
 - Keep implementation aligned with current route-loading strategy (`lazy` route
@@ -111,8 +114,8 @@ Out of scope for this task:
   - stateful content panels.
 
 ### FR-06: Core Route Performance Budgets
-- Define and enforce repository-local performance budgets for active web bundle
-  artifacts referenced by `embedded/index.html`.
+- Preserve and enforce repository-local performance budgets for active web
+  bundle artifacts referenced by `embedded/index.html`.
 - Budget thresholds:
   - referenced JS entry asset (gzip): `<= 110 KiB`
   - referenced CSS entry asset (gzip): `<= 8 KiB`
@@ -199,8 +202,8 @@ Out of scope for this task:
 - `V-02`: `npm run test -- src/app/build-performance.test.ts` passes (chunking
   and warning-threshold guardrails).
 - `V-03`: `npm run build` succeeds for `web-ui`.
-- `V-04`: performance budget script (to be added in build phase) succeeds
-  against `crates/orchestrator-web-server/embedded/index.html` with:
+- `V-04`: existing performance budget script succeeds against
+  `crates/orchestrator-web-server/embedded/index.html` with:
   - JS gzip `<= 110 KiB`
   - CSS gzip `<= 8 KiB`
 - `V-05`: full `npm run test` remains green to protect route/API/telemetry
@@ -224,8 +227,9 @@ Out of scope for this task:
   - event bounds: `src/lib/events/use-daemon-events.ts`
   - diagnostics bounds: `src/lib/telemetry/store.ts`,
     `src/app/diagnostics-panel.tsx`
-- Add deterministic performance budget validation as a repository script tied to
-  `web-ui` build output.
+- Preserve deterministic performance budget validation tied to `web-ui` build
+  output, and only extend logic if thresholds or asset-resolution behavior
+  require adjustment.
 - Keep deliverables compatible with existing embedded static serving flow in
   `crates/orchestrator-web-server/embedded/`.
 - Prefer extending existing baseline tests before creating new test files:
