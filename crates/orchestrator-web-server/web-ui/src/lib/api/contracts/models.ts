@@ -30,6 +30,17 @@ export type TaskTypeValue =
   | "experiment"
   | "unknown";
 
+export type PriorityValue = "critical" | "high" | "medium" | "low" | "unknown";
+
+export type WorkflowStatusValue =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
 export type MessagePayload = JsonRecord & {
   message: string;
 };
@@ -65,16 +76,41 @@ export type TaskSummary = JsonRecord & {
   id: string;
   status: TaskStatusValue;
   type: TaskTypeValue;
+  title?: string;
+  description?: string;
+  priority?: PriorityValue;
+  updated_at?: string;
+  metadata?: JsonRecord & {
+    updated_at?: string;
+  };
+  checklist?: JsonRecord[];
+  dependencies?: JsonRecord[];
 };
 
 export type TaskDetail = JsonRecord & {
   id: string;
   status?: TaskStatusValue;
   type?: TaskTypeValue;
+  title?: string;
+  description?: string;
+  priority?: PriorityValue;
+  updated_at?: string;
+  metadata?: JsonRecord & {
+    updated_at?: string;
+  };
+  checklist?: JsonRecord[];
+  dependencies?: JsonRecord[];
 };
 
 export type WorkflowSummary = JsonRecord & {
   id: string;
+  task_id?: string;
+  pipeline_id?: string | null;
+  status?: WorkflowStatusValue;
+  current_phase?: string | null;
+  current_phase_index?: number;
+  started_at?: string;
+  completed_at?: string | null;
 };
 
 export type ProjectTasksPayload = JsonRecord & {
@@ -233,6 +269,67 @@ export type PlanningRequirementCreateInput = {
 };
 
 export type PlanningRequirementUpdateInput = Partial<PlanningRequirementCreateInput>;
+
+export type TaskUpdateInput = {
+  title?: string;
+  description?: string;
+  priority?: "critical" | "high" | "medium" | "low";
+  status?:
+    | "todo"
+    | "backlog"
+    | "ready"
+    | "in-progress"
+    | "in_progress"
+    | "blocked"
+    | "on-hold"
+    | "on_hold"
+    | "done"
+    | "cancelled";
+  assignee?: string | null;
+  tags?: string[];
+  updated_by?: string;
+  deadline?: string | null;
+  linked_architecture_entities?: string[];
+};
+
+export type TaskStatusInput = {
+  status:
+    | "todo"
+    | "backlog"
+    | "ready"
+    | "in-progress"
+    | "in_progress"
+    | "blocked"
+    | "on-hold"
+    | "on_hold"
+    | "done"
+    | "cancelled";
+};
+
+export type TaskChecklistAddInput = {
+  description: string;
+  updated_by?: string;
+};
+
+export type TaskChecklistUpdateInput = {
+  completed: boolean;
+  updated_by?: string;
+};
+
+export type TaskDependencyAddInput = {
+  dependency_id: string;
+  dependency_type: "blocks-by" | "blocked-by" | "related-to";
+  updated_by?: string;
+};
+
+export type TaskDependencyRemoveInput = {
+  updated_by?: string;
+};
+
+export type WorkflowRunInput = {
+  task_id: string;
+  pipeline_id?: string;
+};
 
 export type PlanningRequirementsDraftInput = {
   include_codebase_scan?: boolean;

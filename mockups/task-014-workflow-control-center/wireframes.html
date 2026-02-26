@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-014 Task and Workflow Control Center Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-014: Task and Workflow Control Center</h1>
+      <p>
+        Concrete wireframes for queue operations, workflow controls, phase timeline visibility,
+        and rule-based gating with deterministic feedback.
+      </p>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="desktop-floor-title">
+        <h2 class="board-title" id="desktop-floor-title">
+          Desktop Command Floor (Queue + Workflow + Timeline)
+        </h2>
+
+        <div class="control-shell">
+          <header class="shell-header">
+            <p class="breadcrumbs">/workflows/a72d7b8e-e1e8-4804-b925-355318bca593</p>
+            <div class="state-strip" aria-label="Runtime state sequence">
+              <span class="state-chip running">workflow: running</span>
+              <span class="state-chip warning">phase: wireframe blocked</span>
+              <span class="state-chip">checkpoint: pending approval</span>
+              <span class="state-chip info">queue: 6 ready</span>
+            </div>
+          </header>
+
+          <div class="desktop-grid">
+            <article class="panel queue-panel" aria-labelledby="queue-title">
+              <div class="panel-head">
+                <h3 id="queue-title">Prioritized Task Queue</h3>
+                <p class="muted">Sort: priority -> updated_at -> task ID</p>
+              </div>
+
+              <div class="toolbar-row" role="group" aria-label="Queue controls">
+                <label class="field-inline" for="queue-status-filter">
+                  Status filter
+                  <select id="queue-status-filter">
+                    <option>all</option>
+                    <option>ready</option>
+                    <option>in-progress</option>
+                    <option>blocked</option>
+                    <option>on-hold</option>
+                  </select>
+                </label>
+                <label class="field-inline search" for="queue-search">
+                  Search
+                  <input id="queue-search" type="search" value="TASK-01" />
+                </label>
+                <button type="button">Refresh queue</button>
+              </div>
+              <p class="muted queue-note">
+                Queue states: loading, ready, empty, filtered-empty, transition-pending, transition-error.
+              </p>
+
+              <div class="table-wrap" role="region" aria-label="Task queue table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Task</th>
+                      <th>Status</th>
+                      <th>Owner</th>
+                      <th>Dependencies</th>
+                      <th>Checklist</th>
+                      <th>Transition</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <p class="task-title">TASK-014 Build task/workflow control center interface</p>
+                        <p class="task-meta">priority: high | type: feature</p>
+                      </td>
+                      <td><span class="pill in-progress">in-progress</span></td>
+                      <td><span class="owner-chip">sam.ishukri</span></td>
+                      <td><span class="dep-chip">none</span></td>
+                      <td>
+                        <p class="task-meta">2 / 5 done</p>
+                        <div class="meter" aria-hidden="true">
+                          <span style="width: 40%"></span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="action-stack">
+                          <button type="button">Set blocked</button>
+                          <button type="button" disabled aria-describedby="done-rationale-014">
+                            Mark done
+                          </button>
+                        </div>
+                        <p id="done-rationale-014" class="rationale">
+                          Disabled: finish checklist items before moving to done.
+                        </p>
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td>
+                        <p class="task-title">TASK-016 Add high-risk action safeguards</p>
+                        <p class="task-meta">priority: high | type: feature</p>
+                      </td>
+                      <td><span class="pill ready">ready</span></td>
+                      <td><span class="owner-chip">unassigned</span></td>
+                      <td><span class="dep-chip blocked">depends on TASK-014</span></td>
+                      <td>
+                        <p class="task-meta">0 / 4 done</p>
+                        <div class="meter" aria-hidden="true">
+                          <span style="width: 0%"></span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="action-stack">
+                          <button type="button" disabled aria-describedby="start-rationale-016">
+                            Start task
+                          </button>
+                          <button type="button">Reassign</button>
+                        </div>
+                        <p id="start-rationale-016" class="rationale">
+                          Disabled: dependency TASK-014 must be done.
+                        </p>
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td>
+                        <p class="task-title">TASK-019 Structured observability diagnostics</p>
+                        <p class="task-meta">priority: medium | type: feature</p>
+                      </td>
+                      <td><span class="pill done">done</span></td>
+                      <td><span class="owner-chip">sam.ishukri</span></td>
+                      <td><span class="dep-chip">none</span></td>
+                      <td>
+                        <p class="task-meta">5 / 5 done</p>
+                        <div class="meter" aria-hidden="true">
+                          <span style="width: 100%"></span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="action-stack">
+                          <button type="button" disabled aria-describedby="reopen-rationale-019">
+                            Reopen
+                          </button>
+                        </div>
+                        <p id="reopen-rationale-019" class="rationale">
+                          Disabled: workflow gate locked during active release checkpoint.
+                        </p>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel workflow-panel" aria-labelledby="workflow-title">
+              <div class="panel-head">
+                <h3 id="workflow-title">Workflow Controls</h3>
+                <p class="muted">Run ID: wf-run-2026-02-26-004</p>
+              </div>
+
+              <div class="status-card">
+                <dl>
+                  <div>
+                    <dt>Workflow</dt>
+                    <dd>a72d7b8e-e1e8-4804-b925-355318bca593</dd>
+                  </div>
+                  <div>
+                    <dt>Lifecycle</dt>
+                    <dd>running</dd>
+                  </div>
+                  <div>
+                    <dt>Current phase</dt>
+                    <dd>wireframe</dd>
+                  </div>
+                  <div>
+                    <dt>Gate state</dt>
+                    <dd>approval required</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div class="toolbar-row" role="group" aria-label="Workflow action controls">
+                <button type="button" disabled aria-describedby="run-disabled">
+                  Run
+                </button>
+                <button type="button" disabled aria-describedby="resume-disabled">
+                  Resume
+                </button>
+                <button type="button">Pause</button>
+                <button type="button" class="danger">Cancel</button>
+              </div>
+              <p id="run-disabled" class="rationale">Disabled: workflow already running.</p>
+              <p id="resume-disabled" class="rationale">Disabled: workflow is not paused.</p>
+
+              <div class="gate-card" role="region" aria-labelledby="gate-title">
+                <h4 id="gate-title">Phase Gate: Manual Approval</h4>
+                <p>
+                  Blocking reason: reviewer approval missing for phase <code>wireframe</code>.
+                </p>
+                <ul>
+                  <li>Decision required: publish mockups in <code>mockups/task-014-...</code></li>
+                  <li>Required approver: <code>reviewer.ops</code></li>
+                  <li>Checkpoint state: <code>pending</code> since 2026-02-26 01:47:29 UTC</li>
+                </ul>
+                <div class="toolbar-row">
+                  <button type="button">Approve phase</button>
+                  <button type="button">Reject with reason</button>
+                </div>
+              </div>
+
+              <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+                <h4 id="confirm-title">Confirm Cancel Workflow</h4>
+                <p>
+                  To cancel this running workflow, type
+                  <code>CANCEL WORKFLOW a72d7b8e-e1e8-4804-b925-355318bca593</code> and include a rollback note.
+                </p>
+                <label for="cancel-phrase">Typed confirmation</label>
+                <input id="cancel-phrase" type="text" value="cancel workflow" aria-invalid="true" />
+                <p class="rationale" role="alert">
+                  Phrase mismatch. Confirm button remains disabled.
+                </p>
+                <label for="rollback-note">Rollback plan</label>
+                <textarea id="rollback-note" rows="3">Resume from checkpoint "wireframe" after review fix.</textarea>
+                <div class="toolbar-row">
+                  <button type="button">Dismiss</button>
+                  <button type="button" class="danger" disabled>Confirm cancel</button>
+                </div>
+                <p class="muted">
+                  Fail-closed rule: cancel dispatch is blocked if action key, workflow ID, or phrase policy metadata is missing.
+                </p>
+              </div>
+            </article>
+
+            <aside class="panel timeline-panel" aria-labelledby="timeline-title">
+              <div class="panel-head">
+                <h3 id="timeline-title">Phase Timeline and Decisions</h3>
+                <p class="muted">Order: checkpoint -> timestamp -> stable key (ascending)</p>
+              </div>
+
+              <ol class="timeline-list" aria-label="Workflow phase timeline">
+                <li class="timeline-item">
+                  <p class="timeline-title">checkpoint 01 planning run started</p>
+                  <p class="timeline-meta">2026-02-26 00:58:11 UTC | checkpoint=planning.01.start</p>
+                  <p class="timeline-note">Execution scope: REQ-014 / TASK-014.</p>
+                </li>
+                <li class="timeline-item">
+                  <p class="timeline-title">checkpoint 02 planning decision recorded</p>
+                  <p class="timeline-meta">2026-02-26 01:10:53 UTC | decision: split UI and telemetry</p>
+                  <p class="timeline-note">Dependency path updated for TASK-016 and TASK-019.</p>
+                </li>
+                <li class="timeline-item">
+                  <p class="timeline-title">checkpoint 03 design approved</p>
+                  <p class="timeline-meta">2026-02-26 01:29:04 UTC | approver: reviewer.ops</p>
+                  <p class="timeline-note">Checkpoint: docs + sketches accepted.</p>
+                </li>
+                <li class="timeline-item blocked">
+                  <p class="timeline-title">checkpoint 04 wireframe blocked</p>
+                  <p class="timeline-meta">2026-02-26 01:47:29 UTC | checkpoint=wireframe.04.review</p>
+                  <p class="timeline-note">Decision requested from reviewer.ops before execute phase.</p>
+                </li>
+              </ol>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="transition-board-title">
+        <h2 class="board-title" id="transition-board-title">
+          Queue Transition and Conflict Handling
+        </h2>
+
+        <div class="board-columns">
+          <article class="panel">
+            <h3>Task Status Transition Drawer</h3>
+            <p class="muted">Selected task: <code>/tasks/TASK-014</code> (current: <code>in-progress</code>)</p>
+
+            <div class="status-grid" role="group" aria-label="Available task statuses">
+              <button type="button">backlog</button>
+              <button type="button">ready</button>
+              <button type="button">in-progress</button>
+              <button type="button">on-hold</button>
+              <button type="button">blocked</button>
+              <button type="button" disabled aria-describedby="done-blocked-note">done</button>
+              <button type="button" class="danger">cancelled</button>
+            </div>
+            <p id="done-blocked-note" class="rationale">
+              Rule gate: checklist completion required (2 remaining items).
+            </p>
+            <p class="rationale">
+              `cancelled` from active state opens typed confirmation gate.
+            </p>
+
+            <div class="detail-card">
+              <h4>Checklist Gate</h4>
+              <ul>
+                <li>[x] Build queue layout and sort model</li>
+                <li>[x] Define workflow action availability matrix</li>
+                <li>[x] Model idempotent retry telemetry copy</li>
+                <li>[x] Add mobile 320px control center board</li>
+              </ul>
+            </div>
+
+            <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="task-cancel-title">
+              <h4 id="task-cancel-title">Confirm Task Cancellation</h4>
+              <p>
+                To move <code>TASK-014</code> to <code>cancelled</code>, type
+                <code>CANCEL TASK TASK-014</code>.
+              </p>
+              <label for="task-cancel-phrase">Typed confirmation</label>
+              <input id="task-cancel-phrase" type="text" value="" aria-invalid="true" />
+              <p class="rationale" role="alert">
+                Phrase missing. Dispatch blocked until phrase and task ID metadata are valid.
+              </p>
+            </div>
+          </article>
+
+          <article class="panel">
+            <h3>Post-Action Telemetry</h3>
+            <p class="assistive" aria-live="polite">
+              Latest event: <code>workflow.pause</code> accepted at 2026-02-26 01:52:01 UTC.
+            </p>
+
+            <ol class="telemetry-list">
+              <li class="telemetry success">
+                <p><strong>success</strong> <code>workflow.pause</code></p>
+                <p>POST /api/v1/workflows/:id/pause | correlation: <code>ao-corr-014-0012</code></p>
+              </li>
+              <li class="telemetry warning">
+                <p><strong>idempotent-retry</strong> <code>workflow.pause</code></p>
+                <p>
+                  No-op: workflow already pausing. Reused correlation
+                  <code>ao-corr-014-0012</code>.
+                </p>
+              </li>
+              <li class="telemetry error">
+                <p><strong>conflict</strong> <code>task.transition.done</code></p>
+                <p>
+                  Backend state changed: checklist incomplete. Refresh task row and retry once
+                  criteria are met.
+                </p>
+                <p role="alert">error code: conflict | next step: retry after checklist update</p>
+              </li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-board-title">
+        <h2 class="board-title" id="mobile-board-title">
+          Mobile Control Center (`320px`) with Gated Actions
+        </h2>
+
+        <div class="mobile-frame" role="region" aria-label="Mobile wireframe board">
+          <header class="mobile-header">
+            <p class="breadcrumbs">/workflows/a72d7b8e-e1e8-4804-b925-355318bca593</p>
+            <h3>Workflow Task Control</h3>
+            <p class="muted">workflow: paused | phase: wireframe</p>
+          </header>
+
+          <section class="mobile-panel">
+            <h4>Queue</h4>
+            <article class="mobile-task-card">
+              <p class="task-title">TASK-014</p>
+              <p class="task-meta">in-progress | 3/5 checklist | owner: sam.ishukri</p>
+              <div class="toolbar-row">
+                <button type="button">Block</button>
+                <button type="button" disabled aria-describedby="mobile-done-note">Done</button>
+              </div>
+              <p id="mobile-done-note" class="rationale">Complete checklist before done.</p>
+            </article>
+          </section>
+
+          <section class="mobile-panel">
+            <h4>Workflow Controls</h4>
+            <div class="toolbar-row">
+              <button type="button">Resume</button>
+              <button type="button" class="danger">Cancel</button>
+            </div>
+            <p class="rationale">`Cancel` opens typed confirmation sheet and rollback note field.</p>
+          </section>
+
+          <section class="mobile-panel">
+            <h4>Phase Timeline</h4>
+            <ul class="compact-timeline">
+              <li>00:58 UTC - checkpoint planning.01.start</li>
+              <li>01:10 UTC - checkpoint planning.02.decision</li>
+              <li>01:29 UTC - checkpoint design.03.approved</li>
+              <li>01:47 UTC - checkpoint wireframe.04.blocked</li>
+            </ul>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

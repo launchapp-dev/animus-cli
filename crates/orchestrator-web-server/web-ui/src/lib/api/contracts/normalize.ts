@@ -1,10 +1,12 @@
 import type {
   DaemonStatusValue,
+  PriorityValue,
   RequirementPriorityValue,
   RequirementStatusValue,
   RequirementTypeValue,
   TaskStatusValue,
   TaskTypeValue,
+  WorkflowStatusValue,
 } from "./models";
 
 function normalizeToken(value: string): string {
@@ -78,6 +80,41 @@ export function normalizeTaskType(value: string): TaskTypeValue {
       return "chore";
     case "experiment":
       return "experiment";
+    default:
+      return "unknown";
+  }
+}
+
+export function normalizePriority(value: string): PriorityValue {
+  switch (normalizeToken(value)) {
+    case "critical":
+      return "critical";
+    case "high":
+      return "high";
+    case "medium":
+      return "medium";
+    case "low":
+      return "low";
+    default:
+      return "unknown";
+  }
+}
+
+export function normalizeWorkflowStatus(value: string): WorkflowStatusValue {
+  switch (normalizeToken(value)) {
+    case "pending":
+      return "pending";
+    case "running":
+      return "running";
+    case "paused":
+      return "paused";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
     default:
       return "unknown";
   }

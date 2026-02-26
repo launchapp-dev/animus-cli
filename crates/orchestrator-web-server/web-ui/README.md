@@ -27,6 +27,10 @@ React shell and route architecture for `TASK-011`.
   `../docs/task-018-web-gui-ci-e2e-release-gates-requirements.md`,
   `../docs/task-018-web-gui-ci-e2e-release-gates-ux-brief.md`,
   `../docs/task-018-web-gui-ci-e2e-release-gates-implementation-notes.md`
+- `TASK-014` requirements and implementation notes:
+  `../docs/task-014-task-workflow-control-center-requirements.md`,
+  `../docs/task-014-task-workflow-control-center-ux-brief.md`,
+  `../docs/task-014-task-workflow-control-center-implementation-notes.md`
 - Web GUI release checklist:
   `../../../.github/release-checklists/web-gui-release.md`
 

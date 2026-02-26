@@ -32,11 +32,13 @@ import type {
 } from "./models";
 import {
   normalizeDaemonStatus,
+  normalizePriority,
   normalizeRequirementPriority,
   normalizeRequirementStatus,
   normalizeRequirementType,
   normalizeTaskStatus,
   normalizeTaskType,
+  normalizeWorkflowStatus,
 } from "./normalize";
 
 export type DecodeResult<TData> =
@@ -296,6 +298,14 @@ function decodeTaskItem(
     decoded["type"] = normalizeTaskType(taskType.data);
   }
 
+  if ("priority" in record.data) {
+    const priority = decodeStringField(record.data, "priority", context);
+    if (!priority.ok) {
+      return priority;
+    }
+    decoded["priority"] = normalizePriority(priority.data);
+  }
+
   return decodeOk(decoded);
 }
 
@@ -316,6 +326,9 @@ function decodeWorkflowItem(
   return decodeOk({
     ...record.data,
     id: id.data,
+    ...(typeof record.data["status"] === "string"
+      ? { status: normalizeWorkflowStatus(record.data["status"] as string) }
+      : {}),
   });
 }
 
@@ -993,6 +1006,16 @@ export function decodeTaskDetail(value: unknown): DecodeResult<TaskDetail> {
   }
 
   return decodeOk(task.data as TaskDetail);
+}
+
+export function decodeTaskDetailNullable(
+  value: unknown,
+): DecodeResult<TaskDetail | null> {
+  if (value === null) {
+    return decodeOk(null);
+  }
+
+  return decodeTaskDetail(value);
 }
 
 export function decodeWorkflowsList(value: unknown): DecodeResult<WorkflowSummary[]> {

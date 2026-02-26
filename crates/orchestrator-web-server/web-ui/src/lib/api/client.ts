@@ -18,6 +18,7 @@ import {
   decodeReviewHandoffResponse,
   decodeSystemInfo,
   decodeTaskDetail,
+  decodeTaskDetailNullable,
   decodeTaskStats,
   decodeTasksList,
   decodeVisionDocument,
@@ -56,11 +57,18 @@ import type {
   ReviewHandoffResponse,
   SystemInfo,
   TaskDetail,
+  TaskDependencyAddInput,
+  TaskDependencyRemoveInput,
+  TaskChecklistAddInput,
+  TaskChecklistUpdateInput,
+  TaskStatusInput,
   TaskStatsPayload,
   TaskSummary,
+  TaskUpdateInput,
   WorkflowCheckpoint,
   WorkflowCheckpointDetail,
   WorkflowDecision,
+  WorkflowRunInput,
   WorkflowSummary,
 } from "./contracts/models";
 import { ApiError, ApiResult, parseAoEnvelope } from "./envelope";
@@ -141,10 +149,10 @@ export async function requestAo<TData>(
   try {
     const response = await fetch(path, requestInit);
     const canonicalCorrelationId =
-      resolveCorrelationId(response.headers.get(AO_CORRELATION_HEADER), requestCorrelationId) ??
+      resolveCorrelationId(response.headers?.get?.(AO_CORRELATION_HEADER), requestCorrelationId) ??
       requestCorrelationId;
     const httpStatus = normalizeHttpStatus(response.status);
-    const responseHeaders = sanitizeHeadersForTelemetry(response.headers);
+    const responseHeaders = sanitizeHeadersForTelemetry(response.headers ?? undefined);
 
     let payload: unknown;
     try {
@@ -401,11 +409,110 @@ export const api = {
       decodePlanningRequirementsRefineResult,
     ),
   tasksList: () => getAo<TaskSummary[]>("/api/v1/tasks", decodeTasksList),
+  tasksPrioritized: () => getAo<TaskSummary[]>("/api/v1/tasks/prioritized", decodeTasksList),
+  tasksNext: () => getAo<TaskDetail | null>("/api/v1/tasks/next", decodeTaskDetailNullable),
   tasksStats: () => getAo<TaskStatsPayload>("/api/v1/tasks/stats", decodeTaskStats),
   tasksById: (taskId: string) => getAo<TaskDetail>(`/api/v1/tasks/${taskId}`, decodeTaskDetail),
+  taskUpdate: (
+    taskId: string,
+    payload: TaskUpdateInput,
+    options: RequestAoOptions = {},
+  ) =>
+    patchAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}`,
+      payload,
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.update" },
+    ),
+  taskSetStatus: (
+    taskId: string,
+    payload: TaskStatusInput,
+    options: RequestAoOptions = {},
+  ) =>
+    postAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}/status`,
+      payload,
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.set_status" },
+    ),
+  taskChecklistAdd: (
+    taskId: string,
+    payload: TaskChecklistAddInput,
+    options: RequestAoOptions = {},
+  ) =>
+    postAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}/checklist`,
+      payload,
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.checklist_add" },
+    ),
+  taskChecklistUpdate: (
+    taskId: string,
+    itemId: string,
+    payload: TaskChecklistUpdateInput,
+    options: RequestAoOptions = {},
+  ) =>
+    patchAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}/checklist/${itemId}`,
+      payload,
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.checklist_update" },
+    ),
+  taskDependencyAdd: (
+    taskId: string,
+    payload: TaskDependencyAddInput,
+    options: RequestAoOptions = {},
+  ) =>
+    postAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}/dependencies`,
+      payload,
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.dependency_add" },
+    ),
+  taskDependencyRemove: (
+    taskId: string,
+    dependencyId: string,
+    payload?: TaskDependencyRemoveInput,
+    options: RequestAoOptions = {},
+  ) =>
+    requestAo<TaskDetail>(
+      `/api/v1/tasks/${taskId}/dependencies/${dependencyId}`,
+      {
+        method: "DELETE",
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+      },
+      decodeTaskDetail,
+      { ...options, actionName: "tasks.dependency_remove" },
+    ),
   workflowsList: () => getAo<WorkflowSummary[]>("/api/v1/workflows", decodeWorkflowsList),
+  workflowRun: (payload: WorkflowRunInput, options: RequestAoOptions = {}) =>
+    postAo<WorkflowSummary>("/api/v1/workflows/run", payload, decodeWorkflowDetail, {
+      ...options,
+      actionName: "workflows.run",
+    }),
   workflowsById: (workflowId: string) =>
     getAo<WorkflowSummary>(`/api/v1/workflows/${workflowId}`, decodeWorkflowDetail),
+  workflowResume: (workflowId: string, options: RequestAoOptions = {}) =>
+    postAo<WorkflowSummary>(
+      `/api/v1/workflows/${workflowId}/resume`,
+      {},
+      decodeWorkflowDetail,
+      { ...options, actionName: "workflows.resume" },
+    ),
+  workflowPause: (workflowId: string, options: RequestAoOptions = {}) =>
+    postAo<WorkflowSummary>(
+      `/api/v1/workflows/${workflowId}/pause`,
+      {},
+      decodeWorkflowDetail,
+      { ...options, actionName: "workflows.pause" },
+    ),
+  workflowCancel: (workflowId: string, options: RequestAoOptions = {}) =>
+    postAo<WorkflowSummary>(
+      `/api/v1/workflows/${workflowId}/cancel`,
+      {},
+      decodeWorkflowDetail,
+      { ...options, actionName: "workflows.cancel" },
+    ),
   workflowDecisions: (workflowId: string) =>
     getAo<WorkflowDecision[]>(
       `/api/v1/workflows/${workflowId}/decisions`,
@@ -436,6 +543,7 @@ export const api = {
 async function postEmpty(
   path: string,
   actionName: string,
+  options: RequestAoOptions = {},
 ): Promise<ApiResult<MessagePayload>> {
   return requestAo(
     path,
@@ -444,7 +552,7 @@ async function postEmpty(
       body: JSON.stringify({}),
     },
     decodeMessagePayload,
-    { actionName },
+    { ...options, actionName },
   );
 }
 
@@ -556,6 +664,7 @@ async function postAo<TData>(
   path: string,
   payload: unknown,
   decoder: PayloadDecoder<TData>,
+  options: RequestAoOptions = {},
 ): Promise<ApiResult<TData>> {
   return requestAo<TData>(
     path,
@@ -564,6 +673,7 @@ async function postAo<TData>(
       body: JSON.stringify(payload),
     },
     decoder,
+    options,
   );
 }
 
@@ -571,6 +681,7 @@ async function patchAo<TData>(
   path: string,
   payload: unknown,
   decoder: PayloadDecoder<TData>,
+  options: RequestAoOptions = {},
 ): Promise<ApiResult<TData>> {
   return requestAo<TData>(
     path,
@@ -579,12 +690,14 @@ async function patchAo<TData>(
       body: JSON.stringify(payload),
     },
     decoder,
+    options,
   );
 }
 
 async function deleteAo<TData>(
   path: string,
   decoder: PayloadDecoder<TData>,
+  options: RequestAoOptions = {},
 ): Promise<ApiResult<TData>> {
   return requestAo<TData>(
     path,
@@ -592,6 +705,7 @@ async function deleteAo<TData>(
       method: "DELETE",
     },
     decoder,
+    options,
   );
 }
 
