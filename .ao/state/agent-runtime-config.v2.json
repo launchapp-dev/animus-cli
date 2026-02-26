@@ -18,24 +18,38 @@
     "default": {
       "description": "Default workflow phase agent profile.",
       "system_prompt": "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
-      "tool": null,
-      "model": null,
+      "tool": "codex",
+      "model": "gpt-5.3-codex",
       "fallback_models": [],
       "reasoning_effort": null,
       "web_search": null,
+      "network_access": true,
       "timeout_secs": null,
-      "max_attempts": null
+      "max_attempts": null,
+      "extra_args": [],
+      "codex_config_overrides": [
+        "approval_policy=never",
+        "sandbox_mode=danger-full-access",
+        "sandbox_workspace_write.network_access=true"
+      ]
     },
     "implementation": {
       "description": "Implementation-focused coding agent profile.",
       "system_prompt": "You are the implementation agent. Make minimal production-ready code changes and emit machine-readable completion payloads required by policy.",
-      "tool": null,
-      "model": null,
+      "tool": "codex",
+      "model": "gpt-5.3-codex",
       "fallback_models": [],
       "reasoning_effort": null,
       "web_search": null,
+      "network_access": true,
       "timeout_secs": null,
-      "max_attempts": null
+      "max_attempts": null,
+      "extra_args": [],
+      "codex_config_overrides": [
+        "approval_policy=never",
+        "sandbox_mode=danger-full-access",
+        "sandbox_workspace_write.network_access=true"
+      ]
     }
   },
   "phases": {
@@ -120,8 +134,11 @@
         "fallback_models": [],
         "reasoning_effort": null,
         "web_search": true,
+        "network_access": null,
         "timeout_secs": 900,
-        "max_attempts": null
+        "max_attempts": null,
+        "extra_args": [],
+        "codex_config_overrides": []
       },
       "output_contract": null,
       "output_json_schema": null,

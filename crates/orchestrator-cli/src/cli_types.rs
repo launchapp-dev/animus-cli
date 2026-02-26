@@ -444,6 +444,12 @@ pub(crate) struct DaemonConfigArgs {
     pub(crate) auto_pr: Option<bool>,
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_commit_before_merge: Option<bool>,
+    #[arg(long, value_name = "JSON")]
+    pub(crate) notification_config_json: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) notification_config_file: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub(crate) clear_notification_config: bool,
 }
 
 #[derive(Debug, Args)]
