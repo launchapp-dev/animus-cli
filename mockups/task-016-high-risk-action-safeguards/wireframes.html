@@ -92,8 +92,22 @@
             <aside class="panel feedback-panel" role="region" aria-labelledby="feedback-heading">
               <div class="panel-head">
                 <h3 id="feedback-heading">Guarded Action Feedback</h3>
-                <span class="capacity">Retention cap: 50 newest entries</span>
+                <span class="capacity">Retention cap: 50 entries (newest-first)</span>
               </div>
+
+              <div class="feedback-filters" role="group" aria-label="Feedback scope filter">
+                <button type="button" class="filter-chip active" aria-pressed="true">
+                  daemon.* only
+                </button>
+                <button type="button" class="filter-chip" aria-pressed="false">
+                  all actions
+                </button>
+              </div>
+
+              <p class="retention-note">
+                Filtered scope: <code>daemon.*</code>. When the list reaches 50 entries, the oldest
+                record ID is evicted first.
+              </p>
 
               <p class="assistive-note" aria-live="polite">
                 Feedback updated: daemon.clear_logs failed (correlation ao-corr-task016-0008).
@@ -105,6 +119,9 @@
                     <span class="badge badge-fail">failure</span>
                     <code>daemon.clear_logs</code>
                     <span class="timestamp">2026-02-25 18:24:12 UTC</span>
+                  </p>
+                  <p class="feedback-meta">
+                    record: <code>fb-task016-0008</code>
                   </p>
                   <p class="feedback-meta">
                     <code>DELETE /api/v1/daemon/logs</code>
@@ -125,6 +142,9 @@
                     <span class="badge badge-ok">success</span>
                     <code>daemon.resume</code>
                     <span class="timestamp">2026-02-25 18:22:07 UTC</span>
+                  </p>
+                  <p class="feedback-meta">
+                    record: <code>fb-task016-0007</code>
                   </p>
                   <p class="feedback-meta">
                     <code>POST /api/v1/daemon/resume</code>
@@ -174,6 +194,10 @@
             <p id="confirm-dialog-description" class="impact-warning">
               Stopping the daemon interrupts active workflow execution and can leave queued work
               waiting for manual resume.
+            </p>
+            <p class="preview-note">
+              Preview data remains side-effect free until a valid typed intent enables
+              <strong>Confirm stop</strong>.
             </p>
 
             <div class="preview-grid">
@@ -250,6 +274,14 @@
                 dispatch locks to a single pending request.
               </p>
             </div>
+
+            <div class="keyboard-note">
+              <h4>Keyboard and Focus Contract</h4>
+              <p>
+                <code>Escape</code> and <code>Cancel</code> close the dialog without mutation and
+                return focus to the <code>Stop daemon</code> trigger.
+              </p>
+            </div>
           </article>
         </div>
       </section>
@@ -288,12 +320,25 @@
             <label for="mobile-intent">
               Type <code>CLEAR DAEMON LOGS</code>
             </label>
-            <input id="mobile-intent" type="text" value="CLEAR DAEMON LOGS" />
+            <input id="mobile-intent" type="text" value="CLEAR DAEMON LOGS" aria-describedby="mobile-intent-help" />
+            <p id="mobile-intent-help" class="retention-note compact">
+              Confirm stays disabled until phrase match is exact after trim.
+            </p>
 
             <div class="action-row stacked">
               <button type="button" class="secondary">Cancel</button>
               <button type="button" class="primary">Confirm clear logs</button>
             </div>
+
+            <section class="preview-card mobile-feedback" role="region" aria-labelledby="mobile-feedback-heading">
+              <h4 id="mobile-feedback-heading">Latest feedback (`daemon.*` filter)</h4>
+              <p class="feedback-message">
+                <span class="badge badge-fail">failure</span> <code>daemon.clear_logs</code>
+                <span class="timestamp">2026-02-25 18:24:12 UTC</span>
+              </p>
+              <p class="feedback-meta">record: <code>fb-task016-0008</code></p>
+              <p class="feedback-meta">correlation: <code>ao-corr-task016-0008</code></p>
+            </section>
 
             <div class="fail-closed" role="alert">
               Guardrail fail-closed example: action metadata unavailable -> mutation blocked,

@@ -2,7 +2,7 @@
 
 ## Phase
 - Workflow phase: `ux-research`
-- Workflow ID: `0f1b0c41-6729-43a1-a6c3-3a031f46682a`
+- Workflow ID: `9f3fbbad-f13f-4c31-ae02-09398e9e3b36`
 - Task: `TASK-016`
 
 ## UX Objective
@@ -64,6 +64,19 @@ The UX must introduce:
 | Guarded action feedback list | Provide auditable action outcomes in-session | Read newest-first entries, scan action/outcome/correlation ID, correlate with diagnostics | empty, list-populated, capacity-eviction-active |
 | Daemon diagnostics panel | Preserve deep failure troubleshooting path | Expand failure rows, copy correlation ID, inspect sanitized payload details, clear diagnostics | empty, list-ready, detail-expanded, copy-success, copy-fallback |
 
+## Interaction Matrix (Deterministic Contracts)
+
+| Trigger | Guard condition | Immediate UI response | Mutating request allowed |
+| --- | --- | --- | --- |
+| Click `Stop daemon` | none | Open confirmation dialog with `STOP DAEMON` phrase and preview payload | no |
+| Click `Clear daemon logs` | none | Open confirmation dialog with `CLEAR DAEMON LOGS` phrase and preview payload | no |
+| Type confirmation phrase | `trim(input) === requiredPhrase` with case-sensitive compare | Enable confirm button only when exact match is true | no |
+| Click dialog `Confirm` | valid phrase and no guarded action already pending | Transition to submitting state and lock duplicate submit | yes |
+| Click dialog `Cancel` or press `Escape` | dialog open | Close dialog, clear typed state, restore trigger focus | no |
+| Click `Start` / `Resume` / `Pause` | no guarded action already pending | Dispatch directly and show pending state for chosen action | yes |
+| Request resolves success | request in-flight | Append success feedback row and announce update via live region | n/a |
+| Request resolves failure | request in-flight | Append failure feedback row and expose correlation ID for diagnostics linkage | n/a |
+
 ## Critical User Flows
 
 ### Flow A: High-Risk Stop Daemon (Success)
@@ -121,6 +134,20 @@ The UX must introduce:
 - High-risk actions with invalid phrase state block dispatch.
 - Blocked dispatch shows explicit user-visible error state.
 
+## Requirement Traceability (UX to FR)
+
+| Requirement | UX coverage in this brief |
+| --- | --- |
+| `FR-01` Guarded action registry | Risk table and interaction matrix define one behavior source for action key, risk, and safeguards |
+| `FR-02` Confirmation gate | High-risk dialog contracts, Flow A/B, typed-intent rules, and fail-closed rules |
+| `FR-03` Preview/dry-run surface | Dialog screen contract and preview content constraints in Flow A and hierarchy guidance |
+| `FR-04` Execution safeguards | Pending/concurrency rules and interaction matrix submit lock behavior |
+| `FR-05` Auditable feedback | Feedback list states, information hierarchy, and behavioral constraints (cap 50, ordering, eviction) |
+| `FR-06` Diagnostics integration | Flow C and diagnostics panel linkage by shared correlation ID |
+| `FR-07` Accessibility requirements | Accessibility section and keyboard/focus behavior in Flow B and mobile flow |
+| `FR-08` Responsive hierarchy | Desktop/mobile layout guidance and `320px` constraints |
+| `FR-09` Feedback record contract | Feedback hierarchy fields and deterministic ordering/capacity rules |
+
 ## Layout, Hierarchy, and Spacing Guidance
 
 ### Desktop (`>= 960px`)
@@ -154,6 +181,13 @@ The UX must introduce:
 8. Focus indicators remain visible with sufficient contrast on all interactive controls.
 9. Text and UI affordances meet WCAG AA contrast targets.
 10. At `320px`, no horizontal overflow for confirmation, preview, or feedback surfaces.
+
+## Accessibility Scenario Checklist
+1. Keyboard-only user opens `Stop daemon`, tabs through preview and input, types phrase, confirms, and returns focus predictably.
+2. Screen reader user hears dialog title, impact text, required phrase hint, and disabled/enabled state transitions for confirm.
+3. Keyboard-only user cancels high-risk dialog with `Escape` and no mutation occurs.
+4. Low-vision user at `200%` zoom can read feedback metadata and correlation ID without clipped controls.
+5. Mobile screen-reader user on `320px` width can reach feedback rows and diagnostics expansion without horizontal scroll.
 
 ## Feedback Record Information Hierarchy
 Per feedback row, display in this order:

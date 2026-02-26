@@ -2,7 +2,7 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `0f1b0c41-6729-43a1-a6c3-3a031f46682a`
+- Workflow ID: `9f3fbbad-f13f-4c31-ae02-09398e9e3b36`
 - Task: `TASK-016`
 
 ## Objective
@@ -13,7 +13,7 @@ service-impacting actions in the standalone daemon web UI by adding:
 - auditable action feedback after execution.
 
 ## Existing Baseline
-- Mutating UI actions are currently invoked directly from
+- Daemon mutating controls and safeguard flow are implemented in
   `crates/orchestrator-web-server/web-ui/src/app/screens.tsx`.
 - Daemon mutating actions currently exposed in UI:
   - `daemon.start`
@@ -21,11 +21,25 @@ service-impacting actions in the standalone daemon web UI by adding:
   - `daemon.resume`
   - `daemon.stop`
   - `daemon.clear_logs`
-- Current flow executes requests immediately on button click; there is no
-  pre-submit confirmation or preflight preview surface.
-- Failure diagnostics are available through `DiagnosticsPanel`, but successful
-  actions only show brief transient text and do not provide structured, auditable
-  history.
+- High-risk actions currently open an inline safeguard panel (not a modal
+  dialog) with typed input and a local dry-run checkbox.
+- Current typed phrases and matching logic are not aligned to target policy:
+  - phrase set is `STOP` / `CLEAR LOGS`
+  - matching is case-insensitive and normalizes internal whitespace.
+- Current action feedback is a local JSON dump (`ActionRecord[]`) and does not
+  enforce bounded capacity or complete correlation-aware schema requirements.
+- Existing failures are surfaced in `DiagnosticsPanel`, but successful actions
+  are not yet rendered through a normalized auditable record surface.
+
+## Baseline Gaps to Close in Build Phase
+- Upgrade high-risk confirmation surface from inline section to accessible modal
+  dialog semantics.
+- Enforce deterministic typed-intent contract (`STOP DAEMON`,
+  `CLEAR DAEMON LOGS`) with trim-only matching.
+- Replace ad-hoc action record rendering with bounded feedback entries that
+  include correlation-aware fields and deterministic ordering.
+- Enforce single in-flight guarded action behavior and deterministic pending
+  state handling.
 
 ## Scope
 In scope for implementation after this phase:
@@ -61,7 +75,7 @@ Out of scope for this task:
 | --- | --- | --- | --- |
 | `daemon.stop` | `POST /api/v1/daemon/stop` | high | full confirmation + preview + auditable feedback |
 | `daemon.clear_logs` | `DELETE /api/v1/daemon/logs` | high | full confirmation + preview + auditable feedback |
-| `daemon.pause` | `POST /api/v1/daemon/pause` | medium | lightweight confirmation + auditable feedback |
+| `daemon.pause` | `POST /api/v1/daemon/pause` | medium | direct execution + auditable feedback |
 | `daemon.start` | `POST /api/v1/daemon/start` | low | auditable feedback only |
 | `daemon.resume` | `POST /api/v1/daemon/resume` | low | auditable feedback only |
 
@@ -82,6 +96,8 @@ Notes:
 
 Rules:
 - Phrase matching is case-sensitive after trimming leading/trailing whitespace.
+- Internal whitespace is not normalized; input must match expected phrase
+  exactly after edge-trim.
 - Submit stays disabled until the input matches the required phrase exactly.
 - The required phrase must be shown inline in the confirmation UI adjacent to
   the input control.
@@ -119,6 +135,8 @@ Rules:
 - Preview must be side-effect free (no mutating network call).
 - Preview must be tied to the specific action and not reusable across different
   actions.
+- Preview content is required for high-risk actions before confirm; an optional
+  preview-only trigger is allowed but not required.
 
 ### FR-04: Execution Safeguards
 - Only one guarded action execution may be pending at a time per page section.
@@ -226,6 +244,8 @@ Rules:
   functionally unchanged.
 - `AC-11`: Action feedback history is bounded to `50` entries with deterministic
   oldest-first eviction and most-recent-first rendering.
+- `AC-12`: `daemon.pause`, `daemon.start`, and `daemon.resume` remain direct
+  execution actions in `TASK-016` (no typed-intent requirement).
 
 ## Testable Acceptance Checklist
 - `T-01`: Component test verifies high-risk action click opens confirmation
@@ -251,6 +271,8 @@ Rules:
   page data rendering remain intact.
 - `T-11`: Store/component test verifies feedback capacity limit (`50`) and
   deterministic eviction order.
+- `T-12`: Component test verifies medium/low risk daemon actions do not require
+  typed-intent confirmation.
 
 ## Acceptance Verification Matrix
 | Requirement | Verification method |
@@ -266,7 +288,7 @@ Rules:
 ## Implementation Notes (Input to Next Phase)
 Primary source targets:
 - `crates/orchestrator-web-server/web-ui/src/app/screens.tsx`
-  - replace direct high-risk button execution with guarded flow
+  - replace current inline safeguard section with modal guarded flow
 - `crates/orchestrator-web-server/web-ui/src/app/`
   - add confirmation/preview component(s)
   - add action feedback panel component(s)

@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 type RiskLevel = "low" | "medium" | "high";
 type GuardState = "idle" | "confirming-invalid" | "confirming-valid" | "submitting" | "failed-closed";
 type GuardedAction = "daemon.start" | "daemon.pause" | "daemon.resume" | "daemon.stop" | "daemon.clear_logs";
+type FeedbackScope = "daemon-only" | "all-actions";
 
 type HttpMethod = "POST" | "DELETE";
 
@@ -46,6 +47,21 @@ type FeedbackRecord = {
 };
 
 const FEEDBACK_CAP = 50;
+const ACCEPTANCE_TRACEABILITY: Array<{ id: string; evidence: string }> = [
+  { id: "AC-01", evidence: "High-risk actions open dialog and block direct dispatch." },
+  { id: "AC-02", evidence: "Typed intent gate requires exact phrase before submit is enabled." },
+  { id: "AC-02a", evidence: "Required phrases are STOP DAEMON and CLEAR DAEMON LOGS." },
+  { id: "AC-03", evidence: "Preview payload is rendered before submit and stays side-effect free." },
+  { id: "AC-04", evidence: "Single pendingAction lock prevents duplicate submissions." },
+  { id: "AC-05", evidence: "Feedback rows include actor, timestamp, action, outcome, and correlation ID." },
+  { id: "AC-06", evidence: "Failure records preserve correlation IDs for diagnostics continuity." },
+  { id: "AC-07", evidence: "Dialog semantics include role/aria + close/reset behavior." },
+  { id: "AC-08", evidence: "Keyboard close contract is represented with Escape/cancel behavior." },
+  { id: "AC-09", evidence: "Mobile stacked board models 320px no-overflow interaction." },
+  { id: "AC-10", evidence: "No low-risk route loading/navigation behavior is altered in scaffold flow." },
+  { id: "AC-11", evidence: "Feedback ring buffer is capped at 50 with oldest eviction." },
+  { id: "AC-12", evidence: "pause/start/resume remain direct execution actions." },
+];
 
 const guardRegistry: Record<GuardedAction, GuardDefinition> = {
   "daemon.start": {
@@ -167,7 +183,7 @@ function prependFeedback(current: FeedbackRecord[], next: FeedbackRecord): Feedb
   return withFeedbackCap([next, ...current]);
 }
 
-function typedIntentValid(action: GuardDefinition, rawInput: string): boolean {
+function isTypedIntentValid(action: GuardDefinition, rawInput: string): boolean {
   if (!action.typedIntentPhrase) {
     return true;
   }
@@ -186,6 +202,13 @@ function nextCorrelation(action: GuardedAction, seed: number): string {
   return `ao-corr-${action.replace(".", "-")}-${seed.toString().padStart(4, "0")}`;
 }
 
+function feedbackMatchesScope(record: FeedbackRecord, scope: FeedbackScope): boolean {
+  if (scope === "all-actions") {
+    return true;
+  }
+  return record.action.startsWith("daemon.");
+}
+
 export function DaemonActionSafeguardsWireframe() {
   const [snapshot] = useState<DaemonSnapshot>({
     status: "running",
@@ -200,6 +223,8 @@ export function DaemonActionSafeguardsWireframe() {
   const [pendingAction, setPendingAction] = useState<GuardedAction | null>(null);
   const [failClosedMessage, setFailClosedMessage] = useState<string | null>(null);
   const [correlationSeed, setCorrelationSeed] = useState(9);
+  const [feedbackScope, setFeedbackScope] = useState<FeedbackScope>("daemon-only");
+  const [focusReturnTarget, setFocusReturnTarget] = useState<GuardedAction | null>(null);
 
   const guardState: GuardState = useMemo(() => {
     if (failClosedMessage) {
@@ -211,10 +236,19 @@ export function DaemonActionSafeguardsWireframe() {
     if (!confirmingAction) {
       return "idle";
     }
-    return typedIntentValid(confirmingAction, typedIntent)
+    return isTypedIntentValid(confirmingAction, typedIntent)
       ? "confirming-valid"
       : "confirming-invalid";
   }, [confirmingAction, failClosedMessage, pendingAction, typedIntent]);
+
+  const visibleFeedback = useMemo(
+    () => feedback.filter((record) => feedbackMatchesScope(record, feedbackScope)),
+    [feedback, feedbackScope],
+  );
+
+  const oldestRetainedFeedbackId = visibleFeedback.length === FEEDBACK_CAP
+    ? visibleFeedback[visibleFeedback.length - 1]?.id ?? null
+    : null;
 
   const onRequestAction = (actionKey: GuardedAction) => {
     const action = guardRegistry[actionKey];
@@ -232,6 +266,7 @@ export function DaemonActionSafeguardsWireframe() {
     if (action.risk === "high") {
       setFailClosedMessage(null);
       setTypedIntent("");
+      setFocusReturnTarget(actionKey);
       setConfirmingAction(action);
       return;
     }
@@ -289,7 +324,7 @@ export function DaemonActionSafeguardsWireframe() {
       return;
     }
 
-    if (!typedIntentValid(confirmingAction, typedIntent)) {
+    if (!isTypedIntentValid(confirmingAction, typedIntent)) {
       return;
     }
 
@@ -361,6 +396,10 @@ export function DaemonActionSafeguardsWireframe() {
           </ul>
           <p>Rollback guidance: {confirmingAction.rollbackGuidance}</p>
           <p>Success messaging must pass server-side state revalidation checks.</p>
+          <p>
+            <code>Escape</code> or <code>Cancel</code> closes this dialog and returns focus to
+            trigger: <code>{focusReturnTarget ?? "none"}</code>.
+          </p>
 
           <label htmlFor="typed-intent-input">
             Type <code>{confirmingAction.typedIntentPhrase}</code>
@@ -369,7 +408,7 @@ export function DaemonActionSafeguardsWireframe() {
             id="typed-intent-input"
             value={typedIntent}
             onChange={(event) => setTypedIntent(event.target.value)}
-            aria-invalid={!typedIntentValid(confirmingAction, typedIntent)}
+            aria-invalid={!isTypedIntentValid(confirmingAction, typedIntent)}
           />
 
           <button type="button" onClick={onCancelConfirmation}>
@@ -380,7 +419,7 @@ export function DaemonActionSafeguardsWireframe() {
             onClick={() => {
               void onConfirmHighRisk();
             }}
-            disabled={!typedIntentValid(confirmingAction, typedIntent)}
+            disabled={!isTypedIntentValid(confirmingAction, typedIntent)}
           >
             Confirm
           </button>
@@ -388,12 +427,34 @@ export function DaemonActionSafeguardsWireframe() {
       ) : null}
 
       <section aria-label="Guarded action feedback">
-        <h2>Feedback ({feedback.length}/{FEEDBACK_CAP})</h2>
+        <h2>Feedback ({visibleFeedback.length}/{FEEDBACK_CAP})</h2>
         <p aria-live="polite">Newest first. Correlation IDs align with diagnostics.</p>
+        <div role="group" aria-label="Feedback scope filter">
+          <button
+            type="button"
+            onClick={() => setFeedbackScope("daemon-only")}
+            aria-pressed={feedbackScope === "daemon-only"}
+          >
+            daemon.* only
+          </button>
+          <button
+            type="button"
+            onClick={() => setFeedbackScope("all-actions")}
+            aria-pressed={feedbackScope === "all-actions"}
+          >
+            all actions
+          </button>
+        </div>
+        <p>
+          Oldest-first eviction when full. Oldest retained ID:{" "}
+          <code>{oldestRetainedFeedbackId ?? "cap not reached"}</code>
+        </p>
         <ol>
-          {feedback.map((row) => (
+          {visibleFeedback.map((row) => (
             <li key={row.id}>
               <strong>{row.outcome}</strong> {row.action} ({normalizeIso(row.timestamp)})
+              <br />
+              record: <code>{row.id}</code>
               <br />
               actor: <code>{row.actor}</code>
               <br />
@@ -407,6 +468,17 @@ export function DaemonActionSafeguardsWireframe() {
             </li>
           ))}
         </ol>
+      </section>
+
+      <section aria-label="Acceptance traceability">
+        <h2>Acceptance traceability</h2>
+        <ul>
+          {ACCEPTANCE_TRACEABILITY.map((entry) => (
+            <li key={entry.id}>
+              <strong>{entry.id}</strong>: {entry.evidence}
+            </li>
+          ))}
+        </ul>
       </section>
     </section>
   );

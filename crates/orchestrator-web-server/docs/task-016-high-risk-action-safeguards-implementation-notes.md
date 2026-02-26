@@ -1,5 +1,10 @@
 # TASK-016 Implementation Notes: High-Risk Action Safeguards in Web UI
 
+## Phase Context
+- Workflow phase: `requirements`
+- Workflow ID: `9f3fbbad-f13f-4c31-ae02-09398e9e3b36`
+- Task: `TASK-016`
+
 ## Purpose
 Translate `TASK-016` requirements into deterministic implementation slices for
 the build phase, focused on high-risk daemon actions in the web UI.
@@ -24,6 +29,31 @@ the build phase, focused on high-risk daemon actions in the web UI.
 - UI styling:
   `crates/orchestrator-web-server/web-ui/src/styles.css`
 
+## Current Implementation Snapshot (Before Build Phase)
+- High-risk controls (`stop`, `clear`) already open an inline safeguard section.
+- Typed-intent behavior is currently weaker than requirement contract:
+  - phrase set: `STOP` / `CLEAR LOGS`
+  - matcher: case-insensitive with internal whitespace normalization.
+- The current dry-run mode creates local preview entries but does not produce
+  the final normalized feedback schema required for auditability.
+- Feedback rendering is currently an unbounded JSON dump and does not guarantee
+  bounded capacity (`50`) or complete correlation-aware fields.
+- Concurrency and pending behavior are partially implemented but not yet locked
+  to explicit single in-flight guardrail invariants.
+
+## Locked Build Decisions from Requirements Phase
+- Typed-intent phrases are exactly:
+  - `STOP DAEMON` for `daemon.stop`
+  - `CLEAR DAEMON LOGS` for `daemon.clear_logs`
+- Phrase matching is trim-only and case-sensitive.
+- High-risk confirmation is modal (`role="dialog"`, `aria-modal="true"`) with
+  focus handoff/restoration.
+- High-risk preview content is shown pre-submit and remains side-effect free.
+- `daemon.pause`, `daemon.start`, and `daemon.resume` remain direct execution
+  actions (no typed intent) for `TASK-016`.
+- Feedback history is bounded to `50`, evicts oldest-first, and renders
+  newest-first.
+
 ## Proposed Source Layout
 - `crates/orchestrator-web-server/web-ui/src/app/daemon-action-guards.ts`
   - typed action registry with risk classification and preview metadata
@@ -34,7 +64,8 @@ the build phase, focused on high-risk daemon actions in the web UI.
 - `crates/orchestrator-web-server/web-ui/src/app/daemon-action-feedback.tsx`
   - success/failure action feedback list (bounded, most-recent-first)
 - `crates/orchestrator-web-server/web-ui/src/app/screens.tsx`
-  - replace direct high-risk click execution with guarded flow orchestration
+  - replace inline safeguard panel with modal guarded flow orchestration
+  - use bounded feedback view instead of raw JSON action dump
 - `crates/orchestrator-web-server/web-ui/src/app/*.test.tsx`
   - confirmation, pending-state, feedback, and accessibility coverage
 
@@ -75,6 +106,7 @@ Preview must be fully client-side and deterministic:
 - show rollback guidance when available
 
 No preview path may perform a mutating network request.
+Preview is informational and rendered before confirmation submit.
 
 ## Feedback and Diagnostics Notes
 Action feedback record fields:
@@ -112,7 +144,7 @@ Layout requirements:
 
 ## Suggested Build Sequence
 1. Add typed daemon action registry and phrase/preview metadata.
-2. Add confirmation dialog component with preview rendering.
+2. Add confirmation dialog component with preview rendering and focus handling.
 3. Refactor daemon action orchestration in `screens.tsx` to use guard state.
 4. Add bounded feedback component and wire it under daemon controls.
 5. Keep existing diagnostics panel; verify correlation alignment.

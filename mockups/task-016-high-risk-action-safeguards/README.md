@@ -36,7 +36,8 @@ Rules represented in the mockups:
 
 ## State Coverage
 - Guard state: `idle`, `confirming-invalid`, `confirming-valid`, `submitting`, `failed-closed`
-- Feedback state: `empty`, `populated`, `eviction-active` (cap `50`, newest-first)
+- Feedback state: `empty`, `populated`, `eviction-active` (cap `50`, newest-first, oldest evicted first)
+- Feedback scope: `daemon.*` filter active by default with explicit scope toggle control
 - Accessibility state: dialog focus handoff, escape/cancel dismissal, polite live updates
 
 ## Acceptance Criteria Traceability
@@ -48,9 +49,14 @@ Rules represented in the mockups:
 | `AC-02a` | Required phrases rendered inline in dialog and encoded in guard registry |
 | `AC-03` | Preview panel includes action metadata, snapshot, effects, irreversible consequences, rollback guidance |
 | `AC-04` | Submitting state disables duplicate actions and locks one pending action key |
-| `AC-05` | Feedback list rows include actor, timestamp, action, method/path, outcome, message/code, correlation ID |
+| `AC-05` | Feedback list rows include record ID, actor, timestamp, action, method/path, outcome, message/code, correlation ID |
 | `AC-06` | Failure board shows correlation continuity between feedback row and diagnostics panel |
-| `AC-07` | Dialog role/ARIA mapping, focus return, keyboard dismissal, and mobile 320px board behavior |
+| `AC-07` | Existing `/api/v1` request metadata is shown in preview and feedback without endpoint contract changes |
+| `AC-08` | Dialog role/ARIA mapping, focus return, keyboard dismissal, and live-region behavior are represented |
+| `AC-09` | Mobile `320px` board shows stacked confirmation + feedback without horizontal overflow |
+| `AC-10` | Mockups keep low-risk data/load route behavior unchanged and scoped to daemon guardrail surfaces |
+| `AC-11` | Retention cap (`50`) and explicit oldest-first eviction behavior are shown in feedback panel copy |
+| `AC-12` | `daemon.pause`, `daemon.start`, and `daemon.resume` remain direct-execution actions in action row and policy notes |
 
 ## Linked Requirement Coverage
 
