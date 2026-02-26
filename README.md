@@ -190,6 +190,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
   - `task-026-event-notification-connector-framework-requirements.md`
   - `task-026-event-notification-connector-framework-implementation-notes.md`
   - `task-026-notification-operator-guide.md`
+- Guided onboarding/config wizard planning artifacts for TASK-022 live in `crates/orchestrator-cli/docs/`:
+  - `task-022-guided-onboarding-config-wizard-requirements.md`
+  - `task-022-guided-onboarding-config-wizard-implementation-notes.md`
 - Runtime tracking files live under `.ao/`.
 - Do not hand-edit `.ao/state/*`; use `ao` commands for changes.
 - Daemon-managed git worktrees are created under:

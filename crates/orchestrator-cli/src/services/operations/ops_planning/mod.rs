@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use super::ops_history::write_history_execution_event;
 use anyhow::Result;
-use orchestrator_core::{
-    doctor::DoctorReport, services::ServiceHub, RequirementsExecutionInput, VisionDraftInput,
-};
+use orchestrator_core::{services::ServiceHub, RequirementsExecutionInput, VisionDraftInput};
 
 use crate::{
     ensure_ai_generated_tasks_for_requirements, parse_input_json_or, print_value, ExecuteCommand,
@@ -143,15 +141,6 @@ pub(crate) async fn handle_execute(
             print_value(planning.execute_requirements(input).await?, json)
         }
     }
-}
-
-pub(crate) async fn handle_doctor(hub: Arc<dyn ServiceHub>, json: bool) -> Result<()> {
-    let daemon_health = hub.daemon().health().await.ok();
-    let report = serde_json::json!({
-        "doctor": DoctorReport::run(),
-        "daemon_health": daemon_health,
-    });
-    print_value(report, json)
 }
 
 pub(crate) async fn handle_planning(

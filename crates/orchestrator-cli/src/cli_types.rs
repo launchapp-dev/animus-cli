@@ -173,10 +173,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: WebCommand,
     },
+    /// Guided onboarding and configuration wizard.
+    Setup(SetupArgs),
     /// Launch the terminal UI.
     Tui(TuiArgs),
     /// Run environment and configuration diagnostics.
-    Doctor,
+    Doctor(DoctorArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -276,6 +278,31 @@ pub(crate) struct TuiArgs {
         help = "Optional initial prompt to pre-fill in the UI."
     )]
     pub(crate) prompt: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SetupArgs {
+    #[arg(
+        long,
+        help = "Run without prompts. Requires explicit --auto-merge, --auto-pr, and --auto-commit-before-merge values."
+    )]
+    pub(crate) non_interactive: bool,
+    #[arg(long, help = "Preview setup changes without writing config.")]
+    pub(crate) plan: bool,
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_merge: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_pr: Option<bool>,
+    #[arg(long, action = ArgAction::Set)]
+    pub(crate) auto_commit_before_merge: Option<bool>,
+    #[arg(long, help = "Apply safe doctor remediations after setup changes.")]
+    pub(crate) doctor_fix: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DoctorArgs {
+    #[arg(long, help = "Apply safe local remediations for doctor findings.")]
+    pub(crate) fix: bool,
 }
 
 #[derive(Debug, Subcommand)]

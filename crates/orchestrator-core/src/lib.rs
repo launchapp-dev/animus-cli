@@ -1,5 +1,6 @@
 pub mod agent_runtime_config;
 pub mod config;
+pub mod daemon_config;
 pub mod doctor;
 pub mod domain_state;
 pub mod events;
@@ -19,7 +20,14 @@ pub use agent_runtime_config::{
     PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition, PhaseOutputContract,
 };
 pub use config::RuntimeConfig;
-pub use doctor::{DoctorCheck, DoctorCheckResult, DoctorReport};
+pub use daemon_config::{
+    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config,
+    write_daemon_project_config, DaemonProjectConfig, DaemonProjectConfigPatch,
+    DAEMON_PROJECT_CONFIG_FILE_NAME,
+};
+pub use doctor::{
+    DoctorCheck, DoctorCheckResult, DoctorCheckStatus, DoctorRemediation, DoctorReport,
+};
 pub use domain_state::{
     compute_entity_review_status, errors_path, handoffs_path, history_path, load_errors,
     load_handoffs, load_history_store, load_qa_approvals, load_qa_results, load_reviews,

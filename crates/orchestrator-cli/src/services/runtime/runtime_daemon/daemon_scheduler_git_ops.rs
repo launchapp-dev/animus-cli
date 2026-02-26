@@ -23,47 +23,19 @@ fn load_post_success_git_config(project_root: &str) -> PostSuccessGitConfig {
         auto_cleanup_worktree_enabled: true,
     };
 
-    let config_path = Path::new(project_root).join(".ao").join("pm-config.json");
-    if let Ok(content) = fs::read_to_string(config_path) {
-        if let Ok(value) = serde_json::from_str::<Value>(&content) {
-            if let Some(enabled) = value.get("auto_merge_enabled").and_then(Value::as_bool) {
-                cfg.auto_merge_enabled = enabled;
-            }
-            if let Some(enabled) = value.get("auto_pr_enabled").and_then(Value::as_bool) {
-                cfg.auto_pr_enabled = enabled;
-            }
-            if let Some(enabled) = value
-                .get("auto_commit_before_merge")
-                .and_then(Value::as_bool)
-            {
-                cfg.auto_commit_before_merge = enabled;
-            }
-            if let Some(branch) = value
-                .get("auto_merge_target_branch")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                cfg.auto_merge_target_branch = branch.to_string();
-            }
-            if let Some(no_ff) = value.get("auto_merge_no_ff").and_then(Value::as_bool) {
-                cfg.auto_merge_no_ff = no_ff;
-            }
-            if let Some(remote) = value
-                .get("auto_push_remote")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                cfg.auto_push_remote = remote.to_string();
-            }
-            if let Some(cleanup) = value
-                .get("auto_cleanup_worktree_enabled")
-                .and_then(Value::as_bool)
-            {
-                cfg.auto_cleanup_worktree_enabled = cleanup;
-            }
+    if let Ok(value) = orchestrator_core::load_daemon_project_config(Path::new(project_root)) {
+        cfg.auto_merge_enabled = value.auto_merge_enabled;
+        cfg.auto_pr_enabled = value.auto_pr_enabled;
+        cfg.auto_commit_before_merge = value.auto_commit_before_merge;
+        if let Some(branch) = Some(value.auto_merge_target_branch.trim()).filter(|v| !v.is_empty())
+        {
+            cfg.auto_merge_target_branch = branch.to_string();
         }
+        cfg.auto_merge_no_ff = value.auto_merge_no_ff;
+        if let Some(remote) = Some(value.auto_push_remote.trim()).filter(|v| !v.is_empty()) {
+            cfg.auto_push_remote = remote.to_string();
+        }
+        cfg.auto_cleanup_worktree_enabled = value.auto_cleanup_worktree_enabled;
     }
 
     if let Some(enabled) = env_bool_override("AO_AUTO_MERGE_ENABLED") {
