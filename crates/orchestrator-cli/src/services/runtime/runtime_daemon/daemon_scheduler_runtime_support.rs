@@ -175,7 +175,7 @@ fn claude_bypass_permissions_enabled() -> bool {
         .ok()
         .map(|value| value.trim().to_ascii_lowercase())
         .map(|value| !matches!(value.as_str(), "0" | "false" | "no" | "off"))
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 fn env_codex_reasoning_effort_override() -> Option<String> {
