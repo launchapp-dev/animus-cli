@@ -16,7 +16,7 @@
       <ul class="header-checklist" aria-label="Wireframe objectives">
         <li>Intent-first help hierarchy at root, group, and command levels.</li>
         <li>Recovery-first invalid input messaging with one-rerun guidance.</li>
-        <li>Stable `CONFIRMATION_REQUIRED` and dry-run preview contracts.</li>
+        <li>Stable `CONFIRMATION_REQUIRED` and shared dry-run payload contracts.</li>
       </ul>
     </header>
 
@@ -43,7 +43,7 @@
                 <span class="dot green"></span>
                 <p id="root-help-title">$ ao --help</p>
               </div>
-              <pre>ao - Agent Orchestrator control plane CLI
+              <pre>ao - Agent Orchestrator CLI
 
 Purpose:
   Coordinate daemon, project, task, workflow, review, and QA operations.
@@ -52,19 +52,19 @@ Usage:
   ao [OPTIONS] &lt;COMMAND&gt;
 
 Options:
-  --project-root &lt;PATH&gt;    Resolve AO state root for this invocation
-  --json                   Emit ao.cli.v1 machine envelope
+  --project-root &lt;PATH&gt;    Project root directory; overrides PROJECT_ROOT and default root resolution
+  --json                   Emit machine-readable output using ao.cli.v1 envelope
   -h, --help               Print help
 
 Core command groups:
-  daemon          Manage standalone daemon lifecycle and telemetry
-  agent           Execute or inspect agent runs
-  project         Manage AO project records
-  task            Create, update, and track project tasks
+  daemon          Manage daemon lifecycle and automation settings
+  agent           Run and inspect agent executions
+  project         Manage project registration and metadata
+  task            Manage tasks, dependencies, and status
   task-control    Apply task pause/resume/cancel operational controls
-  workflow        Run and control workflow phases
-  requirements    Draft and refine requirements
-  git             Safe repository and worktree operations</pre>
+  workflow        Run and control workflow execution
+  requirements    Draft and manage project requirements
+  git             Manage git repos, worktrees, and confirmations</pre>
             </article>
 
             <article class="terminal-pane" aria-labelledby="group-help-title">
@@ -74,23 +74,26 @@ Core command groups:
                 <span class="dot green"></span>
                 <p id="group-help-title">$ ao task --help</p>
               </div>
-              <pre>task - Create, mutate, and inspect AO tasks
+              <pre>task - Manage tasks, dependencies, and status
 
 Usage:
   ao task &lt;COMMAND&gt;
 
 Commands:
-  list                 List tasks with optional status filters
-  prioritized          Show priority-ranked task queue
-  get                  Show full task details by id
-  create               Create a new task linked to requirement context
-  update               Update title, description, status, type, or deadline
+  list                 List tasks with optional filters
+  prioritized          List tasks sorted by priority and urgency
+  next                 Get the next ready task
+  get                  Get a task by id
+  create               Create a task
+  update               Update title, description, status, priority, and links
   delete               Remove a task (destructive; confirmation required)
-  add-dependency       Add dependency edge between tasks
-  assign-owner         Assign task ownership metadata
+  assign-agent         Assign an agent role to a task
+  dependency-add       Add a dependency edge
+  dependency-remove    Remove a dependency edge
+  status               Set task status
 
 Next step:
-  Run 'ao task update --help' to inspect accepted values and input precedence.</pre>
+  Run 'ao task update --help' for accepted values and --input-json precedence.</pre>
             </article>
           </div>
 
@@ -100,6 +103,119 @@ Next step:
               <li>Every help surface starts with intent before flags.</li>
               <li>Grouped commands reduce lookup cost for first-time operators.</li>
               <li>Next-step hint directs users to the exact subcommand help path.</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="group-audit-title">
+        <h2 class="board-title" id="group-audit-title">
+          Scoped Command Group Audit Matrix
+        </h2>
+        <div class="route-shell">
+          <header class="route-header">
+            <p class="breadcrumbs">CLI Help / Cross-group consistency / Intent + safety scan</p>
+            <div class="state-strip" aria-label="Group audit states">
+              <span class="state-chip active">audit-ready</span>
+              <span class="state-chip">copy-aligned</span>
+              <span class="state-chip success">stable-contracts</span>
+            </div>
+          </header>
+
+          <div class="surface-columns two">
+            <article class="terminal-pane" aria-labelledby="task-control-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="task-control-help-title">$ ao task-control --help</p>
+              </div>
+              <pre>task-control - Apply operational controls to tasks
+
+Usage:
+  ao task-control &lt;COMMAND&gt;
+
+Commands:
+  pause               Pause task execution
+  resume              Resume paused task execution
+  cancel              Cancel a task (destructive; --dry-run and --confirm available)
+  set-priority        Set task priority: critical, high, medium, low
+  set-deadline        Set task deadline using RFC3339 timestamp format</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="workflow-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="workflow-help-title">$ ao workflow --help</p>
+              </div>
+              <pre>workflow - Run and control workflow execution
+
+Usage:
+  ao workflow &lt;COMMAND&gt;
+
+Commands:
+  run                 Start a workflow for a task
+  pause               Pause an active workflow (destructive; --dry-run and --confirm available)
+  cancel              Cancel a workflow (destructive; --dry-run and --confirm available)
+  phase               Manual actions for one workflow phase
+  phases              Manage workflow phase definitions (remove is destructive)
+  checkpoints         List and inspect workflow checkpoints</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="requirements-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="requirements-help-title">$ ao requirements --help</p>
+              </div>
+              <pre>requirements - Draft and manage project requirements
+
+Usage:
+  ao requirements &lt;COMMAND&gt;
+
+Commands:
+  draft               Draft requirements from project context
+  list                List requirements
+  get                 Get a requirement by id
+  refine              Refine existing requirements
+  create              Create a requirement
+  update              Update requirement fields
+  mockups             Manage requirement mockups and linked assets
+
+Accepted values (requirements update):
+  --status: draft|refined|planned|in-progress|in_progress|done
+  --priority: must|should|could|wont|won't</pre>
+            </article>
+
+            <article class="terminal-pane" aria-labelledby="git-help-title">
+              <div class="terminal-bar">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+                <p id="git-help-title">$ ao git --help</p>
+              </div>
+              <pre>git - Manage Git repositories, worktrees, and confirmations
+
+Usage:
+  ao git &lt;COMMAND&gt;
+
+Commands:
+  repo               Manage repo registry entries
+  push               Push branch updates (--force requires --confirmation-id)
+  worktree           Manage repository worktrees (remove supports --dry-run)
+  confirm            Request/respond/outcome for confirmation workflows</pre>
+            </article>
+          </div>
+
+          <aside class="annotation-panel" aria-labelledby="group-audit-annotation-title">
+            <h3 id="group-audit-annotation-title">Audit intent</h3>
+            <ul>
+              <li>Each group starts with intent, then usage, then command map.</li>
+              <li>Destructive paths call out `--dry-run` and exact confirmation flag semantics.</li>
+              <li>Bounded values stay explicit where operators commonly fail first-run input.</li>
             </ul>
           </aside>
         </div>
@@ -127,30 +243,32 @@ Next step:
                 <span class="dot green"></span>
                 <p id="command-pane-title">$ ao task update --help</p>
               </div>
-              <pre>update - Update an existing task using explicit flags or --input-json
+              <pre>update - Update a task using explicit flags or --input-json
 
 Usage:
   ao task update --id &lt;TASK_ID&gt; [OPTIONS]
 
 Required:
-  --id &lt;TASK_ID&gt;           Task identifier (for example: TASK-002)
+  --id &lt;TASK_ID&gt;                        Task identifier (for example: TASK-002)
 
 Options:
-  --status &lt;STATUS&gt;        Task status. Accepted values:
-                           backlog|todo, ready, in-progress|in_progress, blocked,
-                           on-hold|on_hold, done, cancelled
-  --type &lt;TYPE&gt;            Task type. Accepted values:
-                           feature, bugfix, hotfix, refactor, docs, test, chore, experiment
-  --priority &lt;PRIORITY&gt;    Task priority: critical, high, medium, low
-  --deadline &lt;YYYY-MM-DD&gt;  Deadline in ISO date format
-  --input-json &lt;PATH&gt;      Load update payload from JSON file; when set, JSON values
-                           take precedence over individual field flags
-  --json                   Emit ao.cli.v1 envelope
-  -h, --help               Print help
+  --title &lt;TITLE&gt;                       Updated task title
+  --description &lt;TEXT&gt;                  Updated task description
+  --status &lt;STATUS&gt;                     Task status:
+                                        backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled
+  --priority &lt;PRIORITY&gt;                 Task priority: critical|high|medium|low
+  --assignee &lt;ASSIGNEE&gt;                 Updated assignee value
+  --linked-architecture-entity &lt;ENTITY_ID&gt;
+                                        Architecture entity id to link (repeatable)
+  --replace-linked-architecture-entities
+                                        Replace existing linked architecture entities
+  --input-json &lt;JSON&gt;                   JSON payload; when set, JSON values override individual field flags
+  --json                                Emit ao.cli.v1 envelope
+  -h, --help                            Print help
 
 Examples:
   ao task update --id TASK-002 --status in-progress --priority high
-  ao task update --id TASK-002 --input-json ./task-update.json --json</pre>
+  ao task update --id TASK-002 --input-json '{"status":"in-progress","priority":"high"}' --json</pre>
             </article>
 
             <aside class="checklist-panel" aria-labelledby="command-checklist-title">
@@ -158,7 +276,7 @@ Examples:
               <ul>
                 <li>Accepted values shown in deterministic order.</li>
                 <li>Alias forms (`in-progress|in_progress`) stay explicit.</li>
-                <li>`--input-json` precedence is called out in-line.</li>
+                <li>`--input-json &lt;JSON&gt;` precedence is called out in-line.</li>
                 <li>Examples include both human and `--json` automation paths.</li>
               </ul>
 
@@ -195,7 +313,7 @@ Examples:
                 <span class="dot green"></span>
                 <p id="human-error-title">$ ao task update --id TASK-002 --status paused</p>
               </div>
-              <pre>error: invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run 'ao task update --help'
+              <pre>error: invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run the same command with --help
 
 rerun:
   ao task update --id TASK-002 --status in-progress</pre>
@@ -213,7 +331,7 @@ rerun:
   "ok": false,
   "error": {
     "code": "invalid_input",
-    "message": "invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run 'ao task update --help'",
+    "message": "invalid status 'paused'; expected one of: backlog, todo, ready, in-progress, in_progress, blocked, on-hold, on_hold, done, cancelled; run the same command with --help",
     "exit_code": 2
   }
 }</pre>
@@ -253,7 +371,7 @@ rerun:
                 <span class="dot green"></span>
                 <p id="confirmation-title">$ ao git worktree remove --repo ao-cli --worktree-name task-task-002</p>
               </div>
-              <pre>error: CONFIRMATION_REQUIRED: rerun 'ao git worktree remove --repo ao-cli --worktree-name task-task-002' with --confirmation-id CONF-7F3A; use --dry-run to preview changes
+              <pre>error: CONFIRMATION_REQUIRED: request and approve a git confirmation for 'remove_worktree' on 'ao-cli', then rerun with --confirmation-id &lt;id&gt;; use --dry-run to preview changes
 
 preview command:
   ao git worktree remove --repo ao-cli --worktree-name task-task-002 --dry-run
@@ -274,16 +392,18 @@ task/workflow variant:
   "ok": true,
   "data": {
     "operation": "git.worktree.remove",
-    "target": "task-task-002",
+    "target": {
+      "repo": "ao-cli",
+      "worktree_name": "task-task-002"
+    },
+    "action": "git.worktree.remove",
     "destructive": true,
     "dry_run": true,
     "requires_confirmation": true,
     "planned_effects": [
-      "validate worktree path exists",
-      "verify branch and worktree mapping",
-      "remove worktree and branch on confirmed rerun"
+      "remove git worktree from repository"
     ],
-    "next_step": "rerun with --confirmation-id CONF-7F3A"
+    "next_step": "request/approve a git confirmation, then rerun with --confirmation-id <id>"
   }
 }</pre>
             </article>
@@ -294,7 +414,7 @@ task/workflow variant:
             <ul>
               <li>`CONFIRMATION_REQUIRED` token appears unchanged across groups.</li>
               <li>Exact confirmation flag name is present in every blocking message.</li>
-              <li>`--confirmation-id &lt;id&gt;` guidance appears for request-based approvals.</li>
+              <li>Git paths include request/approval guidance plus `--confirmation-id &lt;id&gt;`.</li>
               <li>`--confirm &lt;token&gt;` guidance remains explicit for task/workflow controls.</li>
               <li>`--dry-run` path is always promoted before mutation.</li>
               <li>Dry-run payload keeps shared keys in stable top-level order.</li>
@@ -327,9 +447,9 @@ of: backlog, todo,
 ready, in-progress,
 in_progress, blocked,
 on-hold, on_hold, done,
-cancelled; run
-'ao task update
---help'</pre>
+cancelled; run the
+same command with
+--help</pre>
             </section>
 
             <section class="phone-actions" aria-label="Recovery actions">

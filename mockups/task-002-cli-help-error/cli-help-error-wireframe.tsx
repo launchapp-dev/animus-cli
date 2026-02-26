@@ -3,6 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 type SurfaceId =
   | "root-help"
   | "group-help"
+  | "group-audit"
   | "command-help"
   | "validation"
   | "destructive"
@@ -31,7 +32,11 @@ type ValidationDomain =
 
 type DryRunPreview = {
   operation: string;
-  target: string;
+  target: {
+    repo: string;
+    worktree_name: string;
+  };
+  action: string;
   destructive: boolean;
   dry_run: boolean;
   requires_confirmation: boolean;
@@ -64,6 +69,7 @@ type SurfaceDescriptor = {
 const SURFACES: SurfaceDescriptor[] = [
   { id: "root-help", label: "Root help", acceptance: ["AC-01", "AC-10", "AC-12"] },
   { id: "group-help", label: "Group help", acceptance: ["AC-01", "AC-10"] },
+  { id: "group-audit", label: "Scoped group audit", acceptance: ["AC-01", "AC-02"] },
   { id: "command-help", label: "Command help", acceptance: ["AC-02", "AC-03", "AC-10"] },
   { id: "validation", label: "Validation", acceptance: ["AC-04", "AC-11", "AC-12"] },
   { id: "destructive", label: "Destructive safety", acceptance: ["AC-05", "AC-06", "AC-09"] },
@@ -92,6 +98,7 @@ export const ACCEPTED_VALUES: Record<ValidationDomain, string[]> = {
 export const SHARED_DRY_RUN_KEYS = [
   "operation",
   "target",
+  "action",
   "destructive",
   "dry_run",
   "requires_confirmation",
@@ -100,7 +107,7 @@ export const SHARED_DRY_RUN_KEYS = [
 ] as const;
 
 const ROOT_HELP_LINES = [
-  "ao - Agent Orchestrator control plane CLI",
+  "ao - Agent Orchestrator CLI",
   "",
   "Purpose:",
   "  Coordinate daemon, project, task, workflow, review, and QA operations.",
@@ -109,87 +116,165 @@ const ROOT_HELP_LINES = [
   "  ao [OPTIONS] <COMMAND>",
   "",
   "Options:",
-  "  --project-root <PATH>    Resolve AO state root for this invocation",
-  "  --json                   Emit ao.cli.v1 machine envelope",
+  "  --project-root <PATH>    Project root directory; overrides PROJECT_ROOT and default root resolution",
+  "  --json                   Emit machine-readable output using ao.cli.v1 envelope",
   "  -h, --help               Print help",
   "",
   "Core command groups:",
-  "  daemon          Manage standalone daemon lifecycle and telemetry",
-  "  task            Create, update, and track project tasks",
+  "  daemon          Manage daemon lifecycle and automation settings",
+  "  agent           Run and inspect agent executions",
+  "  project         Manage project registration and metadata",
+  "  task            Manage tasks, dependencies, and status",
   "  task-control    Apply task pause/resume/cancel operational controls",
-  "  workflow        Run and control workflow phases",
-  "  requirements    Draft and refine requirements",
-  "  git             Safe repository and worktree operations",
+  "  workflow        Run and control workflow execution",
+  "  requirements    Draft and manage project requirements",
+  "  git             Manage git repos, worktrees, and confirmations",
 ].join("\n");
 
 const GROUP_HELP_LINES = [
-  "task - Create, mutate, and inspect AO tasks",
+  "task - Manage tasks, dependencies, and status",
   "",
   "Usage:",
   "  ao task <COMMAND>",
   "",
   "Commands:",
-  "  list                 List tasks with optional status filters",
-  "  prioritized          Show priority-ranked task queue",
-  "  get                  Show full task details by id",
-  "  create               Create a new task linked to requirement context",
-  "  update               Update title, description, status, type, or deadline",
+  "  list                 List tasks with optional filters",
+  "  prioritized          List tasks sorted by priority and urgency",
+  "  next                 Get the next ready task",
+  "  get                  Get a task by id",
+  "  create               Create a task",
+  "  update               Update title, description, status, priority, and links",
   "  delete               Remove a task (destructive; confirmation required)",
+  "  assign-agent         Assign an agent role to a task",
+  "  dependency-add       Add a dependency edge",
+  "  dependency-remove    Remove a dependency edge",
+  "  status               Set task status",
   "",
   "Next step:",
-  "  Run 'ao task update --help' to inspect accepted values and input precedence.",
+  "  Run 'ao task update --help' for accepted values and --input-json precedence.",
+].join("\n");
+
+const TASK_CONTROL_HELP_LINES = [
+  "task-control - Apply operational controls to tasks",
+  "",
+  "Usage:",
+  "  ao task-control <COMMAND>",
+  "",
+  "Commands:",
+  "  pause               Pause task execution",
+  "  resume              Resume paused task execution",
+  "  cancel              Cancel a task (destructive; --dry-run and --confirm available)",
+  "  set-priority        Set task priority: critical, high, medium, low",
+  "  set-deadline        Set task deadline using RFC3339 timestamp format",
+].join("\n");
+
+const WORKFLOW_HELP_LINES = [
+  "workflow - Run and control workflow execution",
+  "",
+  "Usage:",
+  "  ao workflow <COMMAND>",
+  "",
+  "Commands:",
+  "  run                 Start a workflow for a task",
+  "  pause               Pause an active workflow (destructive; --dry-run and --confirm available)",
+  "  cancel              Cancel a workflow (destructive; --dry-run and --confirm available)",
+  "  phase               Manual actions for one workflow phase",
+  "  phases              Manage workflow phase definitions (remove is destructive)",
+  "  checkpoints         List and inspect workflow checkpoints",
+].join("\n");
+
+const REQUIREMENTS_HELP_LINES = [
+  "requirements - Draft and manage project requirements",
+  "",
+  "Usage:",
+  "  ao requirements <COMMAND>",
+  "",
+  "Commands:",
+  "  draft               Draft requirements from project context",
+  "  list                List requirements",
+  "  get                 Get a requirement by id",
+  "  refine              Refine existing requirements",
+  "  create              Create a requirement",
+  "  update              Update requirement fields",
+  "  mockups             Manage requirement mockups and linked assets",
+  "",
+  "Accepted values (requirements update):",
+  "  --status: draft|refined|planned|in-progress|in_progress|done",
+  "  --priority: must|should|could|wont|won't",
+].join("\n");
+
+const GIT_HELP_LINES = [
+  "git - Manage Git repositories, worktrees, and confirmations",
+  "",
+  "Usage:",
+  "  ao git <COMMAND>",
+  "",
+  "Commands:",
+  "  repo               Manage repo registry entries",
+  "  push               Push branch updates (--force requires --confirmation-id)",
+  "  worktree           Manage repository worktrees (remove supports --dry-run)",
+  "  confirm            Request/respond/outcome for confirmation workflows",
 ].join("\n");
 
 const COMMAND_HELP_LINES = [
-  "update - Update an existing task using explicit flags or --input-json",
+  "update - Update a task using explicit flags or --input-json",
   "",
   "Usage:",
   "  ao task update --id <TASK_ID> [OPTIONS]",
   "",
   "Required:",
-  "  --id <TASK_ID>         Task identifier (for example: TASK-002)",
+  "  --id <TASK_ID>                        Task identifier (for example: TASK-002)",
   "",
   "Options:",
-  "  --status <STATUS>      Accepted values: backlog|todo, ready, in-progress|in_progress, blocked, on-hold|on_hold, done, cancelled",
-  "  --priority <PRIORITY>  Accepted values: critical, high, medium, low",
-  "  --type <TYPE>          Accepted values: feature, bugfix, hotfix, refactor, docs, test, chore, experiment",
-  "  --deadline <YYYY-MM-DD> Deadline in ISO date format",
-  "  --input-json <PATH>    JSON values take precedence over individual flags when present",
+  "  --title <TITLE>                       Updated task title",
+  "  --description <TEXT>                  Updated task description",
+  "  --status <STATUS>                     Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled",
+  "  --priority <PRIORITY>                 Task priority: critical|high|medium|low",
+  "  --assignee <ASSIGNEE>                 Updated assignee value",
+  "  --linked-architecture-entity <ENTITY_ID>  Architecture entity id to link (repeatable)",
+  "  --replace-linked-architecture-entities     Replace existing linked architecture entities",
+  "  --input-json <JSON>                   JSON payload; when set, JSON values override individual field flags",
+  "  --json                                Emit ao.cli.v1 envelope",
+  "  -h, --help                            Print help",
   "",
   "Examples:",
   "  ao task update --id TASK-002 --status in-progress --priority high",
-  "  ao task update --id TASK-002 --input-json ./task-update.json --json",
+  "  ao task update --id TASK-002 --input-json '{\"status\":\"in-progress\",\"priority\":\"high\"}' --json",
 ].join("\n");
 
 const DESTRUCTIVE_PREVIEW: DryRunPreview = {
   operation: "git.worktree.remove",
-  target: "task-task-002",
+  target: {
+    repo: "ao-cli",
+    worktree_name: "task-task-002",
+  },
+  action: "git.worktree.remove",
   destructive: true,
   dry_run: true,
   requires_confirmation: true,
   planned_effects: [
-    "validate worktree path exists",
-    "verify branch and worktree mapping",
-    "remove worktree and branch on confirmed rerun",
+    "remove git worktree from repository",
   ],
-  next_step: "rerun with --confirmation-id CONF-7F3A",
+  next_step: "request/approve a git confirmation, then rerun with --confirmation-id <id>",
 };
 
 export function formatInvalidValueError(
   domain: ValidationDomain,
   invalidValue: string,
-  helpCommand: string,
 ): string {
   const accepted = ACCEPTED_VALUES[domain].join(", ");
-  return `invalid ${domain} '${invalidValue}'; expected one of: ${accepted}; run '${helpCommand} --help'`;
+  return `invalid ${domain} '${invalidValue}'; expected one of: ${accepted}; run the same command with --help`;
 }
 
 export function formatConfirmationRequired(
   command: string,
-  confirmationFlag: "--confirm" | "--confirmation-id",
   token: string,
 ): string {
-  return `CONFIRMATION_REQUIRED: rerun '${command}' with ${confirmationFlag} ${token}; use --dry-run to preview changes`;
+  return `CONFIRMATION_REQUIRED: rerun '${command}' with --confirm ${token}; use --dry-run to preview changes`;
+}
+
+export function formatGitConfirmationRequired(operationType: string, repoName: string): string {
+  return `CONFIRMATION_REQUIRED: request and approve a git confirmation for '${operationType}' on '${repoName}', then rerun with --confirmation-id <id>; use --dry-run to preview changes`;
 }
 
 export const traceability: Record<TraceabilityId, string[]> = {
@@ -211,34 +296,19 @@ export function CliHelpErrorWireframeApp(): ReactNode {
   const [activeSurface, setActiveSurface] = useState<SurfaceId>("root-help");
 
   const invalidStatusError = useMemo(
-    () => formatInvalidValueError("status", "paused", "ao task update"),
+    () => formatInvalidValueError("status", "paused"),
     [],
   );
   const invalidRequirementStatusError = useMemo(
-    () =>
-      formatInvalidValueError(
-        "requirement-status",
-        "waiting",
-        "ao requirements update",
-      ),
+    () => formatInvalidValueError("requirement-status", "waiting"),
     [],
   );
   const workflowConfirmationMessage = useMemo(
-    () =>
-      formatConfirmationRequired(
-        "ao workflow cancel --id WF-42",
-        "--confirm",
-        "WF-42",
-      ),
+    () => formatConfirmationRequired("ao workflow cancel --id WF-42", "WF-42"),
     [],
   );
   const gitConfirmationMessage = useMemo(
-    () =>
-      formatConfirmationRequired(
-        "ao git worktree remove --repo ao-cli --worktree-name task-task-002",
-        "--confirmation-id",
-        "CONF-7F3A",
-      ),
+    () => formatGitConfirmationRequired("remove_worktree", "ao-cli"),
     [],
   );
 
@@ -325,6 +395,15 @@ function renderSurface(
       return <TerminalBlock command="ao --help" output={ROOT_HELP_LINES} />;
     case "group-help":
       return <TerminalBlock command="ao task --help" output={GROUP_HELP_LINES} />;
+    case "group-audit":
+      return (
+        <>
+          <TerminalBlock command="ao task-control --help" output={TASK_CONTROL_HELP_LINES} />
+          <TerminalBlock command="ao workflow --help" output={WORKFLOW_HELP_LINES} />
+          <TerminalBlock command="ao requirements --help" output={REQUIREMENTS_HELP_LINES} />
+          <TerminalBlock command="ao git --help" output={GIT_HELP_LINES} />
+        </>
+      );
     case "command-help":
       return <TerminalBlock command="ao task update --help" output={COMMAND_HELP_LINES} />;
     case "validation":

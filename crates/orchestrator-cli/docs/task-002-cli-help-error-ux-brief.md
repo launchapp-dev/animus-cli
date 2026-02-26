@@ -2,153 +2,116 @@
 
 ## Phase
 - Workflow phase: `ux-research`
-- Workflow ID: `4e289849-5501-4332-ba0d-e907038390ce`
+- Workflow ID: `c280da10-e502-499b-9f57-62e75e158630`
 - Task: `TASK-002`
 
+## Inputs
+- Requirements baseline: `crates/orchestrator-cli/docs/task-002-cli-help-error-requirements.md`
+- Scoped command groups: `task`, `task-control`, `workflow`, `requirements`, `git`, root/global options
+- Message contracts to preserve: `ao.cli.v1` envelope, canonical invalid-value shape, canonical confirmation-required shape
+
 ## UX Objective
-Define a deterministic CLI guidance experience that helps operators:
+Define a deterministic CLI guidance experience that lets operators and automation:
 - discover command intent quickly,
-- choose valid arguments without source-code lookup,
+- supply valid arguments without source lookup,
 - recover from invalid input in one rerun,
-- safely execute destructive flows with explicit preview and confirmation.
+- safely execute destructive flows via preview and explicit confirmation.
 
-The UX must work consistently across human terminal use and machine-driven
-`--json` automation.
-
-## Primary Users and Jobs
-
-| User | Primary jobs | UX success signal |
+## Primary Users
+| User | Primary job | UX success signal |
 | --- | --- | --- |
-| Operator | Discover command shape and run task/workflow/git operations correctly | Finds correct command + args from help in under 30 seconds |
-| Automation engineer | Parse deterministic errors and dry-run previews in CI scripts | Can route invalid-input failures without string-guessing |
-| Reviewer/on-call | Triage user command failures and provide exact rerun guidance | Can copy/paste remediation command from error output directly |
+| Operator | Find correct command/flags for task/workflow/git operations | Successful invocation after help lookup in one navigation path |
+| Automation engineer | Parse failures and route retries in CI scripts | Deterministic branch logic from `ao.cli.v1` and stable message tokens |
+| Reviewer/on-call | Triage command failures and guide rerun | Can copy/paste exact remediation command from output |
 
-## UX Principles
-1. Intent first: every help surface explains what the command does before flags.
-2. Recovery first: invalid input output always tells users exactly how to rerun.
-3. Deterministic language: token order and punctuation remain stable for tests.
-4. Safety before mutation: destructive paths always advertise dry-run + confirmation.
-5. Human/machine parity: non-JSON and JSON outputs carry the same actionable meaning.
-
-## Information Architecture
-
-### Primary CLI Surfaces ("Screens")
-1. Root help surface: `ao --help`
-2. Command-group help surface: `ao task --help`, `ao workflow --help`, `ao requirements --help`, `ao task-control --help`, `ao git --help`
-3. Command-level help surface: `ao <group> <command> --help`
-4. Invalid-value error surface: bounded-domain parse failures (`status`, `priority`, `type`, etc.)
-5. Confirmation-required error surface: destructive command run without required confirmation token
-6. Destructive dry-run preview surface: side-effect-free summary before live execution
-7. JSON envelope surface: `ao.cli.v1` success/error payloads for automation
-
-### Content Hierarchy Per Surface
-1. Command intent (`about` text)
-2. Usage line
-3. Primary options and expected formats
-4. Accepted values or alias guidance
-5. Next-step examples (`--help`, `--dry-run`, confirmation flag)
-
-## Key Screen and Interaction Contracts
-
-| Surface | User goal | Primary interactions | Required states |
+## Key Screens (CLI Surfaces)
+| Screen ID | Surface | User goal | Required hierarchy |
 | --- | --- | --- | --- |
-| Root help | Understand available command groups quickly | Read summary, select group | help-loaded |
-| Group help | Identify right subcommand and shared flags | Scan subcommands, inspect key options | help-loaded |
-| Command help | Build valid invocation first try | Inspect value format/defaults/precedence | help-loaded |
-| Invalid-value error | Fix malformed or unsupported input | Read invalid value + accepted list + rerun hint | error-shown, corrected-rerun |
-| Confirmation-required error | Complete destructive action safely | Obtain/provide confirmation token or run `--dry-run` | confirmation-blocked, previewed, confirmed-rerun |
-| Dry-run preview | Understand impact before mutation | Review deterministic key set and planned effects | preview-rendered |
-| JSON envelope | Integrate with scripts/tools | Parse `ok/error`, branch on message code/text | success-json, error-json |
+| S1 | Root help (`ao --help`) | Discover top-level capability map | intent -> command groups -> global options |
+| S2 | Group help (`ao <group> --help`) | Choose correct subcommand | group intent -> subcommands -> shared options |
+| S3 | Command help (`ao <group> <command> --help`) | Build valid invocation | intent -> usage -> options/args -> accepted values/precedence |
+| S4 | Invalid-value error | Repair bounded-domain input | failing domain/value -> accepted values -> rerun hint |
+| S5 | Confirmation-required error | Complete destructive flow safely | `CONFIRMATION_REQUIRED` -> exact confirmation guidance -> `--dry-run` hint |
+| S6 | Destructive dry-run preview | Review impact before mutation | operation summary -> target/action -> planned effects -> next step |
+| S7 | JSON envelope (`--json`) | Machine-safe branching | `schema/ok` + success data OR `schema/ok=false/error` |
+
+## Interaction and State Model
+| Surface | Trigger | Primary interaction | State transition |
+| --- | --- | --- | --- |
+| S1 -> S2 -> S3 | User needs command shape | Drill down from root to group to command help | `help-loaded` -> `command-selected` -> `ready-to-run` |
+| S4 | Invalid bounded value | Read accepted values and rerun with corrected token | `error-shown` -> `corrected-rerun` |
+| S5 -> S6 -> execution | Destructive command without confirmation | Read confirmation requirement, optionally preview, rerun with confirmation token | `confirmation-blocked` -> `previewed` -> `confirmed-rerun` |
+| S7 | Automation path | Parse deterministic error text and exit code mapping | `error-json` or `success-json` |
 
 ## Critical User Flows
-
-### Flow A: Discover and Run a Command
+### Flow A: Command discovery and first-run success
 1. User runs `ao --help`.
-2. User chooses command group from grouped help content.
-3. User runs `ao <group> --help` and then command-level `--help`.
-4. User sees argument format and accepted value guidance.
-5. User executes command successfully on first full attempt.
+2. User picks a command group and opens `ao <group> --help`.
+3. User opens command-level help for the intended action.
+4. User executes the command with valid args.
 
-### Flow B: Invalid Bounded Value Recovery
-1. User runs command with invalid value (example: unsupported status).
-2. CLI returns canonical invalid-value message with invalid token preserved.
-3. Message includes deterministic accepted-values list and `--help` rerun hint.
-4. User reruns once with valid value and proceeds.
+### Flow B: Invalid bounded value recovery
+1. User runs a command with unsupported `status`/`priority`/`type`/other bounded value.
+2. CLI returns canonical invalid-value message.
+3. User reruns once using accepted values from the message or `--help`.
 
-### Flow C: Destructive Operation Safety Gate
-1. User starts destructive command without confirmation material.
-2. CLI returns `CONFIRMATION_REQUIRED` with exact flag/token guidance.
-3. User optionally runs `--dry-run` to inspect planned effects.
-4. User reruns with required confirmation input.
-5. Operation executes only after explicit confirmation.
+### Flow C: Destructive safety gate
+1. User invokes destructive action without confirmation material.
+2. CLI returns `CONFIRMATION_REQUIRED` with exact flag guidance (`--confirm` or `--confirmation-id`).
+3. User may run `--dry-run` to inspect `planned_effects`.
+4. User reruns with required confirmation input; mutation proceeds only then.
 
-### Flow D: Machine-Mode Error Handling
-1. Automation invokes command with `--json`.
-2. On invalid input, CLI returns `ao.cli.v1` error envelope.
-3. Automation reads deterministic message text and exits with mapped code.
-4. Script emits remediation or retries with corrected args.
+### Flow D: JSON automation handling
+1. Automation calls command with `--json`.
+2. On validation/confirmation failure, CLI emits `ao.cli.v1` error envelope.
+3. Script branches on `ok`, `error.code`, and deterministic message contract.
 
-## Layout, Hierarchy, and Responsive Terminal Behavior
-
-### Terminal Width Strategy
-- `>=100 cols`: keep canonical messages on one line where possible.
-- `80-99 cols`: allow natural wrapping at separators (`;`) without losing order.
-- `<80 cols`: keep clauses short and front-load actionable guidance.
-
-### Help Readability Rules
-- Keep section order stable: intent -> usage -> args/options -> examples/next step.
-- Keep argument descriptions concise and format-specific.
-- Keep accepted values in deterministic, comma-separated order.
-
-### Error Readability Rules
-- Start with failure domain and offending value.
-- Follow with accepted values.
-- End with concrete next-step command hint.
+## Responsive Terminal Behavior
+- `>=100 cols`: keep canonical error shapes on one line where possible.
+- `80-99 cols`: wrap only at clause separators (`;`) while preserving clause order.
+- `<80 cols`: keep clause order unchanged; avoid splitting critical tokens (`--confirm`, `--confirmation-id`, command names).
 
 ## Accessibility Constraints (Non-Negotiable)
-1. Do not rely on color to convey required meaning.
-2. Keep all help/error content meaningful in plain-text terminals.
-3. Use ASCII-safe punctuation and quoting for reliable copy/paste and TTY support.
-4. Preserve deterministic phrase order for screen readers and assistive parsing.
-5. Ensure guidance is keyboard-only operable (no interactive prompt dependency).
-6. Keep command hints explicit and fully typed (no implied placeholders only).
-7. Avoid control characters or formatting that degrade in low-vision/high-contrast terminal themes.
-8. Maintain parseable JSON mode output with no extra human-only prefixes.
-9. Keep line wrapping tolerant of narrow terminals without truncating critical tokens.
-10. Include explicit flag names in remediation messages (`--help`, `--dry-run`, `--confirm`, `--confirmation-id`).
+1. No color-only meaning; output must be complete in plain text.
+2. Keep copy ASCII-safe and terminal-safe for reliable paste and screen readers.
+3. Preserve deterministic token order for assistive parsing and snapshot tests.
+4. Require keyboard-only flows; no interactive prompt dependency for core recovery path.
+5. Keep remediation explicit with full flag names (`--help`, `--dry-run`, `--confirm`, `--confirmation-id`).
+6. Avoid control characters or formatting that breaks high-contrast/low-vision terminal themes.
+7. Maintain machine-parseable JSON output with no extra human-only prefixes.
 
-## Content Contract for Implementation Phase
+## Deterministic Content Contracts
+### Invalid-value contract
+`invalid <domain> '<value>'; expected one of: <v1>, <v2>, ...; run the same command with --help`
 
-### Invalid-Value Message Contract
-- Shape: `invalid <domain> '<value>'; expected one of: <v1>, <v2>, ...; run '<command> --help'`
-- Requirements:
-  - deterministic accepted-value order,
-  - stable punctuation and clause order,
-  - includes actionable rerun hint.
+### Confirmation-required contract
+- Non-git: `CONFIRMATION_REQUIRED: rerun '<command>' with --confirm <token>; use --dry-run to preview changes`
+- Git: `CONFIRMATION_REQUIRED: request and approve a git confirmation for '<operation>' on '<repo>', then rerun with --confirmation-id <id>; use --dry-run to preview changes`
 
-### Confirmation-Required Message Contract
-- Shape: `CONFIRMATION_REQUIRED: rerun '<command>' with <confirmation flag> <token>; use --dry-run to preview changes`
-- Requirements:
-  - include exact required confirmation flag,
-  - include preview guidance when supported,
-  - remain stable for snapshot assertions.
+### Dry-run preview contract
+Shared keys must be present in stable order:
+1. `operation`
+2. `target`
+3. `action`
+4. `destructive`
+5. `dry_run`
+6. `requires_confirmation`
+7. `planned_effects`
+8. `next_step`
 
-### Dry-Run Preview UX Contract
-Top-level keys must be present and stable:
-- `operation`
-- `target`
-- `destructive`
-- `dry_run`
-- `requires_confirmation`
-- `planned_effects`
-- `next_step`
+## Requirements Traceability
+| Requirement group | UX surfaces |
+| --- | --- |
+| FR-01 help metadata | S1, S2, S3 |
+| FR-02 accepted values | S3, S4 |
+| FR-03 actionable validation errors | S4, S7 |
+| FR-04 confirmation guidance | S5, S6, S7 |
+| FR-05 dry-run schema consistency | S6, S7 |
+| FR-06 human/machine alignment | S4, S5, S7 |
+| FR-07 regression coverage targets | S1-S7 |
 
-## UX Acceptance Checklist for Implementation
-- Root and scoped command help expose clear command intent (`about`) text.
-- Key arguments include format/accepted-value guidance.
-- `--input-json` precedence is explicitly documented where applicable.
-- Invalid-value errors include domain, invalid value, accepted values, and rerun hint.
-- Destructive commands emit consistent `CONFIRMATION_REQUIRED` guidance.
-- Dry-run previews expose shared key set in stable order.
-- Non-JSON and JSON surfaces remain behaviorally aligned and deterministic.
-- Output remains legible and actionable on narrow terminals.
+## Implementation Handoff Checklist
+- Keep command/group help copy intent-first and precedence-aware (`--input-json` where supported).
+- Preserve canonical invalid-value and confirmation-required token order.
+- Keep dry-run shared key set stable across task/workflow/git destructive paths.
+- Assert both plain-text and `--json` surfaces in smoke/e2e tests.

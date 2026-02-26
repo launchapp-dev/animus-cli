@@ -15,18 +15,26 @@ dry-run previews, and JSON parity for automation consumers.
 | --- | --- |
 | Root help (`ao --help`) | `wireframes.html` (`Root + Group Help Hierarchy`) + `cli-help-error-wireframe.tsx` (`ROOT_HELP_LINES`, `SURFACES` entry `root-help`) |
 | Group help (`ao task --help`) | `wireframes.html` (`Root + Group Help Hierarchy`) + `cli-help-error-wireframe.tsx` (`GROUP_HELP_LINES`, `SURFACES` entry `group-help`) |
+| Scoped group audit (`task-control`, `workflow`, `requirements`, `git`) | `wireframes.html` (`Scoped Command Group Audit Matrix`) + `cli-help-error-wireframe.tsx` (`SURFACES` entry `group-audit`, `*_HELP_LINES`) |
 | Command help (`ao task update --help`) | `wireframes.html` (`Command Help + Argument Clarity`) + `cli-help-error-wireframe.tsx` (`COMMAND_HELP_LINES`, `SURFACES` entry `command-help`) |
 | Invalid-value recovery | `wireframes.html` (`Invalid Value Recovery + JSON Parity`) + `cli-help-error-wireframe.tsx` (`formatInvalidValueError`, `SURFACES` entry `validation`) |
-| Confirmation-required gate | `wireframes.html` (`Confirmation Required + Dry Run`) + `cli-help-error-wireframe.tsx` (`formatConfirmationRequired`, `SURFACES` entry `destructive`) |
+| Confirmation-required gate | `wireframes.html` (`Confirmation Required + Dry Run`) + `cli-help-error-wireframe.tsx` (`formatConfirmationRequired`, `formatGitConfirmationRequired`, `SURFACES` entry `destructive`) |
 | Dry-run preview shape | `wireframes.html` (`Confirmation Required + Dry Run`) + `cli-help-error-wireframe.tsx` (`DESTRUCTIVE_PREVIEW`, `SHARED_DRY_RUN_KEYS`) |
 | JSON envelope parity | `wireframes.html` (`Invalid Value Recovery + JSON Parity`) + `cli-help-error-wireframe.tsx` (`CliErrorEnvelope`, `CliSuccessEnvelope`) |
 
-## Mockup-Review Resolutions
-- Added `task-control` to root help command-group hierarchy to match scoped requirements coverage.
-- Tightened invalid-value remediation to command-level help (`ao task update --help`) instead of broader group help.
-- Corrected destructive git confirmation guidance to `--confirmation-id <id>` and added explicit `--confirm <token>` workflow variant.
-- Added requirement-status invalid-value example in the TSX validation surface for bounded-domain coverage beyond task status.
-- Updated traceability language for `AC-10` to emphasize deterministic fixture strings usable in CLI regression tests.
+## Wireframe Polish Updates
+- Added a scoped command-group audit board covering `task-control`, `workflow`, `requirements`, and `git` help consistency.
+- Aligned invalid-value examples to canonical parser wording: `run the same command with --help`.
+- Aligned git confirmation guidance to canonical request/approve wording plus `--confirmation-id <id>`.
+- Updated dry-run preview contract examples to include the shared `action` key.
+- Kept task/workflow destructive confirmation guidance explicit with `--confirm <token>`.
+
+## Mockup-Review Corrections
+- Corrected CLI command naming drift in help surfaces to match clap subcommands (`dependency-add`, `dependency-remove`, `assign-agent`, `phase`, `phases`, `worktree`, `confirm`).
+- Corrected `ao task update --help` to only show implemented options and removed non-existent fields (`--type`, `--deadline`).
+- Corrected `--input-json` modeling from file-path semantics to payload semantics (`--input-json <JSON>`) while preserving precedence guidance.
+- Corrected `task-control set-deadline` format guidance to RFC3339.
+- Synchronized `wireframes.html` and `cli-help-error-wireframe.tsx` help fixtures so deterministic test authorship can rely on one canonical set.
 
 ## State Coverage
 - Help flow: `discovery`, `selection`, `ready`
@@ -36,11 +44,13 @@ dry-run previews, and JSON parity for automation consumers.
 
 ## Canonical Contracts Modeled
 - Invalid-value message:
-  `invalid <domain> '<value>'; expected one of: <v1>, <v2>, ...; run '<command> --help'`
-- Confirmation-required message:
-  `CONFIRMATION_REQUIRED: rerun '<command>' with <confirmation flag> <token>; use --dry-run to preview changes`
+  `invalid <domain> '<value>'; expected one of: <v1>, <v2>, ...; run the same command with --help`
+- Confirmation-required message (non-git):
+  `CONFIRMATION_REQUIRED: rerun '<command>' with --confirm <token>; use --dry-run to preview changes`
+- Confirmation-required message (git):
+  `CONFIRMATION_REQUIRED: request and approve a git confirmation for '<operation>' on '<repo>', then rerun with --confirmation-id <id>; use --dry-run to preview changes`
 - Shared dry-run keys:
-  `operation`, `target`, `destructive`, `dry_run`, `requires_confirmation`, `planned_effects`, `next_step`
+  `operation`, `target`, `action`, `destructive`, `dry_run`, `requires_confirmation`, `planned_effects`, `next_step`
 
 ## Accessibility and Responsive Intent
 - Plain-text terminal-first rendering with no color-only meaning.
@@ -53,11 +63,11 @@ dry-run previews, and JSON parity for automation consumers.
 
 | AC | Trace |
 | --- | --- |
-| `AC-01` | Root/group help board intent sections and scoped about text (`wireframes.html`, `ROOT_HELP_LINES`, `GROUP_HELP_LINES`) |
-| `AC-02` | Command help board argument guidance with formats/defaults (`wireframes.html`, `COMMAND_HELP_LINES`) |
+| `AC-01` | Root/group help boards plus scoped group audit matrix preserve intent-first help hierarchy (`wireframes.html`, `ROOT_HELP_LINES`, `GROUP_HELP_LINES`, `*_HELP_LINES`) |
+| `AC-02` | Command help board and scoped group audit snippets preserve argument clarity and accepted-value guidance (`wireframes.html`, `COMMAND_HELP_LINES`) |
 | `AC-03` | `--input-json` precedence callouts in command help board and React scaffold (`wireframes.html`, `COMMAND_HELP_LINES`) |
 | `AC-04` | Invalid-value board with deterministic accepted values + rerun hint (`wireframes.html`, `formatInvalidValueError`) |
-| `AC-05` | Confirmation gate board with canonical `CONFIRMATION_REQUIRED` wording (`wireframes.html`, `formatConfirmationRequired`) |
+| `AC-05` | Confirmation gate board with canonical task/workflow and git `CONFIRMATION_REQUIRED` variants (`wireframes.html`, `formatConfirmationRequired`, `formatGitConfirmationRequired`) |
 | `AC-06` | Dry-run preview board includes shared key set in stable order (`wireframes.html`, `SHARED_DRY_RUN_KEYS`) |
 | `AC-07` | JSON envelope examples preserve `ao.cli.v1` error/success semantics (`wireframes.html`, `CliErrorEnvelope`, `CliSuccessEnvelope`) |
 | `AC-08` | Exit-code mapping shown in JSON error examples (`wireframes.html`) |

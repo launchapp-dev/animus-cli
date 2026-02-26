@@ -136,19 +136,28 @@ pub(super) fn resolve_worktree_path(repo_path: &Path, worktree_name: &str) -> Re
     Ok(PathBuf::from(worktree.path))
 }
 
+pub(super) fn git_confirmation_next_step(operation_type: &str, repo_name: &str) -> String {
+    format!(
+        "request and approve a git confirmation for '{}' on '{}', then rerun with --confirmation-id <id>",
+        operation_type, repo_name
+    )
+}
+
+fn git_confirmation_required_message(operation_type: &str, repo_name: &str) -> String {
+    format!(
+        "CONFIRMATION_REQUIRED: {}; use --dry-run to preview changes",
+        git_confirmation_next_step(operation_type, repo_name)
+    )
+}
+
 pub(super) fn ensure_confirmation(
     project_root: &str,
     confirmation_id: Option<&str>,
     operation_type: &str,
     repo_name: &str,
 ) -> Result<()> {
-    let confirmation_id = confirmation_id.ok_or_else(|| {
-        anyhow!(
-            "CONFIRMATION_REQUIRED: request and approve a git confirmation for '{}' on '{}', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
-            operation_type,
-            repo_name
-        )
-    })?;
+    let confirmation_id = confirmation_id
+        .ok_or_else(|| anyhow!(git_confirmation_required_message(operation_type, repo_name)))?;
     let store = load_git_confirmations(project_root)?;
     let request = store
         .requests
@@ -184,4 +193,24 @@ pub(super) fn ensure_confirmation(
         anyhow::bail!("operation not approved for confirmation_id: {confirmation_id}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{git_confirmation_next_step, git_confirmation_required_message};
+
+    #[test]
+    fn git_confirmation_messages_use_canonical_token_order() {
+        let next_step = git_confirmation_next_step("force_push", "repo-a");
+        assert_eq!(
+            next_step,
+            "request and approve a git confirmation for 'force_push' on 'repo-a', then rerun with --confirmation-id <id>"
+        );
+
+        let required = git_confirmation_required_message("force_push", "repo-a");
+        assert_eq!(
+            required,
+            "CONFIRMATION_REQUIRED: request and approve a git confirmation for 'force_push' on 'repo-a', then rerun with --confirmation-id <id>; use --dry-run to preview changes"
+        );
+    }
 }

@@ -6,6 +6,64 @@ use serde_json::Value;
 use std::process::Command;
 use test_harness::CliHarness;
 
+const SHARED_DESTRUCTIVE_DRY_RUN_KEYS: [&str; 8] = [
+    "operation",
+    "target",
+    "action",
+    "destructive",
+    "dry_run",
+    "requires_confirmation",
+    "planned_effects",
+    "next_step",
+];
+
+fn assert_shared_destructive_dry_run_contract(
+    payload: &Value,
+    expected_operation: &str,
+    expected_requires_confirmation: bool,
+) {
+    let data = payload
+        .pointer("/data")
+        .expect("envelope should include /data payload");
+
+    for key in SHARED_DESTRUCTIVE_DRY_RUN_KEYS {
+        assert!(
+            data.get(key).is_some(),
+            "dry-run payload should include shared key '{}'",
+            key
+        );
+    }
+
+    assert_eq!(
+        data.get("operation").and_then(Value::as_str),
+        Some(expected_operation)
+    );
+    assert_eq!(
+        data.get("action").and_then(Value::as_str),
+        Some(expected_operation)
+    );
+    assert_eq!(data.get("dry_run").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        data.get("requires_confirmation").and_then(Value::as_bool),
+        Some(expected_requires_confirmation)
+    );
+    assert!(
+        data.get("target").and_then(Value::as_object).is_some(),
+        "dry-run payload target should be a JSON object"
+    );
+    assert!(
+        data.get("planned_effects")
+            .and_then(Value::as_array)
+            .map(|effects| !effects.is_empty())
+            .unwrap_or(false),
+        "dry-run payload planned_effects should be a non-empty array"
+    );
+    assert!(
+        data.get("next_step").and_then(Value::as_str).is_some(),
+        "dry-run payload next_step should be a string"
+    );
+}
+
 #[test]
 fn e2e_task_lifecycle_round_trip() -> Result<()> {
     let harness = CliHarness::new()?;
@@ -213,20 +271,21 @@ fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
         .to_string();
 
     let confirmation_error = harness.run_json_err(&["task", "delete", "--id", &task_id])?;
-    assert!(
-        confirmation_error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("CONFIRMATION_REQUIRED"),
-        "task delete should require explicit confirmation"
+    let confirmation_message = confirmation_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        confirmation_message,
+        format!(
+            "CONFIRMATION_REQUIRED: rerun 'task delete' with --confirm {}; use --dry-run to preview changes",
+            task_id
+        ),
+        "task delete confirmation message should use canonical token order"
     );
 
     let preview = harness.run_json_ok(&["task", "delete", "--id", &task_id, "--dry-run"])?;
-    assert_eq!(
-        preview.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_shared_destructive_dry_run_contract(&preview, "task.delete", true);
 
     harness.run_json_ok(&["task", "get", "--id", &task_id])?;
     harness.run_json_ok(&["task", "delete", "--id", &task_id, "--confirm", &task_id])?;
@@ -260,21 +319,22 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
 
     let confirmation_error =
         harness.run_json_err(&["task-control", "cancel", "--task-id", &task_id])?;
-    assert!(
-        confirmation_error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("CONFIRMATION_REQUIRED"),
-        "task-control cancel should require explicit confirmation"
+    let confirmation_message = confirmation_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        confirmation_message,
+        format!(
+            "CONFIRMATION_REQUIRED: rerun 'task-control cancel' with --confirm {}; use --dry-run to preview changes",
+            task_id
+        ),
+        "task-control cancel confirmation message should use canonical token order"
     );
 
     let preview =
         harness.run_json_ok(&["task-control", "cancel", "--task-id", &task_id, "--dry-run"])?;
-    assert_eq!(
-        preview.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_shared_destructive_dry_run_contract(&preview, "task-control.cancel", true);
 
     let before_cancel = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
     assert_eq!(
@@ -337,23 +397,22 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         .to_string();
 
     let cancel_error = harness.run_json_err(&["workflow", "cancel", "--id", &workflow_id])?;
-    assert!(
-        cancel_error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("CONFIRMATION_REQUIRED"),
-        "workflow cancel should require explicit confirmation"
+    let cancel_confirmation_message = cancel_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        cancel_confirmation_message,
+        format!(
+            "CONFIRMATION_REQUIRED: rerun 'workflow cancel' with --confirm {}; use --dry-run to preview changes",
+            workflow_id
+        ),
+        "workflow cancel confirmation message should use canonical token order"
     );
 
     let cancel_preview =
         harness.run_json_ok(&["workflow", "cancel", "--id", &workflow_id, "--dry-run"])?;
-    assert_eq!(
-        cancel_preview
-            .pointer("/data/dry_run")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_shared_destructive_dry_run_contract(&cancel_preview, "workflow.cancel", true);
 
     let cancelled = harness.run_json_ok(&[
         "workflow",
@@ -386,13 +445,17 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
 
     let remove_error =
         harness.run_json_err(&["workflow", "phases", "remove", "--phase", phase_id])?;
-    assert!(
-        remove_error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("CONFIRMATION_REQUIRED"),
-        "workflow phases remove should require explicit confirmation"
+    let remove_confirmation_message = remove_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        remove_confirmation_message,
+        format!(
+            "CONFIRMATION_REQUIRED: rerun 'workflow phases remove' with --confirm {}; use --dry-run to preview changes",
+            phase_id
+        ),
+        "workflow phases remove confirmation message should use canonical token order"
     );
 
     let remove_preview = harness.run_json_ok(&[
@@ -403,12 +466,7 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         phase_id,
         "--dry-run",
     ])?;
-    assert_eq!(
-        remove_preview
-            .pointer("/data/dry_run")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_shared_destructive_dry_run_contract(&remove_preview, "workflow.phases.remove", true);
     assert_eq!(
         remove_preview
             .pointer("/data/can_remove")
@@ -504,13 +562,14 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
         "--worktree-name",
         worktree_name,
     ])?;
-    assert!(
-        remove_error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("CONFIRMATION_REQUIRED"),
-        "git worktree remove should require confirmation_id"
+    let remove_confirmation_message = remove_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        remove_confirmation_message,
+        "CONFIRMATION_REQUIRED: request and approve a git confirmation for 'remove_worktree' on 'demo', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
+        "git worktree remove confirmation message should use canonical token order"
     );
 
     let remove_preview = harness.run_json_ok(&[
@@ -523,18 +582,24 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
         worktree_name,
         "--dry-run",
     ])?;
+    assert_shared_destructive_dry_run_contract(&remove_preview, "git.worktree.remove", true);
     assert_eq!(
-        remove_preview
-            .pointer("/data/dry_run")
-            .and_then(Value::as_bool),
-        Some(true)
+        remove_preview.pointer("/data/next_step").and_then(Value::as_str),
+        Some(
+            "request and approve a git confirmation for 'remove_worktree' on 'demo', then rerun with --confirmation-id <id>"
+        )
     );
+
+    let push_preview =
+        harness.run_json_ok(&["git", "push", "--repo", "demo", "--force", "--dry-run"])?;
+    assert_shared_destructive_dry_run_contract(&push_preview, "git.push", true);
     assert_eq!(
-        remove_preview
-            .pointer("/data/requires_confirmation")
-            .and_then(Value::as_bool),
-        Some(true)
+        push_preview.pointer("/data/next_step").and_then(Value::as_str),
+        Some(
+            "request and approve a git confirmation for 'force_push' on 'demo', then rerun with --confirmation-id <id>"
+        )
     );
+
     assert!(
         worktree_path.exists(),
         "dry-run should not remove worktree path"
