@@ -100,6 +100,91 @@ fn collect_requirement_lifecycle_transitions(
     transitions
 }
 
+fn normalize_optional_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .map(|candidate| candidate.to_string())
+}
+
+fn collect_task_state_transitions(
+    before: &[orchestrator_core::OrchestratorTask],
+    after: &[orchestrator_core::OrchestratorTask],
+    workflows: &[orchestrator_core::OrchestratorWorkflow],
+    phase_events: &[PhaseExecutionEvent],
+) -> Vec<TaskStateTransition> {
+    let before_lookup: std::collections::HashMap<&str, &orchestrator_core::OrchestratorTask> =
+        before.iter().map(|task| (task.id.as_str(), task)).collect();
+
+    let mut phase_context_by_task: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for event in phase_events {
+        phase_context_by_task.insert(
+            event.task_id.clone(),
+            (event.workflow_id.clone(), event.phase_id.clone()),
+        );
+    }
+
+    let mut workflow_context_by_task: std::collections::HashMap<
+        String,
+        (String, Option<String>, i64),
+    > = std::collections::HashMap::new();
+    for workflow in workflows {
+        let started_at_unix_ms = workflow.started_at.timestamp_millis();
+        let candidate = (
+            workflow.id.clone(),
+            normalize_optional_id(workflow.current_phase.as_deref()),
+            started_at_unix_ms,
+        );
+        match workflow_context_by_task.get_mut(workflow.task_id.as_str()) {
+            Some(existing) if existing.2 >= started_at_unix_ms => {}
+            Some(existing) => {
+                *existing = candidate;
+            }
+            None => {
+                workflow_context_by_task.insert(workflow.task_id.clone(), candidate);
+            }
+        }
+    }
+
+    let mut transitions = Vec::new();
+    for task in after {
+        let Some(previous) = before_lookup.get(task.id.as_str()) else {
+            continue;
+        };
+        if previous.status == task.status {
+            continue;
+        }
+
+        let (workflow_id, phase_id) = match phase_context_by_task.get(task.id.as_str()) {
+            Some((workflow_id, phase_id)) => (
+                Some(workflow_id.clone()),
+                normalize_optional_id(Some(phase_id.as_str())),
+            ),
+            None => workflow_context_by_task
+                .get(task.id.as_str())
+                .map(|(workflow_id, phase_id, _)| (Some(workflow_id.clone()), phase_id.clone()))
+                .unwrap_or((None, None)),
+        };
+
+        transitions.push(TaskStateTransition {
+            task_id: task.id.clone(),
+            from_status: task_status_label(previous.status).to_string(),
+            to_status: task_status_label(task.status).to_string(),
+            changed_at: task.metadata.updated_at.to_rfc3339(),
+            workflow_id,
+            phase_id,
+        });
+    }
+
+    transitions.sort_by(|a, b| {
+        a.changed_at
+            .cmp(&b.changed_at)
+            .then(a.task_id.cmp(&b.task_id))
+    });
+    transitions
+}
+
 async fn set_task_blocked_with_reason(
     hub: Arc<dyn ServiceHub>,
     task: &orchestrator_core::OrchestratorTask,
@@ -968,6 +1053,7 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = flush_git_integration_outbox(&root);
     let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
+    let tasks_before = hub.tasks().list().await.unwrap_or_default();
     let daemon = hub.daemon();
     let status = daemon.status().await?;
     let mut started_daemon = false;
@@ -1048,6 +1134,8 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     let requirements_after = hub.planning().list_requirements().await.unwrap_or_default();
     let requirement_lifecycle_transitions =
         collect_requirement_lifecycle_transitions(&requirements_before, &requirements_after);
+    let task_state_transitions =
+        collect_task_state_transitions(&tasks_before, &tasks, &workflows, &phase_execution_events);
 
     Ok(ProjectTickSummary {
         project_root: root,
@@ -1071,5 +1159,6 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         failed_workflow_phases,
         phase_execution_events,
         requirement_lifecycle_transitions,
+        task_state_transitions,
     })
 }

@@ -367,6 +367,24 @@ pub(super) async fn handle_daemon_run(
                             )?;
                         }
 
+                        for transition in &summary.task_state_transitions {
+                            emit_daemon_event_with_notifications(
+                                &mut seq,
+                                "task-state-change",
+                                Some(summary.project_root.clone()),
+                                serde_json::json!({
+                                    "task_id": transition.task_id,
+                                    "from_status": transition.from_status,
+                                    "to_status": transition.to_status,
+                                    "changed_at": transition.changed_at,
+                                    "workflow_id": transition.workflow_id,
+                                    "phase_id": transition.phase_id,
+                                }),
+                                json,
+                                notification_runtime.as_mut(),
+                            )?;
+                        }
+
                         for phase_event in &summary.phase_execution_events {
                             emit_daemon_event_with_notifications(
                                 &mut seq,
@@ -574,6 +592,137 @@ mod tests {
             .collect();
         assert!(roots.contains(&canonicalize_lossy(&primary_root)));
         assert!(roots.contains(&canonicalize_lossy(&secondary_root)));
+    }
+
+    #[tokio::test]
+    async fn daemon_run_emits_task_state_change_events() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+
+        let config_root = TempDir::new().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(config_root.path().to_string_lossy().as_ref()),
+        );
+        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
+
+        let primary = TempDir::new().expect("primary project dir");
+        let primary_root = primary.path().to_string_lossy().to_string();
+        let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
+
+        let task = primary_hub
+            .tasks()
+            .create(orchestrator_core::TaskCreateInput {
+                title: "transition task".to_string(),
+                description: "verify task-state-change daemon events".to_string(),
+                task_type: Some(orchestrator_core::TaskType::Feature),
+                priority: Some(orchestrator_core::Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let mut workflow = primary_hub
+            .workflows()
+            .run(orchestrator_core::WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should run");
+        for _ in 0..12 {
+            if workflow.status == orchestrator_core::WorkflowStatus::Completed {
+                break;
+            }
+            workflow = primary_hub
+                .workflows()
+                .complete_current_phase(&workflow.id)
+                .await
+                .expect("phase should complete");
+        }
+        assert_eq!(
+            workflow.status,
+            orchestrator_core::WorkflowStatus::Completed
+        );
+
+        primary_hub
+            .tasks()
+            .set_status(&task.id, orchestrator_core::TaskStatus::InProgress)
+            .await
+            .expect("task should be stale in-progress");
+
+        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
+
+        let args = DaemonRunArgs {
+            interval_secs: 1,
+            include_registry: false,
+            ai_task_generation: false,
+            auto_run_ready: false,
+            auto_merge: None,
+            auto_pr: None,
+            auto_commit_before_merge: None,
+            startup_cleanup: false,
+            resume_interrupted: false,
+            reconcile_stale: true,
+            max_tasks_per_tick: 1,
+            phase_timeout_secs: None,
+            idle_timeout_secs: None,
+            once: true,
+        };
+        handle_daemon_run(
+            args,
+            primary_hub as Arc<dyn ServiceHub>,
+            &primary_root,
+            true,
+        )
+        .await
+        .expect("daemon run should emit transition event");
+
+        let events_path = daemon_events_log_path();
+        let events_content =
+            std::fs::read_to_string(events_path).expect("daemon events log should exist");
+        let events: Vec<DaemonEventRecord> = events_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
+            .collect();
+
+        let transition_event = events
+            .iter()
+            .find(|event| {
+                event.event_type == "task-state-change"
+                    && event.project_root.as_deref()
+                        == Some(canonicalize_lossy(&primary_root).as_str())
+                    && event
+                        .data
+                        .get("task_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(task.id.as_str())
+            })
+            .expect("task-state-change event should be emitted");
+        assert_eq!(
+            transition_event
+                .data
+                .get("from_status")
+                .and_then(serde_json::Value::as_str),
+            Some("in-progress")
+        );
+        assert_eq!(
+            transition_event
+                .data
+                .get("to_status")
+                .and_then(serde_json::Value::as_str),
+            Some("done")
+        );
+        assert!(transition_event
+            .data
+            .get("changed_at")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false));
     }
 
     #[tokio::test]

@@ -1,140 +1,97 @@
 # TASK-026 Implementation Notes: Event Notification Connector Framework
 
 ## Purpose
-Translate TASK-026 requirements into implementation slices for daemon
-notifications while preserving existing daemon scheduling reliability.
+Define the concrete implementation delta needed to complete TASK-026 based on
+what already exists in `daemon_notifications.rs` and related daemon runtime
+plumbing.
+
+## Current State Summary
+Already implemented in code:
+- connector runtime with `webhook` and `slack_webhook` adapters,
+- subscription filtering (`event_types` wildcard + optional project/workflow/task
+  filters),
+- durable outbox + dead-letter with bounded retry/backoff,
+- notification lifecycle daemon events,
+- daemon config CLI flags for notification config JSON/file updates,
+- operator guide with setup/troubleshooting flow.
+
+Remaining implementation focus:
+- explicit `task-state-change` event emission,
+- notification lifecycle ingestion in `ao errors` surfaces,
+- contract/documentation alignment and acceptance-proof tests.
 
 ## Non-Negotiable Constraints
-- Keep all implementation in Rust crates under `crates/`.
-- Preserve existing daemon event emission contract (`ao.daemon.event.v1`).
-- Prevent secret leakage: never persist raw credentials in `.ao`, JSONL logs, or
-  emitted event payloads.
-- Keep notification failures isolated from workflow/task execution progress.
-- Avoid manual `.ao` JSON edits; rely on command-driven persistence flows.
+- Preserve `ao.daemon-notification-config.v1` schema compatibility.
+- Preserve existing connector behavior and retry classification semantics.
+- Never leak raw credential values in output/log/state.
+- Keep daemon scheduling non-blocking under notification failures.
 
 ## Proposed Change Surface
 
-### Runtime daemon modules
+### Task Transition Event Emission
+- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs`
+  - capture task status transitions during tick execution.
+  - produce structured transition records (task id, from/to status,
+    workflow/task linkage where available).
+- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler.rs`
+  - extend `ProjectTickSummary` with task transition events.
 - `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_run.rs`
-  - wire notification enqueue + flush into event emission lifecycle.
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_events.rs`
-  - reuse `DaemonEventRecord` envelope for connector dispatch inputs.
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/`
-  - add notification-specific modules (suggested split):
-    - `daemon_notifications.rs` (orchestration API),
-    - `daemon_notifications_config.rs` (schema + validation),
-    - `daemon_notifications_connectors.rs` (adapter registry + connector impls),
-    - `daemon_notifications_queue.rs` (outbox/dead-letter persistence + retry).
+  - emit `task-state-change` daemon events from summary transitions using
+    existing event emission path.
 
-### CLI and config plumbing
-- `crates/orchestrator-cli/src/cli_types.rs`
-  - add daemon config arguments required to manage notification configuration.
-- `crates/orchestrator-cli/src/services/runtime/runtime_daemon.rs`
-  - load/save notification configuration through daemon command handlers.
+### Error Surface Integration
+- `crates/orchestrator-cli/src/services/operations/ops_errors.rs`
+  - ingest notification lifecycle failures:
+    - `notification-delivery-failed` (error category: `notification`),
+    - `notification-delivery-dead-lettered` (severity escalated as needed).
+  - de-duplicate by source event id as with existing daemon error ingestion.
 
-### Tests
-- daemon runtime unit tests in notification modules.
-- integration coverage in existing daemon runtime test areas for:
-  - enqueue/flush behavior,
-  - retry/dead-letter transitions,
-  - resilience under connector failure.
+### Documentation Alignment
+- `crates/orchestrator-cli/docs/task-026-notification-operator-guide.md`
+  - add explicit subscription examples for `task-state-change`.
+  - clarify how notification lifecycle failures appear in `ao errors`.
+- `crates/orchestrator-cli/docs/task-026-event-notification-connector-framework-requirements.md`
+  - keep acceptance and verification matrix aligned to implemented behavior.
 
-## Data Contract Draft
+## Data Contract Additions
+Add normalized daemon event payload for task transitions:
+- `event_type`: `task-state-change`
+- `data`:
+  - `task_id`
+  - `from_status`
+  - `to_status`
+  - `changed_at`
+  - optional `workflow_id`
+  - optional `phase_id`
 
-Suggested notification config shape:
+## Implementation Sequence
+1. Add task transition detection in project tick execution path.
+2. Thread transition records through summary and emit `task-state-change` events.
+3. Extend `ops_errors` sync logic for notification failure/dead-letter events.
+4. Add/adjust tests for transition emission and errors ingestion.
+5. Refresh TASK-026 docs and examples to match final behavior.
 
-```json
-{
-  "schema": "ao.daemon-notification-config.v1",
-  "version": 1,
-  "connectors": [
-    {
-      "id": "ops-webhook",
-      "type": "webhook",
-      "enabled": true,
-      "config": {
-        "url_env": "AO_NOTIFY_WEBHOOK_URL",
-        "headers_env": {
-          "Authorization": "AO_NOTIFY_WEBHOOK_TOKEN"
-        },
-        "timeout_secs": 10
-      }
-    }
-  ],
-  "subscriptions": [
-    {
-      "id": "critical-phase-failures",
-      "enabled": true,
-      "connector_id": "ops-webhook",
-      "event_types": [
-        "workflow-phase-contract-violation",
-        "notification-delivery-dead-lettered"
-      ],
-      "project_root": null,
-      "workflow_id": null,
-      "task_id": null
-    }
-  ],
-  "retry_policy": {
-    "max_attempts": 5,
-    "base_delay_secs": 2,
-    "max_delay_secs": 300
-  }
-}
-```
-
-Queue entry shape should include:
-- `delivery_id`, `delivery_key`, `event_id`,
-- `connector_id`, `subscription_id`,
-- `attempts`, `next_attempt_unix_secs`,
-- redacted `last_error`,
-- connector payload.
-
-## Adapter Contract Draft
-- `NotificationConnector` behavior:
-  - `connector_type()` for routing,
-  - `validate_config()` for startup-time guardrails,
-  - `send(delivery)` returning typed success/failure classification.
-- Failure classification categories:
-  - `transient` (retry),
-  - `permanent` (dead-letter),
-  - `misconfigured` (dead-letter + config guidance).
-
-## Retry and Dead-Letter Strategy
-- Reuse deterministic outbox patterns from `daemon_scheduler_git_ops.rs`:
-  - JSONL persistence,
-  - temp-file + rename writes,
-  - bounded exponential backoff.
-- Suggested paths under repo-scoped AO runtime root:
-  - `~/.ao/<repo-scope>/notifications/outbox.jsonl`,
-  - `~/.ao/<repo-scope>/notifications/dead-letter.jsonl`.
-- Deduplicate queued deliveries by deterministic delivery key.
-
-## Execution Sequence
-1. Add config model + validation and command plumbing.
-2. Add adapter registry and minimal connector implementations.
-3. Add queue persistence and retry/dead-letter processor.
-4. Integrate enqueue on matched daemon events.
-5. Flush queue during daemon ticks with bounded processing budget.
-6. Emit notification lifecycle daemon events.
-7. Add deterministic tests and update operator docs.
-
-## Testing Plan
+## Test Plan
 - Unit tests:
-  - subscription matching and wildcard semantics,
-  - credential reference resolution + redaction,
-  - retry classification and backoff math.
+  - task transition extraction logic,
+  - task-state-change payload normalization,
+  - notification lifecycle -> error record mapping.
 - Integration tests:
-  - successful delivery path removes queue entry,
-  - transient failure retries then succeeds,
-  - permanent failure routes to dead-letter.
-- Resilience tests:
-  - connector failures do not abort daemon tick execution.
+  - daemon run emits task-state-change when task status advances,
+  - notification delivery failures become visible in `errors list`.
+- Regression tests:
+  - existing notification outbox/dead-letter behavior remains unchanged,
+  - daemon tick continues when connector delivery fails.
 
 ## Risks and Mitigations
-- Risk: connector errors slow daemon tick throughput.
-  - Mitigation: cap delivery flush operations per tick and keep retry async.
-- Risk: accidental secret exposure in events/errors.
-  - Mitigation: central redaction utility applied before all persistence/emits.
-- Risk: duplicate delivery from repeated enqueue.
-  - Mitigation: deterministic delivery key and outbox dedupe check.
+- Risk: noisy transition emission for non-meaningful updates.
+  - Mitigation: emit only when canonical status value changes.
+- Risk: duplicate error records from repeated sync.
+  - Mitigation: retain source-event-id dedupe contract.
+- Risk: ordering ambiguity between primary daemon events and transition events.
+  - Mitigation: emit through shared sequence counter path in daemon run loop.
+
+## Validation Targets for Implementation Phase
+- `cargo test -p orchestrator-cli runtime_daemon`
+- `cargo test -p orchestrator-cli --test cli_e2e`
+- `cargo test -p orchestrator-cli --test cli_smoke`

@@ -74,6 +74,7 @@ pub(super) struct ProjectTickSummary {
     pub(super) failed_workflow_phases: usize,
     pub(super) phase_execution_events: Vec<PhaseExecutionEvent>,
     pub(super) requirement_lifecycle_transitions: Vec<RequirementLifecycleTransition>,
+    pub(super) task_state_transitions: Vec<TaskStateTransition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +98,18 @@ pub(super) struct RequirementLifecycleTransition {
     pub(super) transition_at: String,
     #[serde(default)]
     pub(super) comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct TaskStateTransition {
+    pub(super) task_id: String,
+    pub(super) from_status: String,
+    pub(super) to_status: String,
+    pub(super) changed_at: String,
+    #[serde(default)]
+    pub(super) workflow_id: Option<String>,
+    #[serde(default)]
+    pub(super) phase_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -1218,6 +1231,11 @@ mod tests {
             .await
             .expect("project tick should succeed");
         assert!(summary.reconciled_stale_tasks >= 1);
+        assert!(summary.task_state_transitions.iter().any(|transition| {
+            transition.task_id == task.id
+                && transition.from_status == "in-progress"
+                && transition.to_status == "done"
+        }));
 
         let refreshed_hub = Arc::new(FileServiceHub::new(&project_root).expect("refreshed hub"));
         let updated = refreshed_hub
