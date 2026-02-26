@@ -104,14 +104,15 @@ fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
         &std::fs::read_to_string(&state_path).expect("core-state should be readable"),
     )
     .expect("core-state should parse");
-    raw.as_object_mut()
-        .expect("core-state is object")
-        .insert(
-            "__sentinel".to_string(),
-            serde_json::json!({"source":"regression-test"}),
-        );
-    std::fs::write(&state_path, serde_json::to_string_pretty(&raw).expect("serialize state"))
-        .expect("write state with sentinel");
+    raw.as_object_mut().expect("core-state is object").insert(
+        "__sentinel".to_string(),
+        serde_json::json!({"source":"regression-test"}),
+    );
+    std::fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&raw).expect("serialize state"),
+    )
+    .expect("write state with sentinel");
     let before = std::fs::read_to_string(&state_path).expect("read sentinel state");
 
     let _reloaded = FileServiceHub::new(temp.path()).expect("reload hub");

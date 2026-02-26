@@ -1044,7 +1044,11 @@ fn validate_phase_definition(
             ));
         }
 
-        if runtime.extra_args.iter().any(|value| value.trim().is_empty()) {
+        if runtime
+            .extra_args
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
             return Err(anyhow!(
                 "phases['{}'].runtime.extra_args must not contain empty values",
                 phase_id
@@ -1158,7 +1162,11 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
             ));
         }
 
-        if profile.extra_args.iter().any(|value| value.trim().is_empty()) {
+        if profile
+            .extra_args
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
             return Err(anyhow!(
                 "agents['{}'].extra_args must not contain empty values",
                 agent_id
