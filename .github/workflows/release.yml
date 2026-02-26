@@ -105,7 +105,10 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF_NAME}"
           else
-            BRANCH_SANITIZED="${GITHUB_REF_NAME//\//-}"
+            BRANCH_SANITIZED="$(echo "${GITHUB_REF_NAME}" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
+            if [[ -z "${BRANCH_SANITIZED}" ]]; then
+              BRANCH_SANITIZED="ref"
+            fi
             VERSION="${BRANCH_SANITIZED}-${GITHUB_SHA::7}"
           fi
           echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
@@ -113,6 +116,8 @@ jobs:
       - name: Package artifact (unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          DRY_RUN_NOTE: ${{ github.event.inputs.dry_run_note || '' }}
         run: |
           set -euo pipefail
 
@@ -126,31 +131,45 @@ jobs:
             cp "target/${TARGET}/release/${binary}" "${STAGE_DIR}/"
           done
 
-          {
-            echo "{"
-            echo "  \"schema\": \"ao.release.v1\","
-            echo "  \"version\": \"${VERSION}\","
-            echo "  \"target\": \"${TARGET}\","
-            echo "  \"git_ref\": \"${GITHUB_REF}\","
-            echo "  \"git_sha\": \"${GITHUB_SHA}\","
-            echo "  \"binaries\": [\"ao\", \"agent-runner\", \"llm-cli-wrapper\", \"llm-mcp-server\"]"
-            echo "}"
-          } > "${STAGE_DIR}/release-metadata.json"
+          export VERSION TARGET STAGE_DIR
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          binaries = ["ao", "agent-runner", "llm-cli-wrapper", "llm-mcp-server"]
+          metadata = {
+              "schema": "ao.release.v1",
+              "version": os.environ["VERSION"],
+              "target": os.environ["TARGET"],
+              "git_ref": os.environ["GITHUB_REF"],
+              "git_sha": os.environ["GITHUB_SHA"],
+              "event_name": os.environ["GITHUB_EVENT_NAME"],
+              "dry_run_note": os.environ.get("DRY_RUN_NOTE", ""),
+              "binaries": binaries,
+              "files": binaries,
+          }
+          output = Path(os.environ["STAGE_DIR"]) / "release-metadata.json"
+          output.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
 
           tar -czf "${STAGE_DIR}.tar.gz" "${STAGE_DIR}"
 
       - name: Package artifact (windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          DRY_RUN_NOTE: ${{ github.event.inputs.dry_run_note || '' }}
         run: |
           $Version = "${{ steps.version.outputs.value }}"
           $Target = "${{ matrix.target }}"
           $StageDir = "ao-$Version-$Target"
-          $Binaries = @("ao.exe", "agent-runner.exe", "llm-cli-wrapper.exe", "llm-mcp-server.exe")
+          $Binaries = @("ao", "agent-runner", "llm-cli-wrapper", "llm-mcp-server")
+          $BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }
 
           New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 
-          foreach ($Binary in $Binaries) {
+          foreach ($Binary in $BinaryFiles) {
             Copy-Item "target/$Target/release/$Binary" "$StageDir/"
           }
 
@@ -160,25 +179,20 @@ jobs:
             target = $Target
             git_ref = $env:GITHUB_REF
             git_sha = $env:GITHUB_SHA
+            event_name = $env:GITHUB_EVENT_NAME
+            dry_run_note = $env:DRY_RUN_NOTE
             binaries = $Binaries
+            files = $BinaryFiles
           }
           $Metadata | ConvertTo-Json -Depth 4 | Set-Content -Path "$StageDir/release-metadata.json" -Encoding utf8NoBOM
 
           Compress-Archive -Path $StageDir -DestinationPath "$StageDir.zip" -Force
 
-      - name: Upload artifact (unix)
-        if: runner.os != 'Windows'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}
-          path: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}.tar.gz
-
-      - name: Upload artifact (windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}
-          path: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip
+          path: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}.${{ matrix.archive_ext }}
 
   publish:
     name: Publish GitHub release (tags only)
@@ -198,7 +212,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | sort -z | xargs -0 sha256sum > dist/SHA256SUMS.txt
+          mapfile -d '' ARCHIVES < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | LC_ALL=C sort -z)
+          if [[ "${#ARCHIVES[@]}" -eq 0 ]]; then
+            echo "no release archives found after download-artifact step" >&2
+            exit 1
+          fi
+          printf '%s\0' "${ARCHIVES[@]}" | xargs -0 sha256sum > dist/SHA256SUMS.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
