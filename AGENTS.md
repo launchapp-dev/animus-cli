@@ -364,6 +364,49 @@ Reference implementation points:
 - Workflow execution controls: `/Users/samishukri/ao-cli/crates/orchestrator-cli/src/services/operations/ops_workflow.rs`
 - Output/history/audit support: `/Users/samishukri/ao-cli/crates/orchestrator-cli/src/services/operations/ops_output.rs`, `/Users/samishukri/ao-cli/crates/orchestrator-cli/src/services/operations/ops_history.rs`, `/Users/samishukri/ao-cli/crates/orchestrator-cli/src/services/operations/ops_errors.rs`
 
+## Parallel Daemon Runbook (5-Agent Target)
+
+Use this runbook when workflows should execute in parallel and concurrency appears degraded.
+
+1. Start one authoritative daemon process only
+
+- Use one foreground or detached daemon per project root; do not run multiple `daemon run` loops for the same repo.
+- Example:
+  - `cargo run -p orchestrator-cli -- --project-root "$(pwd)" daemon run --include-registry false --interval-secs 2 --max-tasks-per-tick 5 --auto-run-ready true --startup-cleanup true --resume-interrupted true --reconcile-stale true --json`
+
+2. Confirm parallel capacity, then sample over time
+
+- `ao daemon health --json` is point-in-time. Sample multiple times before concluding capacity is capped.
+- Target signals for 5-way fanout:
+  - `active_agents: 5`
+  - `max_agents: 5`
+  - multiple workflows in `running` state (`ao workflow list --json`)
+
+3. Distinguish queue state from runner state
+
+- `workflows_running > 0` with low `active_agents` can be transient during phase transitions/resume windows.
+- Validate both:
+  - scheduler/event view: `ao daemon events --limit 50 --follow false --json`
+  - runner view: `ao runner health --json`
+
+4. Validate runner socket/config path alignment
+
+- Concurrency diagnostics are invalid if you inspect the wrong runner directory.
+- The active runner may use repo-scoped config under `~/.ao/<repo-scope>/runner` (via `AO_CONFIG_DIR`) rather than `<project>/.ao/runner`.
+- Confirm with process environment:
+  - `ps eww -p <runner_pid>`
+  - `lsof -n -p <runner_pid> | rg 'agent-runner.sock'`
+
+5. Recover from `task not found` workflow failures safely
+
+- Symptom: workflow exists and fails with `cannot load task TASK-XXX: task not found`.
+- Cause pattern: task JSON file exists but task is missing from active AO state registry.
+- Policy-compliant recovery:
+  - verify with `ao task get --id TASK-XXX --json`
+  - re-register missing tasks through `ao task create` / `ao task update` only
+  - re-run workflows with `ao workflow run --task-id TASK-XXX`
+- Never patch `/.ao/*.json` directly to recover runtime state.
+
 ## Self-Hosting Workflow (Use AO to Build AO)
 
 1. Inspect queue:

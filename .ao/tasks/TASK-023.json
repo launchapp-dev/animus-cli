@@ -20,12 +20,12 @@
   "linked_requirements": [],
   "metadata": {
     "completed_at": null,
-    "created_at": "2026-02-25T19:52:14.391815Z",
+    "created_at": "2026-02-26T00:01:29.013118Z",
     "created_by": "ao-cli",
-    "started_at": "2026-02-25T22:52:55.438166Z",
-    "updated_at": "2026-02-25T23:54:16.083152Z",
+    "started_at": "2026-02-26T00:01:44.285387Z",
+    "updated_at": "2026-02-26T00:08:25.161277Z",
     "updated_by": "ao-cli",
-    "version": 12
+    "version": 5
   },
   "paused": false,
   "priority": "high",
