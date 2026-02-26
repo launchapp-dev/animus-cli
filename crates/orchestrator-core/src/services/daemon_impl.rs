@@ -45,13 +45,18 @@ fn runner_process_alive_for_status(pid: u32) -> bool {
     is_runner_process_alive(pid)
 }
 
-fn persist_snapshot_for_daemon(state_file: &Path, snapshot: &CoreState) -> Result<()> {
+async fn mutate_daemon_state<T>(
+    hub: &FileServiceHub,
+    mutator: impl FnOnce(&mut CoreState) -> Result<T>,
+) -> Result<T> {
     #[cfg(test)]
     if test_skip_persist_override() {
-        return Ok(());
+        let mut lock = hub.state.write().await;
+        return mutator(&mut lock);
     }
 
-    FileServiceHub::persist_snapshot(state_file, snapshot)
+    let (output, _) = hub.mutate_persistent_state(mutator).await?;
+    Ok(output)
 }
 
 #[async_trait]
@@ -163,12 +168,11 @@ impl DaemonServiceApi for FileServiceHub {
             }
         };
 
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.daemon_status = DaemonStatus::Running;
-            lock.daemon_max_agents = max_agents;
-            lock.runner_pid = runner_pid;
-            lock.logs.push(LogEntry {
+        mutate_daemon_state(self, |state| {
+            state.daemon_status = DaemonStatus::Running;
+            state.daemon_max_agents = max_agents;
+            state.runner_pid = runner_pid;
+            state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
                 message: match (runner_pid, max_agents) {
@@ -180,20 +184,19 @@ impl DaemonServiceApi for FileServiceHub {
                     (None, None) => "daemon started".to_string(),
                 },
             });
-            lock.clone()
-        };
-        persist_snapshot_for_daemon(&self.state_file, &snapshot)
+            Ok(())
+        })
+        .await
     }
 
     async fn stop(&self) -> Result<()> {
         let stopped_runner = stop_agent_runner_process(&self.project_root)
             .await
             .unwrap_or(false);
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.daemon_status = DaemonStatus::Stopped;
-            lock.runner_pid = None;
-            lock.logs.push(LogEntry {
+        mutate_daemon_state(self, |state| {
+            state.daemon_status = DaemonStatus::Stopped;
+            state.runner_pid = None;
+            state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
                 message: if stopped_runner {
@@ -202,81 +205,89 @@ impl DaemonServiceApi for FileServiceHub {
                     "daemon stopped".to_string()
                 },
             });
-            lock.clone()
-        };
-        persist_snapshot_for_daemon(&self.state_file, &snapshot)
+            Ok(())
+        })
+        .await
     }
 
     async fn pause(&self) -> Result<()> {
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.daemon_status = DaemonStatus::Paused;
-            lock.logs.push(LogEntry {
+        mutate_daemon_state(self, |state| {
+            state.daemon_status = DaemonStatus::Paused;
+            state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
                 message: "daemon paused".to_string(),
             });
-            lock.clone()
-        };
-        persist_snapshot_for_daemon(&self.state_file, &snapshot)
+            Ok(())
+        })
+        .await
     }
 
     async fn resume(&self) -> Result<()> {
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.daemon_status = DaemonStatus::Running;
-            lock.logs.push(LogEntry {
+        mutate_daemon_state(self, |state| {
+            state.daemon_status = DaemonStatus::Running;
+            state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
                 message: "daemon resumed".to_string(),
             });
-            lock.clone()
-        };
-        persist_snapshot_for_daemon(&self.state_file, &snapshot)
+            Ok(())
+        })
+        .await
     }
 
     async fn status(&self) -> Result<DaemonStatus> {
         let config_dir = runner_config_dir(&self.project_root);
         let runner_ready = runner_ready_for_status(&config_dir).await;
+        let runner_pid_from_lock = runner_pid_from_lock_for_status(&config_dir);
 
-        let snapshot = {
+        let (status, should_mark_crashed, runner_alive) = {
             let mut lock = self.state.write().await;
             if lock.runner_pid.is_none() && runner_ready {
-                lock.runner_pid = runner_pid_from_lock_for_status(&config_dir);
+                lock.runner_pid = runner_pid_from_lock;
             }
-            let runner_pid = lock
-                .runner_pid
-                .or_else(|| runner_pid_from_lock_for_status(&config_dir));
+            let runner_pid = lock.runner_pid.or(runner_pid_from_lock);
             if lock.runner_pid.is_none() {
                 lock.runner_pid = runner_pid;
             }
             let runner_alive = runner_pid
                 .map(runner_process_alive_for_status)
                 .unwrap_or(false);
-            if matches!(
+            let should_mark_crashed = matches!(
                 lock.daemon_status,
                 DaemonStatus::Running | DaemonStatus::Paused
-            ) && lock.runner_pid.is_some()
+            ) && runner_pid.is_some()
                 && !runner_ready
-                && !runner_alive
-            {
-                lock.daemon_status = DaemonStatus::Crashed;
-                lock.logs.push(LogEntry {
-                    timestamp: Utc::now(),
-                    level: LogLevel::Error,
-                    message: "agent-runner health check failed while daemon was active".to_string(),
-                });
-                Some(lock.clone())
-            } else {
-                None
-            }
+                && !runner_alive;
+            (lock.daemon_status, should_mark_crashed, runner_alive)
         };
 
-        if let Some(snapshot) = snapshot {
-            persist_snapshot_for_daemon(&self.state_file, &snapshot)?;
+        if should_mark_crashed {
+            return mutate_daemon_state(self, |state| {
+                if state.runner_pid.is_none() {
+                    state.runner_pid = runner_pid_from_lock;
+                }
+                if matches!(
+                    state.daemon_status,
+                    DaemonStatus::Running | DaemonStatus::Paused
+                ) && state.runner_pid.is_some()
+                    && !runner_ready
+                    && !runner_alive
+                {
+                    state.daemon_status = DaemonStatus::Crashed;
+                    state.logs.push(LogEntry {
+                        timestamp: Utc::now(),
+                        level: LogLevel::Error,
+                        message: "agent-runner health check failed while daemon was active"
+                            .to_string(),
+                    });
+                }
+                Ok(state.daemon_status)
+            })
+            .await;
         }
 
-        Ok(self.state.read().await.daemon_status)
+        Ok(status)
     }
 
     async fn health(&self) -> Result<DaemonHealth> {
@@ -317,12 +328,11 @@ impl DaemonServiceApi for FileServiceHub {
     }
 
     async fn clear_logs(&self) -> Result<()> {
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.logs.clear();
-            lock.clone()
-        };
-        persist_snapshot_for_daemon(&self.state_file, &snapshot)
+        mutate_daemon_state(self, |state| {
+            state.logs.clear();
+            Ok(())
+        })
+        .await
     }
 
     async fn active_agents(&self) -> Result<usize> {

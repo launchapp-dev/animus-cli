@@ -330,110 +330,111 @@ impl TaskServiceApi for FileServiceHub {
     }
 
     async fn create(&self, input: TaskCreateInput) -> Result<OrchestratorTask> {
+        let TaskCreateInput {
+            title,
+            description,
+            task_type,
+            priority,
+            created_by,
+            tags,
+            linked_requirements,
+            linked_architecture_entities,
+        } = input;
         let now = Utc::now();
-        let created_by = input.created_by.unwrap_or_else(|| "ao-cli".to_string());
-        let task = {
-            let mut lock = self.state.write().await;
-            let id = next_task_id(&lock.tasks);
-            validate_linked_architecture_entities(
-                &lock.architecture,
-                &input.linked_architecture_entities,
-            )?;
-            let task = OrchestratorTask {
-                id: id.clone(),
-                title: input.title,
-                description: input.description,
-                task_type: input.task_type.unwrap_or(TaskType::Feature),
-                status: TaskStatus::Backlog,
-                blocked_reason: None,
-                blocked_at: None,
-                blocked_phase: None,
-                blocked_by: None,
-                priority: input.priority.unwrap_or(Priority::Medium),
-                risk: RiskLevel::Medium,
-                scope: Scope::Medium,
-                complexity: Complexity::Medium,
-                impact_area: Vec::new(),
-                assignee: Assignee::Unassigned,
-                estimated_effort: None,
-                linked_requirements: input.linked_requirements,
-                linked_architecture_entities: input.linked_architecture_entities,
-                dependencies: Vec::new(),
-                checklist: Vec::new(),
-                tags: input.tags,
-                workflow_metadata: WorkflowMetadata::default(),
-                worktree_path: None,
-                branch_name: None,
-                metadata: TaskMetadata {
-                    created_at: now,
-                    updated_at: now,
-                    created_by: created_by.clone(),
-                    updated_by: created_by.clone(),
-                    started_at: None,
-                    completed_at: None,
-                    version: 1,
-                },
-                deadline: None,
-                paused: false,
-                cancelled: false,
-                resource_requirements: Default::default(),
-            };
-            lock.tasks.insert(id, task.clone());
-            task
-        };
-
-        let snapshot = self.state.read().await.clone();
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+        let created_by = created_by.unwrap_or_else(|| "ao-cli".to_string());
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let id = next_task_id(&state.tasks);
+                validate_linked_architecture_entities(
+                    &state.architecture,
+                    &linked_architecture_entities,
+                )?;
+                let task = OrchestratorTask {
+                    id: id.clone(),
+                    title,
+                    description,
+                    task_type: task_type.unwrap_or(TaskType::Feature),
+                    status: TaskStatus::Backlog,
+                    blocked_reason: None,
+                    blocked_at: None,
+                    blocked_phase: None,
+                    blocked_by: None,
+                    priority: priority.unwrap_or(Priority::Medium),
+                    risk: RiskLevel::Medium,
+                    scope: Scope::Medium,
+                    complexity: Complexity::Medium,
+                    impact_area: Vec::new(),
+                    assignee: Assignee::Unassigned,
+                    estimated_effort: None,
+                    linked_requirements,
+                    linked_architecture_entities,
+                    dependencies: Vec::new(),
+                    checklist: Vec::new(),
+                    tags,
+                    workflow_metadata: WorkflowMetadata::default(),
+                    worktree_path: None,
+                    branch_name: None,
+                    metadata: TaskMetadata {
+                        created_at: now,
+                        updated_at: now,
+                        created_by: created_by.clone(),
+                        updated_by: created_by.clone(),
+                        started_at: None,
+                        completed_at: None,
+                        version: 1,
+                    },
+                    deadline: None,
+                    paused: false,
+                    cancelled: false,
+                    resource_requirements: Default::default(),
+                };
+                state.tasks.insert(id, task.clone());
+                Ok(task)
+            })
+            .await?;
         Ok(task)
     }
 
     async fn update(&self, id: &str, input: TaskUpdateInput) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            if let Some(entity_ids) = input.linked_architecture_entities.as_ref() {
-                validate_linked_architecture_entities(&lock.architecture, entity_ids)?;
-            }
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                if let Some(entity_ids) = input.linked_architecture_entities.as_ref() {
+                    validate_linked_architecture_entities(&state.architecture, entity_ids)?;
+                }
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
                 apply_task_update(task, input);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
     async fn replace(&self, task: OrchestratorTask) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let mut task = task;
-            task.metadata.updated_at = Utc::now();
-            task.metadata.version = task.metadata.version.saturating_add(1);
-            lock.tasks.insert(task.id.clone(), task.clone());
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let mut task = task;
+                task.metadata.updated_at = Utc::now();
+                task.metadata.version = task.metadata.version.saturating_add(1);
+                state.tasks.insert(task.id.clone(), task.clone());
+                Ok(task)
+            })
+            .await?;
         Ok(task)
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.tasks
+        self.mutate_persistent_state(|state| {
+            state
+                .tasks
                 .remove(id)
                 .ok_or_else(|| anyhow!("task not found: {id}"))?;
-            lock.clone()
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)
+            Ok(())
+        })
+        .await?;
+        Ok(())
     }
 
     async fn assign(&self, id: &str, assignee: String) -> Result<OrchestratorTask> {
@@ -447,10 +448,9 @@ impl TaskServiceApi for FileServiceHub {
         model: Option<String>,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -458,13 +458,9 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
@@ -474,10 +470,9 @@ impl TaskServiceApi for FileServiceHub {
         user_id: String,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -485,34 +480,25 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
     async fn set_status(&self, id: &str, status: TaskStatus) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
                 apply_task_status(task, status);
                 task.metadata.updated_at = Utc::now();
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
@@ -522,10 +508,9 @@ impl TaskServiceApi for FileServiceHub {
         description: String,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -539,13 +524,9 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
@@ -556,10 +537,9 @@ impl TaskServiceApi for FileServiceHub {
         completed: bool,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -573,13 +553,9 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
@@ -590,13 +566,12 @@ impl TaskServiceApi for FileServiceHub {
         dependency_type: DependencyType,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            if !lock.tasks.contains_key(dependency_id) {
-                return Err(anyhow!("dependency task not found: {dependency_id}"));
-            }
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                if !state.tasks.contains_key(dependency_id) {
+                    return Err(anyhow!("dependency task not found: {dependency_id}"));
+                }
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -611,13 +586,9 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 
@@ -627,10 +598,9 @@ impl TaskServiceApi for FileServiceHub {
         dependency_id: &str,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        let (snapshot, task) = {
-            let mut lock = self.state.write().await;
-            let task = {
-                let task = lock
+        let (task, _) = self
+            .mutate_persistent_state(|state| {
+                let task = state
                     .tasks
                     .get_mut(id)
                     .ok_or_else(|| anyhow!("task not found: {id}"))?;
@@ -639,13 +609,9 @@ impl TaskServiceApi for FileServiceHub {
                 task.metadata.updated_at = Utc::now();
                 task.metadata.updated_by = updated_by;
                 task.metadata.version = task.metadata.version.saturating_add(1);
-                task.clone()
-            };
-            let snapshot = lock.clone();
-            (snapshot, task)
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
+                Ok(task.clone())
+            })
+            .await?;
         Ok(task)
     }
 }

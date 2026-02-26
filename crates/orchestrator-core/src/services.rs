@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
+use fs2::FileExt;
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -45,7 +46,7 @@ mod workflow_impl;
 
 use planning_utils::*;
 use runner_helpers::*;
-use state_store::{load_core_state, CoreState};
+use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
 use task_shared::*;
 
 #[async_trait]
@@ -254,6 +255,54 @@ impl FileServiceHub {
 
     fn ao_dir_for_state_file(path: &Path) -> Option<PathBuf> {
         path.parent().map(Path::to_path_buf)
+    }
+
+    fn state_lock_file_for_state_file(path: &Path) -> PathBuf {
+        path.with_extension("lock")
+    }
+
+    fn lock_state_file(path: &Path) -> Result<std::fs::File> {
+        let lock_path = Self::state_lock_file_for_state_file(path);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create parent directory for core state lock at {}",
+                    lock_path.display()
+                )
+            })?;
+        }
+
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| {
+                format!(
+                    "failed to open core state lock file at {}",
+                    lock_path.display()
+                )
+            })?;
+        lock_file.lock_exclusive().with_context(|| {
+            format!(
+                "failed to acquire exclusive core state lock at {}",
+                lock_path.display()
+            )
+        })?;
+        Ok(lock_file)
+    }
+
+    async fn mutate_persistent_state<T>(
+        &self,
+        mutator: impl FnOnce(&mut CoreState) -> Result<T>,
+    ) -> Result<(T, CoreState)> {
+        let _file_lock = Self::lock_state_file(&self.state_file)?;
+
+        let mut state = self.state.write().await;
+        *state = load_core_state_for_mutation(&self.state_file)?;
+        let output = mutator(&mut state)?;
+        Self::persist_snapshot(&self.state_file, &state)?;
+        Ok((output, state.clone()))
     }
 
     fn sanitize_relative_json_path(raw: Option<&str>, fallback_file_name: &str) -> PathBuf {
@@ -716,7 +765,10 @@ impl FileServiceHub {
         let core_state_path = ao_dir.join("core-state.json");
         let is_new_project = !core_state_path.exists();
         if !core_state_path.exists() {
-            Self::persist_snapshot(&core_state_path, &CoreState::default_with_stopped())?;
+            let _file_lock = Self::lock_state_file(&core_state_path)?;
+            if !core_state_path.exists() {
+                Self::persist_snapshot(&core_state_path, &CoreState::default_with_stopped())?;
+            }
         }
 
         Self::write_json_if_missing(&ao_dir.join("resume-config.json"), &ResumeConfig::default())?;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{ArchitectureEntity, RequirementPriority, WorkflowStatus};
+use crate::types::{ArchitectureEntity, RequirementPriority, RequirementStatus, WorkflowStatus};
 use sha2::{Digest, Sha256};
 
 fn sanitize_identifier(value: &str) -> String {
@@ -56,10 +56,38 @@ fn global_requirements_index_dir(project_root: &std::path::Path) -> std::path::P
         .join("requirements")
 }
 
+fn assert_core_state_json_is_valid(project_root: &std::path::Path) {
+    let state_path = project_root.join(".ao").join("core-state.json");
+    let raw = std::fs::read_to_string(&state_path).expect("core-state should be readable");
+    serde_json::from_str::<serde_json::Value>(&raw).expect("core-state should be valid json");
+}
+
+fn ensure_test_config_env() {
+    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        let config_dir = std::env::temp_dir().join(format!(
+            "ao-orchestrator-core-test-config-{}",
+            std::process::id()
+        ));
+        let home_dir = config_dir.join("home");
+        std::fs::create_dir_all(&config_dir).expect("create test AO config dir");
+        std::fs::create_dir_all(&home_dir).expect("create test home dir");
+        std::env::set_var("HOME", &home_dir);
+        std::env::set_var("AO_CONFIG_DIR", &config_dir);
+        std::env::set_var("AGENT_ORCHESTRATOR_CONFIG_DIR", &config_dir);
+        std::env::set_var("AO_RUNNER_CONFIG_DIR", &config_dir);
+    });
+}
+
+fn file_hub(project_root: &std::path::Path) -> anyhow::Result<FileServiceHub> {
+    ensure_test_config_env();
+    FileServiceHub::new(project_root)
+}
+
 #[tokio::test]
 async fn file_hub_persists_projects_with_rich_payload() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let created = ProjectServiceApi::create(
         &hub,
         ProjectCreateInput {
@@ -80,7 +108,7 @@ async fn file_hub_persists_projects_with_rich_payload() {
     .await
     .expect("create project");
 
-    let second_hub = FileServiceHub::new(temp.path()).expect("reload hub");
+    let second_hub = file_hub(temp.path()).expect("reload hub");
     let loaded = ProjectServiceApi::load(&second_hub, &created.path)
         .await
         .expect("load by path");
@@ -97,7 +125,7 @@ async fn file_hub_persists_projects_with_rich_payload() {
 #[test]
 fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let _hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let _hub = file_hub(temp.path()).expect("create hub");
 
     let state_path = temp.path().join(".ao").join("core-state.json");
     let mut raw: serde_json::Value = serde_json::from_str(
@@ -115,7 +143,7 @@ fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     .expect("write state with sentinel");
     let before = std::fs::read_to_string(&state_path).expect("read sentinel state");
 
-    let _reloaded = FileServiceHub::new(temp.path()).expect("reload hub");
+    let _reloaded = file_hub(temp.path()).expect("reload hub");
     let after = std::fs::read_to_string(&state_path).expect("read reloaded state");
 
     assert_eq!(before, after, "hub startup should not rewrite core-state");
@@ -124,7 +152,7 @@ fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
 #[tokio::test]
 async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let project_path = temp.path().join("scaffolded-project");
 
     let created = ProjectServiceApi::create(
@@ -181,7 +209,7 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
 #[tokio::test]
 async fn file_hub_bootstraps_workflow_config_v2_with_phase_catalog() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let project_path = temp.path().join("configured-project");
 
     let created = ProjectServiceApi::create(
@@ -243,7 +271,7 @@ async fn file_hub_bootstraps_workflow_config_v2_with_phase_catalog() {
 #[tokio::test]
 async fn file_hub_bootstraps_architecture_docs_file() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let _hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let _hub = file_hub(temp.path()).expect("create hub");
 
     let architecture_path = temp
         .path()
@@ -267,7 +295,7 @@ async fn file_hub_bootstraps_architecture_docs_file() {
 #[tokio::test]
 async fn file_hub_load_persists_active_project_selection() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
 
     let first = ProjectServiceApi::create(
         &hub,
@@ -302,7 +330,7 @@ async fn file_hub_load_persists_active_project_selection() {
         .await
         .expect("load first");
 
-    let reloaded = FileServiceHub::new(temp.path()).expect("reload hub");
+    let reloaded = file_hub(temp.path()).expect("reload hub");
     let active = ProjectServiceApi::active(&reloaded)
         .await
         .expect("active project")
@@ -313,7 +341,7 @@ async fn file_hub_load_persists_active_project_selection() {
 #[tokio::test]
 async fn file_hub_persists_tasks() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let created = TaskServiceApi::create(
         &hub,
         TaskCreateInput {
@@ -330,7 +358,7 @@ async fn file_hub_persists_tasks() {
     .await
     .expect("create task");
 
-    let second_hub = FileServiceHub::new(temp.path()).expect("reload hub");
+    let second_hub = file_hub(temp.path()).expect("reload hub");
     let loaded = TaskServiceApi::get(&second_hub, &created.id)
         .await
         .expect("load task");
@@ -338,9 +366,301 @@ async fn file_hub_persists_tasks() {
 }
 
 #[tokio::test]
+async fn file_hub_mutations_fail_closed_for_invalid_core_state_json() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+    let state_path = temp.path().join(".ao").join("core-state.json");
+    std::fs::write(&state_path, "{not-valid-json").expect("write malformed state");
+
+    let error = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Should fail".to_string(),
+            description: String::new(),
+            task_type: None,
+            priority: None,
+            created_by: Some("test".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect_err("malformed core-state should reject mutation");
+    let message = format!("{error:#}");
+    assert!(message.contains("refusing mutation to avoid data loss"));
+    assert_eq!(
+        std::fs::read_to_string(&state_path).expect("malformed state remains on disk"),
+        "{not-valid-json"
+    );
+}
+
+#[test]
+fn file_hub_concurrent_requirement_upserts_keep_unique_ids() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub_a = file_hub(temp.path()).expect("create first hub");
+    let hub_b = file_hub(temp.path()).expect("create second hub");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+    let barrier_a = barrier.clone();
+    let thread_a = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_a.wait();
+        runtime.block_on(async {
+            let now = chrono::Utc::now();
+            PlanningServiceApi::upsert_requirement(
+                &hub_a,
+                RequirementItem {
+                    id: String::new(),
+                    title: "Concurrent requirement A".to_string(),
+                    description: "First concurrent requirement".to_string(),
+                    body: None,
+                    legacy_id: None,
+                    category: None,
+                    requirement_type: None,
+                    acceptance_criteria: vec!["AC-A".to_string()],
+                    priority: RequirementPriority::Should,
+                    status: RequirementStatus::Draft,
+                    source: "manual".to_string(),
+                    tags: vec![],
+                    links: crate::types::RequirementLinks::default(),
+                    comments: vec![],
+                    relative_path: None,
+                    linked_task_ids: vec![],
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("upsert requirement A")
+            .id
+        })
+    });
+
+    let barrier_b = barrier.clone();
+    let thread_b = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_b.wait();
+        runtime.block_on(async {
+            let now = chrono::Utc::now();
+            PlanningServiceApi::upsert_requirement(
+                &hub_b,
+                RequirementItem {
+                    id: String::new(),
+                    title: "Concurrent requirement B".to_string(),
+                    description: "Second concurrent requirement".to_string(),
+                    body: None,
+                    legacy_id: None,
+                    category: None,
+                    requirement_type: None,
+                    acceptance_criteria: vec!["AC-B".to_string()],
+                    priority: RequirementPriority::Should,
+                    status: RequirementStatus::Draft,
+                    source: "manual".to_string(),
+                    tags: vec![],
+                    links: crate::types::RequirementLinks::default(),
+                    comments: vec![],
+                    relative_path: None,
+                    linked_task_ids: vec![],
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .await
+            .expect("upsert requirement B")
+            .id
+        })
+    });
+
+    barrier.wait();
+    let first_id = thread_a.join().expect("thread A should finish");
+    let second_id = thread_b.join().expect("thread B should finish");
+    assert_ne!(first_id, second_id, "requirement IDs must be unique");
+
+    let reloaded = file_hub(temp.path()).expect("reload hub");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let requirements = runtime.block_on(async {
+        PlanningServiceApi::list_requirements(&reloaded)
+            .await
+            .expect("list requirements")
+    });
+
+    let ids: std::collections::HashSet<String> = requirements
+        .into_iter()
+        .map(|requirement| requirement.id)
+        .collect();
+    assert_eq!(ids.len(), 2, "both concurrent requirements must persist");
+    assert!(ids.contains(&first_id));
+    assert!(ids.contains(&second_id));
+    assert_core_state_json_is_valid(temp.path());
+}
+
+#[test]
+fn file_hub_concurrent_task_creates_keep_unique_ids() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub_a = file_hub(temp.path()).expect("create first hub");
+    let hub_b = file_hub(temp.path()).expect("create second hub");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+    let barrier_a = barrier.clone();
+    let thread_a = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_a.wait();
+        runtime.block_on(async {
+            TaskServiceApi::create(
+                &hub_a,
+                TaskCreateInput {
+                    title: "Concurrent task A".to_string(),
+                    description: String::new(),
+                    task_type: None,
+                    priority: None,
+                    created_by: Some("test-a".to_string()),
+                    tags: vec![],
+                    linked_requirements: vec![],
+                    linked_architecture_entities: vec![],
+                },
+            )
+            .await
+            .expect("create task A")
+            .id
+        })
+    });
+
+    let barrier_b = barrier.clone();
+    let thread_b = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_b.wait();
+        runtime.block_on(async {
+            TaskServiceApi::create(
+                &hub_b,
+                TaskCreateInput {
+                    title: "Concurrent task B".to_string(),
+                    description: String::new(),
+                    task_type: None,
+                    priority: None,
+                    created_by: Some("test-b".to_string()),
+                    tags: vec![],
+                    linked_requirements: vec![],
+                    linked_architecture_entities: vec![],
+                },
+            )
+            .await
+            .expect("create task B")
+            .id
+        })
+    });
+
+    barrier.wait();
+    let first_id = thread_a.join().expect("thread A should finish");
+    let second_id = thread_b.join().expect("thread B should finish");
+    assert_ne!(first_id, second_id, "task IDs must be unique");
+
+    let reloaded = file_hub(temp.path()).expect("reload hub");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let tasks =
+        runtime.block_on(async { TaskServiceApi::list(&reloaded).await.expect("list tasks") });
+
+    let ids: std::collections::HashSet<String> = tasks.into_iter().map(|task| task.id).collect();
+    assert_eq!(ids.len(), 2, "both concurrent tasks must persist");
+    assert!(ids.contains(&first_id));
+    assert!(ids.contains(&second_id));
+    assert_core_state_json_is_valid(temp.path());
+}
+
+#[test]
+fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub_a = file_hub(temp.path()).expect("create first hub");
+    let hub_b = file_hub(temp.path()).expect("create second hub");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+    let barrier_a = barrier.clone();
+    let daemon_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_a.wait();
+        runtime.block_on(async {
+            DaemonServiceApi::pause(&hub_a)
+                .await
+                .expect("daemon pause should succeed");
+        });
+    });
+
+    let barrier_b = barrier.clone();
+    let task_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        barrier_b.wait();
+        runtime.block_on(async {
+            TaskServiceApi::create(
+                &hub_b,
+                TaskCreateInput {
+                    title: "Daemon interleave task".to_string(),
+                    description: String::new(),
+                    task_type: None,
+                    priority: None,
+                    created_by: Some("interleave".to_string()),
+                    tags: vec![],
+                    linked_requirements: vec![],
+                    linked_architecture_entities: vec![],
+                },
+            )
+            .await
+            .expect("create interleave task")
+            .id
+        })
+    });
+
+    barrier.wait();
+    daemon_thread.join().expect("daemon thread should finish");
+    let task_id = task_thread.join().expect("task thread should finish");
+
+    let reloaded = file_hub(temp.path()).expect("reload hub");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let status = runtime.block_on(async {
+        DaemonServiceApi::status(&reloaded)
+            .await
+            .expect("daemon status should load")
+    });
+    assert_eq!(status, DaemonStatus::Paused);
+    let task = runtime.block_on(async {
+        TaskServiceApi::get(&reloaded, &task_id)
+            .await
+            .expect("interleaved task should exist")
+    });
+    assert_eq!(task.id, task_id);
+    assert_core_state_json_is_valid(temp.path());
+}
+
+#[tokio::test]
 async fn file_hub_persists_workflows_with_machine_state() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput {
@@ -359,7 +679,7 @@ async fn file_hub_persists_workflows_with_machine_state() {
     assert_eq!(workflow.checkpoint_metadata.checkpoint_count, 1);
     assert!(workflow.decision_history.is_empty());
 
-    let second_hub = FileServiceHub::new(temp.path()).expect("reload hub");
+    let second_hub = file_hub(temp.path()).expect("reload hub");
     let loaded = WorkflowServiceApi::get(&second_hub, &workflow.id)
         .await
         .expect("load workflow");
@@ -536,7 +856,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     )
     .expect("agent runtime config should be written");
 
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput {
@@ -786,7 +1106,7 @@ async fn task_filter_supports_linked_architecture_entity() {
 #[tokio::test]
 async fn workflow_service_exposes_decisions_and_checkpoints() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput {
@@ -1000,7 +1320,7 @@ async fn execute_requirements_blocks_when_vision_constraints_are_not_covered() {
 #[tokio::test]
 async fn file_hub_persists_planning_artifacts() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
 
     PlanningServiceApi::draft_vision(
         &hub,
@@ -1244,7 +1564,7 @@ async fn execute_requirements_runs_requirement_state_machine_before_task_materia
 #[tokio::test]
 async fn file_hub_writes_legacy_style_requirement_and_task_files() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = FileServiceHub::new(temp.path()).expect("create hub");
+    let hub = file_hub(temp.path()).expect("create hub");
 
     PlanningServiceApi::draft_vision(
         &hub,

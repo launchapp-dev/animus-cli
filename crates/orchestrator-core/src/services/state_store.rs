@@ -148,21 +148,13 @@ fn normalize_legacy_project(project: &mut serde_json::Value) {
     }
 }
 
-pub(super) fn load_core_state(state_file: &Path) -> CoreState {
-    if !state_file.exists() {
-        return CoreState::default_with_stopped();
-    }
-
-    let Ok(contents) = std::fs::read_to_string(state_file) else {
-        return CoreState::default_with_stopped();
-    };
-
-    if let Ok(state) = serde_json::from_str::<CoreState>(&contents) {
-        return state;
+fn deserialize_core_state(contents: &str) -> Result<CoreState> {
+    if let Ok(state) = serde_json::from_str::<CoreState>(contents) {
+        return Ok(state);
     }
 
     let mut raw: serde_json::Value =
-        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}));
+        serde_json::from_str(contents).context("core-state JSON is invalid")?;
     if let Some(projects) = raw
         .get_mut("projects")
         .and_then(|value| value.as_object_mut())
@@ -177,5 +169,62 @@ pub(super) fn load_core_state(state_file: &Path) -> CoreState {
         }
     }
 
-    serde_json::from_value::<CoreState>(raw).unwrap_or_else(|_| CoreState::default_with_stopped())
+    serde_json::from_value::<CoreState>(raw)
+        .context("core-state JSON does not match expected schema")
+}
+
+pub(super) fn load_core_state(state_file: &Path) -> CoreState {
+    if !state_file.exists() {
+        return CoreState::default_with_stopped();
+    }
+
+    let Ok(contents) = std::fs::read_to_string(state_file) else {
+        return CoreState::default_with_stopped();
+    };
+
+    deserialize_core_state(&contents).unwrap_or_else(|_| CoreState::default_with_stopped())
+}
+
+pub(super) fn load_core_state_for_mutation(state_file: &Path) -> Result<CoreState> {
+    if !state_file.exists() {
+        return Ok(CoreState::default_with_stopped());
+    }
+
+    let contents = std::fs::read_to_string(state_file)
+        .with_context(|| format!("failed to read core-state at {}", state_file.display()))?;
+    deserialize_core_state(&contents).with_context(|| {
+        format!(
+            "failed to parse core-state at {}; refusing mutation to avoid data loss",
+            state_file.display()
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutation_loader_returns_default_when_state_file_is_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing_path = temp.path().join("core-state.json");
+
+        let loaded = load_core_state_for_mutation(&missing_path).expect("load default state");
+        assert_eq!(loaded.daemon_status, DaemonStatus::Stopped);
+        assert!(loaded.projects.is_empty());
+        assert!(loaded.tasks.is_empty());
+        assert!(loaded.requirements.is_empty());
+    }
+
+    #[test]
+    fn mutation_loader_rejects_invalid_core_state_json() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_path = temp.path().join("core-state.json");
+        std::fs::write(&state_path, "{not-valid-json").expect("write malformed state");
+
+        let error = load_core_state_for_mutation(&state_path)
+            .expect_err("invalid core-state should fail closed");
+        let message = format!("{error:#}");
+        assert!(message.contains("refusing mutation to avoid data loss"));
+    }
 }
