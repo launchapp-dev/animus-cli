@@ -388,13 +388,25 @@ impl AgentRuntimeConfig {
             .and_then(|definition| definition.runtime.as_ref())
             .map(|runtime| normalize_auth_profile_chain(&runtime.auth_profile_chain))
             .unwrap_or_default();
-        if !phase_chain.is_empty() {
-            return phase_chain;
+        let agent_chain = self
+            .phase_agent_profile(phase_id)
+            .map(|profile| normalize_auth_profile_chain(&profile.auth_profile_chain))
+            .unwrap_or_default();
+
+        if phase_chain.is_empty() {
+            return agent_chain;
         }
 
-        self.phase_agent_profile(phase_id)
-            .map(|profile| normalize_auth_profile_chain(&profile.auth_profile_chain))
-            .unwrap_or_default()
+        let mut merged = Vec::new();
+        let mut seen = BTreeSet::new();
+        for profile_id in phase_chain.into_iter().chain(agent_chain) {
+            let key = profile_id.to_ascii_lowercase();
+            if seen.insert(key) {
+                merged.push(profile_id);
+            }
+        }
+
+        merged
     }
 
     pub fn resolve_phase_auth_profiles_for_provider(
@@ -1407,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_runtime_chain_overrides_agent_chain() {
+    fn phase_runtime_chain_precedes_agent_chain() {
         let mut config = builtin_agent_runtime_config();
         config.auth_profiles.insert(
             "codex-phase".to_string(),
@@ -1433,6 +1445,18 @@ mod tests {
                 enabled: true,
             },
         );
+        config.auth_profiles.insert(
+            "codex-provider".to_string(),
+            ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "OPENAI_KEY_PROVIDER".to_string(),
+                )]),
+                priority: Some(0),
+                enabled: true,
+            },
+        );
         config
             .agents
             .get_mut("implementation")
@@ -1452,6 +1476,6 @@ mod tests {
             .iter()
             .map(|(profile_id, _)| profile_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(ids.first().copied(), Some("codex-phase"));
+        assert_eq!(ids, vec!["codex-phase", "codex-agent", "codex-provider"]);
     }
 }

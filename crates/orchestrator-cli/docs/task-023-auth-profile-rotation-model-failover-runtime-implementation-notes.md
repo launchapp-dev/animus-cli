@@ -1,5 +1,10 @@
 # TASK-023 Implementation Notes: Auth Profile Rotation and Model Failover Runtime
 
+## Phase Metadata
+- Workflow ID: `c432cfa5-2b20-493f-be00-d2d115103d6f`
+- Task: `TASK-023`
+- Phase: `requirements`
+
 ## Purpose
 Translate `TASK-023` requirements into concrete implementation slices for standalone daemon runtime execution while preserving deterministic behavior and secret-safe diagnostics.
 
@@ -9,6 +14,13 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
 - Keep `ao.cli.v1` response envelope semantics unchanged.
 - Do not log raw secret values.
 - Preserve existing behavior when no auth profile configuration is provided.
+- Keep this phase documentation-only (no runtime behavior changes during `requirements`).
+
+## Requirements-Phase Exit Checklist
+- Scope boundaries are explicit and mapped to crate responsibilities.
+- Failure classification and transition rules are explicit and deterministic.
+- Acceptance criteria and verification matrix are implementation-ready.
+- Implementation sequence identifies dependency ordering and rollback-safe checkpoints.
 
 ## Proposed Change Surface
 
@@ -21,6 +33,7 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
   - add empty/default auth profile sections so generated defaults remain explicit
 - `crates/orchestrator-cli/src/services/operations/ops_workflow.rs`
   - ensure `workflow agent-runtime set/get/validate` round-trips new fields
+  - include diagnostics data projection for non-JSON and `--json` output modes
 
 ### 2) Phase execution and failover orchestration
 - `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_phase_exec.rs`
@@ -36,6 +49,7 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
   - keep target planning deterministic; expose source metadata for diagnostics payloads
 - `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_runtime_support.rs`
   - include tunable policy fields if needed (`backoff_base_ms`, `backoff_cap_ms`, optional per-profile attempts)
+  - keep stable defaults aligned with existing retry behavior when unset
 
 ### 3) Agent runner env injection for selected auth profile
 - `crates/agent-runner/src/runner/supervisor.rs`
@@ -45,6 +59,10 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
   - allow required provider env keys and profile source env aliases without broadening unrelated environment exposure
 - `crates/agent-runner/src/providers/mod.rs`
   - keep availability checks compatible with profile-based env aliasing
+
+### 3.1) Explicit non-goals in runner scope
+- no persistent storage of resolved secrets or source env snapshots
+- no expansion of unrelated allowed environment variables
 
 ### 4) Diagnostics command surface
 - `crates/orchestrator-cli/src/cli_types.rs`
@@ -64,6 +82,7 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
     - `workflow-phase-fallback-exhausted`
   - include `workflow_id`, `task_id`, `phase_id`, target/profile identifiers, attempt index, and failure class
   - exclude secret payloads
+  - keep payload fields stable for deterministic event-based assertions
 
 ## Runtime Algorithm (Deterministic)
 1. Resolve ordered model targets with existing planner rules.
@@ -78,6 +97,12 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
        - terminal error
 4. Emit failover/rotation diagnostics events at each transition.
 5. Return deterministic terminal error with per-target/profile summary when exhausted.
+
+## Failure Handling Guardrails
+- Transient runner/process failures never consume auth profile candidates unless attempt cap for the tuple is exceeded.
+- Provider exhaustion failures rotate auth profile first, then fail over model targets only when profile chain is exhausted.
+- Target availability failures bypass profile rotation and fail over model targets directly.
+- Unknown/unclassified failures terminate deterministically with diagnostic summary.
 
 ## Diagnostics Payload Guidance
 
@@ -99,6 +124,11 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
 - `classification`
 - `reason`
 
+## Compatibility Contract
+- Existing runtime config files without auth profile fields must parse and validate unchanged.
+- Existing phase scheduling behavior must be bit-for-bit equivalent when no auth profiles are configured.
+- Existing `ao daemon events` behavior remains unchanged unless filter flags are provided.
+
 ## Testing Plan
 - `crates/orchestrator-core/src/agent_runtime_config.rs` tests:
   - new schema validation
@@ -114,14 +144,21 @@ Translate `TASK-023` requirements into concrete implementation slices for standa
 - `crates/agent-runner` tests:
   - env alias mapping
   - no secret leakage in error output
+  - no unintended environment key expansion after sanitizer pass
 
 ## Implementation Sequence
 1. Extend runtime config schema + validation.
 2. Implement auth chain resolution helpers.
-3. Update daemon phase execution loop with profile-aware classification.
-4. Add runner env alias injection support.
-5. Add diagnostics command and daemon event filter support.
-6. Add tests and regression coverage.
+3. Add core unit tests for ordering/validation before scheduler changes.
+4. Update daemon phase execution loop with profile-aware classification.
+5. Add runner env alias injection support.
+6. Add diagnostics command and daemon event filter support.
+7. Add integration/regression tests and secret-redaction assertions.
+
+## Implementation Handoff Gate
+- Do not start step 4 until steps 1-3 tests pass in isolation.
+- Do not start step 6 until scheduler behavior tests for retry/rotate/failover pass.
+- Do not mark task done until diagnostics payload redaction and backward-compat tests pass.
 
 ## Risks and Mitigations
 - Risk: auth-profile logic changes existing fallback behavior.

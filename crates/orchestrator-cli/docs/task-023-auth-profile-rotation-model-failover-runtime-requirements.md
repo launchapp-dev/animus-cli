@@ -2,7 +2,7 @@
 
 ## Phase
 - Workflow phase: `requirements`
-- Workflow ID: `0f7a95eb-6bcf-44b7-98d5-e6ffe016be7d`
+- Workflow ID: `c432cfa5-2b20-493f-be00-d2d115103d6f`
 - Task: `TASK-023`
 - Requirement reference: `REQ-023`
 
@@ -29,6 +29,7 @@ In scope for implementation phase:
 - Add diagnostics command surface for runtime resolution and failover/auth events.
 - Add structured daemon/runtime events that explain retry, auth rotation, and model failover decisions.
 - Add tests covering config validation, runtime behavior, and diagnostics output.
+- Add deterministic terminal diagnostics summarizing all attempted `(target, auth_profile, attempt)` outcomes.
 
 Out of scope for this task:
 - External secret manager integration.
@@ -36,6 +37,25 @@ Out of scope for this task:
 - Replacing the existing model routing defaults in `protocol` beyond failover/runtime needs.
 - UI/web diagnostics panels.
 - Changes to `ao.cli.v1` envelope schema or exit-code mapping.
+- Adding randomized retry jitter to runtime behavior.
+
+### Requirements-Phase Deliverables (This Phase)
+- `task-023-auth-profile-rotation-model-failover-runtime-requirements.md` reflects final implementation scope, constraints, and acceptance criteria.
+- `task-023-auth-profile-rotation-model-failover-runtime-implementation-notes.md` reflects crate/module-level ownership and execution sequence.
+- No runtime behavior or schema code changes are performed in this requirements phase.
+
+## Implementation Boundaries by Crate
+- `crates/orchestrator-core`:
+  - runtime config schema additions (`auth_profiles`, auth chain references, validation, compatibility).
+- `crates/orchestrator-cli`:
+  - daemon phase scheduler resolution/execution changes (profile rotation + model failover).
+  - diagnostics command and daemon event filtering.
+  - structured event emission for retry/rotation/failover transitions.
+- `crates/agent-runner`:
+  - selected auth profile env mapping into process launch environment.
+  - sanitized env handling compatibility with alias mapping.
+- Non-goal boundary:
+  - no state-shape migration outside agent runtime config and related persistence/round-trip paths.
 
 ## Constraints
 - Keep output deterministic:
@@ -90,6 +110,14 @@ For each phase execution:
 - Backoff policy keeps current exponential shape unless explicitly overridden by phase runtime settings.
 - Max attempts remain bounded by runtime config (`max_attempts`) and must not exceed current global clamp policy.
 
+### Failure Classification Matrix
+| Failure class | Condition examples | Action when more auth profiles remain | Action when auth profiles exhausted | Action when targets exhausted |
+| --- | --- | --- | --- | --- |
+| Transient runner/process | runner disconnect, socket timeout, broken pipe | Retry same tuple | Retry same tuple until attempt cap | Terminal |
+| Provider auth/quota/rate-limit | `insufficient_quota`, credits exhausted, rate-limit | Rotate auth profile | Fail over model target | Terminal |
+| Target unavailable/tool-model invalid | missing CLI, unsupported tool, unknown model | Fail over model target | Fail over model target | Terminal |
+| Unclassified hard failure | deterministic parser/contract errors | Terminal | Terminal | Terminal |
+
 ### Diagnostics Command Contract
 
 Command 1 (new):
@@ -127,6 +155,9 @@ Required event types for diagnostics:
 - `AC-10`: `ao daemon events` failover filters return only matching auth/failover events.
 - `AC-11`: Logs/events/diagnostics never expose secret values.
 - `AC-12`: Tests cover config validation, retry/backoff behavior, auth rotation behavior, model failover behavior, and diagnostics command output.
+- `AC-13`: Failure classification behavior follows the matrix above and remains deterministic for equivalent inputs.
+- `AC-14`: Terminal exhaustion summaries include ordered attempt outcomes without secret values.
+- `AC-15`: Requirements-phase artifacts are complete before implementation starts.
 
 ## Verification Matrix
 
@@ -138,6 +169,8 @@ Required event types for diagnostics:
 | `AC-09`, `AC-10` | CLI tests for diagnostics command payloads and daemon event filtering behavior |
 | `AC-11` | Redaction tests asserting no secret values in emitted diagnostic payloads |
 | `AC-12` | Targeted test runs across `orchestrator-core`, `orchestrator-cli`, and `agent-runner` suites for touched modules |
+| `AC-13`, `AC-14` | Scheduler classification/unit tests + deterministic output snapshot tests |
+| `AC-15` | Documentation review for requirements + implementation notes consistency |
 
 ## Deterministic Deliverables for Implementation Phase
 - Runtime config schema updates for auth profiles and chain references.
