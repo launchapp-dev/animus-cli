@@ -24,6 +24,7 @@ rmcp = { version = "0.15.0", features = ["transport-io"] }
 schemars = "1.0"
 fs2 = "0.4"
 sha2 = "0.10"
+semver = "1"
 webbrowser = "1"
 crossterm = "0.28"
 ratatui = "0.29"

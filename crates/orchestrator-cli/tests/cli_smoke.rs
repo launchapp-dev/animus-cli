@@ -43,6 +43,10 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
         top_level_stdout.contains("Record and inspect review decisions and handoffs"),
         "top-level help should describe review command"
     );
+    assert!(
+        top_level_stdout.contains("Search, install, update, and publish versioned skills"),
+        "top-level help should describe skill command"
+    );
 
     let workflow_help = Command::new(&binary)
         .args(["workflow", "--help"])
@@ -80,6 +84,26 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
     assert!(
         web_serve_stdout.contains("Serve API endpoints only without static assets"),
         "web serve help should explain --api-only"
+    );
+
+    let skill_help = Command::new(&binary).args(["skill", "--help"]).output()?;
+    assert!(skill_help.status.success(), "skill help should succeed");
+    let skill_stdout = String::from_utf8(skill_help.stdout)?;
+    assert!(
+        skill_stdout.contains("search"),
+        "skill help should include search command"
+    );
+    assert!(
+        skill_stdout.contains("install"),
+        "skill help should include install command"
+    );
+    assert!(
+        skill_stdout.contains("update"),
+        "skill help should include update command"
+    );
+    assert!(
+        skill_stdout.contains("publish"),
+        "skill help should include publish command"
     );
 
     Ok(())

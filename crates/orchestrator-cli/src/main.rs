@@ -98,6 +98,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Git { command } => {
             services::operations::handle_git(command, &project_root, cli.json).await
         }
+        Command::Skill { command } => {
+            services::operations::handle_skill(command, &project_root, cli.json).await
+        }
         Command::Model { command } => {
             services::operations::handle_model(command, hub.clone(), &project_root, cli.json).await
         }
