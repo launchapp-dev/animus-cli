@@ -478,7 +478,10 @@ fn ensure_flag_value_if_missing(args: &mut Vec<Value>, flag: &str, value: &str, 
 
     let insert_at = insert_at.min(args.len());
     args.insert(insert_at, Value::String(flag.to_string()));
-    args.insert((insert_at + 1).min(args.len()), Value::String(value.to_string()));
+    args.insert(
+        (insert_at + 1).min(args.len()),
+        Value::String(value.to_string()),
+    );
 }
 
 fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
@@ -528,22 +531,19 @@ fn cli_tool_extra_args_env_keys(tool: &str) -> Option<(&'static str, &'static st
         "codex" => Some(("AO_CODEX_EXTRA_ARGS_JSON", "AO_CODEX_EXTRA_ARGS")),
         "claude" => Some(("AO_CLAUDE_EXTRA_ARGS_JSON", "AO_CLAUDE_EXTRA_ARGS")),
         "gemini" => Some(("AO_GEMINI_EXTRA_ARGS_JSON", "AO_GEMINI_EXTRA_ARGS")),
-        "opencode" | "open-code" => {
-            Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS"))
-        }
+        "opencode" | "open-code" => Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS")),
         _ => None,
     }
 }
 
 fn resolved_extra_args(tool: &str) -> Vec<String> {
-    let mut args =
-        parse_env_string_list_json("AO_AI_CLI_EXTRA_ARGS_JSON", Some("AO_AI_CLI_EXTRA_ARGS"), false);
+    let mut args = parse_env_string_list_json(
+        "AO_AI_CLI_EXTRA_ARGS_JSON",
+        Some("AO_AI_CLI_EXTRA_ARGS"),
+        false,
+    );
     if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool) {
-        args.extend(parse_env_string_list_json(
-            json_key,
-            Some(plain_key),
-            false,
-        ));
+        args.extend(parse_env_string_list_json(json_key, Some(plain_key), false));
     }
     args
 }
@@ -814,6 +814,16 @@ pub(crate) fn event_matches_run(event: &AgentRunEvent, run_id: &RunId) -> bool {
             ..
         } => event_run_id == run_id,
     }
+}
+
+pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
+    if run_id.trim().is_empty() {
+        anyhow::bail!("run_id is required");
+    }
+    if run_id.contains('/') || run_id.contains('\\') || run_id.contains("..") {
+        anyhow::bail!("invalid run_id");
+    }
+    Ok(())
 }
 
 pub(crate) fn run_dir(project_root: &str, run_id: &RunId, base_override: Option<&str>) -> PathBuf {

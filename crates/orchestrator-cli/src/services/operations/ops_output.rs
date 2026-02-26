@@ -1,6 +1,5 @@
 use crate::cli_types::OutputCommand;
-use crate::print_value;
-use crate::run_dir;
+use crate::{ensure_safe_run_id, print_value, run_dir};
 use anyhow::{anyhow, Context, Result};
 use protocol::RunId;
 use serde::{Deserialize, Serialize};
@@ -41,6 +40,13 @@ fn run_dir_candidates(project_root: &str, run_id: &str) -> Vec<PathBuf> {
     ]
 }
 
+fn resolve_run_dir_for_lookup(project_root: &str, run_id: &str) -> Result<Option<PathBuf>> {
+    ensure_safe_run_id(run_id)?;
+    Ok(run_dir_candidates(project_root, run_id)
+        .into_iter()
+        .find(|path| path.exists()))
+}
+
 fn extract_timestamp_hint(line: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(line).ok()?;
     parsed
@@ -52,42 +58,33 @@ fn extract_timestamp_hint(line: &str) -> Option<String> {
 }
 
 fn get_run_jsonl_entries(project_root: &str, run_id: &str) -> Result<Vec<RunJsonlEntryCli>> {
-    if run_id.trim().is_empty() {
-        anyhow::bail!("run_id is required");
-    }
-    if run_id.contains('/') || run_id.contains('\\') || run_id.contains("..") {
-        anyhow::bail!("invalid run_id");
-    }
-
     let mut rows = Vec::new();
-    for run_dir in run_dir_candidates(project_root, run_id) {
-        if !run_dir.exists() {
+    let Some(run_dir) = resolve_run_dir_for_lookup(project_root, run_id)? else {
+        return Ok(rows);
+    };
+    for file_name in [
+        "json-output.jsonl",
+        "stdout.jsonl",
+        "stderr.jsonl",
+        "system.jsonl",
+        "signals.jsonl",
+        "events.jsonl",
+    ] {
+        let path = run_dir.join(file_name);
+        if !path.exists() {
             continue;
         }
-        for file_name in [
-            "json-output.jsonl",
-            "stdout.jsonl",
-            "stderr.jsonl",
-            "system.jsonl",
-            "signals.jsonl",
-            "events.jsonl",
-        ] {
-            let path = run_dir.join(file_name);
-            if !path.exists() {
+        let content = fs::read_to_string(&path)?;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
                 continue;
             }
-            let content = fs::read_to_string(&path)?;
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                rows.push(RunJsonlEntryCli {
-                    source_file: file_name.to_string(),
-                    line: line.to_string(),
-                    timestamp_hint: extract_timestamp_hint(line),
-                });
-            }
+            rows.push(RunJsonlEntryCli {
+                source_file: file_name.to_string(),
+                line: line.to_string(),
+                timestamp_hint: extract_timestamp_hint(line),
+            });
         }
     }
 
@@ -161,9 +158,7 @@ pub(crate) async fn handle_output(
 ) -> Result<()> {
     match command {
         OutputCommand::Run(args) => {
-            let run_dir = run_dir_candidates(project_root, &args.run_id)
-                .into_iter()
-                .find(|path| path.exists())
+            let run_dir = resolve_run_dir_for_lookup(project_root, &args.run_id)?
                 .ok_or_else(|| anyhow!("run directory not found for {}", args.run_id))?;
             let events_path = run_dir.join("events.jsonl");
             if !events_path.exists() {
@@ -310,9 +305,8 @@ mod tests {
         for candidate in &candidates {
             std::fs::create_dir_all(candidate).expect("candidate run dir should be created");
         }
-        let selected = run_dir_candidates(project_root.to_string_lossy().as_ref(), run_id)
-            .into_iter()
-            .find(|path| path.exists())
+        let selected = resolve_run_dir_for_lookup(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("run dir lookup should succeed")
             .expect("a run dir should be selected");
         assert_eq!(selected, candidates[0]);
     }
@@ -330,19 +324,108 @@ mod tests {
         let candidates = run_dir_candidates(project_root.to_string_lossy().as_ref(), run_id);
 
         std::fs::create_dir_all(&candidates[1]).expect("legacy .ao/runs dir should be created");
-        let selected_legacy = run_dir_candidates(project_root.to_string_lossy().as_ref(), run_id)
-            .into_iter()
-            .find(|path| path.exists())
-            .expect("legacy run dir should be selected");
+        let selected_legacy =
+            resolve_run_dir_for_lookup(project_root.to_string_lossy().as_ref(), run_id)
+                .expect("run dir lookup should succeed")
+                .expect("legacy run dir should be selected");
         assert_eq!(selected_legacy, candidates[1]);
 
         std::fs::remove_dir_all(&candidates[1]).expect("legacy .ao/runs dir should be removed");
         std::fs::create_dir_all(&candidates[2]).expect("legacy .ao/state/runs dir should exist");
-        let selected_state = run_dir_candidates(project_root.to_string_lossy().as_ref(), run_id)
-            .into_iter()
-            .find(|path| path.exists())
-            .expect("legacy state run dir should be selected");
+        let selected_state =
+            resolve_run_dir_for_lookup(project_root.to_string_lossy().as_ref(), run_id)
+                .expect("run dir lookup should succeed")
+                .expect("legacy state run dir should be selected");
         assert_eq!(selected_state, candidates[2]);
+    }
+
+    #[test]
+    fn get_run_jsonl_entries_prefer_canonical_path_over_legacy_fallbacks() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = "trace-jsonl-canonical-precedence";
+        let canonical_dir = run_dir(
+            project_root.to_string_lossy().as_ref(),
+            &RunId(run_id.to_string()),
+            None,
+        );
+        let legacy_dir = project_root.join(".ao").join("runs").join(run_id);
+        let legacy_state_dir = project_root
+            .join(".ao")
+            .join("state")
+            .join("runs")
+            .join(run_id);
+        std::fs::create_dir_all(&canonical_dir).expect("canonical run dir should be created");
+        std::fs::create_dir_all(&legacy_dir).expect("legacy run dir should be created");
+        std::fs::create_dir_all(&legacy_state_dir).expect("legacy state run dir should be created");
+        std::fs::write(
+            canonical_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-01T00:00:00Z\",\"kind\":\"canonical\"}\n",
+        )
+        .expect("canonical events should be written");
+        std::fs::write(
+            legacy_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-02T00:00:00Z\",\"kind\":\"legacy\"}\n",
+        )
+        .expect("legacy events should be written");
+        std::fs::write(
+            legacy_state_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-03T00:00:00Z\",\"kind\":\"legacy-state\"}\n",
+        )
+        .expect("legacy state events should be written");
+
+        let entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("jsonl entries should load from canonical path");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].line.contains("\"canonical\""));
+    }
+
+    #[test]
+    fn get_run_jsonl_entries_keep_lookup_repo_scoped_under_global_runner_scope() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let override_dir = temp.path().join("override-config");
+        let _ao_config = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(override_dir.to_string_lossy().as_ref()),
+        );
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = "trace-jsonl-global-scope-lookup";
+        let canonical_dir = run_dir(
+            project_root.to_string_lossy().as_ref(),
+            &RunId(run_id.to_string()),
+            None,
+        );
+        let override_run_dir = override_dir.join("runs").join(run_id);
+        std::fs::create_dir_all(&canonical_dir).expect("canonical run dir should be created");
+        std::fs::create_dir_all(&override_run_dir).expect("override run dir should be created");
+        std::fs::write(
+            canonical_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-01T00:00:00Z\",\"kind\":\"canonical\"}\n",
+        )
+        .expect("canonical events should be written");
+        std::fs::write(
+            override_run_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-02T00:00:00Z\",\"kind\":\"override\"}\n",
+        )
+        .expect("override events should be written");
+
+        let entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("jsonl entries should load from scoped path");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].line.contains("\"canonical\""));
+        assert!(canonical_dir.starts_with(temp.path().join(".ao")));
+        assert!(!canonical_dir.starts_with(&override_dir));
     }
 
     #[test]
@@ -388,6 +471,50 @@ mod tests {
     }
 
     #[test]
+    fn get_run_jsonl_entries_reads_events_persisted_via_runner_helpers() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+
+        let run_id = RunId("trace-jsonl-persist".to_string());
+        let canonical_run_dir = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
+
+        crate::persist_agent_event(
+            &canonical_run_dir,
+            &protocol::AgentRunEvent::Started {
+                run_id: run_id.clone(),
+                timestamp: protocol::Timestamp::now(),
+            },
+        )
+        .expect("started event should persist");
+        crate::persist_agent_event(
+            &canonical_run_dir,
+            &protocol::AgentRunEvent::Finished {
+                run_id: run_id.clone(),
+                exit_code: Some(0),
+                duration_ms: 12,
+            },
+        )
+        .expect("finished event should persist");
+
+        let entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), &run_id.0)
+            .expect("jsonl entries should include persisted events");
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .all(|entry| entry.source_file == "events.jsonl"));
+        for entry in entries {
+            let parsed = serde_json::from_str::<protocol::AgentRunEvent>(&entry.line)
+                .expect("persisted event lines should parse");
+            assert!(crate::event_matches_run(&parsed, &run_id));
+        }
+    }
+
+    #[test]
     fn get_run_jsonl_entries_supports_legacy_lookup_paths() {
         let _lock = crate::shared::test_env_lock()
             .lock()
@@ -416,18 +543,23 @@ mod tests {
         )
         .expect("legacy state events should be written");
 
-        let entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
-            .expect("jsonl entries should load from legacy paths");
-        assert_eq!(entries.len(), 2);
-        assert!(entries
-            .iter()
-            .all(|entry| entry.source_file == "events.jsonl"));
+        let legacy_entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("jsonl entries should load from legacy path");
+        assert_eq!(legacy_entries.len(), 1);
+        assert!(legacy_entries[0].line.contains("\"legacy\""));
         assert_eq!(
-            entries
-                .iter()
-                .filter_map(|entry| entry.timestamp_hint.as_deref())
-                .collect::<Vec<_>>(),
-            vec!["2024-01-03T00:00:00Z", "2024-01-04T00:00:00Z"]
+            legacy_entries[0].timestamp_hint.as_deref(),
+            Some("2024-01-03T00:00:00Z")
+        );
+
+        std::fs::remove_dir_all(&legacy_run_dir).expect("legacy run dir should be removed");
+        let state_entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("jsonl entries should load from legacy state path");
+        assert_eq!(state_entries.len(), 1);
+        assert!(state_entries[0].line.contains("\"legacy-state\""));
+        assert_eq!(
+            state_entries[0].timestamp_hint.as_deref(),
+            Some("2024-01-04T00:00:00Z")
         );
     }
 

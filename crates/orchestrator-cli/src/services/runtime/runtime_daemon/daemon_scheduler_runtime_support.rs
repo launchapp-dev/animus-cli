@@ -213,7 +213,10 @@ fn ensure_flag_value_if_missing(args: &mut Vec<Value>, flag: &str, value: &str, 
 
     let insert_at = insert_at.min(args.len());
     args.insert(insert_at, Value::String(flag.to_string()));
-    args.insert((insert_at + 1).min(args.len()), Value::String(value.to_string()));
+    args.insert(
+        (insert_at + 1).min(args.len()),
+        Value::String(value.to_string()),
+    );
 }
 
 fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
@@ -301,9 +304,7 @@ fn cli_tool_extra_args_env_keys(tool_id: &str) -> Option<(&'static str, &'static
         "codex" => Some(("AO_CODEX_EXTRA_ARGS_JSON", "AO_CODEX_EXTRA_ARGS")),
         "claude" => Some(("AO_CLAUDE_EXTRA_ARGS_JSON", "AO_CLAUDE_EXTRA_ARGS")),
         "gemini" => Some(("AO_GEMINI_EXTRA_ARGS_JSON", "AO_GEMINI_EXTRA_ARGS")),
-        "opencode" | "open-code" => {
-            Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS"))
-        }
+        "opencode" | "open-code" => Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS")),
         _ => None,
     }
 }
@@ -326,14 +327,13 @@ fn resolved_phase_extra_args(
         }
     }
 
-    let mut resolved =
-        parse_env_string_list_json("AO_AI_CLI_EXTRA_ARGS_JSON", Some("AO_AI_CLI_EXTRA_ARGS"), false);
+    let mut resolved = parse_env_string_list_json(
+        "AO_AI_CLI_EXTRA_ARGS_JSON",
+        Some("AO_AI_CLI_EXTRA_ARGS"),
+        false,
+    );
     if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool_id) {
-        resolved.extend(parse_env_string_list_json(
-            json_key,
-            Some(plain_key),
-            false,
-        ));
+        resolved.extend(parse_env_string_list_json(json_key, Some(plain_key), false));
     }
 
     resolved

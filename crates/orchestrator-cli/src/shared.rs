@@ -183,6 +183,35 @@ mod tests {
     }
 
     #[test]
+    fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let override_dir = temp.path().join("override-config");
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let _config_override = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(override_dir.to_string_lossy().as_ref()),
+        );
+
+        let project_root = temp.path().join("project-root");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = RunId("trace-run-global-scope".to_string());
+
+        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
+        assert!(
+            resolved.starts_with(temp.path().join(".ao")),
+            "run directory should stay under ~/.ao repo-scoped runtime root"
+        );
+        assert!(
+            !resolved.starts_with(&override_dir),
+            "run directory should not use AO_CONFIG_DIR overrides"
+        );
+    }
+
+    #[test]
     fn run_dir_uses_base_override_when_provided() {
         let project_root = tempfile::tempdir().expect("tempdir should be created");
         let override_root = tempfile::tempdir().expect("tempdir should be created");

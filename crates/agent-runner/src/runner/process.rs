@@ -381,12 +381,11 @@ fn apply_codex_native_mcp_lockdown(
         McpServerTransport::Http(endpoint) => {
             ensure_codex_config_override(args, &format!("{base}.url"), &toml_string(endpoint));
         }
-        McpServerTransport::Stdio { command, args: stdio_args } => {
-            ensure_codex_config_override(
-                args,
-                &format!("{base}.command"),
-                &toml_string(command),
-            );
+        McpServerTransport::Stdio {
+            command,
+            args: stdio_args,
+        } => {
+            ensure_codex_config_override(args, &format!("{base}.command"), &toml_string(command));
             let toml_args = format!(
                 "[{}]",
                 stdio_args
@@ -1049,8 +1048,16 @@ mod tests {
             }
         });
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
-        assert!(is_tool_call_allowed("ao.task.list", &json!({}), &enforcement));
-        assert!(is_tool_call_allowed("phase_transition", &json!({}), &enforcement));
+        assert!(is_tool_call_allowed(
+            "ao.task.list",
+            &json!({}),
+            &enforcement
+        ));
+        assert!(is_tool_call_allowed(
+            "phase_transition",
+            &json!({}),
+            &enforcement
+        ));
         assert!(!is_tool_call_allowed("Bash", &json!({}), &enforcement));
         assert!(!is_tool_call_allowed(
             "stories-search",
@@ -1206,10 +1213,14 @@ mod tests {
         )
         .expect("claude policy should apply");
 
-        assert!(invocation.args.windows(2).any(|pair| {
-            pair[0] == "--permission-mode" && pair[1] == "bypassPermissions"
-        }));
-        assert!(invocation.args.iter().any(|arg| arg == "--strict-mcp-config"));
+        assert!(invocation
+            .args
+            .windows(2)
+            .any(|pair| { pair[0] == "--permission-mode" && pair[1] == "bypassPermissions" }));
+        assert!(invocation
+            .args
+            .iter()
+            .any(|arg| arg == "--strict-mcp-config"));
         assert!(!invocation.args.iter().any(|arg| arg == "--tools"));
     }
 
@@ -1231,7 +1242,11 @@ mod tests {
 
     #[test]
     fn codex_native_lockdown_disables_non_target_servers() {
-        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "hello".to_string(),
+        ];
         let configured_servers = vec!["shortcut".to_string(), "ao".to_string()];
 
         apply_codex_native_mcp_lockdown(
@@ -1249,7 +1264,11 @@ mod tests {
 
     #[test]
     fn codex_native_lockdown_sets_stdio_transport_when_configured() {
-        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "hello".to_string(),
+        ];
 
         apply_codex_native_mcp_lockdown(
             &mut args,
@@ -1267,9 +1286,9 @@ mod tests {
         );
 
         let joined = args.join(" ");
-        assert!(joined.contains(
-            "mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\""
-        ));
+        assert!(
+            joined.contains("mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\"")
+        );
         assert!(joined.contains(
             "mcp_servers.ao.args=[\"--project-root\", \"/Users/samishukri/ao-cli\", \"mcp\", \"serve\"]"
         ));
@@ -1380,7 +1399,11 @@ mod tests {
     fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
         let mut invocation = super::super::process_builder::CliInvocation {
             command: "opencode".to_string(),
-            args: vec!["run".to_string(), "--format".to_string(), "json".to_string()],
+            args: vec![
+                "run".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+            ],
             prompt_via_stdin: false,
         };
         let enforcement = McpToolEnforcement {
@@ -1417,7 +1440,9 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(config_raw).expect("opencode config should be valid JSON");
         assert_eq!(
-            parsed.pointer("/mcp/ao/type").and_then(serde_json::Value::as_str),
+            parsed
+                .pointer("/mcp/ao/type")
+                .and_then(serde_json::Value::as_str),
             Some("local")
         );
         assert_eq!(

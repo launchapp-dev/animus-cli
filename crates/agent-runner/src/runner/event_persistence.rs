@@ -287,4 +287,45 @@ mod tests {
             .join(&run_id.0);
         assert!(!run_dir.exists());
     }
+
+    #[test]
+    fn persist_keeps_repo_scoped_runtime_root_under_global_scope_override() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = test_root();
+        let _home = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let override_dir = home.join("override-config");
+        let _ao_config = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(override_dir.to_string_lossy().as_ref()),
+        );
+
+        let project_root = test_root();
+        let run_id = RunId("run-global-scope-123".to_string());
+        let context = serde_json::json!({
+            "project_root": project_root,
+        });
+        let mut persistence = RunEventPersistence::new(&context, &run_id);
+        persistence
+            .persist(&AgentRunEvent::Started {
+                run_id: run_id.clone(),
+                timestamp: Timestamp::now(),
+            })
+            .expect("persist started");
+        persistence
+            .persist(&AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stdout,
+                text: "{\"kind\":\"global-scope\"}".to_string(),
+            })
+            .expect("persist output");
+
+        let canonical_run_dir = project_runs_root(&project_root)
+            .expect("project-scoped runtime root should resolve")
+            .join(&run_id.0);
+        let override_run_dir = override_dir.join("runs").join(&run_id.0);
+        assert!(canonical_run_dir.join("events.jsonl").exists());
+        assert!(canonical_run_dir.join("json-output.jsonl").exists());
+        assert!(!override_run_dir.exists());
+    }
 }
