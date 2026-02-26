@@ -18,6 +18,26 @@ const REQUIREMENT_STATUS_HELP: &str =
 const DEPENDENCY_TYPE_HELP: &str =
     "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to.";
 
+fn parse_positive_u64(value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "must be a whole number".to_string())?;
+    if parsed == 0 {
+        return Err("must be greater than 0".to_string());
+    }
+    Ok(parsed)
+}
+
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "must be a whole number".to_string())?;
+    if parsed == 0 {
+        return Err("must be greater than 0".to_string());
+    }
+    Ok(parsed)
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "ao", about = "Agent Orchestrator CLI", version)]
 pub(crate) struct Cli {
@@ -297,45 +317,110 @@ pub(crate) enum AgentCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentRunArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "RUN_ID",
+        help = "Run identifier. Omit to auto-generate a UUID."
+    )]
     pub(crate) run_id: Option<String>,
-    #[arg(long, default_value = "codex")]
+    #[arg(
+        long,
+        value_name = "TOOL",
+        default_value = "codex",
+        help = "CLI provider to execute, for example codex or claude."
+    )]
     pub(crate) tool: String,
-    #[arg(long, default_value = "codex")]
+    #[arg(
+        long,
+        value_name = "MODEL",
+        default_value = "codex",
+        help = "Model identifier passed to the selected tool."
+    )]
     pub(crate) model: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Prompt text to send to the agent.")]
     pub(crate) prompt: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Working directory for the run. Must resolve inside the project root."
+    )]
     pub(crate) cwd: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Run timeout in seconds."
+    )]
     pub(crate) timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Agent context JSON object.")]
     pub(crate) context_json: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Runtime contract JSON override.")]
     pub(crate) runtime_contract_json: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Submit run and return immediately without streaming events."
+    )]
     pub(crate) detach: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Stream run events to stdout."
+    )]
     pub(crate) stream: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Persist run event logs under .ao/runs."
+    )]
     pub(crate) save_jsonl: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Override the base directory used for persisted run logs."
+    )]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentControlArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ACTION",
+        help = "Control action: pause, resume, or terminate."
+    )]
     pub(crate) action: AgentControlActionArg,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
@@ -348,125 +433,337 @@ pub(crate) enum AgentControlActionArg {
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentStatusArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Override the base directory used to read persisted run logs."
+    )]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentModelStatusArgs {
-    #[arg(long = "model")]
+    #[arg(
+        long = "model",
+        value_name = "MODEL_ID",
+        help = "Model identifier to check. Repeat to query multiple models."
+    )]
     pub(crate) models: Vec<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentRunnerStatusArgs {
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonStartArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of concurrent agents."
+    )]
     pub(crate) max_agents: Option<usize>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Do not auto-start the runner process."
+    )]
     pub(crate) skip_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run daemon in detached/background mode."
+    )]
     pub(crate) autonomous: bool,
-    #[arg(long, default_value_t = 5)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 5,
+        value_parser = parse_positive_u64,
+        help = "Scheduler interval in seconds."
+    )]
     pub(crate) interval_secs: u64,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Include projects from the global daemon registry."
+    )]
     pub(crate) include_registry: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Enable AI-generated task creation."
+    )]
     pub(crate) ai_task_generation: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Automatically run ready tasks."
+    )]
     pub(crate) auto_run_ready: bool,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-merge behavior for daemon runs."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for daemon runs."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for daemon runs."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile daemon/project registry entries before scheduling."
+    )]
     pub(crate) startup_cleanup: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Attempt to resume interrupted workflows."
+    )]
     pub(crate) resume_interrupted: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile stale task/workflow runtime state."
+    )]
     pub(crate) reconcile_stale: bool,
-    #[arg(long, default_value_t = 2)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 2,
+        value_parser = parse_positive_usize,
+        help = "Maximum task workflows or phases to execute per scheduler tick."
+    )]
     pub(crate) max_tasks_per_tick: usize,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override phase timeout in seconds."
+    )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override workflow idle timeout in seconds."
+    )]
     pub(crate) idle_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonRunArgs {
-    #[arg(long, default_value_t = 5)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 5,
+        value_parser = parse_positive_u64,
+        help = "Scheduler interval in seconds."
+    )]
     pub(crate) interval_secs: u64,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Include projects from the global daemon registry."
+    )]
     pub(crate) include_registry: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Enable AI-generated task creation."
+    )]
     pub(crate) ai_task_generation: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Automatically run ready tasks."
+    )]
     pub(crate) auto_run_ready: bool,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-merge behavior for this daemon run."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for this daemon run."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for this daemon run."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile daemon/project registry entries before scheduling."
+    )]
     pub(crate) startup_cleanup: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Attempt to resume interrupted workflows."
+    )]
     pub(crate) resume_interrupted: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile stale task/workflow runtime state."
+    )]
     pub(crate) reconcile_stale: bool,
-    #[arg(long, default_value_t = 2)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 2,
+        value_parser = parse_positive_usize,
+        help = "Maximum task workflows or phases to execute per scheduler tick."
+    )]
     pub(crate) max_tasks_per_tick: usize,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override phase timeout in seconds."
+    )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override workflow idle timeout in seconds."
+    )]
     pub(crate) idle_timeout_secs: Option<u64>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run one scheduler tick and exit."
+    )]
     pub(crate) once: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonConfigArgs {
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-merge daemon configuration."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-PR daemon configuration."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-commit-before-merge daemon configuration."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonEventsArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of recent events to print before follow mode."
+    )]
     pub(crate) limit: Option<usize>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Continue streaming new events until interrupted."
+    )]
     pub(crate) follow: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct LogArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of recent log lines to return."
+    )]
     pub(crate) limit: Option<usize>,
 }
 
@@ -1679,7 +1976,7 @@ pub(crate) struct TaskIdArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlCancelArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
     #[arg(
         long,
@@ -1697,13 +1994,9 @@ pub(crate) struct TaskControlCancelArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlPriorityArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
-    #[arg(
-        long,
-        value_name = "PRIORITY",
-        help = "Priority value: critical|high|medium|low."
-    )]
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
     pub(crate) priority: String,
 }
 
@@ -2360,4 +2653,51 @@ pub(crate) struct WorkflowAgentRuntimeSetArgs {
         help = "Workflow agent-runtime configuration JSON payload."
     )]
     pub(crate) input_json: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn agent_run_help_includes_actionable_field_descriptions() {
+        let error = Cli::try_parse_from(["ao", "agent", "run", "--help"])
+            .expect_err("help output should short-circuit parsing");
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        assert!(help.contains("Run identifier. Omit to auto-generate a UUID."));
+        assert!(help.contains("CLI provider to execute, for example codex or claude."));
+        assert!(help.contains("Runner config scope: project or global."));
+    }
+
+    #[test]
+    fn daemon_run_rejects_zero_interval_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "daemon", "run", "--interval-secs", "0"])
+            .expect_err("zero interval should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--interval-secs"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
+    fn daemon_run_rejects_zero_max_tasks_per_tick_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "daemon", "run", "--max-tasks-per-tick", "0"])
+            .expect_err("zero max-tasks-per-tick should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--max-tasks-per-tick"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
+    fn daemon_events_rejects_zero_limit() {
+        let error = Cli::try_parse_from(["ao", "daemon", "events", "--limit", "0"])
+            .expect_err("zero limit should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--limit"));
+        assert!(message.contains("greater than 0"));
+    }
 }

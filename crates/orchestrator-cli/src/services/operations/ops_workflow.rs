@@ -1024,7 +1024,12 @@ pub(crate) async fn handle_workflow(
                     json,
                 );
             }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow pause")?;
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.id,
+                "workflow pause",
+                "--id",
+            )?;
             print_value(workflows.pause(&args.id).await?, json)
         }
         WorkflowCommand::Cancel(args) => {
@@ -1056,7 +1061,12 @@ pub(crate) async fn handle_workflow(
                     json,
                 );
             }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow cancel")?;
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.id,
+                "workflow cancel",
+                "--id",
+            )?;
             print_value(workflows.cancel(&args.id).await?, json)
         }
         WorkflowCommand::Phase { command } => match command {
@@ -1089,6 +1099,7 @@ pub(crate) async fn handle_workflow(
                     args.confirm.as_deref(),
                     &args.phase,
                     "workflow phases remove",
+                    "--phase",
                 )?;
                 print_value(remove_phase_definition(project_root, &args.phase)?, json)
             }

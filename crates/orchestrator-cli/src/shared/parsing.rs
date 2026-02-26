@@ -43,11 +43,22 @@ where
 pub(crate) fn ensure_destructive_confirmation(
     confirm: Option<&str>,
     expected: &str,
-    action: &str,
+    command_path: &str,
+    id_flag: &str,
 ) -> Result<()> {
     let expected = expected.trim();
     if expected.is_empty() {
-        anyhow::bail!("invalid confirmation token for {action}");
+        anyhow::bail!("invalid confirmation token for {command_path}");
+    }
+
+    let command_path = command_path.trim();
+    if command_path.is_empty() {
+        anyhow::bail!("invalid confirmation command path");
+    }
+
+    let id_flag = id_flag.trim();
+    if id_flag.is_empty() || !id_flag.starts_with("--") {
+        anyhow::bail!("invalid confirmation id flag for {command_path}");
     }
 
     let provided = confirm.map(str::trim).filter(|value| !value.is_empty());
@@ -56,9 +67,7 @@ pub(crate) fn ensure_destructive_confirmation(
     }
 
     anyhow::bail!(
-        "CONFIRMATION_REQUIRED: rerun '{}' with --confirm {}; use --dry-run to preview changes",
-        action,
-        expected
+        "CONFIRMATION_REQUIRED: rerun 'ao {command_path} {id_flag} {expected} --confirm {expected}'; use --dry-run to preview changes"
     );
 }
 
@@ -341,17 +350,36 @@ mod tests {
 
     #[test]
     fn destructive_confirmation_accepts_matching_token() {
-        ensure_destructive_confirmation(Some("TASK-123"), "TASK-123", "task.delete")
+        ensure_destructive_confirmation(Some("TASK-123"), "TASK-123", "task delete", "--id")
             .expect("matching token should pass");
     }
 
     #[test]
     fn destructive_confirmation_requires_exact_token() {
-        let error = ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task.delete")
-            .expect_err("mismatched token should fail");
+        let error =
+            ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task delete", "--id")
+                .expect_err("mismatched token should fail");
         let message = error.to_string();
         assert!(message.contains("CONFIRMATION_REQUIRED"));
-        assert!(message.contains("--confirm TASK-123"));
+        assert!(message.contains("ao task delete --id TASK-123 --confirm TASK-123"));
         assert!(message.contains("--dry-run"));
+    }
+
+    #[test]
+    fn destructive_confirmation_requires_non_empty_command_path() {
+        let error = ensure_destructive_confirmation(None, "TASK-123", "   ", "--id")
+            .expect_err("empty command path should fail");
+        assert!(error
+            .to_string()
+            .contains("invalid confirmation command path"));
+    }
+
+    #[test]
+    fn destructive_confirmation_requires_long_form_id_flag() {
+        let error = ensure_destructive_confirmation(None, "TASK-123", "task delete", "id")
+            .expect_err("non long-form id flag should fail");
+        assert!(error
+            .to_string()
+            .contains("invalid confirmation id flag for task delete"));
     }
 }

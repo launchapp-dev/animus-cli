@@ -278,8 +278,8 @@ fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
     assert_eq!(
         confirmation_message,
         format!(
-            "CONFIRMATION_REQUIRED: rerun 'task delete' with --confirm {}; use --dry-run to preview changes",
-            task_id
+            "CONFIRMATION_REQUIRED: rerun 'ao task delete --id {} --confirm {}'; use --dry-run to preview changes",
+            task_id, task_id
         ),
         "task delete confirmation message should use canonical token order"
     );
@@ -326,8 +326,8 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
     assert_eq!(
         confirmation_message,
         format!(
-            "CONFIRMATION_REQUIRED: rerun 'task-control cancel' with --confirm {}; use --dry-run to preview changes",
-            task_id
+            "CONFIRMATION_REQUIRED: rerun 'ao task-control cancel --task-id {} --confirm {}'; use --dry-run to preview changes",
+            task_id, task_id
         ),
         "task-control cancel confirmation message should use canonical token order"
     );
@@ -396,6 +396,24 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         .context("workflow run should return data.id")?
         .to_string();
 
+    let pause_error = harness.run_json_err(&["workflow", "pause", "--id", &workflow_id])?;
+    let pause_confirmation_message = pause_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        pause_confirmation_message,
+        format!(
+            "CONFIRMATION_REQUIRED: rerun 'ao workflow pause --id {} --confirm {}'; use --dry-run to preview changes",
+            workflow_id, workflow_id
+        ),
+        "workflow pause confirmation message should use canonical token order"
+    );
+
+    let pause_preview =
+        harness.run_json_ok(&["workflow", "pause", "--id", &workflow_id, "--dry-run"])?;
+    assert_shared_destructive_dry_run_contract(&pause_preview, "workflow.pause", true);
+
     let cancel_error = harness.run_json_err(&["workflow", "cancel", "--id", &workflow_id])?;
     let cancel_confirmation_message = cancel_error
         .pointer("/error/message")
@@ -404,8 +422,8 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
     assert_eq!(
         cancel_confirmation_message,
         format!(
-            "CONFIRMATION_REQUIRED: rerun 'workflow cancel' with --confirm {}; use --dry-run to preview changes",
-            workflow_id
+            "CONFIRMATION_REQUIRED: rerun 'ao workflow cancel --id {} --confirm {}'; use --dry-run to preview changes",
+            workflow_id, workflow_id
         ),
         "workflow cancel confirmation message should use canonical token order"
     );
@@ -452,8 +470,8 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
     assert_eq!(
         remove_confirmation_message,
         format!(
-            "CONFIRMATION_REQUIRED: rerun 'workflow phases remove' with --confirm {}; use --dry-run to preview changes",
-            phase_id
+            "CONFIRMATION_REQUIRED: rerun 'ao workflow phases remove --phase {} --confirm {}'; use --dry-run to preview changes",
+            phase_id, phase_id
         ),
         "workflow phases remove confirmation message should use canonical token order"
     );
