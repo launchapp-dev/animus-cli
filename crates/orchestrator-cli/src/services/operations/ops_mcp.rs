@@ -104,6 +104,214 @@ struct WorkflowRunInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonStartInput {
+    #[serde(default)]
+    max_agents: Option<usize>,
+    #[serde(default)]
+    interval_secs: Option<u64>,
+    #[serde(default)]
+    max_tasks_per_tick: Option<usize>,
+    #[serde(default)]
+    phase_timeout_secs: Option<u64>,
+    #[serde(default)]
+    idle_timeout_secs: Option<u64>,
+    #[serde(default)]
+    skip_runner: Option<bool>,
+    #[serde(default)]
+    autonomous: Option<bool>,
+    #[serde(default)]
+    include_registry: Option<bool>,
+    #[serde(default)]
+    ai_task_generation: Option<bool>,
+    #[serde(default)]
+    auto_run_ready: Option<bool>,
+    #[serde(default)]
+    auto_merge: Option<bool>,
+    #[serde(default)]
+    auto_pr: Option<bool>,
+    #[serde(default)]
+    auto_commit_before_merge: Option<bool>,
+    #[serde(default)]
+    startup_cleanup: Option<bool>,
+    #[serde(default)]
+    resume_interrupted: Option<bool>,
+    #[serde(default)]
+    reconcile_stale: Option<bool>,
+    #[serde(default)]
+    runner_scope: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonEventsInput {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct AgentRunInput {
+    #[serde(default = "default_codex")]
+    tool: String,
+    #[serde(default = "default_codex")]
+    model: String,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    context_json: Option<String>,
+    #[serde(default)]
+    runtime_contract_json: Option<String>,
+    #[serde(default = "default_true")]
+    detach: bool,
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    runner_scope: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct AgentControlInput {
+    run_id: String,
+    action: String,
+    #[serde(default)]
+    runner_scope: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct AgentStatusInput {
+    run_id: String,
+    #[serde(default)]
+    runner_scope: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct RunnerScopeInput {
+    #[serde(default)]
+    runner_scope: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct RunIdInput {
+    run_id: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct OutputMonitorInput {
+    run_id: String,
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    phase_id: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct OutputJsonlInput {
+    run_id: String,
+    #[serde(default)]
+    entries: bool,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct ExecutionIdInput {
+    execution_id: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct TaskUpdateInput {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    assignee: Option<String>,
+    #[serde(default)]
+    input_json: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct TaskAssignInput {
+    id: String,
+    assignee: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct TaskCancelInput {
+    task_id: String,
+    #[serde(default)]
+    confirm: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct TaskSetPriorityInput {
+    task_id: String,
+    priority: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct TaskSetDeadlineInput {
+    task_id: String,
+    #[serde(default)]
+    deadline: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct WorkflowDestructiveInput {
+    id: String,
+    #[serde(default)]
+    confirm: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct IdInput {
+    id: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CliExecutionResult {
     command: String,
@@ -183,13 +391,37 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
-                let payload = json!({
-                    "tool": tool_name,
-                    "result": result,
-                });
                 if result.success {
-                    Ok(CallToolResult::structured(payload))
+                    let data = result
+                        .stdout_json
+                        .map(|envelope| match envelope {
+                            Value::Object(mut map) => {
+                                map.remove("data").unwrap_or(Value::Object(map))
+                            }
+                            other => other,
+                        })
+                        .unwrap_or(Value::Null);
+
+                    let data = summarize_list_if_needed(tool_name, data);
+
+                    Ok(CallToolResult::structured(json!({
+                        "tool": tool_name,
+                        "result": data,
+                    })))
                 } else {
+                    let mut payload = json!({ "tool": tool_name });
+                    if let Some(envelope) = result.stdout_json {
+                        if let Some(error) = envelope.get("error") {
+                            payload["error"] = error.clone();
+                        } else if let Some(data) = envelope.get("data") {
+                            payload["error"] = data.clone();
+                        }
+                    }
+                    payload["exit_code"] = json!(result.exit_code);
+                    let stderr = result.stderr.trim().to_string();
+                    if !stderr.is_empty() {
+                        payload["stderr"] = json!(stderr);
+                    }
                     Ok(CallToolResult::structured_error(payload))
                 }
             }
@@ -420,6 +652,654 @@ impl AoMcpServer {
         self.run_tool("ao.workflow.run", args, input.project_root)
             .await
     }
+
+    #[tool(
+        name = "ao.daemon.start",
+        description = "Start the AO daemon.",
+        input_schema = ao_schema_for_type::<DaemonStartInput>()
+    )]
+    async fn ao_daemon_start(
+        &self,
+        params: Parameters<DaemonStartInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_daemon_start_args(&input);
+        self.run_tool("ao.daemon.start", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.daemon.stop",
+        description = "Stop the AO daemon.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_stop(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.stop",
+            vec!["daemon".to_string(), "stop".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.status",
+        description = "Get daemon status.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_status(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.status",
+            vec!["daemon".to_string(), "status".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.health",
+        description = "Check daemon health.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_health(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.health",
+            vec!["daemon".to_string(), "health".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.pause",
+        description = "Pause the daemon scheduler.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_pause(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.pause",
+            vec!["daemon".to_string(), "pause".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.resume",
+        description = "Resume the daemon scheduler.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_resume(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.resume",
+            vec!["daemon".to_string(), "resume".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.events",
+        description = "List recent daemon events.",
+        input_schema = ao_schema_for_type::<DaemonEventsInput>()
+    )]
+    async fn ao_daemon_events(
+        &self,
+        params: Parameters<DaemonEventsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "daemon".to_string(),
+            "events".to_string(),
+            "--follow".to_string(),
+            "false".to_string(),
+        ];
+        push_opt_usize(&mut args, "--limit", input.limit);
+        self.run_tool("ao.daemon.events", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.daemon.agents",
+        description = "List active daemon agents.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_daemon_agents(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.agents",
+            vec!["daemon".to_string(), "agents".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.agent.run",
+        description = "Run an agent. Defaults to detached mode for MCP.",
+        input_schema = ao_schema_for_type::<AgentRunInput>()
+    )]
+    async fn ao_agent_run(
+        &self,
+        params: Parameters<AgentRunInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_agent_run_args(&input);
+        self.run_tool("ao.agent.run", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.agent.control",
+        description = "Control a running agent (pause, resume, terminate).",
+        input_schema = ao_schema_for_type::<AgentControlInput>()
+    )]
+    async fn ao_agent_control(
+        &self,
+        params: Parameters<AgentControlInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "agent".to_string(),
+            "control".to_string(),
+            "--run-id".to_string(),
+            input.run_id,
+            "--action".to_string(),
+            input.action,
+        ];
+        push_opt(&mut args, "--runner-scope", input.runner_scope);
+        self.run_tool("ao.agent.control", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.agent.status",
+        description = "Get status of an agent run.",
+        input_schema = ao_schema_for_type::<AgentStatusInput>()
+    )]
+    async fn ao_agent_status(
+        &self,
+        params: Parameters<AgentStatusInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "agent".to_string(),
+            "status".to_string(),
+            "--run-id".to_string(),
+            input.run_id,
+        ];
+        push_opt(&mut args, "--runner-scope", input.runner_scope);
+        self.run_tool("ao.agent.status", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.agent.runner-status",
+        description = "Get agent runner process status.",
+        input_schema = ao_schema_for_type::<RunnerScopeInput>()
+    )]
+    async fn ao_agent_runner_status(
+        &self,
+        params: Parameters<RunnerScopeInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec!["agent".to_string(), "runner-status".to_string()];
+        push_opt(&mut args, "--runner-scope", input.runner_scope);
+        self.run_tool("ao.agent.runner-status", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.output.run",
+        description = "Get output for an agent run.",
+        input_schema = ao_schema_for_type::<RunIdInput>()
+    )]
+    async fn ao_output_run(
+        &self,
+        params: Parameters<RunIdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "output".to_string(),
+            "run".to_string(),
+            "--run-id".to_string(),
+            input.run_id,
+        ];
+        self.run_tool("ao.output.run", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.output.monitor",
+        description = "Monitor output for a run, task, or phase.",
+        input_schema = ao_schema_for_type::<OutputMonitorInput>()
+    )]
+    async fn ao_output_monitor(
+        &self,
+        params: Parameters<OutputMonitorInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "output".to_string(),
+            "monitor".to_string(),
+            "--run-id".to_string(),
+            input.run_id,
+        ];
+        push_opt(&mut args, "--task-id", input.task_id);
+        push_opt(&mut args, "--phase-id", input.phase_id);
+        self.run_tool("ao.output.monitor", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.output.jsonl",
+        description = "Get JSONL log for an agent run.",
+        input_schema = ao_schema_for_type::<OutputJsonlInput>()
+    )]
+    async fn ao_output_jsonl(
+        &self,
+        params: Parameters<OutputJsonlInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "output".to_string(),
+            "jsonl".to_string(),
+            "--run-id".to_string(),
+            input.run_id,
+        ];
+        if input.entries {
+            args.push("--entries".to_string());
+        }
+        self.run_tool("ao.output.jsonl", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.output.artifacts",
+        description = "Get artifacts for an execution.",
+        input_schema = ao_schema_for_type::<ExecutionIdInput>()
+    )]
+    async fn ao_output_artifacts(
+        &self,
+        params: Parameters<ExecutionIdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "output".to_string(),
+            "artifacts".to_string(),
+            "--execution-id".to_string(),
+            input.execution_id,
+        ];
+        self.run_tool("ao.output.artifacts", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.runner.health",
+        description = "Check runner process health.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_runner_health(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.runner.health",
+            vec!["runner".to_string(), "health".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.runner.orphans-detect",
+        description = "Detect orphaned runner processes.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_runner_orphans_detect(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.runner.orphans-detect",
+            vec![
+                "runner".to_string(),
+                "orphans".to_string(),
+                "detect".to_string(),
+            ],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.runner.restart-stats",
+        description = "Get runner restart statistics.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_runner_restart_stats(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.runner.restart-stats",
+            vec!["runner".to_string(), "restart-stats".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.task.update",
+        description = "Update task fields.",
+        input_schema = ao_schema_for_type::<TaskUpdateInput>()
+    )]
+    async fn ao_task_update(
+        &self,
+        params: Parameters<TaskUpdateInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "task".to_string(),
+            "update".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        push_opt(&mut args, "--title", input.title);
+        push_opt(&mut args, "--description", input.description);
+        push_opt(&mut args, "--priority", input.priority);
+        push_opt(&mut args, "--status", input.status);
+        push_opt(&mut args, "--assignee", input.assignee);
+        push_opt(&mut args, "--input-json", input.input_json);
+        self.run_tool("ao.task.update", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.task.assign",
+        description = "Assign a task to a user or agent.",
+        input_schema = ao_schema_for_type::<TaskAssignInput>()
+    )]
+    async fn ao_task_assign(
+        &self,
+        params: Parameters<TaskAssignInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "task".to_string(),
+            "assign".to_string(),
+            "--id".to_string(),
+            input.id,
+            "--assignee".to_string(),
+            input.assignee,
+        ];
+        self.run_tool("ao.task.assign", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.task.prioritized",
+        description = "List tasks in priority order.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_task_prioritized(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.task.prioritized",
+            vec!["task".to_string(), "prioritized".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.task.next",
+        description = "Get the next task to work on.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_task_next(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.task.next",
+            vec!["task".to_string(), "next".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.task.stats",
+        description = "Get task statistics.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_task_stats(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.task.stats",
+            vec!["task".to_string(), "stats".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.task.cancel",
+        description = "Cancel a task.",
+        input_schema = ao_schema_for_type::<TaskCancelInput>()
+    )]
+    async fn ao_task_cancel(
+        &self,
+        params: Parameters<TaskCancelInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "task-control".to_string(),
+            "cancel".to_string(),
+            "--task-id".to_string(),
+            input.task_id,
+        ];
+        push_opt(&mut args, "--confirm", input.confirm);
+        if input.dry_run {
+            args.push("--dry-run".to_string());
+        }
+        self.run_tool("ao.task.cancel", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.task.set-priority",
+        description = "Set task priority.",
+        input_schema = ao_schema_for_type::<TaskSetPriorityInput>()
+    )]
+    async fn ao_task_set_priority(
+        &self,
+        params: Parameters<TaskSetPriorityInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "task-control".to_string(),
+            "set-priority".to_string(),
+            "--task-id".to_string(),
+            input.task_id,
+            "--priority".to_string(),
+            input.priority,
+        ];
+        self.run_tool("ao.task.set-priority", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.task.set-deadline",
+        description = "Set or clear a task deadline.",
+        input_schema = ao_schema_for_type::<TaskSetDeadlineInput>()
+    )]
+    async fn ao_task_set_deadline(
+        &self,
+        params: Parameters<TaskSetDeadlineInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "task-control".to_string(),
+            "set-deadline".to_string(),
+            "--task-id".to_string(),
+            input.task_id,
+        ];
+        push_opt(&mut args, "--deadline", input.deadline);
+        self.run_tool("ao.task.set-deadline", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.get",
+        description = "Get workflow details by id.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_get(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "get".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.get", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.pause",
+        description = "Pause a running workflow.",
+        input_schema = ao_schema_for_type::<WorkflowDestructiveInput>()
+    )]
+    async fn ao_workflow_pause(
+        &self,
+        params: Parameters<WorkflowDestructiveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "workflow".to_string(),
+            "pause".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        push_opt(&mut args, "--confirm", input.confirm);
+        if input.dry_run {
+            args.push("--dry-run".to_string());
+        }
+        self.run_tool("ao.workflow.pause", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.cancel",
+        description = "Cancel a running workflow.",
+        input_schema = ao_schema_for_type::<WorkflowDestructiveInput>()
+    )]
+    async fn ao_workflow_cancel(
+        &self,
+        params: Parameters<WorkflowDestructiveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "workflow".to_string(),
+            "cancel".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        push_opt(&mut args, "--confirm", input.confirm);
+        if input.dry_run {
+            args.push("--dry-run".to_string());
+        }
+        self.run_tool("ao.workflow.cancel", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.resume",
+        description = "Resume a paused workflow.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_resume(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "resume".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.resume", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.decisions",
+        description = "List workflow decisions.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_decisions(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "decisions".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.decisions", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.checkpoints.list",
+        description = "List workflow checkpoints.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_checkpoints_list(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "checkpoints".to_string(),
+            "list".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.checkpoints.list", args, input.project_root)
+            .await
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -476,11 +1356,149 @@ fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObj
     std::sync::Arc::new(object)
 }
 
+const TASK_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "status",
+    "priority",
+    "type",
+    "linked_requirements",
+    "dependencies",
+    "tags",
+    "assignee",
+];
+
+const REQUIREMENT_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "status",
+    "priority",
+    "category",
+    "type",
+    "linked_task_ids",
+];
+
+fn summarize_list_if_needed(tool_name: &str, data: Value) -> Value {
+    let keep_fields: &[&str] = match tool_name {
+        "ao.task.list" | "ao.task.prioritized" => TASK_SUMMARY_FIELDS,
+        "ao.requirements.list" => REQUIREMENT_SUMMARY_FIELDS,
+        _ => return data,
+    };
+
+    match data {
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| retain_fields(item, keep_fields))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn retain_fields(value: Value, fields: &[&str]) -> Value {
+    match value {
+        Value::Object(map) => {
+            let filtered: serde_json::Map<String, Value> = map
+                .into_iter()
+                .filter(|(key, _)| fields.contains(&key.as_str()))
+                .collect();
+            Value::Object(filtered)
+        }
+        other => other,
+    }
+}
+
 fn push_opt(args: &mut Vec<String>, flag: &str, value: Option<String>) {
     if let Some(value) = value {
         args.push(flag.to_string());
         args.push(value);
     }
+}
+
+fn push_bool_flag(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
+    if value == Some(true) {
+        args.push(flag.to_string());
+    }
+}
+
+fn push_bool_set(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
+    if let Some(v) = value {
+        args.push(flag.to_string());
+        args.push(v.to_string());
+    }
+}
+
+fn push_opt_num(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
+    if let Some(v) = value {
+        args.push(flag.to_string());
+        args.push(v.to_string());
+    }
+}
+
+fn push_opt_usize(args: &mut Vec<String>, flag: &str, value: Option<usize>) {
+    if let Some(v) = value {
+        args.push(flag.to_string());
+        args.push(v.to_string());
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_codex() -> String {
+    "codex".to_string()
+}
+
+fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
+    let mut args = vec!["daemon".to_string(), "start".to_string()];
+    push_opt_usize(&mut args, "--max-agents", input.max_agents);
+    push_opt_num(&mut args, "--interval-secs", input.interval_secs);
+    push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
+    push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
+    push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
+    push_bool_flag(&mut args, "--skip-runner", input.skip_runner);
+    push_bool_flag(&mut args, "--autonomous", input.autonomous);
+    push_bool_set(&mut args, "--include-registry", input.include_registry);
+    push_bool_set(&mut args, "--ai-task-generation", input.ai_task_generation);
+    push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
+    push_bool_set(&mut args, "--auto-merge", input.auto_merge);
+    push_bool_set(&mut args, "--auto-pr", input.auto_pr);
+    push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
+    push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
+    push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
+    push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
+    push_opt(&mut args, "--runner-scope", input.runner_scope.clone());
+    args
+}
+
+fn build_agent_run_args(input: &AgentRunInput) -> Vec<String> {
+    let mut args = vec![
+        "agent".to_string(),
+        "run".to_string(),
+        "--tool".to_string(),
+        input.tool.clone(),
+        "--model".to_string(),
+        input.model.clone(),
+        "--stream".to_string(),
+        "false".to_string(),
+    ];
+    if input.detach {
+        args.push("--detach".to_string());
+    }
+    push_opt(&mut args, "--prompt", input.prompt.clone());
+    push_opt(&mut args, "--cwd", input.cwd.clone());
+    push_opt_num(&mut args, "--timeout-secs", input.timeout_secs);
+    push_opt(&mut args, "--context-json", input.context_json.clone());
+    push_opt(
+        &mut args,
+        "--runtime-contract-json",
+        input.runtime_contract_json.clone(),
+    );
+    push_opt(&mut args, "--run-id", input.run_id.clone());
+    push_opt(&mut args, "--runner-scope", input.runner_scope.clone());
+    args
 }
 
 fn build_task_get_args(id: String) -> Vec<String> {
@@ -623,6 +1641,122 @@ mod tests {
                 "get".to_string(),
                 "--id".to_string(),
                 "REQ-123".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_daemon_start_args_defaults_minimal() {
+        let input = DaemonStartInput::default();
+        let args = build_daemon_start_args(&input);
+        assert_eq!(
+            args,
+            vec!["daemon".to_string(), "start".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_daemon_start_args_with_flags() {
+        let input = DaemonStartInput {
+            max_agents: Some(4),
+            skip_runner: Some(true),
+            include_registry: Some(false),
+            auto_run_ready: Some(true),
+            runner_scope: Some("project".to_string()),
+            ..Default::default()
+        };
+        let args = build_daemon_start_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "daemon".to_string(),
+                "start".to_string(),
+                "--max-agents".to_string(),
+                "4".to_string(),
+                "--skip-runner".to_string(),
+                "--include-registry".to_string(),
+                "false".to_string(),
+                "--auto-run-ready".to_string(),
+                "true".to_string(),
+                "--runner-scope".to_string(),
+                "project".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_agent_run_args_defaults_detach_and_stream() {
+        let input = AgentRunInput {
+            tool: "codex".to_string(),
+            model: "codex".to_string(),
+            prompt: None,
+            cwd: None,
+            timeout_secs: None,
+            context_json: None,
+            runtime_contract_json: None,
+            detach: true,
+            run_id: None,
+            runner_scope: None,
+            project_root: None,
+        };
+        let args = build_agent_run_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "agent".to_string(),
+                "run".to_string(),
+                "--tool".to_string(),
+                "codex".to_string(),
+                "--model".to_string(),
+                "codex".to_string(),
+                "--stream".to_string(),
+                "false".to_string(),
+                "--detach".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_agent_run_args_with_all_options() {
+        let input = AgentRunInput {
+            tool: "claude".to_string(),
+            model: "opus".to_string(),
+            prompt: Some("hello".to_string()),
+            cwd: Some("/tmp".to_string()),
+            timeout_secs: Some(300),
+            context_json: Some("{}".to_string()),
+            runtime_contract_json: Some("{\"k\":1}".to_string()),
+            detach: false,
+            run_id: Some("run-1".to_string()),
+            runner_scope: Some("global".to_string()),
+            project_root: None,
+        };
+        let args = build_agent_run_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "agent".to_string(),
+                "run".to_string(),
+                "--tool".to_string(),
+                "claude".to_string(),
+                "--model".to_string(),
+                "opus".to_string(),
+                "--stream".to_string(),
+                "false".to_string(),
+                "--prompt".to_string(),
+                "hello".to_string(),
+                "--cwd".to_string(),
+                "/tmp".to_string(),
+                "--timeout-secs".to_string(),
+                "300".to_string(),
+                "--context-json".to_string(),
+                "{}".to_string(),
+                "--runtime-contract-json".to_string(),
+                "{\"k\":1}".to_string(),
+                "--run-id".to_string(),
+                "run-1".to_string(),
+                "--runner-scope".to_string(),
+                "global".to_string(),
             ]
         );
     }
