@@ -277,6 +277,22 @@ mod tests {
     }
 
     #[test]
+    fn daemon_event_filters_match_case_insensitively() {
+        let args = DaemonEventsArgs {
+            limit: None,
+            follow: false,
+            event_type: Some("WORKFLOW-PHASE-AUTH-ROTATED".to_string()),
+            workflow_id: Some("WF-1".to_string()),
+            task_id: Some("task-023".to_string()),
+            phase: Some("IMPLEMENTATION".to_string()),
+        };
+        assert!(event_record_matches_args(
+            &record("workflow-phase-auth-rotated"),
+            &args
+        ));
+    }
+
+    #[test]
     fn daemon_event_filters_exclude_non_matching_phase() {
         let args = DaemonEventsArgs {
             limit: None,

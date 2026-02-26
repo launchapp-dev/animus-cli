@@ -913,7 +913,6 @@ pub(super) async fn run_workflow_phase_with_agent(
                 break;
             }
         }
-
     }
 
     signals.push(PhaseExecutionSignal {
@@ -1534,5 +1533,94 @@ pub(super) async fn run_workflow_phase(
                 signals,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_phase_auth_candidates_prioritizes_chain_hint_and_filters_invalid_profiles() {
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        config.auth_profiles.insert(
+            "codex-a".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "AO_TEST_OPENAI_KEY_A".to_string(),
+                )]),
+                priority: Some(1),
+                enabled: true,
+            },
+        );
+        config.auth_profiles.insert(
+            "codex-b".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "AO_TEST_OPENAI_KEY_B".to_string(),
+                )]),
+                priority: Some(10),
+                enabled: true,
+            },
+        );
+        config.auth_profiles.insert(
+            "codex-disabled".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([(
+                    "OPENAI_API_KEY".to_string(),
+                    "AO_TEST_OPENAI_KEY_DISABLED".to_string(),
+                )]),
+                priority: Some(5),
+                enabled: false,
+            },
+        );
+        config.auth_profiles.insert(
+            "claude-main".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "claude".to_string(),
+                env_map: BTreeMap::from([(
+                    "ANTHROPIC_API_KEY".to_string(),
+                    "AO_TEST_ANTHROPIC_KEY_MAIN".to_string(),
+                )]),
+                priority: Some(1),
+                enabled: true,
+            },
+        );
+
+        let chain_hint = vec![
+            " codex-b ".to_string(),
+            "codex-disabled".to_string(),
+            "claude-main".to_string(),
+            "missing-profile".to_string(),
+            "codex-b".to_string(),
+        ];
+        let candidates =
+            resolve_phase_auth_candidates(&config, "implementation", "codex", Some(&chain_hint));
+
+        let profile_ids = candidates
+            .iter()
+            .map(|candidate| candidate.profile_id.as_deref().unwrap_or("implicit-env"))
+            .collect::<Vec<_>>();
+        assert_eq!(profile_ids, vec!["codex-b", "codex-a"]);
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.provider == "codex"));
+    }
+
+    #[test]
+    fn resolve_phase_auth_candidates_falls_back_to_implicit_env_candidate() {
+        let config = orchestrator_core::builtin_agent_runtime_config();
+        let candidates = resolve_phase_auth_candidates(&config, "implementation", "codex", None);
+
+        assert_eq!(candidates.len(), 1);
+        let first = candidates.first().expect("implicit candidate");
+        assert_eq!(first.profile_id, None);
+        assert_eq!(first.provider, "codex");
+        assert!(first.env_map.is_empty());
     }
 }

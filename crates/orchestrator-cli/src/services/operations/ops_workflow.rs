@@ -1623,6 +1623,81 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_payload_reports_missing_profile_source_env_readiness() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        let source_env = "AO_TEST_AUTH_PROFILE_MISSING_SOURCE_023";
+        std::env::remove_var(source_env);
+
+        config.auth_profiles.insert(
+            "codex-primary".to_string(),
+            orchestrator_core::ProviderAuthProfile {
+                provider: "codex".to_string(),
+                env_map: BTreeMap::from([("OPENAI_API_KEY".to_string(), source_env.to_string())]),
+                priority: Some(1),
+                enabled: true,
+            },
+        );
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile")
+            .auth_profile_chain = vec!["codex-primary".to_string()];
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config)
+            .expect("write runtime config");
+
+        let payload = workflow_agent_runtime_diagnostics_payload(
+            temp.path().to_str().expect("path"),
+            "implementation",
+            None,
+            Some("medium"),
+        )
+        .expect("diagnostics payload");
+
+        let warnings = payload
+            .get("warnings")
+            .and_then(Value::as_array)
+            .expect("warnings array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("auth profile 'codex-primary' missing source env vars")
+                && warning.contains(source_env)
+        }));
+
+        let auth_chains = payload
+            .get("auth_profile_chains")
+            .and_then(Value::as_array)
+            .expect("auth profile chains");
+        let first_profile = auth_chains
+            .first()
+            .and_then(|entry| entry.get("profiles"))
+            .and_then(Value::as_array)
+            .and_then(|profiles| profiles.first())
+            .expect("first auth profile");
+        let readiness = first_profile
+            .get("readiness")
+            .and_then(Value::as_object)
+            .expect("readiness object");
+        assert_eq!(readiness.get("ready").and_then(Value::as_bool), Some(false));
+        let missing = readiness
+            .get("missing_source_env")
+            .and_then(Value::as_array)
+            .expect("missing source env list");
+        assert!(missing
+            .iter()
+            .any(|value| value.as_str() == Some(source_env)));
+        let required = readiness
+            .get("required_env_keys")
+            .and_then(Value::as_array)
+            .expect("required env keys");
+        assert!(required
+            .iter()
+            .any(|value| value.as_str() == Some("OPENAI_API_KEY")));
+    }
+
+    #[test]
     fn diagnostics_payload_reports_invalid_complexity() {
         let temp = tempfile::tempdir().expect("tempdir");
         let config = orchestrator_core::builtin_agent_runtime_config();
