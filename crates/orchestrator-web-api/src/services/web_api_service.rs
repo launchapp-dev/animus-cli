@@ -939,6 +939,7 @@ impl WebApiService {
         task_id: Option<String>,
         phase_id: Option<String>,
     ) -> Result<Value, WebApiError> {
+        let run_id = run_id.trim();
         let entries = get_run_jsonl_entries(&self.context.project_root, run_id)?;
         let batch = build_run_telemetry_batch(
             entries,
@@ -966,6 +967,7 @@ impl WebApiService {
         phase_id: Option<String>,
         limit: Option<usize>,
     ) -> Result<Value, WebApiError> {
+        let run_id = run_id.trim();
         let entries = get_run_jsonl_entries(&self.context.project_root, run_id)?;
         let source_file = normalize_optional_string(source_file);
         let contains = normalize_optional_string(contains).map(|value| value.to_ascii_lowercase());
@@ -1007,6 +1009,7 @@ impl WebApiService {
     }
 
     pub async fn output_artifacts(&self, execution_id: &str) -> Result<Value, WebApiError> {
+        let execution_id = execution_id.trim();
         Ok(json!(list_artifact_infos(
             &self.context.project_root,
             execution_id
@@ -1018,6 +1021,7 @@ impl WebApiService {
         execution_id: &str,
         artifact_id: &str,
     ) -> Result<Value, WebApiError> {
+        let execution_id = execution_id.trim();
         let (artifact_id, bytes) =
             read_artifact_bytes(&self.context.project_root, execution_id, artifact_id)?;
         Ok(json!({
@@ -1843,23 +1847,37 @@ fn validate_identifier_segment(value: &str, field_name: &str) -> Result<(), WebA
 }
 
 fn run_dir_candidates(project_root: &str, run_id: &str) -> Vec<PathBuf> {
-    let mut candidates = vec![
+    let mut candidates = Vec::new();
+    if let Some(scoped_root) = discover_scoped_ao_root(project_root) {
+        candidates.push(scoped_root.join("runs").join(run_id));
+    }
+
+    candidates.push(
         Path::new(project_root)
             .join(".ao")
             .join("runs")
             .join(run_id),
+    );
+    candidates.push(
         Path::new(project_root)
             .join(".ao")
             .join("state")
             .join("runs")
             .join(run_id),
-    ];
-
-    if let Some(scoped_root) = discover_scoped_ao_root(project_root) {
-        candidates.push(scoped_root.join("runs").join(run_id));
-    }
+    );
 
     candidates
+}
+
+fn resolve_run_dir_for_lookup(
+    project_root: &str,
+    run_id: &str,
+) -> Result<Option<PathBuf>, WebApiError> {
+    validate_identifier_segment(run_id, "run_id")?;
+    let normalized_run_id = run_id.trim();
+    Ok(run_dir_candidates(project_root, normalized_run_id)
+        .into_iter()
+        .find(|candidate| candidate.exists()))
 }
 
 fn discover_scoped_ao_root(project_root: &str) -> Option<PathBuf> {
@@ -1921,39 +1939,35 @@ fn get_run_jsonl_entries(
     project_root: &str,
     run_id: &str,
 ) -> Result<Vec<RunJsonlEntry>, WebApiError> {
-    validate_identifier_segment(run_id, "run_id")?;
-
+    let Some(run_dir) = resolve_run_dir_for_lookup(project_root, run_id)? else {
+        return Ok(Vec::new());
+    };
     let mut rows = Vec::new();
-    for run_dir in run_dir_candidates(project_root, run_id) {
-        if !run_dir.exists() {
+    for file_name in [
+        "json-output.jsonl",
+        "stdout.jsonl",
+        "stderr.jsonl",
+        "system.jsonl",
+        "signals.jsonl",
+        "events.jsonl",
+    ] {
+        let path = run_dir.join(file_name);
+        if !path.exists() {
             continue;
         }
-        for file_name in [
-            "json-output.jsonl",
-            "stdout.jsonl",
-            "stderr.jsonl",
-            "system.jsonl",
-            "signals.jsonl",
-            "events.jsonl",
-        ] {
-            let path = run_dir.join(file_name);
-            if !path.exists() {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read run output file {}", path.display()))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
                 continue;
             }
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read run output file {}", path.display()))?;
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                rows.push(RunJsonlEntry {
-                    source_file: file_name.to_string(),
-                    line: line.to_string(),
-                    timestamp_hint: extract_timestamp_hint(line),
-                    payload: serde_json::from_str::<Value>(line).ok(),
-                });
-            }
+            rows.push(RunJsonlEntry {
+                source_file: file_name.to_string(),
+                line: line.to_string(),
+                timestamp_hint: extract_timestamp_hint(line),
+                payload: serde_json::from_str::<Value>(line).ok(),
+            });
         }
     }
 
@@ -2070,11 +2084,17 @@ fn list_artifact_infos(
                 )
             })?;
             let path = entry.path();
-            if path.is_dir() {
+            let metadata = fs::symlink_metadata(&path).with_context(|| {
+                format!("failed to read artifact metadata for {}", path.display())
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
                 pending.push(path);
                 continue;
             }
-            if !path.is_file() {
+            if !metadata.is_file() {
                 continue;
             }
 
@@ -2088,12 +2108,11 @@ fn list_artifact_infos(
                 .and_then(|value| value.to_str())
                 .unwrap_or("file")
                 .to_string();
-            let size_bytes = fs::metadata(&path).ok().map(|metadata| metadata.len());
             artifacts.push(ArtifactInfoWeb {
                 artifact_id: relative,
                 artifact_type,
                 file_path: Some(path.display().to_string()),
-                size_bytes,
+                size_bytes: Some(metadata.len()),
             });
         }
     }
@@ -2124,16 +2143,22 @@ fn read_artifact_bytes(
     }
 
     let artifacts_dir = artifact_dir(project_root, execution_id);
+    let artifacts_root = artifacts_dir.canonicalize().map_err(|_| {
+        WebApiError::new(
+            "not_found",
+            format!("execution not found: {}", execution_id.trim()),
+            3,
+        )
+    })?;
     let path = artifacts_dir.join(&safe_relative);
-    let symlink_metadata = fs::symlink_metadata(&path).map_err(|_| {
+    let canonical_path = path.canonicalize().map_err(|_| {
         WebApiError::new(
             "not_found",
             format!("artifact not found: {}", artifact_id.trim()),
             3,
         )
     })?;
-
-    if symlink_metadata.file_type().is_symlink() || !symlink_metadata.file_type().is_file() {
+    if !canonical_path.starts_with(&artifacts_root) {
         return Err(WebApiError::new(
             "not_found",
             format!("artifact not found: {}", artifact_id.trim()),
@@ -2141,8 +2166,23 @@ fn read_artifact_bytes(
         ));
     }
 
-    let bytes = fs::read(&path)
-        .with_context(|| format!("failed to read artifact at {}", path.display()))?;
+    let metadata = fs::metadata(&canonical_path).map_err(|_| {
+        WebApiError::new(
+            "not_found",
+            format!("artifact not found: {}", artifact_id.trim()),
+            3,
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(WebApiError::new(
+            "not_found",
+            format!("artifact not found: {}", artifact_id.trim()),
+            3,
+        ));
+    }
+
+    let bytes = fs::read(&canonical_path)
+        .with_context(|| format!("failed to read artifact at {}", canonical_path.display()))?;
     let normalized_artifact_id = safe_relative.to_string_lossy().replace('\\', "/");
     Ok((normalized_artifact_id, bytes))
 }
@@ -2273,4 +2313,153 @@ fn sanitize_relative_path(path: &str) -> Option<PathBuf> {
     }
 
     Some(safe_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn temp_test_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    #[test]
+    fn get_run_jsonl_entries_prefers_scoped_lookup_over_legacy_paths() {
+        let _lock = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let temp = temp_test_dir("web-api-runs-precedence");
+        let home_dir = temp.join("home");
+        fs::create_dir_all(&home_dir).expect("home dir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(home_dir.to_string_lossy().as_ref()));
+
+        let project_root = temp.join("project");
+        fs::create_dir_all(&project_root).expect("project root should be created");
+        let run_id = "run-abc123";
+
+        let scoped_root = home_dir.join(".ao").join("repo-scope");
+        fs::create_dir_all(scoped_root.join("runs").join(run_id))
+            .expect("scoped run dir should be created");
+        let canonical_project_root = project_root
+            .canonicalize()
+            .expect("project root should canonicalize");
+        fs::write(
+            scoped_root.join(".project-root"),
+            canonical_project_root.to_string_lossy().as_ref(),
+        )
+        .expect("scoped marker should be written");
+        fs::write(
+            scoped_root.join("runs").join(run_id).join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-01T00:00:00Z\",\"kind\":\"scoped\"}\n",
+        )
+        .expect("scoped run event should be written");
+
+        let legacy_dir = project_root.join(".ao").join("runs").join(run_id);
+        fs::create_dir_all(&legacy_dir).expect("legacy run dir should be created");
+        fs::write(
+            legacy_dir.join("events.jsonl"),
+            "{\"timestamp\":\"2024-01-02T00:00:00Z\",\"kind\":\"legacy\"}\n",
+        )
+        .expect("legacy run event should be written");
+
+        let entries = get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id)
+            .expect("run entries should load");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].line.contains("\"scoped\""));
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_artifact_infos_skips_symlink_entries() {
+        let temp = temp_test_dir("web-api-artifacts-list");
+        let project_root = temp.join("project");
+        let execution_id = "exec-abc123";
+        let artifacts_dir = artifact_dir(project_root.to_string_lossy().as_ref(), execution_id);
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir should be created");
+
+        fs::write(artifacts_dir.join("valid.log"), "ok").expect("valid artifact should be written");
+        let outside_dir = temp.join("outside");
+        fs::create_dir_all(&outside_dir).expect("outside dir should be created");
+        fs::write(outside_dir.join("secret.log"), "secret")
+            .expect("outside artifact should be written");
+
+        std::os::unix::fs::symlink(
+            outside_dir.join("secret.log"),
+            artifacts_dir.join("link.log"),
+        )
+        .expect("file symlink should be created");
+        std::os::unix::fs::symlink(&outside_dir, artifacts_dir.join("external"))
+            .expect("dir symlink should be created");
+
+        let artifacts = list_artifact_infos(project_root.to_string_lossy().as_ref(), execution_id)
+            .expect("artifact listing should succeed");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].artifact_id, "valid.log");
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_artifact_bytes_rejects_symlink_directory_escape() {
+        let temp = temp_test_dir("web-api-artifacts-read");
+        let project_root = temp.join("project");
+        let execution_id = "exec-abc123";
+        let artifacts_dir = artifact_dir(project_root.to_string_lossy().as_ref(), execution_id);
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir should be created");
+
+        let outside_dir = temp.join("outside");
+        fs::create_dir_all(&outside_dir).expect("outside dir should be created");
+        fs::write(outside_dir.join("secret.txt"), "secret")
+            .expect("outside file should be written");
+        std::os::unix::fs::symlink(&outside_dir, artifacts_dir.join("escape"))
+            .expect("symlink should be created");
+
+        let err = read_artifact_bytes(
+            project_root.to_string_lossy().as_ref(),
+            execution_id,
+            "escape/secret.txt",
+        )
+        .expect_err("symlink escape should be rejected");
+        assert_eq!(err.code, "not_found");
+
+        let _ = fs::remove_dir_all(&temp);
+    }
 }
