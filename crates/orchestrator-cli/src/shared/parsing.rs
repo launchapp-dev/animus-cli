@@ -6,18 +6,20 @@ use serde_json::Value;
 use crate::{ensure_safe_run_id, event_matches_run, run_dir};
 
 const TASK_STATUS_EXPECTED: &str =
-    "backlog|todo, ready, in-progress|in_progress, blocked, on-hold|on_hold, done, cancelled";
-const TASK_TYPE_EXPECTED: &str = "feature, bugfix, hotfix, refactor, docs, test, chore, experiment";
-const PRIORITY_EXPECTED: &str = "critical, high, medium, low";
+    "backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled";
+const TASK_TYPE_EXPECTED: &str = "feature|bugfix|hotfix|refactor|docs|test|chore|experiment";
+const PRIORITY_EXPECTED: &str = "critical|high|medium|low";
 const DEPENDENCY_TYPE_EXPECTED: &str =
-    "blocks-by|blocks_by, blocked-by|blocked_by, related-to|related_to";
-const PROJECT_TYPE_EXPECTED: &str = "web-app, mobile-app, desktop-app, full-stack-platform|full-stack|saas, library, infrastructure, other";
+    "blocks-by|blocks_by|blocksby|blocked-by|blocked_by|blockedby|related-to|related_to|relatedto";
+const PROJECT_TYPE_EXPECTED: &str =
+    "web-app|mobile-app|desktop-app|full-stack-platform|full-stack|saas|library|infrastructure|other";
+pub(crate) const COMMAND_HELP_HINT: &str = "run the same command with --help";
 
 fn invalid_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
     let value = value.trim();
     let normalized_value = if value.is_empty() { "<empty>" } else { value };
     anyhow!(
-        "invalid {domain} '{normalized_value}'; expected one of: {expected}; run the command with --help for accepted values"
+        "invalid {domain} '{normalized_value}'; expected one of: {expected}; {COMMAND_HELP_HINT}"
     )
 }
 
@@ -28,7 +30,11 @@ where
 {
     match input_json {
         Some(raw) => {
-            serde_json::from_str::<T>(&raw).context("failed to parse --input-json payload as JSON")
+            serde_json::from_str::<T>(&raw).with_context(|| {
+                format!(
+                    "failed to parse --input-json payload as JSON; {COMMAND_HELP_HINT} for the expected shape"
+                )
+            })
         }
         None => fallback(),
     }
@@ -37,11 +43,22 @@ where
 pub(crate) fn ensure_destructive_confirmation(
     confirm: Option<&str>,
     expected: &str,
-    action: &str,
+    command_path: &str,
+    id_flag: &str,
 ) -> Result<()> {
     let expected = expected.trim();
     if expected.is_empty() {
-        anyhow::bail!("invalid confirmation token for {action}");
+        anyhow::bail!("invalid confirmation token for {command_path}");
+    }
+
+    let command_path = command_path.trim();
+    if command_path.is_empty() {
+        anyhow::bail!("invalid confirmation command path");
+    }
+
+    let id_flag = id_flag.trim();
+    if id_flag.is_empty() || !id_flag.starts_with("--") {
+        anyhow::bail!("invalid confirmation id flag for {command_path}");
     }
 
     let provided = confirm.map(str::trim).filter(|value| !value.is_empty());
@@ -50,9 +67,7 @@ pub(crate) fn ensure_destructive_confirmation(
     }
 
     anyhow::bail!(
-        "CONFIRMATION_REQUIRED: rerun '{}' with --confirm {}; use --dry-run to preview changes",
-        action,
-        expected
+        "CONFIRMATION_REQUIRED: rerun 'ao {command_path} {id_flag} {expected} --confirm {expected}'; use --dry-run to preview changes"
     );
 }
 
@@ -176,7 +191,7 @@ pub(crate) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
         "test" => TaskType::Test,
         "chore" => TaskType::Chore,
         "experiment" => TaskType::Experiment,
-        _ => return Err(invalid_value_error("task_type", value, TASK_TYPE_EXPECTED)),
+        _ => return Err(invalid_value_error("task type", value, TASK_TYPE_EXPECTED)),
     };
 
     Ok(Some(task_type))
@@ -207,7 +222,7 @@ pub(crate) fn parse_dependency_type(value: &str) -> Result<DependencyType> {
         "related-to" | "related_to" | "relatedto" => DependencyType::RelatedTo,
         _ => {
             return Err(invalid_value_error(
-                "dependency_type",
+                "dependency type",
                 value,
                 DEPENDENCY_TYPE_EXPECTED,
             ))
@@ -239,7 +254,7 @@ pub(crate) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<Proje
         "other" | "greenfield" | "existing" => ProjectType::Other,
         _ => {
             return Err(invalid_value_error(
-                "project_type",
+                "project type",
                 value,
                 PROJECT_TYPE_EXPECTED,
             ))
@@ -300,7 +315,7 @@ mod tests {
     fn parse_project_type_rejects_unknown_values() {
         let err = parse_project_type_opt(Some("nonsense")).expect_err("unknown value should fail");
         let message = err.to_string();
-        assert!(message.contains("invalid project_type"));
+        assert!(message.contains("invalid project type"));
         assert!(message.contains("expected one of"));
         assert!(message.contains("--help"));
     }
@@ -320,7 +335,7 @@ mod tests {
         assert!(message.contains("invalid status"));
         assert!(message.contains("expected one of"));
         assert!(message.contains("in-progress|in_progress"));
-        assert!(message.contains("--help"));
+        assert!(message.contains(COMMAND_HELP_HINT));
     }
 
     #[test]
@@ -328,8 +343,8 @@ mod tests {
         let err = parse_priority_opt(Some("urgent")).expect_err("unknown priority should fail");
         let message = err.to_string();
         assert!(message.contains("invalid priority"));
-        assert!(message.contains("critical, high, medium, low"));
-        assert!(message.contains("--help"));
+        assert!(message.contains(PRIORITY_EXPECTED));
+        assert!(message.contains(COMMAND_HELP_HINT));
     }
 
     #[test]
@@ -337,7 +352,7 @@ mod tests {
         let err = parse_priority_opt(Some("   ")).expect_err("empty priority should fail");
         let message = err.to_string();
         assert!(message.contains("invalid priority '<empty>'"));
-        assert!(message.contains("--help"));
+        assert!(message.contains(COMMAND_HELP_HINT));
     }
 
     #[test]
@@ -345,25 +360,55 @@ mod tests {
         let err =
             parse_dependency_type("unrelated").expect_err("unknown dependency type should fail");
         let message = err.to_string();
-        assert!(message.contains("invalid dependency_type"));
-        assert!(message.contains("blocks-by|blocks_by"));
-        assert!(message.contains("--help"));
+        assert!(message.contains("invalid dependency type"));
+        assert!(message.contains("blocks-by|blocks_by|blocksby"));
+        assert!(message.contains(COMMAND_HELP_HINT));
+    }
+
+    #[test]
+    fn parse_input_json_or_reports_help_hint_on_invalid_json() {
+        let err = parse_input_json_or::<serde_json::Value, _>(Some("{invalid".to_string()), || {
+            Ok(serde_json::Value::Null)
+        })
+        .expect_err("invalid json should fail");
+        let message = err.to_string();
+        assert!(message.contains("failed to parse --input-json payload as JSON"));
+        assert!(message.contains(COMMAND_HELP_HINT));
     }
 
     #[test]
     fn destructive_confirmation_accepts_matching_token() {
-        ensure_destructive_confirmation(Some("TASK-123"), "TASK-123", "task.delete")
+        ensure_destructive_confirmation(Some("TASK-123"), "TASK-123", "task delete", "--id")
             .expect("matching token should pass");
     }
 
     #[test]
     fn destructive_confirmation_requires_exact_token() {
-        let error = ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task.delete")
-            .expect_err("mismatched token should fail");
+        let error =
+            ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task delete", "--id")
+                .expect_err("mismatched token should fail");
         let message = error.to_string();
         assert!(message.contains("CONFIRMATION_REQUIRED"));
-        assert!(message.contains("--confirm TASK-123"));
+        assert!(message.contains("ao task delete --id TASK-123 --confirm TASK-123"));
         assert!(message.contains("--dry-run"));
+    }
+
+    #[test]
+    fn destructive_confirmation_requires_non_empty_command_path() {
+        let error = ensure_destructive_confirmation(None, "TASK-123", "   ", "--id")
+            .expect_err("empty command path should fail");
+        assert!(error
+            .to_string()
+            .contains("invalid confirmation command path"));
+    }
+
+    #[test]
+    fn destructive_confirmation_requires_long_form_id_flag() {
+        let error = ensure_destructive_confirmation(None, "TASK-123", "task delete", "id")
+            .expect_err("non long-form id flag should fail");
+        assert!(error
+            .to_string()
+            .contains("invalid confirmation id flag for task delete"));
     }
 
     #[test]

@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 
 use super::model::GitRepoRefCli;
 use super::store::{
-    ensure_confirmation, load_git_repo_registry, repos_root, resolve_repo_path, run_git,
-    save_git_repo_registry,
+    ensure_confirmation, git_confirmation_next_step, load_git_repo_registry, repos_root,
+    resolve_repo_path, run_git, save_git_repo_registry,
 };
 
 pub(super) fn handle_git_repo(
@@ -159,7 +159,7 @@ pub(super) fn handle_git_push(args: GitPushArgs, project_root: &str, json: bool)
         let remote = args.remote.clone();
         let branch = args.branch.clone();
         let next_step = if args.force {
-            "request/approve a git confirmation, then rerun with --confirmation-id <id>".to_string()
+            git_confirmation_next_step("force_push", &repo)
         } else {
             "rerun without --dry-run to execute git push".to_string()
         };

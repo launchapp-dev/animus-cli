@@ -19,7 +19,7 @@ pub(crate) async fn handle_task_control(
                 return print_value(
                     serde_json::json!({
                         "success": false,
-                        "message": "Task is already paused",
+                        "message": "task is already paused",
                         "task_id": args.task_id,
                     }),
                     json,
@@ -31,7 +31,7 @@ pub(crate) async fn handle_task_control(
             print_value(
                 serde_json::json!({
                     "success": true,
-                    "message": format!("Task {} paused", args.task_id),
+                    "message": format!("task {} paused", args.task_id),
                 }),
                 json,
             )
@@ -42,7 +42,7 @@ pub(crate) async fn handle_task_control(
                 return print_value(
                     serde_json::json!({
                         "success": false,
-                        "message": "Task is not paused",
+                        "message": "task is not paused",
                         "task_id": args.task_id,
                     }),
                     json,
@@ -54,7 +54,7 @@ pub(crate) async fn handle_task_control(
             print_value(
                 serde_json::json!({
                     "success": true,
-                    "message": format!("Task {} resumed", args.task_id),
+                    "message": format!("task {} resumed", args.task_id),
                 }),
                 json,
             )
@@ -65,7 +65,7 @@ pub(crate) async fn handle_task_control(
                 return print_value(
                     serde_json::json!({
                         "success": false,
-                        "message": "Task is already cancelled",
+                        "message": "task is already cancelled",
                         "task_id": args.task_id,
                     }),
                     json,
@@ -109,6 +109,7 @@ pub(crate) async fn handle_task_control(
                 args.confirm.as_deref(),
                 &args.task_id,
                 "task-control cancel",
+                "--task-id",
             )?;
             task.cancelled = true;
             task.status = TaskStatus::Cancelled;
@@ -117,7 +118,7 @@ pub(crate) async fn handle_task_control(
             print_value(
                 serde_json::json!({
                     "success": true,
-                    "message": format!("Task {} cancelled", args.task_id),
+                    "message": format!("task {} cancelled", args.task_id),
                 }),
                 json,
             )
@@ -132,7 +133,7 @@ pub(crate) async fn handle_task_control(
             print_value(
                 serde_json::json!({
                     "success": true,
-                    "message": format!("Task {} priority set to {}", args.task_id, args.priority),
+                    "message": format!("task {} priority set to {}", args.task_id, args.priority),
                 }),
                 json,
             )
@@ -158,7 +159,7 @@ pub(crate) async fn handle_task_control(
             print_value(
                 serde_json::json!({
                     "success": true,
-                    "message": format!("Task {} deadline updated", args.task_id),
+                    "message": format!("task {} deadline updated", args.task_id),
                 }),
                 json,
             )

@@ -3,7 +3,8 @@ use anyhow::{anyhow, Result};
 
 use super::model::GitSyncStatusCli;
 use super::store::{
-    ensure_confirmation, load_worktrees, resolve_repo_path, resolve_worktree_path, run_git,
+    ensure_confirmation, git_confirmation_next_step, load_worktrees, resolve_repo_path,
+    resolve_worktree_path, run_git,
 };
 
 pub(super) fn handle_git_worktree(
@@ -72,7 +73,7 @@ pub(super) fn handle_git_worktree(
                         "planned_effects": [
                             "remove git worktree from repository",
                         ],
-                        "next_step": "request/approve a git confirmation, then rerun with --confirmation-id <id>",
+                        "next_step": git_confirmation_next_step("remove_worktree", &repo),
                         "repo": repo,
                         "repo_path": repo_path.display().to_string(),
                         "worktree_name": worktree_name,
@@ -130,9 +131,9 @@ pub(super) fn handle_git_worktree(
                 let remote = args.remote.clone();
                 let branch_name = branch.trim().to_string();
                 let next_step = if args.force {
-                    "request/approve a git confirmation, then rerun with --confirmation-id <id>"
+                    git_confirmation_next_step("force_push", &repo)
                 } else {
-                    "rerun without --dry-run to execute git worktree push"
+                    "rerun without --dry-run to execute git worktree push".to_string()
                 };
                 return print_value(
                     serde_json::json!({

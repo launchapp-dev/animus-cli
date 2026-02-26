@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::ops_common::project_state_dir;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{services::ServiceHub, WorkflowResumeManager, WorkflowRunInput};
 use serde::{Deserialize, Serialize};
@@ -260,7 +260,10 @@ fn validate_state_machine_payload(project_root: &str) -> Value {
 }
 
 fn set_state_machine_payload(project_root: &str, input_json: &str) -> Result<Value> {
-    let document: orchestrator_core::StateMachinesDocument = serde_json::from_str(input_json)?;
+    let document: orchestrator_core::StateMachinesDocument =
+        serde_json::from_str(input_json).with_context(|| {
+            "invalid --input-json payload for workflow state-machine set; run 'ao workflow state-machine set --help' for schema"
+        })?;
     let compiled =
         orchestrator_core::write_state_machines_document(Path::new(project_root), &document)?;
     let path = orchestrator_core::state_machines_path(Path::new(project_root));
@@ -325,7 +328,10 @@ fn validate_agent_runtime_payload(project_root: &str) -> Value {
 }
 
 fn set_agent_runtime_payload(project_root: &str, input_json: &str) -> Result<Value> {
-    let config: orchestrator_core::AgentRuntimeConfig = serde_json::from_str(input_json)?;
+    let config: orchestrator_core::AgentRuntimeConfig =
+        serde_json::from_str(input_json).with_context(|| {
+            "invalid --input-json payload for workflow agent-runtime set; run 'ao workflow agent-runtime set --help' for schema"
+        })?;
     orchestrator_core::write_agent_runtime_config(Path::new(project_root), &config)?;
     let path = agent_runtime_path(project_root);
 
@@ -1036,7 +1042,12 @@ pub(crate) async fn handle_workflow(
                     json,
                 );
             }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow pause")?;
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.id,
+                "workflow pause",
+                "--id",
+            )?;
             print_value(workflows.pause(&args.id).await?, json)
         }
         WorkflowCommand::Cancel(args) => {
@@ -1068,7 +1079,12 @@ pub(crate) async fn handle_workflow(
                     json,
                 );
             }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow cancel")?;
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.id,
+                "workflow cancel",
+                "--id",
+            )?;
             print_value(workflows.cancel(&args.id).await?, json)
         }
         WorkflowCommand::Phase { command } => match command {
@@ -1085,7 +1101,9 @@ pub(crate) async fn handle_workflow(
             }
             WorkflowPhasesCommand::Upsert(args) => {
                 let definition: orchestrator_core::PhaseExecutionDefinition =
-                    serde_json::from_str(&args.input_json)?;
+                    serde_json::from_str(&args.input_json).with_context(|| {
+                        "invalid --input-json payload for workflow phases upsert; run 'ao workflow phases upsert --help' for schema"
+                    })?;
                 print_value(
                     upsert_phase_definition(project_root, &args.phase, definition)?,
                     json,
@@ -1099,6 +1117,7 @@ pub(crate) async fn handle_workflow(
                     args.confirm.as_deref(),
                     &args.phase,
                     "workflow phases remove",
+                    "--phase",
                 )?;
                 print_value(remove_phase_definition(project_root, &args.phase)?, json)
             }
@@ -1110,7 +1129,9 @@ pub(crate) async fn handle_workflow(
             }
             WorkflowPipelinesCommand::Upsert(args) => {
                 let pipeline: orchestrator_core::PipelineDefinition =
-                    serde_json::from_str(&args.input_json)?;
+                    serde_json::from_str(&args.input_json).with_context(|| {
+                        "invalid --input-json payload for workflow pipelines upsert; run 'ao workflow pipelines upsert --help' for schema"
+                    })?;
                 print_value(upsert_pipeline(project_root, pipeline)?, json)
             }
         },
@@ -1158,5 +1179,28 @@ pub(crate) async fn handle_workflow(
             })?;
             print_value(upsert_pipeline(project_root, pipeline)?, json)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_state_machine_payload_reports_actionable_json_error() {
+        let error = set_state_machine_payload("/tmp/unused", "{invalid")
+            .expect_err("invalid payload should fail");
+        let message = error.to_string();
+        assert!(message.contains("invalid --input-json payload"));
+        assert!(message.contains("workflow state-machine set --help"));
+    }
+
+    #[test]
+    fn set_agent_runtime_payload_reports_actionable_json_error() {
+        let error = set_agent_runtime_payload("/tmp/unused", "{invalid")
+            .expect_err("invalid payload should fail");
+        let message = error.to_string();
+        assert!(message.contains("invalid --input-json payload"));
+        assert!(message.contains("workflow agent-runtime set --help"));
     }
 }

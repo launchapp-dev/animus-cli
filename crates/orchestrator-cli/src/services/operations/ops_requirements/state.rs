@@ -1,5 +1,5 @@
 use crate::cli_types::{RequirementCreateArgs, RequirementUpdateArgs};
-use crate::parse_input_json_or;
+use crate::{parse_input_json_or, COMMAND_HELP_HINT};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{RequirementItem, RequirementPriority, RequirementStatus};
@@ -187,14 +187,14 @@ fn next_requirement_id_local(requirements: &HashMap<String, RequirementItem>) ->
     format!("REQ-{next_seq:03}")
 }
 
-const REQUIREMENT_PRIORITY_EXPECTED: &str = "must, should, could, wont|won't";
-const REQUIREMENT_STATUS_EXPECTED: &str = "draft, refined, planned, in-progress|in_progress, done";
+const REQUIREMENT_PRIORITY_EXPECTED: &str = "must|should|could|wont|won't";
+const REQUIREMENT_STATUS_EXPECTED: &str = "draft|refined|planned|in-progress|in_progress|done";
 
 fn invalid_requirement_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
     let value = value.trim();
     let normalized_value = if value.is_empty() { "<empty>" } else { value };
     anyhow!(
-        "invalid requirement {domain} '{normalized_value}'; expected one of: {expected}; run the command with --help for accepted values"
+        "invalid requirement {domain} '{normalized_value}'; expected one of: {expected}; {COMMAND_HELP_HINT}"
     )
 }
 
@@ -372,4 +372,27 @@ pub(super) fn delete_requirement_cli(project_root: &str, id: &str) -> Result<()>
         anyhow::bail!("requirement not found: {id}");
     }
     save_requirements_map_to_core_state(project_root, &requirements)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_requirement_priority_reports_canonical_help_hint() {
+        let error = parse_requirement_priority("urgent").expect_err("invalid priority should fail");
+        let message = error.to_string();
+        assert!(message.contains("invalid requirement priority"));
+        assert!(message.contains(REQUIREMENT_PRIORITY_EXPECTED));
+        assert!(message.contains(COMMAND_HELP_HINT));
+    }
+
+    #[test]
+    fn parse_requirement_status_reports_canonical_help_hint() {
+        let error = parse_requirement_status("queued").expect_err("invalid status should fail");
+        let message = error.to_string();
+        assert!(message.contains("invalid requirement status"));
+        assert!(message.contains(REQUIREMENT_STATUS_EXPECTED));
+        assert!(message.contains(COMMAND_HELP_HINT));
+    }
 }

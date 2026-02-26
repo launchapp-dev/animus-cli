@@ -2,6 +2,26 @@ use anyhow::Result;
 use serde::Serialize;
 
 const CLI_SCHEMA: &str = "ao.cli.v1";
+const INVALID_INPUT_PATTERNS: &[&str] = &[
+    "invalid",
+    "parse",
+    "missing required",
+    "required arguments were not provided",
+    "unexpected argument",
+    "unknown argument",
+    "unrecognized option",
+    "confirmation_required",
+    "must be",
+];
+const NOT_FOUND_PATTERNS: &[&str] = &["not found", "no such file or directory", "does not exist"];
+const CONFLICT_PATTERNS: &[&str] = &["already", "conflict"];
+const UNAVAILABLE_PATTERNS: &[&str] = &[
+    "timed out",
+    "timeout",
+    "connection",
+    "unavailable",
+    "failed to connect",
+];
 
 #[derive(Debug, Serialize)]
 struct CliSuccessEnvelope<T: Serialize> {
@@ -33,7 +53,9 @@ pub(crate) fn print_ok(message: &str, json: bool) {
         };
         println!(
             "{}",
-            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{\"ok\":true}".to_string())
+            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
+                "{\"schema\":\"ao.cli.v1\",\"ok\":true,\"data\":{\"message\":\"ok\"}}".to_string()
+            })
         );
     } else {
         println!("{message}");
@@ -57,29 +79,16 @@ pub(crate) fn print_value<T: serde::Serialize>(value: T, json: bool) -> Result<(
 
 pub(crate) fn classify_error(err: &anyhow::Error) -> (&'static str, i32) {
     let message = err.to_string().to_ascii_lowercase();
-    if message.contains("invalid")
-        || message.contains("parse")
-        || message.contains("missing required")
-        || message.contains("required arguments were not provided")
-        || message.contains("unexpected argument")
-        || message.contains("unknown argument")
-        || message.contains("unrecognized option")
-        || message.contains("confirmation_required")
-        || message.contains("must be")
-    {
+    if contains_any(&message, INVALID_INPUT_PATTERNS) {
         return ("invalid_input", 2);
     }
-    if message.contains("not found") {
+    if contains_any(&message, NOT_FOUND_PATTERNS) {
         return ("not_found", 3);
     }
-    if message.contains("already") || message.contains("conflict") {
+    if contains_any(&message, CONFLICT_PATTERNS) {
         return ("conflict", 4);
     }
-    if message.contains("timed out")
-        || message.contains("connection")
-        || message.contains("unavailable")
-        || message.contains("failed to connect")
-    {
+    if contains_any(&message, UNAVAILABLE_PATTERNS) {
         return ("unavailable", 5);
     }
 
@@ -110,10 +119,18 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
         );
     } else {
         eprintln!("error: {}", err);
-        if code == "invalid_input" && !err.to_string().contains("--help") {
+        if code == "invalid_input" && should_emit_help_hint(&err.to_string()) {
             eprintln!("hint: run with --help to view accepted arguments and values");
         }
     }
+}
+
+fn contains_any(message: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| message.contains(pattern))
+}
+
+fn should_emit_help_hint(message: &str) -> bool {
+    !message.to_ascii_lowercase().contains("--help")
 }
 
 #[cfg(test)]
@@ -137,6 +154,13 @@ mod tests {
     }
 
     #[test]
+    fn classify_error_marks_os_error_not_found_failures() {
+        let (code, exit_code) = classify_error(&anyhow!("No such file or directory (os error 2)"));
+        assert_eq!(code, "not_found");
+        assert_eq!(exit_code, 3);
+    }
+
+    #[test]
     fn classify_error_marks_conflicts() {
         let (code, exit_code) = classify_error(&anyhow!("resource already exists"));
         assert_eq!(code, "conflict");
@@ -151,9 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn classify_error_marks_timeout_paths_as_unavailable() {
+        let (code, exit_code) = classify_error(&anyhow!("timeout while waiting for daemon"));
+        assert_eq!(code, "unavailable");
+        assert_eq!(exit_code, 5);
+    }
+
+    #[test]
     fn classify_error_defaults_to_internal() {
         let (code, exit_code) = classify_error(&anyhow!("unexpected panic in scheduler loop"));
         assert_eq!(code, "internal");
         assert_eq!(exit_code, 1);
+    }
+
+    #[test]
+    fn should_emit_help_hint_is_case_insensitive() {
+        assert!(!should_emit_help_hint("Run with --HELP for usage"));
+        assert!(should_emit_help_hint("invalid priority value"));
     }
 }

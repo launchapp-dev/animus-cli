@@ -133,7 +133,12 @@ pub(crate) async fn handle_task(
                 );
             }
 
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "task delete")?;
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.id,
+                "task delete",
+                "--id",
+            )?;
             tasks.delete(&args.id).await?;
             print_value(
                 serde_json::json!({

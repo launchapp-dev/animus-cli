@@ -2,6 +2,41 @@ use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 const INPUT_JSON_PRECEDENCE_HELP: &str =
     "JSON payload for this command. When provided, values in this payload override individual CLI flags.";
+const TASK_TYPE_HELP: &str =
+    "Task type: feature|bugfix|hotfix|refactor|docs|test|chore|experiment.";
+const TASK_TYPE_FILTER_HELP: &str =
+    "Task type filter: feature|bugfix|hotfix|refactor|docs|test|chore|experiment.";
+const TASK_STATUS_HELP: &str =
+    "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled.";
+const TASK_STATUS_FILTER_HELP: &str =
+    "Status filter: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled.";
+const TASK_PRIORITY_HELP: &str = "Task priority: critical|high|medium|low.";
+const TASK_PRIORITY_FILTER_HELP: &str = "Priority filter: critical|high|medium|low.";
+const REQUIREMENT_PRIORITY_HELP: &str = "Requirement priority: must|should|could|wont|won't.";
+const REQUIREMENT_STATUS_HELP: &str =
+    "Requirement status: draft|refined|planned|in-progress|in_progress|done.";
+const DEPENDENCY_TYPE_HELP: &str =
+    "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to.";
+
+fn parse_positive_u64(value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "must be a whole number".to_string())?;
+    if parsed == 0 {
+        return Err("must be greater than 0".to_string());
+    }
+    Ok(parsed)
+}
+
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "must be a whole number".to_string())?;
+    if parsed == 0 {
+        return Err("must be greater than 0".to_string());
+    }
+    Ok(parsed)
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "ao", about = "Agent Orchestrator CLI", version)]
@@ -287,45 +322,110 @@ pub(crate) enum AgentCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentRunArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "RUN_ID",
+        help = "Run identifier. Omit to auto-generate a UUID."
+    )]
     pub(crate) run_id: Option<String>,
-    #[arg(long, default_value = "codex")]
+    #[arg(
+        long,
+        value_name = "TOOL",
+        default_value = "codex",
+        help = "CLI provider to execute, for example codex or claude."
+    )]
     pub(crate) tool: String,
-    #[arg(long, default_value = "codex")]
+    #[arg(
+        long,
+        value_name = "MODEL",
+        default_value = "codex",
+        help = "Model identifier passed to the selected tool."
+    )]
     pub(crate) model: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Prompt text to send to the agent.")]
     pub(crate) prompt: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Working directory for the run. Must resolve inside the project root."
+    )]
     pub(crate) cwd: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Run timeout in seconds."
+    )]
     pub(crate) timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Agent context JSON object.")]
     pub(crate) context_json: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Runtime contract JSON override.")]
     pub(crate) runtime_contract_json: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Submit run and return immediately without streaming events."
+    )]
     pub(crate) detach: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Stream run events to stdout."
+    )]
     pub(crate) stream: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Persist run event logs under .ao/runs."
+    )]
     pub(crate) save_jsonl: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Override the base directory used for persisted run logs."
+    )]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentControlArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ACTION",
+        help = "Control action: pause, resume, or terminate."
+    )]
     pub(crate) action: AgentControlActionArg,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
@@ -338,111 +438,308 @@ pub(crate) enum AgentControlActionArg {
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentStatusArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Override the base directory used to read persisted run logs."
+    )]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentModelStatusArgs {
-    #[arg(long = "model")]
+    #[arg(
+        long = "model",
+        value_name = "MODEL_ID",
+        help = "Model identifier to check. Repeat to query multiple models."
+    )]
     pub(crate) models: Vec<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentRunnerStatusArgs {
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the runner automatically when required."
+    )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonStartArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of concurrent agents."
+    )]
     pub(crate) max_agents: Option<usize>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Do not auto-start the runner process."
+    )]
     pub(crate) skip_runner: bool,
-    #[arg(long, value_enum)]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SCOPE",
+        help = "Runner config scope: project or global."
+    )]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run daemon in detached/background mode."
+    )]
     pub(crate) autonomous: bool,
-    #[arg(long, default_value_t = 5)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 5,
+        value_parser = parse_positive_u64,
+        help = "Scheduler interval in seconds."
+    )]
     pub(crate) interval_secs: u64,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Include projects from the global daemon registry."
+    )]
     pub(crate) include_registry: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Enable AI-generated task creation."
+    )]
     pub(crate) ai_task_generation: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Automatically run ready tasks."
+    )]
     pub(crate) auto_run_ready: bool,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-merge behavior for daemon runs."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for daemon runs."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for daemon runs."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile daemon/project registry entries before scheduling."
+    )]
     pub(crate) startup_cleanup: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Attempt to resume interrupted workflows."
+    )]
     pub(crate) resume_interrupted: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile stale task/workflow runtime state."
+    )]
     pub(crate) reconcile_stale: bool,
-    #[arg(long, default_value_t = 2)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 2,
+        value_parser = parse_positive_usize,
+        help = "Maximum task workflows or phases to execute per scheduler tick."
+    )]
     pub(crate) max_tasks_per_tick: usize,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override phase timeout in seconds."
+    )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override workflow idle timeout in seconds."
+    )]
     pub(crate) idle_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonRunArgs {
-    #[arg(long, default_value_t = 5)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 5,
+        value_parser = parse_positive_u64,
+        help = "Scheduler interval in seconds."
+    )]
     pub(crate) interval_secs: u64,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Include projects from the global daemon registry."
+    )]
     pub(crate) include_registry: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Enable AI-generated task creation."
+    )]
     pub(crate) ai_task_generation: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Automatically run ready tasks."
+    )]
     pub(crate) auto_run_ready: bool,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-merge behavior for this daemon run."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for this daemon run."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for this daemon run."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile daemon/project registry entries before scheduling."
+    )]
     pub(crate) startup_cleanup: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Attempt to resume interrupted workflows."
+    )]
     pub(crate) resume_interrupted: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Reconcile stale task/workflow runtime state."
+    )]
     pub(crate) reconcile_stale: bool,
-    #[arg(long, default_value_t = 2)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 2,
+        value_parser = parse_positive_usize,
+        help = "Maximum task workflows or phases to execute per scheduler tick."
+    )]
     pub(crate) max_tasks_per_tick: usize,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override phase timeout in seconds."
+    )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Override workflow idle timeout in seconds."
+    )]
     pub(crate) idle_timeout_secs: Option<u64>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run one scheduler tick and exit."
+    )]
     pub(crate) once: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonConfigArgs {
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-merge daemon configuration."
+    )]
     pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-PR daemon configuration."
+    )]
     pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist auto-commit-before-merge daemon configuration."
+    )]
     pub(crate) auto_commit_before_merge: Option<bool>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
@@ -454,15 +751,30 @@ pub(crate) struct DaemonConfigArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct DaemonEventsArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of recent events to print before follow mode."
+    )]
     pub(crate) limit: Option<usize>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Continue streaming new events until interrupted."
+    )]
     pub(crate) follow: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct LogArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of recent log lines to return."
+    )]
     pub(crate) limit: Option<usize>,
 }
 
@@ -514,15 +826,15 @@ pub(crate) struct ProjectCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct IdArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Entity identifier.")]
     pub(crate) id: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct ProjectRenameArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Project identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Updated project name.")]
     pub(crate) name: String,
 }
 
@@ -564,33 +876,41 @@ pub(crate) enum TaskCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskListArgs {
-    #[arg(
-        long,
-        value_name = "TYPE",
-        help = "Task type filter: feature|bugfix|hotfix|refactor|docs|test|chore|experiment."
-    )]
+    #[arg(long, value_name = "TYPE", help = TASK_TYPE_FILTER_HELP)]
     pub(crate) task_type: Option<String>,
-    #[arg(
-        long,
-        value_name = "STATUS",
-        help = "Status filter: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
-    )]
+    #[arg(long, value_name = "STATUS", help = TASK_STATUS_FILTER_HELP)]
     pub(crate) status: Option<String>,
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_FILTER_HELP)]
+    pub(crate) priority: Option<String>,
     #[arg(
         long,
-        value_name = "PRIORITY",
-        help = "Priority filter: critical|high|medium|low."
+        value_name = "ASSIGNEE_TYPE",
+        help = "Assignee type filter: agent|human|unassigned."
     )]
-    pub(crate) priority: Option<String>,
-    #[arg(long)]
     pub(crate) assignee_type: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TAG",
+        help = "Match tasks that include all provided tags. Repeat to require multiple tags."
+    )]
     pub(crate) tag: Vec<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "REQ_ID",
+        help = "Filter tasks linked to a requirement id."
+    )]
     pub(crate) linked_requirement: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ENTITY_ID",
+        help = "Filter tasks linked to an architecture entity id."
+    )]
     pub(crate) linked_architecture_entity: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Case-insensitive text search over task title and description."
+    )]
     pub(crate) search: Option<String>,
 }
 
@@ -605,19 +925,15 @@ pub(crate) struct TaskCreateArgs {
         help = "Task description."
     )]
     pub(crate) description: String,
-    #[arg(
-        long,
-        value_name = "TYPE",
-        help = "Task type: feature|bugfix|hotfix|refactor|docs|test|chore|experiment."
-    )]
+    #[arg(long, value_name = "TYPE", help = TASK_TYPE_HELP)]
     pub(crate) task_type: Option<String>,
-    #[arg(
-        long,
-        value_name = "PRIORITY",
-        help = "Task priority: critical|high|medium|low."
-    )]
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
-    #[arg(long = "linked-architecture-entity")]
+    #[arg(
+        long = "linked-architecture-entity",
+        value_name = "ENTITY_ID",
+        help = "Link architecture entity ids to the new task. Repeat to add multiple ids."
+    )]
     pub(crate) linked_architecture_entity: Vec<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
@@ -625,29 +941,33 @@ pub(crate) struct TaskCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskUpdateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TITLE", help = "Updated task title.")]
     pub(crate) title: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Updated task description.")]
     pub(crate) description: Option<String>,
-    #[arg(
-        long,
-        value_name = "PRIORITY",
-        help = "Task priority: critical|high|medium|low."
-    )]
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
+    #[arg(long, value_name = "STATUS", help = TASK_STATUS_HELP)]
+    pub(crate) status: Option<String>,
     #[arg(
         long,
-        value_name = "STATUS",
-        help = "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
+        value_name = "ASSIGNEE",
+        help = "Updated assignee value for the task."
     )]
-    pub(crate) status: Option<String>,
-    #[arg(long)]
     pub(crate) assignee: Option<String>,
-    #[arg(long = "linked-architecture-entity")]
+    #[arg(
+        long = "linked-architecture-entity",
+        value_name = "ENTITY_ID",
+        help = "Architecture entity ids to link. Repeat to add multiple ids."
+    )]
     pub(crate) linked_architecture_entity: Vec<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace all linked architecture entities with the provided --linked-architecture-entity values."
+    )]
     pub(crate) replace_linked_architecture_entities: bool,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
@@ -655,7 +975,7 @@ pub(crate) struct TaskUpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskDeleteArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -673,91 +993,121 @@ pub(crate) struct TaskDeleteArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskAssignArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "ASSIGNEE", help = "Assignee value.")]
     pub(crate) assignee: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskAssignAgentArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "ROLE", help = "Agent role identifier.")]
     pub(crate) role: String,
-    #[arg(long)]
+    #[arg(long, value_name = "MODEL", help = "Optional model override.")]
     pub(crate) model: Option<String>,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskAssignHumanArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "USER_ID", help = "Human user id.")]
     pub(crate) user_id: String,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskChecklistAddArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Checklist item text.")]
     pub(crate) description: String,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskChecklistUpdateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "ITEM_ID", help = "Checklist item identifier.")]
     pub(crate) item_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Set to true to mark complete, false to mark incomplete.")]
     pub(crate) completed: bool,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskDependencyAddArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
-    pub(crate) dependency_id: String,
     #[arg(
         long,
-        value_name = "TYPE",
-        help = "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to."
+        value_name = "DEPENDENCY_ID",
+        help = "Dependency task identifier."
     )]
+    pub(crate) dependency_id: String,
+    #[arg(long, value_name = "TYPE", help = DEPENDENCY_TYPE_HELP)]
     pub(crate) dependency_type: String,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskDependencyRemoveArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "DEPENDENCY_ID",
+        help = "Dependency task identifier."
+    )]
     pub(crate) dependency_id: String,
-    #[arg(long, default_value = "ao-cli")]
+    #[arg(
+        long,
+        value_name = "USER",
+        default_value = "ao-cli",
+        help = "Audit user id recorded in task metadata."
+    )]
     pub(crate) updated_by: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskStatusArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "STATUS",
-        help = "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled."
-    )]
+    #[arg(long, value_name = "STATUS", help = TASK_STATUS_HELP)]
     pub(crate) status: String,
 }
 
@@ -1107,7 +1457,7 @@ pub(crate) struct RequirementsDraftArgs {
     pub(crate) timeout_secs: Option<u64>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) start_runner: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1127,7 +1477,7 @@ pub(crate) struct RequirementsRefineArgs {
     pub(crate) timeout_secs: Option<u64>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]
     pub(crate) start_runner: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1135,17 +1485,26 @@ pub(crate) struct RequirementsRefineArgs {
 pub(crate) struct RequirementCreateArgs {
     #[arg(long, value_name = "TITLE", help = "Requirement title.")]
     pub(crate) title: String,
-    #[arg(long, default_value = "")]
-    pub(crate) description: String,
     #[arg(
         long,
-        value_name = "PRIORITY",
-        help = "Requirement priority: must|should|could|wont|won't."
+        value_name = "TEXT",
+        default_value = "",
+        help = "Requirement description."
     )]
+    pub(crate) description: String,
+    #[arg(long, value_name = "PRIORITY", help = REQUIREMENT_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "SOURCE",
+        help = "Optional source describing where this requirement originated."
+    )]
     pub(crate) source: Option<String>,
-    #[arg(long = "acceptance-criterion")]
+    #[arg(
+        long = "acceptance-criterion",
+        value_name = "TEXT",
+        help = "Acceptance criteria text. Repeat to provide multiple criteria."
+    )]
     pub(crate) acceptance_criterion: Vec<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
@@ -1153,31 +1512,39 @@ pub(crate) struct RequirementCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementUpdateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REQ_ID", help = "Requirement identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TITLE", help = "Updated requirement title.")]
     pub(crate) title: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Updated requirement description.")]
     pub(crate) description: Option<String>,
-    #[arg(
-        long,
-        value_name = "PRIORITY",
-        help = "Requirement priority: must|should|could|wont|won't."
-    )]
+    #[arg(long, value_name = "PRIORITY", help = REQUIREMENT_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
+    #[arg(long, value_name = "STATUS", help = REQUIREMENT_STATUS_HELP)]
+    pub(crate) status: Option<String>,
     #[arg(
         long,
-        value_name = "STATUS",
-        help = "Requirement status: draft|refined|planned|in-progress|in_progress|done."
+        value_name = "SOURCE",
+        help = "Updated source describing where this requirement originated."
     )]
-    pub(crate) status: Option<String>,
-    #[arg(long)]
     pub(crate) source: Option<String>,
-    #[arg(long = "linked-task-id")]
+    #[arg(
+        long = "linked-task-id",
+        value_name = "TASK_ID",
+        help = "Task ids linked to this requirement. Repeat to add multiple ids."
+    )]
     pub(crate) linked_task_id: Vec<String>,
-    #[arg(long = "acceptance-criterion")]
+    #[arg(
+        long = "acceptance-criterion",
+        value_name = "TEXT",
+        help = "Acceptance criteria text. Repeat to provide multiple criteria."
+    )]
     pub(crate) acceptance_criterion: Vec<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace all acceptance criteria with the provided --acceptance-criterion values."
+    )]
     pub(crate) replace_acceptance_criteria: bool,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
@@ -1193,7 +1560,11 @@ pub(crate) enum RequirementGraphCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementGraphSaveArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Complete requirement graph JSON payload to persist."
+    )]
     pub(crate) input_json: String,
 }
 
@@ -1277,7 +1648,7 @@ pub(crate) struct RecommendationConfigUpdateArgs {
     pub(crate) mode: Option<String>,
     #[arg(long)]
     pub(crate) enabled: Option<bool>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
@@ -1610,13 +1981,13 @@ pub(crate) enum TaskControlCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskIdArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlCancelArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
     #[arg(
         long,
@@ -1634,21 +2005,21 @@ pub(crate) struct TaskControlCancelArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlPriorityArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
-    #[arg(
-        long,
-        value_name = "PRIORITY",
-        help = "Priority value: critical|high|medium|low."
-    )]
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
     pub(crate) priority: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct TaskControlDeadlineArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) task_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "RFC3339",
+        help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z."
+    )]
     pub(crate) deadline: Option<String>,
 }
 
@@ -1683,192 +2054,290 @@ pub(crate) enum GitCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitRepoCommand {
+    /// List registered repositories.
     List,
+    /// Get details for one repository.
     Get(GitRepoArgs),
+    /// Initialize and register a local repository.
     Init(GitRepoInitArgs),
+    /// Clone and register a repository.
     Clone(GitRepoCloneArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoInitArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Repository registration name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Optional filesystem path.")]
     pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitRepoCloneArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "URL", help = "Git clone URL.")]
     pub(crate) url: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Repository registration name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Optional destination directory.")]
     pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitCommitArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Commit message.")]
     pub(crate) message: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitPushArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value = "main")]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        default_value = "main",
+        help = "Branch to push."
+    )]
     pub(crate) branch: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force push (destructive and requires --confirmation-id)."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required for destructive git operations."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitPullArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value = "main")]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        default_value = "main",
+        help = "Branch to pull."
+    )]
     pub(crate) branch: String,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitWorktreeCommand {
+    /// Create a repository worktree.
     Create(GitWorktreeCreateArgs),
+    /// List repository worktrees.
     List(GitRepoArgs),
+    /// Get one worktree by name.
     Get(GitWorktreeGetArgs),
+    /// Remove a worktree (confirmation required).
     Remove(GitWorktreeRemoveArgs),
+    /// Pull updates in a worktree.
     Pull(GitWorktreePullArgs),
+    /// Push updates from a worktree.
     Push(GitWorktreePushArgs),
+    /// Pull then push a worktree.
     Sync(GitWorktreeSyncArgs),
+    /// Show synchronization status for a worktree.
     SyncStatus(GitWorktreeGetArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeCreateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree registration name.")]
     pub(crate) worktree_name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PATH", help = "Filesystem path for the worktree.")]
     pub(crate) worktree_path: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        help = "Branch to check out in the worktree."
+    )]
     pub(crate) branch: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create the branch when it does not already exist."
+    )]
     pub(crate) create_branch: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeGetArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeRemoveArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force removal if the worktree is dirty."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required before removing a worktree."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreePullArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreePushArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force push (destructive and requires --confirmation-id)."
+    )]
     pub(crate) force: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Approved confirmation id required for destructive git operations."
+    )]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview command payload without changing repository state."
+    )]
     pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitWorktreeSyncArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(long, default_value = "origin")]
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name."
+    )]
     pub(crate) remote: String,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitConfirmCommand {
+    /// Request a confirmation record for a destructive git operation.
     Request(GitConfirmRequestArgs),
+    /// Approve or reject a confirmation request.
     Respond(GitConfirmRespondArgs),
+    /// Record operation outcome for a confirmation request.
     Outcome(GitConfirmOutcomeArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmRequestArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "TYPE",
+        help = "Operation type, for example force_push or remove_worktree."
+    )]
     pub(crate) operation_type: String,
-    #[arg(long)]
+    #[arg(long, value_name = "REPO", help = "Repository name.")]
     pub(crate) repo_name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Optional JSON context payload.")]
     pub(crate) context_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmRespondArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
     pub(crate) request_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Set to true to approve, false to reject.")]
     pub(crate) approved: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Optional reviewer comment.")]
     pub(crate) comment: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "USER", help = "Reviewer user id.")]
     pub(crate) user_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmOutcomeArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
     pub(crate) request_id: String,
-    #[arg(long)]
+    #[arg(long, help = "Whether the operation succeeded.")]
     pub(crate) success: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Outcome message.")]
     pub(crate) message: String,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = "Optional JSON metadata payload.")]
     pub(crate) metadata_json: Option<String>,
 }
 
@@ -2125,9 +2594,9 @@ pub(crate) enum WorkflowCheckpointCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowCheckpointGetArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "INDEX", help = "Checkpoint index (zero-based).")]
     pub(crate) checkpoint: usize,
 }
 
@@ -2139,7 +2608,11 @@ pub(crate) struct WorkflowRunArgs {
         help = "Task id to run the workflow for."
     )]
     pub(crate) task_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PIPELINE_ID",
+        help = "Optional pipeline id override."
+    )]
     pub(crate) pipeline_id: Option<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
@@ -2147,7 +2620,7 @@ pub(crate) struct WorkflowRunArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPauseArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -2165,7 +2638,7 @@ pub(crate) struct WorkflowPauseArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowCancelArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -2183,31 +2656,35 @@ pub(crate) struct WorkflowCancelArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseApproveArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Approval note for the phase gate.")]
     pub(crate) note: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseGetArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseUpsertArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Phase runtime definition JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseRemoveArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
     #[arg(
         long,
@@ -2225,32 +2702,95 @@ pub(crate) struct WorkflowPhaseRemoveArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPipelineUpsertArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow pipeline definition JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPipelineUpdateArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "PIPELINE_ID", help = "Pipeline identifier.")]
     pub(crate) id: String,
-    #[arg(long)]
+    #[arg(long, value_name = "NAME", help = "Pipeline display name.")]
     pub(crate) name: String,
-    #[arg(long)]
+    #[arg(long, value_name = "TEXT", help = "Optional pipeline description.")]
     pub(crate) description: Option<String>,
-    #[arg(long = "phase")]
+    #[arg(
+        long = "phase",
+        value_name = "PHASE_ID",
+        help = "Ordered phase ids for the pipeline. Repeat to add multiple phases."
+    )]
     pub(crate) phases: Vec<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowStateMachineSetArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow state-machine configuration JSON payload."
+    )]
     pub(crate) input_json: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Workflow agent-runtime configuration JSON payload."
+    )]
     pub(crate) input_json: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn agent_run_help_includes_actionable_field_descriptions() {
+        let error = Cli::try_parse_from(["ao", "agent", "run", "--help"])
+            .expect_err("help output should short-circuit parsing");
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        assert!(help.contains("Run identifier. Omit to auto-generate a UUID."));
+        assert!(help.contains("CLI provider to execute, for example codex or claude."));
+        assert!(help.contains("Runner config scope: project or global."));
+    }
+
+    #[test]
+    fn daemon_run_rejects_zero_interval_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "daemon", "run", "--interval-secs", "0"])
+            .expect_err("zero interval should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--interval-secs"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
+    fn daemon_run_rejects_zero_max_tasks_per_tick_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "daemon", "run", "--max-tasks-per-tick", "0"])
+            .expect_err("zero max-tasks-per-tick should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--max-tasks-per-tick"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
+    fn daemon_events_rejects_zero_limit() {
+        let error = Cli::try_parse_from(["ao", "daemon", "events", "--limit", "0"])
+            .expect_err("zero limit should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--limit"));
+        assert!(message.contains("greater than 0"));
+    }
 }
