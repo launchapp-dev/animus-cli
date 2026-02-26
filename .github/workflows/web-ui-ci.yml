@@ -9,6 +9,8 @@ on:
       - ".github/workflows/release-rollback-validation.yml"
       - ".github/release-checklists/web-gui-release.md"
   push:
+    tags-ignore:
+      - "*"
     paths:
       - "crates/orchestrator-web-server/**"
       - ".github/workflows/web-ui-ci.yml"

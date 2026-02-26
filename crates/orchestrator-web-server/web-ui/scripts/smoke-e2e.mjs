@@ -4,7 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const HOST = "127.0.0.1";
@@ -54,6 +54,15 @@ function tail(text, maxChars = 1_200) {
     return "";
   }
   return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function toErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isWithin(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 async function pickOpenPort(host) {
@@ -221,6 +230,7 @@ async function fetchAndParse(url) {
 async function waitForReady(server) {
   const endpoint = `http://${HOST}:${server.port}/api/v1/system/info`;
   const deadline = Date.now() + READY_TIMEOUT_MS;
+  let lastReadinessError = null;
 
   while (Date.now() < deadline) {
     if (server.spawnError) {
@@ -239,14 +249,16 @@ async function waitForReady(server) {
         record("PASS", `${server.name} readiness`, endpoint);
         return;
       }
-    } catch {
+    } catch (error) {
+      lastReadinessError = toErrorMessage(error);
       // Server startup in progress; retry until timeout.
     }
 
     await sleep(POLL_INTERVAL_MS);
   }
 
-  throw new Error(`${server.name} did not become ready within ${READY_TIMEOUT_MS}ms`);
+  const detail = lastReadinessError ? ` last readiness error: ${tail(lastReadinessError, 400)}` : "";
+  throw new Error(`${server.name} did not become ready within ${READY_TIMEOUT_MS}ms.${detail}`);
 }
 
 async function assertUiRoutes(baseUrl) {
@@ -332,27 +344,49 @@ async function writeReport() {
   await writeFile(REPORT_PATH, output, "utf8");
 }
 
+async function prepareArtifactDir() {
+  const artifactPath = path.resolve(ARTIFACT_DIR);
+  const rootPath = path.parse(artifactPath).root;
+  if (artifactPath === rootPath) {
+    throw new Error(`refusing to clean root path as artifact dir: ${artifactPath}`);
+  }
+
+  if (artifactPath === REPO_ROOT || artifactPath === WEB_UI_DIR) {
+    throw new Error(`refusing to clean protected path as artifact dir: ${artifactPath}`);
+  }
+
+  if (!isWithin(REPO_ROOT, artifactPath)) {
+    throw new Error(`artifact dir must be inside repository root: ${artifactPath}`);
+  }
+
+  await rm(artifactPath, { recursive: true, force: true });
+  await mkdir(artifactPath, { recursive: true });
+}
+
 async function main() {
-  await mkdir(ARTIFACT_DIR, { recursive: true });
-  record("PASS", "repo root", REPO_ROOT);
-  record("PASS", "artifact dir", ARTIFACT_DIR);
+  let artifactDirReady = false;
 
   try {
+    await prepareArtifactDir();
+    artifactDirReady = true;
+    record("PASS", "repo root", REPO_ROOT);
+    record("PASS", "artifact dir", ARTIFACT_DIR);
+
     await runUiSmoke();
     await runApiOnlySmoke();
     record("PASS", "smoke suite", "all assertions passed");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     record("FAIL", "smoke suite", message);
     throw error;
   } finally {
     await stopAllServers();
-    await writeReport();
+    if (artifactDirReady) {
+      await writeReport();
+    }
   }
 }
 
-main().catch(async () => {
-  await stopAllServers();
-  await writeReport();
+main().catch(() => {
   process.exitCode = 1;
 });

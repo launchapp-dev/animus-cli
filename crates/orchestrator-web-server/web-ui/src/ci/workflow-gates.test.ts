@@ -26,6 +26,7 @@ describe("web gui release workflow gates", () => {
 
     expect(workflow).toContain('.github/workflows/release-rollback-validation.yml');
     expect(workflow).toContain('.github/release-checklists/web-gui-release.md');
+    expect(workflow).toMatch(/push:\s*\n[\s\S]*tags-ignore:\s*[\s\S]*["']\*["']/);
     expect(workflow).toMatch(/web-ui-matrix:\s*\n[\s\S]*timeout-minutes:\s*20/);
     expect(workflow).toMatch(/matrix:\s*[\s\S]*node:\s*[\s\S]*["']20\.x["'][\s\S]*["']22\.x["']/);
     expect(workflow).toMatch(/web-ui-smoke-e2e:\s*\n[\s\S]*needs:\s*web-ui-matrix/);
