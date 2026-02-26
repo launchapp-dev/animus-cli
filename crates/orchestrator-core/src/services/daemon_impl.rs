@@ -507,6 +507,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_hub_start_retries_even_when_cleanup_stop_fails() {
+        let _guard = RunnerLifecycleHooksGuard::new();
+        with_runner_lifecycle_test_hooks(|hooks| {
+            hooks.ensure_results = std::collections::VecDeque::from([
+                Err(anyhow!("first start failure")),
+                Ok(Some(7003)),
+            ]);
+            hooks.stop_results = std::collections::VecDeque::from([Err(anyhow!("stop failed"))]);
+            hooks.skip_persist = true;
+        });
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hub = new_file_hub(&temp);
+        DaemonServiceApi::start(&hub)
+            .await
+            .expect("daemon start should succeed on retry even if stop fails");
+
+        let state = hub.state.read().await;
+        assert_eq!(state.daemon_status, DaemonStatus::Running);
+        assert_eq!(state.runner_pid, Some(7003));
+        drop(state);
+
+        let stop_calls = with_runner_lifecycle_test_hooks(|hooks| hooks.stop_calls);
+        assert_eq!(stop_calls, 1);
+    }
+
+    #[tokio::test]
     async fn file_hub_start_retry_failure_includes_initial_error_context() {
         let _guard = RunnerLifecycleHooksGuard::new();
         with_runner_lifecycle_test_hooks(|hooks| {
@@ -571,6 +598,34 @@ mod tests {
             let mut lock = hub.state.write().await;
             lock.daemon_status = DaemonStatus::Running;
             lock.runner_pid = Some(8124);
+        }
+
+        let status = DaemonServiceApi::status(&hub).await.expect("status");
+        assert_eq!(status, DaemonStatus::Crashed);
+        let state = hub.state.read().await;
+        assert_eq!(state.daemon_status, DaemonStatus::Crashed);
+        assert!(state.logs.iter().any(|entry| {
+            entry.level == LogLevel::Error
+                && entry.message == "agent-runner health check failed while daemon was active"
+        }));
+    }
+
+    #[tokio::test]
+    async fn file_hub_status_marks_paused_daemon_crashed_when_runner_is_not_ready_and_not_alive() {
+        let _guard = RunnerLifecycleHooksGuard::new();
+        with_runner_lifecycle_test_hooks(|hooks| {
+            hooks.runner_ready = Some(false);
+            hooks.runner_pid_from_lock = Some(Some(8125));
+            hooks.runner_alive = Some(false);
+            hooks.skip_persist = true;
+        });
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hub = new_file_hub(&temp);
+        {
+            let mut lock = hub.state.write().await;
+            lock.daemon_status = DaemonStatus::Paused;
+            lock.runner_pid = Some(8125);
         }
 
         let status = DaemonServiceApi::status(&hub).await.expect("status");

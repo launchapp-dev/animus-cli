@@ -182,6 +182,17 @@ pub(super) fn read_runner_pid_from_lock(config_dir: &Path) -> Option<u32> {
     read_runner_lock(config_dir).map(|(pid, _)| pid)
 }
 
+fn remove_malformed_runner_lock_if_present(config_dir: &Path) -> bool {
+    let lock_path = runner_lock_path(config_dir);
+    let Ok(contents) = std::fs::read_to_string(&lock_path) else {
+        return false;
+    };
+    if parse_runner_lock(&contents).is_some() {
+        return false;
+    }
+    std::fs::remove_file(lock_path).is_ok()
+}
+
 #[cfg(unix)]
 pub(super) fn is_runner_process_alive(pid: u32) -> bool {
     if pid == 0 {
@@ -243,6 +254,7 @@ pub(super) fn cleanup_stale_runner_socket(config_dir: &Path) {
 
 pub(super) fn clear_stale_runner_artifacts(config_dir: &Path) {
     let lock_path = runner_lock_path(config_dir);
+    let _ = remove_malformed_runner_lock_if_present(config_dir);
     let lock = read_runner_lock(config_dir);
 
     if let Some((pid, _)) = lock {
@@ -548,6 +560,7 @@ pub(super) async fn stop_agent_runner_process(project_root: &Path) -> Result<boo
 
 async fn stop_agent_runner_process_at_config_dir(config_dir: &Path) -> Result<bool> {
     let lock_path = runner_lock_path(&config_dir);
+    let _ = remove_malformed_runner_lock_if_present(config_dir);
     let Some((pid, _)) = read_runner_lock(&config_dir) else {
         #[cfg(unix)]
         cleanup_stale_runner_socket(&config_dir);
@@ -622,6 +635,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn new_temp_runner_config_dir() -> (TempDir, PathBuf) {
+        let temp = TempDir::new().expect("tempdir");
+        let config_dir = temp.path().join("runner");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        (temp, config_dir)
+    }
+
     #[test]
     fn runner_status_compatibility_requires_matching_protocol() {
         let status = RunnerStatusResponse {
@@ -654,11 +674,20 @@ mod tests {
 
     #[test]
     fn clear_stale_runner_artifacts_removes_dead_pid_lock_file() {
-        let temp = TempDir::new().expect("tempdir");
-        let config_dir = temp.path().join("runner");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let (_temp, config_dir) = new_temp_runner_config_dir();
         let lock_path = runner_lock_path(&config_dir);
         std::fs::write(&lock_path, "0|unix://unused").expect("write stale lock");
+        assert!(lock_path.exists());
+
+        clear_stale_runner_artifacts(&config_dir);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn clear_stale_runner_artifacts_removes_malformed_lock_file() {
+        let (_temp, config_dir) = new_temp_runner_config_dir();
+        let lock_path = runner_lock_path(&config_dir);
+        std::fs::write(&lock_path, "not-a-valid-lock").expect("write malformed lock");
         assert!(lock_path.exists());
 
         clear_stale_runner_artifacts(&config_dir);
@@ -676,9 +705,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn clear_stale_runner_artifacts_removes_unreachable_socket_without_lock() {
-        let temp = TempDir::new().expect("tempdir");
-        let config_dir = temp.path().join("runner");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let (_temp, config_dir) = new_temp_runner_config_dir();
         let socket_path = runner_socket_path(&config_dir);
         create_stale_unix_socket(&socket_path);
         assert!(socket_path.exists());
@@ -690,9 +717,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stop_runner_returns_false_and_cleans_socket_when_lock_is_missing() {
-        let temp = TempDir::new().expect("tempdir");
-        let config_dir = temp.path().join("runner");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let (_temp, config_dir) = new_temp_runner_config_dir();
         let socket_path = runner_socket_path(&config_dir);
         create_stale_unix_socket(&socket_path);
         assert!(socket_path.exists());
@@ -707,11 +732,23 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stop_runner_returns_false_and_cleans_dead_pid_lock() {
-        let temp = TempDir::new().expect("tempdir");
-        let config_dir = temp.path().join("runner");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let (_temp, config_dir) = new_temp_runner_config_dir();
         let lock_path = runner_lock_path(&config_dir);
         std::fs::write(&lock_path, "0|unix://unused").expect("write stale lock");
+        assert!(lock_path.exists());
+
+        let stopped = stop_agent_runner_process_at_config_dir(&config_dir)
+            .await
+            .expect("stop runner");
+        assert!(!stopped);
+        assert!(!lock_path.exists());
+    }
+
+    #[tokio::test]
+    async fn stop_runner_returns_false_and_cleans_malformed_lock() {
+        let (_temp, config_dir) = new_temp_runner_config_dir();
+        let lock_path = runner_lock_path(&config_dir);
+        std::fs::write(&lock_path, "malformed-lock-content").expect("write malformed lock");
         assert!(lock_path.exists());
 
         let stopped = stop_agent_runner_process_at_config_dir(&config_dir)
@@ -724,9 +761,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stop_runner_terminates_live_pid_and_cleans_artifacts() {
-        let temp = TempDir::new().expect("tempdir");
-        let config_dir = temp.path().join("runner");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let (_temp, config_dir) = new_temp_runner_config_dir();
 
         let mut child = Command::new("sleep")
             .arg("30")
@@ -752,5 +787,42 @@ mod tests {
         assert!(!lock_path.exists());
         assert!(!socket_path.exists());
         assert!(!is_runner_process_alive(pid));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_runner_repeated_cycles_leave_no_lock_or_socket_artifacts() {
+        let (_temp, config_dir) = new_temp_runner_config_dir();
+        let lock_path = runner_lock_path(&config_dir);
+        let socket_path = runner_socket_path(&config_dir);
+
+        for cycle in 1..=20 {
+            let mut child = Command::new("sleep")
+                .arg("30")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn sleep process");
+            let pid = child.id();
+
+            std::fs::write(&lock_path, format!("{pid}|unix://unused")).expect("write lock file");
+            create_stale_unix_socket(&socket_path);
+
+            let stop_result = stop_agent_runner_process_at_config_dir(&config_dir).await;
+            let _ = child.kill();
+            let _ = child.wait();
+
+            let stopped = stop_result.expect("stop runner");
+            assert!(stopped, "cycle {cycle} should report a terminated runner");
+            assert!(!lock_path.exists(), "cycle {cycle} should clean lock file");
+            assert!(
+                !socket_path.exists(),
+                "cycle {cycle} should clean socket file"
+            );
+            assert!(
+                !is_runner_process_alive(pid),
+                "cycle {cycle} should not leave the spawned process alive"
+            );
+        }
     }
 }
