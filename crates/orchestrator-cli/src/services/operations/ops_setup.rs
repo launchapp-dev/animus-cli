@@ -288,7 +288,10 @@ fn collect_blocked_items(report: &DoctorReport) -> Vec<SetupBlockedItem> {
     report
         .checks
         .iter()
-        .filter(|check| check.status == DoctorCheckStatus::Fail || !check.remediation.available)
+        .filter(|check| {
+            check.status == DoctorCheckStatus::Fail
+                || (check.status == DoctorCheckStatus::Warn && !check.remediation.available)
+        })
         .map(|check| SetupBlockedItem {
             check_id: check.id.clone(),
             details: check.details.clone(),
@@ -300,6 +303,7 @@ fn collect_blocked_items(report: &DoctorReport) -> Vec<SetupBlockedItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orchestrator_core::{DoctorCheck, DoctorCheckResult, DoctorRemediation};
 
     fn non_interactive_args() -> SetupArgs {
         SetupArgs {
@@ -336,5 +340,63 @@ mod tests {
         assert_eq!(plan[0].changed, false);
         assert_eq!(plan[1].changed, true);
         assert_eq!(plan[2].changed, false);
+    }
+
+    #[test]
+    fn collect_blocked_items_only_returns_actionable_non_ok_checks() {
+        let report = DoctorReport {
+            result: DoctorCheckResult::Degraded,
+            checks: vec![
+                DoctorCheck {
+                    id: "ok_without_fix".to_string(),
+                    status: DoctorCheckStatus::Ok,
+                    details: "ok check".to_string(),
+                    remediation: DoctorRemediation {
+                        id: "manual".to_string(),
+                        available: false,
+                        details: "manual remediation".to_string(),
+                        command: None,
+                    },
+                },
+                DoctorCheck {
+                    id: "warn_without_fix".to_string(),
+                    status: DoctorCheckStatus::Warn,
+                    details: "warn check".to_string(),
+                    remediation: DoctorRemediation {
+                        id: "manual".to_string(),
+                        available: false,
+                        details: "manual remediation".to_string(),
+                        command: None,
+                    },
+                },
+                DoctorCheck {
+                    id: "warn_with_fix".to_string(),
+                    status: DoctorCheckStatus::Warn,
+                    details: "warn check".to_string(),
+                    remediation: DoctorRemediation {
+                        id: "auto_fix".to_string(),
+                        available: true,
+                        details: "automatic remediation".to_string(),
+                        command: Some("ao doctor --fix".to_string()),
+                    },
+                },
+                DoctorCheck {
+                    id: "fail_with_fix".to_string(),
+                    status: DoctorCheckStatus::Fail,
+                    details: "fail check".to_string(),
+                    remediation: DoctorRemediation {
+                        id: "auto_fix".to_string(),
+                        available: true,
+                        details: "automatic remediation".to_string(),
+                        command: Some("ao doctor --fix".to_string()),
+                    },
+                },
+            ],
+        };
+
+        let blocked_items = collect_blocked_items(&report);
+        assert_eq!(blocked_items.len(), 2);
+        assert_eq!(blocked_items[0].check_id, "warn_without_fix");
+        assert_eq!(blocked_items[1].check_id, "fail_with_fix");
     }
 }

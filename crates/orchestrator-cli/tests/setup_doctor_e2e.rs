@@ -3,6 +3,7 @@ mod test_harness;
 
 use anyhow::Result;
 use serde_json::Value;
+use std::collections::HashMap;
 use test_harness::CliHarness;
 
 #[test]
@@ -123,6 +124,58 @@ fn setup_plan_apply_and_idempotent_rerun_are_stable() -> Result<()> {
             .and_then(Value::as_bool),
         Some(true)
     );
+
+    Ok(())
+}
+
+#[test]
+fn setup_plan_blocked_items_match_actionable_doctor_checks() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let doctor = harness.run_json_ok(&["doctor"])?;
+    let check_index: HashMap<String, (String, bool)> = doctor
+        .pointer("/data/doctor/checks")
+        .and_then(Value::as_array)
+        .expect("doctor checks array should exist")
+        .iter()
+        .filter_map(|check| {
+            let id = check.get("id").and_then(Value::as_str)?;
+            let status = check.get("status").and_then(Value::as_str)?;
+            let remediation_available = check.pointer("/remediation/available")?.as_bool()?;
+            Some((id.to_string(), (status.to_string(), remediation_available)))
+        })
+        .collect();
+
+    let plan = harness.run_json_ok(&[
+        "setup",
+        "--non-interactive",
+        "--plan",
+        "--auto-merge",
+        "true",
+        "--auto-pr",
+        "false",
+        "--auto-commit-before-merge",
+        "true",
+    ])?;
+    let blocked_items = plan
+        .pointer("/data/blocked_items")
+        .and_then(Value::as_array)
+        .expect("blocked_items should be an array");
+
+    for blocked in blocked_items {
+        let check_id = blocked
+            .get("check_id")
+            .and_then(Value::as_str)
+            .expect("blocked item should include check_id");
+        let (status, remediation_available) = check_index
+            .get(check_id)
+            .expect("blocked item check_id should exist in doctor report");
+        let actionable = status == "fail" || (status == "warn" && !*remediation_available);
+        assert!(
+            actionable,
+            "blocked item should be actionable: id={check_id}, status={status}, remediation_available={remediation_available}"
+        );
+    }
 
     Ok(())
 }
