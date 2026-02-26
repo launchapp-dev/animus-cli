@@ -320,7 +320,7 @@ fn parse_elevation_approval(value: Option<&serde_json::Value>) -> Option<Elevati
     let approved = object
         .get("approved")
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+        .unwrap_or(false);
     let approved_by = object
         .get("approved_by")
         .and_then(serde_json::Value::as_str)
@@ -369,8 +369,11 @@ fn resolve_execution_policy_enforcement(
         return policy;
     };
 
-    policy.sandbox_mode =
-        parse_sandbox_mode(execution.get("sandbox_mode").and_then(serde_json::Value::as_str));
+    policy.sandbox_mode = parse_sandbox_mode(
+        execution
+            .get("sandbox_mode")
+            .and_then(serde_json::Value::as_str),
+    );
     policy.allow_elevated = execution
         .get("allow_elevated")
         .and_then(serde_json::Value::as_bool)
@@ -380,8 +383,7 @@ fn resolve_execution_policy_enforcement(
         .get("tool_policy")
         .filter(|value| value.is_object())
         .unwrap_or(execution);
-    policy.tool_policy.allow_prefixes =
-        parse_tool_entries(tool_policy.get("allow_prefixes"));
+    policy.tool_policy.allow_prefixes = parse_tool_entries(tool_policy.get("allow_prefixes"));
     policy.tool_policy.allow_exact = parse_tool_entries(tool_policy.get("allow_exact"));
     policy.tool_policy.deny_prefixes = parse_tool_entries(tool_policy.get("deny_prefixes"));
     policy.tool_policy.deny_exact = parse_tool_entries(tool_policy.get("deny_exact"));
@@ -427,8 +429,9 @@ fn load_elevation_audit(path: &Path) -> ElevationAuditLog {
 
 fn write_elevation_audit(path: &Path, log: &ElevationAuditLog) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create elevation audit dir {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create elevation audit dir {}", parent.display())
+        })?;
     }
     let payload = serde_json::to_vec_pretty(log).context("Failed to encode elevation audit log")?;
     let now_nanos = std::time::SystemTime::now()
@@ -485,10 +488,7 @@ fn elevation_request_id(run_id: &RunId, policy_hash: &str, action: &str) -> Stri
     )
 }
 
-fn context_identity(
-    execution_context: Option<&serde_json::Value>,
-    key: &str,
-) -> Option<String> {
+fn context_identity(execution_context: Option<&serde_json::Value>, key: &str) -> Option<String> {
     execution_context
         .and_then(|context| context.get(key))
         .and_then(serde_json::Value::as_str)
@@ -589,7 +589,10 @@ fn require_elevation_for_action(
         bail!("POLICY_VIOLATION: {payload}");
     }
 
-    let approval = policy.approval.as_ref().filter(|approval| approval.approved);
+    let approval = policy
+        .approval
+        .as_ref()
+        .filter(|approval| approval.approved);
     let Some(approval) = approval else {
         append_elevation_outcome(
             audit_path.as_deref(),
@@ -940,12 +943,11 @@ fn apply_codex_native_mcp_lockdown(
         McpServerTransport::Http(endpoint) => {
             ensure_codex_config_override(args, &format!("{base}.url"), &toml_string(endpoint));
         }
-        McpServerTransport::Stdio { command, args: stdio_args } => {
-            ensure_codex_config_override(
-                args,
-                &format!("{base}.command"),
-                &toml_string(command),
-            );
+        McpServerTransport::Stdio {
+            command,
+            args: stdio_args,
+        } => {
+            ensure_codex_config_override(args, &format!("{base}.command"), &toml_string(command));
             let toml_args = format!(
                 "[{}]",
                 stdio_args
@@ -1174,6 +1176,46 @@ fn is_tool_call_allowed_with_policy(
     is_tool_allowed_by_policy_allowlist(&normalized, &execution_policy.tool_policy)
 }
 
+fn tool_call_policy_violation(
+    event: &AgentRunEvent,
+    mcp_tool_enforcement: &McpToolEnforcement,
+    execution_policy: &ExecutionPolicyEnforcement,
+) -> Option<(String, Option<String>, String)> {
+    let AgentRunEvent::ToolCall { tool_info, .. } = event else {
+        return None;
+    };
+    if is_tool_call_allowed_with_policy(
+        &tool_info.tool_name,
+        &tool_info.parameters,
+        mcp_tool_enforcement,
+        execution_policy,
+    ) {
+        return None;
+    }
+
+    let server_context = tool_info
+        .parameters
+        .get("server")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let error = serde_json::json!({
+        "code": "POLICY_VIOLATION",
+        "reason": "tool_call_blocked",
+        "tool_name": tool_info.tool_name,
+        "tool_server": server_context,
+        "policy_hash": execution_policy.policy_hash,
+        "mcp_allowed_prefixes": mcp_tool_enforcement.allowed_prefixes,
+        "policy_allow_prefixes": execution_policy.tool_policy.allow_prefixes,
+        "policy_allow_exact": execution_policy.tool_policy.allow_exact,
+        "policy_deny_prefixes": execution_policy.tool_policy.deny_prefixes,
+        "policy_deny_exact": execution_policy.tool_policy.deny_exact,
+    })
+    .to_string();
+    Some((tool_info.tool_name.clone(), server_context, error))
+}
+
 #[cfg(test)]
 fn is_tool_call_allowed(
     tool_name: &str,
@@ -1395,67 +1437,44 @@ pub async fn spawn_cli_process(
         loop {
             tokio::select! {
                 Some(evt) = output_rx.recv() => {
-                    if let AgentRunEvent::ToolCall { tool_info, .. } = &evt {
-                        if !is_tool_call_allowed_with_policy(
-                            &tool_info.tool_name,
-                            &tool_info.parameters,
-                            &mcp_tool_enforcement_for_select,
-                            &execution_policy_for_select,
-                        ) {
-                            let server_context = tool_info
-                                .parameters
-                                .get("server")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                                .map(ToString::to_string);
-                            let error = serde_json::json!({
-                                "code": "POLICY_VIOLATION",
-                                "reason": "tool_call_blocked",
-                                "tool_name": tool_info.tool_name,
-                                "tool_server": server_context,
-                                "policy_hash": execution_policy_for_select.policy_hash,
-                                "mcp_allowed_prefixes": mcp_tool_enforcement_for_select.allowed_prefixes,
-                                "policy_allow_prefixes": execution_policy_for_select.tool_policy.allow_prefixes,
-                                "policy_allow_exact": execution_policy_for_select.tool_policy.allow_exact,
-                                "policy_deny_prefixes": execution_policy_for_select.tool_policy.deny_prefixes,
-                                "policy_deny_exact": execution_policy_for_select.tool_policy.deny_exact,
-                            })
-                            .to_string();
+                    if let Some((tool_name, server_context, error)) = tool_call_policy_violation(
+                        &evt,
+                        &mcp_tool_enforcement_for_select,
+                        &execution_policy_for_select,
+                    ) {
+                        warn!(
+                            run_id = %run_id_for_select.0.as_str(),
+                            pid,
+                            tool_name = %tool_name,
+                            tool_server = ?server_context,
+                            allowed_prefixes = ?mcp_tool_enforcement_for_select.allowed_prefixes,
+                            policy_hash = %execution_policy_for_select.policy_hash,
+                            "Run emitted disallowed tool call under policy enforcement"
+                        );
+                        let _ = event_tx.send(evt.clone()).await;
+                        let _ = event_tx.send(AgentRunEvent::Error {
+                            run_id: run_id_for_select.clone(),
+                            error: format!("POLICY_VIOLATION: {error}"),
+                        }).await;
+                        let killed = crate::cleanup::kill_process(pid as i32);
+                        if !killed {
                             warn!(
                                 run_id = %run_id_for_select.0.as_str(),
                                 pid,
-                                tool_name = %tool_info.tool_name,
-                                tool_server = ?server_context,
-                                allowed_prefixes = ?mcp_tool_enforcement_for_select.allowed_prefixes,
-                                policy_hash = %execution_policy_for_select.policy_hash,
-                                "Run emitted disallowed tool call under policy enforcement"
+                                "Failed to terminate process after policy violation"
                             );
-                            let _ = event_tx.send(evt.clone()).await;
-                            let _ = event_tx.send(AgentRunEvent::Error {
-                                run_id: run_id_for_select.clone(),
-                                error: format!("POLICY_VIOLATION: {error}"),
-                            }).await;
-                            let killed = crate::cleanup::kill_process(pid as i32);
-                            if !killed {
-                                warn!(
-                                    run_id = %run_id_for_select.0.as_str(),
-                                    pid,
-                                    "Failed to terminate process after policy violation"
-                                );
-                            }
-                            if let Err(track_error) = untrack_process(&run_id_for_select.0) {
-                                warn!(
-                                    run_id = %run_id_for_select.0.as_str(),
-                                    pid,
-                                    error = %track_error,
-                                    "Failed to remove process from orphan tracker after policy violation"
-                                );
-                            }
-                            #[cfg(windows)]
-                            crate::cleanup::untrack_job(pid);
-                            bail!("POLICY_VIOLATION: {error}");
                         }
+                        if let Err(track_error) = untrack_process(&run_id_for_select.0) {
+                            warn!(
+                                run_id = %run_id_for_select.0.as_str(),
+                                pid,
+                                error = %track_error,
+                                "Failed to remove process from orphan tracker after policy violation"
+                            );
+                        }
+                        #[cfg(windows)]
+                        crate::cleanup::untrack_job(pid);
+                        bail!("POLICY_VIOLATION: {error}");
                     }
                     if let AgentRunEvent::OutputChunk { stream_type, text, .. } = &evt {
                         output_chunks_total += 1;
@@ -1544,6 +1563,27 @@ pub async fn spawn_cli_process(
                 }
                 result = &mut wait_rx => {
                     while let Some(evt) = output_rx.recv().await {
+                        if let Some((tool_name, server_context, error)) = tool_call_policy_violation(
+                            &evt,
+                            &mcp_tool_enforcement_for_select,
+                            &execution_policy_for_select,
+                        ) {
+                            warn!(
+                                run_id = %run_id_for_select.0.as_str(),
+                                pid,
+                                tool_name = %tool_name,
+                                tool_server = ?server_context,
+                                allowed_prefixes = ?mcp_tool_enforcement_for_select.allowed_prefixes,
+                                policy_hash = %execution_policy_for_select.policy_hash,
+                                "Run emitted disallowed tool call during output drain"
+                            );
+                            let _ = event_tx.send(evt.clone()).await;
+                            let _ = event_tx.send(AgentRunEvent::Error {
+                                run_id: run_id_for_select.clone(),
+                                error: format!("POLICY_VIOLATION: {error}"),
+                            }).await;
+                            return Err(anyhow::anyhow!("POLICY_VIOLATION: {error}"));
+                        }
                         let _ = event_tx.send(evt).await;
                     }
                     return match result {
@@ -1680,8 +1720,16 @@ mod tests {
             }
         });
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
-        assert!(is_tool_call_allowed("ao.task.list", &json!({}), &enforcement));
-        assert!(is_tool_call_allowed("phase_transition", &json!({}), &enforcement));
+        assert!(is_tool_call_allowed(
+            "ao.task.list",
+            &json!({}),
+            &enforcement
+        ));
+        assert!(is_tool_call_allowed(
+            "phase_transition",
+            &json!({}),
+            &enforcement
+        ));
         assert!(!is_tool_call_allowed("Bash", &json!({}), &enforcement));
         assert!(!is_tool_call_allowed(
             "stories-search",
@@ -1772,6 +1820,31 @@ mod tests {
     }
 
     #[test]
+    fn execution_policy_parser_defaults_missing_approval_flag_to_false() {
+        let contract = json!({
+            "policy": {
+                "execution": {
+                    "sandbox_mode": "read_only",
+                    "allow_elevated": true,
+                    "elevation_approval": {
+                        "request_id": "elv-implicit"
+                    }
+                }
+            }
+        });
+
+        let policy = resolve_execution_policy_enforcement(Some(&contract));
+        assert!(policy.approval.is_some());
+        assert!(
+            !policy
+                .approval
+                .as_ref()
+                .expect("approval should parse")
+                .approved
+        );
+    }
+
+    #[test]
     fn execution_policy_parser_defaults_when_policy_block_missing() {
         let contract = json!({
             "policy": {
@@ -1831,6 +1904,96 @@ mod tests {
             &mcp,
             &policy
         ));
+    }
+
+    #[test]
+    fn tool_call_policy_violation_detects_disallowed_event() {
+        let mcp = McpToolEnforcement {
+            enabled: false,
+            endpoint: None,
+            stdio: None,
+            agent_id: "ao".to_string(),
+            allowed_prefixes: Vec::new(),
+        };
+        let mut policy = ExecutionPolicyEnforcement {
+            sandbox_mode: SandboxMode::WorkspaceWrite,
+            tool_policy: ToolPolicyEnforcement {
+                allow_prefixes: vec!["ao.".to_string()],
+                allow_exact: Vec::new(),
+                deny_prefixes: Vec::new(),
+                deny_exact: vec!["ao.git.push".to_string()],
+            },
+            allow_elevated: false,
+            policy_hash: String::new(),
+            approval: None,
+        };
+        policy.policy_hash = execution_policy_hash(&policy);
+        let event = AgentRunEvent::ToolCall {
+            run_id: RunId("run-policy-test".to_string()),
+            tool_info: protocol::ToolCallInfo {
+                tool_name: "AO.GIT.PUSH".to_string(),
+                parameters: json!({}),
+                timestamp: protocol::Timestamp::now(),
+            },
+        };
+
+        let violation =
+            tool_call_policy_violation(&event, &mcp, &policy).expect("tool should be blocked");
+        assert_eq!(violation.0, "AO.GIT.PUSH");
+        assert!(violation.2.contains("\"code\":\"POLICY_VIOLATION\""));
+        assert!(violation.2.contains("\"reason\":\"tool_call_blocked\""));
+    }
+
+    #[test]
+    fn tool_call_policy_violation_ignores_allowed_event() {
+        let mcp = McpToolEnforcement {
+            enabled: false,
+            endpoint: None,
+            stdio: None,
+            agent_id: "ao".to_string(),
+            allowed_prefixes: Vec::new(),
+        };
+        let mut policy = ExecutionPolicyEnforcement {
+            sandbox_mode: SandboxMode::WorkspaceWrite,
+            tool_policy: ToolPolicyEnforcement {
+                allow_prefixes: vec!["ao.".to_string()],
+                allow_exact: Vec::new(),
+                deny_prefixes: Vec::new(),
+                deny_exact: Vec::new(),
+            },
+            allow_elevated: false,
+            policy_hash: String::new(),
+            approval: None,
+        };
+        policy.policy_hash = execution_policy_hash(&policy);
+        let event = AgentRunEvent::ToolCall {
+            run_id: RunId("run-policy-allowed".to_string()),
+            tool_info: protocol::ToolCallInfo {
+                tool_name: "ao.task.list".to_string(),
+                parameters: json!({}),
+                timestamp: protocol::Timestamp::now(),
+            },
+        };
+
+        assert!(tool_call_policy_violation(&event, &mcp, &policy).is_none());
+    }
+
+    #[test]
+    fn tool_call_policy_violation_ignores_non_tool_events() {
+        let mcp = McpToolEnforcement {
+            enabled: false,
+            endpoint: None,
+            stdio: None,
+            agent_id: "ao".to_string(),
+            allowed_prefixes: Vec::new(),
+        };
+        let policy = ExecutionPolicyEnforcement::default();
+        let event = AgentRunEvent::Started {
+            run_id: RunId("run-policy-started".to_string()),
+            timestamp: protocol::Timestamp::now(),
+        };
+
+        assert!(tool_call_policy_violation(&event, &mcp, &policy).is_none());
     }
 
     #[test]
@@ -2022,10 +2185,14 @@ mod tests {
         )
         .expect("claude policy should apply");
 
-        assert!(invocation.args.windows(2).any(|pair| {
-            pair[0] == "--permission-mode" && pair[1] == "bypassPermissions"
-        }));
-        assert!(invocation.args.iter().any(|arg| arg == "--strict-mcp-config"));
+        assert!(invocation
+            .args
+            .windows(2)
+            .any(|pair| { pair[0] == "--permission-mode" && pair[1] == "bypassPermissions" }));
+        assert!(invocation
+            .args
+            .iter()
+            .any(|arg| arg == "--strict-mcp-config"));
         assert!(!invocation.args.iter().any(|arg| arg == "--tools"));
     }
 
@@ -2047,7 +2214,11 @@ mod tests {
 
     #[test]
     fn codex_native_lockdown_disables_non_target_servers() {
-        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "hello".to_string(),
+        ];
         let configured_servers = vec!["shortcut".to_string(), "ao".to_string()];
 
         apply_codex_native_mcp_lockdown(
@@ -2065,7 +2236,11 @@ mod tests {
 
     #[test]
     fn codex_native_lockdown_sets_stdio_transport_when_configured() {
-        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "hello".to_string(),
+        ];
 
         apply_codex_native_mcp_lockdown(
             &mut args,
@@ -2083,9 +2258,9 @@ mod tests {
         );
 
         let joined = args.join(" ");
-        assert!(joined.contains(
-            "mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\""
-        ));
+        assert!(
+            joined.contains("mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\"")
+        );
         assert!(joined.contains(
             "mcp_servers.ao.args=[\"--project-root\", \"/Users/samishukri/ao-cli\", \"mcp\", \"serve\"]"
         ));
@@ -2196,7 +2371,11 @@ mod tests {
     fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
         let mut invocation = super::super::process_builder::CliInvocation {
             command: "opencode".to_string(),
-            args: vec!["run".to_string(), "--format".to_string(), "json".to_string()],
+            args: vec![
+                "run".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+            ],
             prompt_via_stdin: false,
         };
         let enforcement = McpToolEnforcement {
@@ -2233,7 +2412,9 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(config_raw).expect("opencode config should be valid JSON");
         assert_eq!(
-            parsed.pointer("/mcp/ao/type").and_then(serde_json::Value::as_str),
+            parsed
+                .pointer("/mcp/ao/type")
+                .and_then(serde_json::Value::as_str),
             Some("local")
         );
         assert_eq!(
