@@ -283,6 +283,11 @@ code {
   gap: 0.3rem;
 }
 
+.daemon-feedback-item[data-outcome="preview"] {
+  border-color: #d3c892;
+  background: #fffcf0;
+}
+
 .daemon-feedback-headline {
   margin: 0;
 }

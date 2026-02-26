@@ -37,7 +37,7 @@ type ActionFeedbackRecord = {
   action: DaemonActionName;
   method: "POST" | "DELETE";
   path: string;
-  outcome: "success" | "failure";
+  outcome: "success" | "failure" | "preview";
   timestamp: string;
   message: string;
   code: string;
@@ -124,7 +124,7 @@ const DAEMON_ACTION_CONFIG: Record<DaemonAction, DaemonActionConfig> = {
 };
 
 export function matchesConfirmationPhrase(input: string, expected: string): boolean {
-  return input.trim() === expected;
+  return input.trim() === expected.trim();
 }
 
 export function DashboardPage() {
@@ -189,6 +189,7 @@ export function DaemonPage() {
   const confirmationInputRef = useRef<HTMLInputElement | null>(null);
   const pendingExecutionRef = useRef(false);
   const feedbackSequenceRef = useRef(0);
+  const isMountedRef = useRef(true);
 
   const healthState = useApiResource(
     async () => api.daemonHealth(),
@@ -211,6 +212,13 @@ export function DaemonPage() {
     confirmationInputRef.current?.focus();
   }, [pendingAction]);
 
+  useEffect(
+    () => () => {
+      isMountedRef.current = false;
+    },
+    [],
+  );
+
   const closeConfirmationDialog = () => {
     setPendingAction(null);
     setConfirmationInput("");
@@ -224,6 +232,10 @@ export function DaemonPage() {
   };
 
   const appendActionRecord = (record: Omit<ActionFeedbackRecord, "id">) => {
+    if (!isMountedRef.current) {
+      return;
+    }
+
     feedbackSequenceRef.current += 1;
     const nextRecord: ActionFeedbackRecord = {
       id: `daemon-action-${feedbackSequenceRef.current}`,
@@ -234,6 +246,13 @@ export function DaemonPage() {
       const next = [nextRecord, ...current];
       return next.length > ACTION_FEEDBACK_CAPACITY ? next.slice(0, ACTION_FEEDBACK_CAPACITY) : next;
     });
+  };
+
+  const clearPendingExecution = () => {
+    pendingExecutionRef.current = false;
+    if (isMountedRef.current) {
+      setPendingExecution(null);
+    }
   };
 
   const runAction = (action: DaemonAction) => {
@@ -248,11 +267,13 @@ export function DaemonPage() {
 
     const correlationId = generateCorrelationId();
     pendingExecutionRef.current = true;
-    setPendingExecution({
-      action,
-      correlationId,
-    });
-    setActionState({ kind: "idle" });
+    if (isMountedRef.current) {
+      setPendingExecution({
+        action,
+        correlationId,
+      });
+      setActionState({ kind: "idle" });
+    }
 
     const request =
       action === "start"
@@ -270,7 +291,9 @@ export function DaemonPage() {
         const timestamp = new Date().toISOString();
 
         if (result.kind === "error") {
-          setActionState({ kind: "error", message: `${result.code}: ${result.message}` });
+          if (isMountedRef.current) {
+            setActionState({ kind: "error", message: `${result.code}: ${result.message}` });
+          }
           appendActionRecord({
             action: config.actionName,
             method: config.method,
@@ -281,8 +304,7 @@ export function DaemonPage() {
             code: result.code,
             correlationId: result.correlationId ?? correlationId,
           });
-          pendingExecutionRef.current = false;
-          setPendingExecution(null);
+          clearPendingExecution();
           return;
         }
 
@@ -290,7 +312,9 @@ export function DaemonPage() {
           typeof result.data.message === "string" && result.data.message.trim().length > 0
             ? result.data.message
             : `${config.label} completed.`;
-        setActionState({ kind: "ok", message: successMessage });
+        if (isMountedRef.current) {
+          setActionState({ kind: "ok", message: successMessage });
+        }
         appendActionRecord({
           action: config.actionName,
           method: config.method,
@@ -301,13 +325,16 @@ export function DaemonPage() {
           code: "ok",
           correlationId,
         });
-        setRefreshNonce((current) => current + 1);
-        pendingExecutionRef.current = false;
-        setPendingExecution(null);
+        if (isMountedRef.current) {
+          setRefreshNonce((current) => current + 1);
+        }
+        clearPendingExecution();
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : "Daemon action failed unexpectedly.";
-        setActionState({ kind: "error", message });
+        if (isMountedRef.current) {
+          setActionState({ kind: "error", message });
+        }
         appendActionRecord({
           action: config.actionName,
           method: config.method,
@@ -318,8 +345,7 @@ export function DaemonPage() {
           code: "request_rejected",
           correlationId,
         });
-        pendingExecutionRef.current = false;
-        setPendingExecution(null);
+        clearPendingExecution();
       });
   };
 
@@ -350,9 +376,22 @@ export function DaemonPage() {
     }
 
     const config = DAEMON_ACTION_CONFIG[pendingAction];
+    const timestamp = new Date().toISOString();
+    const correlationId = generateCorrelationId();
+    const previewMessage = `Dry-run preview ready for ${config.label}.`;
     setActionState({
       kind: "ok",
-      message: `Dry-run preview ready for ${config.label}.`,
+      message: previewMessage,
+    });
+    appendActionRecord({
+      action: config.actionName,
+      method: config.method,
+      path: config.path,
+      outcome: "preview",
+      timestamp,
+      message: previewMessage,
+      code: "dry_run",
+      correlationId,
     });
   };
 
@@ -508,8 +547,9 @@ export function DaemonPage() {
                   return;
                 }
 
+                const actionToRun = pendingAction;
                 closeConfirmationDialog();
-                runAction(pendingAction);
+                runAction(actionToRun);
               }}
             >
               Confirm and Execute
@@ -556,9 +596,15 @@ export function DaemonPage() {
         ) : (
           <ul className="daemon-feedback-list">
             {actionRecords.map((record) => (
-              <li key={record.id} className="daemon-feedback-item">
+              <li key={record.id} className="daemon-feedback-item" data-outcome={record.outcome}>
                 <p className="daemon-feedback-headline">
-                  <strong>{record.outcome === "success" ? "Success" : "Failure"}</strong>{" "}
+                  <strong>
+                    {record.outcome === "success"
+                      ? "Success"
+                      : record.outcome === "failure"
+                        ? "Failure"
+                        : "Preview"}
+                  </strong>{" "}
                   <code>{record.action}</code>
                 </p>
                 <p>
