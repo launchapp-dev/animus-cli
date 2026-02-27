@@ -25,3 +25,4 @@ orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-web-contracts = { path = "crates/orchestrator-web-contracts" }
 orchestrator-web-api = { path = "crates/orchestrator-web-api" }
 orchestrator-web-server = { path = "crates/orchestrator-web-server" }
+axum = "0.8"

@@ -25,7 +25,11 @@
 //!         PathBuf::from("/path/to/project"),
 //!     );
 //!
-//!     let http_server = HttpServer::new(Arc::new(mcp), 3000);
+//!     let http_server = HttpServer::new(3000);
+//!     http_server
+//!         .registry()
+//!         .register_agent("default".to_string(), Arc::new(mcp))
+//!         .await;
 //!     http_server.start().await.unwrap();
 //! }
 //! ```

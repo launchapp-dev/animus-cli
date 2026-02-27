@@ -83,21 +83,21 @@ fn build_router(state: AppState) -> Router {
         .route("/projects", post(projects_create_handler))
         .route("/projects/active", get(projects_active_handler))
         .route("/project-requirements", get(projects_requirements_handler))
-        .route("/projects/:id", get(projects_get_handler))
-        .route("/projects/:id/tasks", get(project_tasks_handler))
-        .route("/projects/:id/workflows", get(project_workflows_handler))
-        .route("/projects/:id", patch(projects_patch_handler))
-        .route("/projects/:id", delete(projects_delete_handler))
+        .route("/projects/{id}", get(projects_get_handler))
+        .route("/projects/{id}/tasks", get(project_tasks_handler))
+        .route("/projects/{id}/workflows", get(project_workflows_handler))
+        .route("/projects/{id}", patch(projects_patch_handler))
+        .route("/projects/{id}", delete(projects_delete_handler))
         .route(
-            "/project-requirements/:id",
+            "/project-requirements/{id}",
             get(projects_requirements_by_id_handler),
         )
         .route(
-            "/project-requirements/:project_id/:requirement_id",
+            "/project-requirements/{project_id}/{requirement_id}",
             get(project_requirement_get_handler),
         )
-        .route("/projects/:id/load", post(projects_load_handler))
-        .route("/projects/:id/archive", post(projects_archive_handler))
+        .route("/projects/{id}/load", post(projects_load_handler))
+        .route("/projects/{id}/archive", post(projects_archive_handler))
         .route("/vision", get(vision_get_handler))
         .route("/vision", post(vision_save_handler))
         .route("/vision/refine", post(vision_refine_handler))
@@ -105,54 +105,54 @@ fn build_router(state: AppState) -> Router {
         .route("/requirements", post(requirements_create_handler))
         .route("/requirements/draft", post(requirements_draft_handler))
         .route("/requirements/refine", post(requirements_refine_handler))
-        .route("/requirements/:id", get(requirements_get_handler))
-        .route("/requirements/:id", patch(requirements_patch_handler))
-        .route("/requirements/:id", delete(requirements_delete_handler))
+        .route("/requirements/{id}", get(requirements_get_handler))
+        .route("/requirements/{id}", patch(requirements_patch_handler))
+        .route("/requirements/{id}", delete(requirements_delete_handler))
         .route("/tasks", get(tasks_list_handler))
         .route("/tasks", post(tasks_create_handler))
         .route("/tasks/prioritized", get(tasks_prioritized_handler))
         .route("/tasks/next", get(tasks_next_handler))
         .route("/tasks/stats", get(tasks_stats_handler))
-        .route("/tasks/:id", get(tasks_get_handler))
-        .route("/tasks/:id", patch(tasks_patch_handler))
-        .route("/tasks/:id", delete(tasks_delete_handler))
-        .route("/tasks/:id/status", post(tasks_status_handler))
-        .route("/tasks/:id/assign-agent", post(tasks_assign_agent_handler))
-        .route("/tasks/:id/assign-human", post(tasks_assign_human_handler))
-        .route("/tasks/:id/checklist", post(tasks_checklist_add_handler))
+        .route("/tasks/{id}", get(tasks_get_handler))
+        .route("/tasks/{id}", patch(tasks_patch_handler))
+        .route("/tasks/{id}", delete(tasks_delete_handler))
+        .route("/tasks/{id}/status", post(tasks_status_handler))
+        .route("/tasks/{id}/assign-agent", post(tasks_assign_agent_handler))
+        .route("/tasks/{id}/assign-human", post(tasks_assign_human_handler))
+        .route("/tasks/{id}/checklist", post(tasks_checklist_add_handler))
         .route(
-            "/tasks/:id/checklist/:item_id",
+            "/tasks/{id}/checklist/{item_id}",
             patch(tasks_checklist_update_handler),
         )
         .route(
-            "/tasks/:id/dependencies",
+            "/tasks/{id}/dependencies",
             post(tasks_dependency_add_handler),
         )
         .route(
-            "/tasks/:id/dependencies/:dependency_id",
+            "/tasks/{id}/dependencies/{dependency_id}",
             delete(tasks_dependency_remove_handler),
         )
         .route("/workflows", get(workflows_list_handler))
         .route("/workflows/run", post(workflows_run_handler))
-        .route("/workflows/:id", get(workflows_get_handler))
-        .route("/workflows/:id/decisions", get(workflows_decisions_handler))
+        .route("/workflows/{id}", get(workflows_get_handler))
+        .route("/workflows/{id}/decisions", get(workflows_decisions_handler))
         .route(
-            "/workflows/:id/checkpoints",
+            "/workflows/{id}/checkpoints",
             get(workflows_checkpoints_handler),
         )
         .route(
-            "/workflows/:id/checkpoints/:checkpoint",
+            "/workflows/{id}/checkpoints/{checkpoint}",
             get(workflows_get_checkpoint_handler),
         )
-        .route("/workflows/:id/resume", post(workflows_resume_handler))
-        .route("/workflows/:id/pause", post(workflows_pause_handler))
-        .route("/workflows/:id/cancel", post(workflows_cancel_handler))
+        .route("/workflows/{id}/resume", post(workflows_resume_handler))
+        .route("/workflows/{id}/pause", post(workflows_pause_handler))
+        .route("/workflows/{id}/cancel", post(workflows_cancel_handler))
         .route("/reviews/handoff", post(reviews_handoff_handler));
 
     Router::new()
         .nest("/api/v1", api_router)
         .route("/", get(root_handler))
-        .route("/*path", get(static_handler))
+        .route("/{*path}", get(static_handler))
         .with_state(state)
 }
 

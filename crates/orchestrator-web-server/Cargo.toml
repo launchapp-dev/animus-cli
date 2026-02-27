@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
-axum = { version = "0.7", features = ["macros"] }
+axum = { workspace = true, features = ["macros"] }
 include_dir = "0.7"
 mime_guess = "2"
 orchestrator-web-api = { path = "../orchestrator-web-api" }

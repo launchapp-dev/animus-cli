@@ -98,6 +98,7 @@ pub struct PromptsCapability {
 pub struct ServerInfo {
     pub name: String,
     pub version: String,
+    #[serde(rename = "protocolVersion", alias = "protocol_version")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,
 }
@@ -105,8 +106,10 @@ pub struct ServerInfo {
 /// Initialize Request Parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitializeParams {
+    #[serde(rename = "protocolVersion", alias = "protocol_version")]
     pub protocol_version: String,
     pub capabilities: ClientCapabilities,
+    #[serde(rename = "clientInfo", alias = "client_info")]
     pub client_info: ClientInfo,
 }
 
@@ -133,8 +136,10 @@ pub struct ClientInfo {
 /// Initialize Response Result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitializeResult {
+    #[serde(rename = "protocolVersion", alias = "protocol_version")]
     pub protocol_version: String,
     pub capabilities: ServerCapabilities,
+    #[serde(rename = "serverInfo", alias = "server_info")]
     pub server_info: ServerInfo,
 }
 

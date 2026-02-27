@@ -2,7 +2,6 @@
 
 use crate::protocol::*;
 use crate::tools::ToolRegistry;
-use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;

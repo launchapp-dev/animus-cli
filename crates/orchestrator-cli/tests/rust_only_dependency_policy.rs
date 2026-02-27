@@ -181,6 +181,80 @@ tauri-dev = { version = "2", package = "tauri-build" }
     assert_eq!(violations.len(), 2);
 }
 
+#[test]
+fn workspace_axum_dependency_is_pinned_and_consumed_from_workspace() {
+    let root = workspace_root();
+    let workspace_manifest =
+        parse_toml(&root.join("Cargo.toml")).expect("workspace manifest should parse");
+
+    let workspace_axum_version = workspace_manifest
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(toml::Value::as_table)
+        .and_then(|dependencies| dependencies.get("axum"))
+        .and_then(dependency_version_string);
+
+    assert_eq!(
+        workspace_axum_version,
+        Some("0.8"),
+        "workspace axum dependency must be pinned to 0.8"
+    );
+
+    for manifest_path in [
+        "crates/orchestrator-cli/Cargo.toml",
+        "crates/orchestrator-web-server/Cargo.toml",
+        "crates/llm-mcp-server/Cargo.toml",
+    ] {
+        let manifest = parse_toml(&root.join(manifest_path))
+            .unwrap_or_else(|error| panic!("manifest should parse ({manifest_path}): {error}"));
+        let axum_dependency = manifest
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .and_then(|dependencies| dependencies.get("axum"))
+            .unwrap_or_else(|| panic!("{manifest_path} must declare dependencies.axum"));
+
+        assert!(
+            dependency_uses_workspace(axum_dependency),
+            "{manifest_path} must consume axum via workspace = true"
+        );
+    }
+}
+
+#[test]
+fn llm_cli_wrapper_manifest_does_not_declare_tokio_process() {
+    let manifest_path = workspace_root().join("crates/llm-cli-wrapper/Cargo.toml");
+    let dependencies = parse_manifest_dependencies(&manifest_path)
+        .expect("llm-cli-wrapper manifest dependencies should parse");
+
+    let tokio_process_dependencies = dependencies
+        .into_iter()
+        .filter(|dependency| {
+            dependency
+                .dependency_key
+                .eq_ignore_ascii_case("tokio-process")
+                || dependency
+                    .resolved_package
+                    .eq_ignore_ascii_case("tokio-process")
+        })
+        .map(|dependency| {
+            format!(
+                "{} [{}] key=`{}` resolved_package=`{}`",
+                manifest_path.display(),
+                dependency.section,
+                dependency.dependency_key,
+                dependency.resolved_package
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        tokio_process_dependencies.is_empty(),
+        "llm-cli-wrapper must not declare tokio-process.\n{}",
+        tokio_process_dependencies.join("\n")
+    );
+}
+
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -371,6 +445,25 @@ fn parse_toml(path: &Path) -> Result<toml::Value, String> {
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     toml::from_str::<toml::Value>(&content)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn dependency_version_string(value: &toml::Value) -> Option<&str> {
+    if let Some(version) = value.as_str() {
+        return Some(version);
+    }
+
+    value
+        .as_table()
+        .and_then(|table| table.get("version"))
+        .and_then(toml::Value::as_str)
+}
+
+fn dependency_uses_workspace(value: &toml::Value) -> bool {
+    value
+        .as_table()
+        .and_then(|table| table.get("workspace"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn write_file(path: &Path, content: &str) {

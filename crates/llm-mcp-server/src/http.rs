@@ -75,8 +75,8 @@ impl HttpServer {
             .route("/", get(health_check))
             .route("/health", get(health_check))
             .route("/agents", get(list_agents))
-            .route("/agents/:agent_id", get(get_agent))
-            .route("/mcp/:agent_id", post(handle_agent_request))
+            .route("/agents/{agent_id}", get(get_agent))
+            .route("/mcp/{agent_id}", post(handle_agent_request))
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)
@@ -189,8 +189,8 @@ mod tests {
             .route("/", get(health_check))
             .route("/health", get(health_check))
             .route("/agents", get(list_agents))
-            .route("/agents/:agent_id", get(get_agent))
-            .route("/mcp/:agent_id", post(handle_agent_request))
+            .route("/agents/{agent_id}", get(get_agent))
+            .route("/mcp/{agent_id}", post(handle_agent_request))
             .with_state(registry)
     }
 
