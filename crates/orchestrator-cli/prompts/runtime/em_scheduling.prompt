@@ -43,7 +43,11 @@ Return exactly one JSON object:
 Rules:
 - `kind` must be exactly `em_scheduling_decision`.
 - `queue` must be ordered by dispatch order for this tick.
-- Keep `queue` length at or below available agent slots unless there is a strong reason to stage additional ready work.
+- Keep task IDs unique across `queue`, `defer`, and `preempt`.
+- `defer` IDs must refer to known tasks from the provided task list.
+- `preempt` IDs must refer to currently running workflow tasks.
+- Keep `queue` length at or below `available_agent_slots + preempt.length`.
+- If `available_agent_slots` is `0` and `preempt` is empty, `queue` must be empty.
 - Use `defer` for tasks that should not start now.
 - Use `preempt` only for tasks currently running that should be paused for higher-value work.
 - Every queued item must include a concrete scheduling reason.

@@ -95,11 +95,8 @@ struct EmSchedulingQueueDecision {
 #[derive(Debug, Clone, Deserialize)]
 struct EmSchedulingDecision {
     kind: String,
-    #[serde(default)]
     queue: Vec<EmSchedulingQueueDecision>,
-    #[serde(default)]
     defer: Vec<String>,
-    #[serde(default)]
     preempt: Vec<String>,
 }
 
@@ -1066,11 +1063,7 @@ fn build_em_scheduling_prompt(input: &EmSchedulingPromptInput) -> String {
 }
 
 fn is_valid_em_scheduling_decision(decision: &EmSchedulingDecision) -> bool {
-    if !decision
-        .kind
-        .trim()
-        .eq_ignore_ascii_case(EM_SCHEDULING_RESULT_KIND)
-    {
+    if decision.kind.trim() != EM_SCHEDULING_RESULT_KIND {
         return false;
     }
 
@@ -1178,29 +1171,32 @@ fn parse_em_scheduling_decision_response(text: &str) -> Option<EmSchedulingDecis
 fn normalize_em_scheduling_decision(
     decision: EmSchedulingDecision,
     known_task_ids: &HashSet<String>,
+    running_task_ids: &HashSet<String>,
+    available_agent_slots: usize,
 ) -> EmSchedulingAppliedDecision {
+    let mut preempt_seen = HashSet::new();
+    let preempt_task_ids: Vec<String> = decision
+        .preempt
+        .into_iter()
+        .filter_map(|task_id| normalize_optional_id(Some(task_id.as_str())))
+        .filter(|task_id| running_task_ids.contains(task_id))
+        .filter(|task_id| preempt_seen.insert(task_id.clone()))
+        .collect();
+
+    let preempt_lookup: HashSet<String> = preempt_task_ids.iter().cloned().collect();
     let mut defer_seen = HashSet::new();
     let defer_task_ids: Vec<String> = decision
         .defer
         .into_iter()
         .filter_map(|task_id| normalize_optional_id(Some(task_id.as_str())))
         .filter(|task_id| known_task_ids.contains(task_id))
+        .filter(|task_id| !preempt_lookup.contains(task_id))
         .filter(|task_id| defer_seen.insert(task_id.clone()))
         .collect();
 
-    let mut preempt_seen = HashSet::new();
-    let preempt_task_ids: Vec<String> = decision
-        .preempt
-        .into_iter()
-        .filter_map(|task_id| normalize_optional_id(Some(task_id.as_str())))
-        .filter(|task_id| known_task_ids.contains(task_id))
-        .filter(|task_id| preempt_seen.insert(task_id.clone()))
-        .collect();
-
     let defer_lookup: HashSet<String> = defer_task_ids.iter().cloned().collect();
-    let preempt_lookup: HashSet<String> = preempt_task_ids.iter().cloned().collect();
     let mut queue_seen = HashSet::new();
-    let queue_task_ids: Vec<String> = decision
+    let mut queue_task_ids: Vec<String> = decision
         .queue
         .into_iter()
         .filter_map(|item| {
@@ -1220,6 +1216,8 @@ fn normalize_em_scheduling_decision(
             Some(task_id)
         })
         .collect();
+    let max_queue_len = available_agent_slots.saturating_add(preempt_task_ids.len());
+    queue_task_ids.truncate(max_queue_len);
 
     EmSchedulingAppliedDecision {
         queue_task_ids,
@@ -1380,7 +1378,17 @@ async fn em_scheduling_decision_for_ready_tasks(
     let decision = parse_em_scheduling_decision_response(&transcript)
         .ok_or_else(|| anyhow!("EM scheduling output was not parseable JSON"))?;
     let known_task_ids: HashSet<String> = tasks.iter().map(|task| task.id.clone()).collect();
-    let applied_decision = normalize_em_scheduling_decision(decision, &known_task_ids);
+    let running_task_ids: HashSet<String> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Running)
+        .map(|workflow| workflow.task_id.clone())
+        .collect();
+    let applied_decision = normalize_em_scheduling_decision(
+        decision,
+        &known_task_ids,
+        &running_task_ids,
+        max_tasks_per_tick,
+    );
 
     if applied_decision.queue_task_ids.is_empty()
         && applied_decision.defer_task_ids.is_empty()
@@ -2702,7 +2710,18 @@ thinking...
         assert!(
             prompt.contains("Task list (statuses, priorities, dependencies, linked requirements):")
         );
+        assert!(prompt.contains("Current running workflows and phases:"));
+        assert!(prompt.contains("Recent decision history:"));
+        assert!(prompt.contains("Recent failure reasons:"));
+        assert!(prompt.contains("Requirement coverage snapshot:"));
+        assert!(prompt.contains("Task priority and urgency."));
+        assert!(prompt.contains("Dependency readiness and unblock impact."));
+        assert!(prompt.contains("Risk level and complexity."));
+        assert!(prompt.contains("Recent failures and repeated failure patterns."));
+        assert!(prompt.contains("Requirement coverage balance"));
+        assert!(prompt.contains("Resource constraints from available agent slots."));
         assert!(prompt.contains("Do not propose or perform code changes."));
+        assert!(prompt.contains("Output JSON only. No markdown. No commentary."));
     }
 
     #[test]
@@ -2733,6 +2752,44 @@ thinking...
     }
 
     #[test]
+    fn parse_em_scheduling_decision_response_rejects_kind_case_mismatch() {
+        let transcript = r#"
+{"kind":"EM_SCHEDULING_DECISION","queue":[{"task_id":"TASK-010","reason":"ready and unblocked"}],"defer":[],"preempt":[]}
+"#;
+        assert!(
+            parse_em_scheduling_decision_response(transcript).is_none(),
+            "kind must match em_scheduling_decision exactly"
+        );
+    }
+
+    #[test]
+    fn parse_em_scheduling_decision_response_rejects_missing_required_collections() {
+        for transcript in [
+            r#"{"kind":"em_scheduling_decision","defer":[],"preempt":[]}"#,
+            r#"{"kind":"em_scheduling_decision","queue":[],"preempt":[]}"#,
+            r#"{"kind":"em_scheduling_decision","queue":[],"defer":[]}"#,
+        ] {
+            assert!(
+                parse_em_scheduling_decision_response(transcript).is_none(),
+                "queue, defer, and preempt are all required"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_em_scheduling_decision_response_rejects_malformed_queue_items() {
+        for transcript in [
+            r#"{"kind":"em_scheduling_decision","queue":[{"task_id":"TASK-010","reason":""}],"defer":[],"preempt":[]}"#,
+            r#"{"kind":"em_scheduling_decision","queue":[{"task_id":"","reason":"missing task id"}],"defer":[],"preempt":[]}"#,
+        ] {
+            assert!(
+                parse_em_scheduling_decision_response(transcript).is_none(),
+                "queue entries require both task_id and reason"
+            );
+        }
+    }
+
+    #[test]
     fn normalize_em_scheduling_decision_filters_unknown_and_duplicate_ids() {
         let decision = EmSchedulingDecision {
             kind: "em_scheduling_decision".to_string(),
@@ -2757,11 +2814,153 @@ thinking...
             .into_iter()
             .map(str::to_string)
             .collect();
+        let running_task_ids: HashSet<String> =
+            ["TASK-003"].into_iter().map(str::to_string).collect();
 
-        let normalized = normalize_em_scheduling_decision(decision, &known_task_ids);
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 5);
         assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
         assert_eq!(normalized.defer_task_ids, vec!["TASK-002"]);
         assert_eq!(normalized.preempt_task_ids, vec!["TASK-003"]);
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_resolves_cross_list_overlap() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-001".to_string(),
+                    reason: "first".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-002".to_string(),
+                    reason: "deferred".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-003".to_string(),
+                    reason: "running task".to_string(),
+                },
+            ],
+            defer: vec!["TASK-002".to_string(), "TASK-003".to_string()],
+            preempt: vec!["TASK-003".to_string(), "TASK-003".to_string()],
+        };
+        let known_task_ids: HashSet<String> = ["TASK-001", "TASK-002", "TASK-003"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let running_task_ids: HashSet<String> =
+            ["TASK-003"].into_iter().map(str::to_string).collect();
+
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 1);
+        assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
+        assert_eq!(normalized.defer_task_ids, vec!["TASK-002"]);
+        assert_eq!(normalized.preempt_task_ids, vec!["TASK-003"]);
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_enforces_queue_capacity() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-001".to_string(),
+                    reason: "first".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-002".to_string(),
+                    reason: "second".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-003".to_string(),
+                    reason: "third".to_string(),
+                },
+            ],
+            defer: Vec::new(),
+            preempt: Vec::new(),
+        };
+        let known_task_ids: HashSet<String> = ["TASK-001", "TASK-002", "TASK-003"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let running_task_ids: HashSet<String> = HashSet::new();
+
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 1);
+        assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_drops_queue_when_no_slots_and_no_preemptions() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![EmSchedulingQueueDecision {
+                task_id: "TASK-001".to_string(),
+                reason: "ready".to_string(),
+            }],
+            defer: Vec::new(),
+            preempt: Vec::new(),
+        };
+        let known_task_ids: HashSet<String> =
+            ["TASK-001"].into_iter().map(str::to_string).collect();
+        let running_task_ids: HashSet<String> = HashSet::new();
+
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 0);
+        assert!(normalized.queue_task_ids.is_empty());
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_allows_queue_up_to_preempted_capacity() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-001".to_string(),
+                    reason: "replace preempted work".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-002".to_string(),
+                    reason: "exceeds preempted capacity".to_string(),
+                },
+            ],
+            defer: Vec::new(),
+            preempt: vec!["TASK-900".to_string()],
+        };
+        let known_task_ids: HashSet<String> = ["TASK-001", "TASK-002"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let running_task_ids: HashSet<String> =
+            ["TASK-900"].into_iter().map(str::to_string).collect();
+
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 0);
+        assert_eq!(normalized.preempt_task_ids, vec!["TASK-900"]);
+        assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_limits_preempt_to_running_tasks() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![EmSchedulingQueueDecision {
+                task_id: "TASK-001".to_string(),
+                reason: "ready".to_string(),
+            }],
+            defer: Vec::new(),
+            preempt: vec!["TASK-900".to_string(), "TASK-901".to_string()],
+        };
+        let known_task_ids: HashSet<String> =
+            ["TASK-001"].into_iter().map(str::to_string).collect();
+        let running_task_ids: HashSet<String> =
+            ["TASK-901"].into_iter().map(str::to_string).collect();
+
+        let normalized =
+            normalize_em_scheduling_decision(decision, &known_task_ids, &running_task_ids, 0);
+        assert_eq!(normalized.preempt_task_ids, vec!["TASK-901"]);
+        assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
     }
 }
 

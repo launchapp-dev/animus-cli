@@ -228,7 +228,11 @@ impl WorkflowLifecycleExecutor {
 
                 let (confidence, risk, source) = match &decision {
                     Some(d) => (d.confidence, d.risk, WorkflowDecisionSource::Llm),
-                    None => (1.0, WorkflowDecisionRisk::Low, WorkflowDecisionSource::Fallback),
+                    None => (
+                        1.0,
+                        WorkflowDecisionRisk::Low,
+                        WorkflowDecisionSource::Fallback,
+                    ),
                 };
                 let (machine_version, machine_hash, machine_source) = self.machine_metadata();
                 let guardrail_violations = decision
@@ -422,16 +426,14 @@ impl WorkflowLifecycleExecutor {
                 };
             }
             PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Skip => {
-                if decision.confidence < 0.5
-                    && matches!(decision.risk, WorkflowDecisionRisk::High)
+                if decision.confidence < 0.5 && matches!(decision.risk, WorkflowDecisionRisk::High)
                 {
                     let phase_id = workflow
                         .phases
                         .get(workflow.current_phase_index)
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
-                    let rework_count =
-                        workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                    let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
                     if rework_count < MAX_PHASE_REWORKS {
                         return GateEvaluationResult::Rework {
                             reason: format!(
@@ -447,8 +449,7 @@ impl WorkflowLifecycleExecutor {
                         .get(workflow.current_phase_index)
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
-                    let rework_count =
-                        workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                    let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
                     if rework_count < MAX_PHASE_REWORKS {
                         return GateEvaluationResult::Rework {
                             reason: format!(
