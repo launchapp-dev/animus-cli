@@ -2,17 +2,20 @@ use super::daemon_registry::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
 use crate::shared::{
     build_runtime_contract, collect_json_payload_lines, connect_runner,
-    ensure_ai_generated_tasks_for_requirements, event_matches_run, runner_config_dir,
-    write_json_line,
+    ensure_ai_generated_tasks_for_requirements, event_matches_run,
+    requirement_has_active_tasks, run_prompt_against_runner, runner_config_dir, write_json_line,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
     services::ServiceHub, DependencyType, FileServiceHub, RequirementItem, RequirementStatus,
-    RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskStatus,
-    WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
+    RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput,
+    TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
-use protocol::{AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
+use protocol::{
+    default_primary_model_for_phase, tool_for_model_id, AgentRunEvent, AgentRunRequest, ModelId,
+    RunId, PROTOCOL_VERSION,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashSet, VecDeque};

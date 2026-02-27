@@ -899,19 +899,89 @@ async fn execute_running_workflow_phases_for_project(
                 if PhaseFailureClassifier::is_transient_runner_error_message(&error_message) {
                     continue;
                 }
-                let updated = hub
-                    .workflows()
-                    .fail_current_phase(&workflow.id, error_message)
-                    .await?;
-                sync_task_status_for_workflow_result(
-                    hub.clone(),
+
+                let recovery = attempt_ai_failure_recovery(
                     project_root,
-                    &updated.task_id,
-                    updated.status,
-                    Some(updated.id.as_str()),
+                    &task,
+                    &phase_id,
+                    &error_message,
+                    &workflow.decision_history,
                 )
                 .await;
-                failed = failed.saturating_add(1);
+
+                match recovery {
+                    AiRecoveryAction::Retry => {
+                        continue;
+                    }
+                    AiRecoveryAction::SkipPhase => {
+                        let updated = hub
+                            .workflows()
+                            .complete_current_phase(&workflow.id)
+                            .await?;
+                        sync_task_status_for_workflow_result(
+                            hub.clone(),
+                            project_root,
+                            &updated.task_id,
+                            updated.status,
+                            Some(updated.id.as_str()),
+                        )
+                        .await;
+                        executed = executed.saturating_add(1);
+                    }
+                    AiRecoveryAction::Decompose(subtasks) => {
+                        let linked_requirements = task.linked_requirements.clone();
+                        for subtask_def in subtasks {
+                            let _ = hub
+                                .tasks()
+                                .create(TaskCreateInput {
+                                    title: subtask_def.title,
+                                    description: subtask_def.description,
+                                    task_type: Some(TaskType::Feature),
+                                    priority: Some(task.priority),
+                                    created_by: Some(AI_RECOVERY_MARKER.to_string()),
+                                    tags: vec![
+                                        "ai-decomposed".to_string(),
+                                        "ai-generated".to_string(),
+                                    ],
+                                    linked_requirements: linked_requirements.clone(),
+                                    linked_architecture_entities: Vec::new(),
+                                })
+                                .await;
+                        }
+                        let fail_reason = format!(
+                            "{AI_RECOVERY_MARKER}: decomposed into subtasks — {}",
+                            error_message
+                        );
+                        let updated = hub
+                            .workflows()
+                            .fail_current_phase(&workflow.id, fail_reason)
+                            .await?;
+                        sync_task_status_for_workflow_result(
+                            hub.clone(),
+                            project_root,
+                            &updated.task_id,
+                            updated.status,
+                            Some(updated.id.as_str()),
+                        )
+                        .await;
+                        failed = failed.saturating_add(1);
+                    }
+                    AiRecoveryAction::Fail => {
+                        let updated = hub
+                            .workflows()
+                            .fail_current_phase(&workflow.id, error_message)
+                            .await?;
+                        sync_task_status_for_workflow_result(
+                            hub.clone(),
+                            project_root,
+                            &updated.task_id,
+                            updated.status,
+                            Some(updated.id.as_str()),
+                        )
+                        .await;
+                        failed = failed.saturating_add(1);
+                    }
+                }
             }
         }
     }
@@ -1074,6 +1144,281 @@ pub(super) async fn bootstrap_from_vision_if_needed(
     Ok(())
 }
 
+async fn ensure_tasks_for_unplanned_requirements(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> Result<usize> {
+    let requirements = hub.planning().list_requirements().await?;
+    let tasks = hub.tasks().list().await?;
+
+    let unplanned: Vec<String> = requirements
+        .iter()
+        .filter(|req| {
+            !matches!(
+                req.status,
+                RequirementStatus::Done
+                    | RequirementStatus::Implemented
+                    | RequirementStatus::Deprecated
+            )
+        })
+        .filter(|req| !requirement_has_active_tasks(req, &tasks))
+        .map(|req| req.id.clone())
+        .take(1)
+        .collect();
+
+    if unplanned.is_empty() {
+        return Ok(0);
+    }
+
+    let summary =
+        ensure_ai_generated_tasks_for_requirements(hub, project_root, &unplanned).await?;
+    Ok(summary.requirements_generated)
+}
+
+async fn promote_backlog_tasks_to_ready(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> Result<usize> {
+    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let active_task_ids: HashSet<String> = workflows
+        .iter()
+        .filter(|workflow| {
+            matches!(
+                workflow.status,
+                WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
+            )
+        })
+        .map(|workflow| workflow.task_id.clone())
+        .collect();
+
+    let candidates = hub.tasks().list().await?;
+    let mut promoted = 0usize;
+
+    for task in &candidates {
+        if task.paused || task.cancelled {
+            continue;
+        }
+        if task.status != TaskStatus::Backlog {
+            continue;
+        }
+        if active_task_ids.contains(&task.id) {
+            continue;
+        }
+
+        let dependency_issues =
+            dependency_gate_issues_for_task(hub.clone(), project_root, task).await;
+        if !dependency_issues.is_empty() {
+            let reason = dependency_blocked_reason(&dependency_issues);
+            let _ = set_task_blocked_with_reason(hub.clone(), task, reason, None).await;
+            continue;
+        }
+
+        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready).await;
+        promoted = promoted.saturating_add(1);
+    }
+
+    Ok(promoted)
+}
+
+const DEFAULT_RETRY_COOLDOWN_SECS: i64 = 300;
+const DEFAULT_MAX_TASK_RETRIES: usize = 3;
+
+async fn retry_failed_task_workflows(hub: Arc<dyn ServiceHub>) -> Result<usize> {
+    let cooldown_secs = std::env::var("AO_RETRY_COOLDOWN_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_RETRY_COOLDOWN_SECS);
+    let max_retries = std::env::var("AO_MAX_TASK_RETRIES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MAX_TASK_RETRIES);
+
+    let tasks = hub.tasks().list().await?;
+    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let now = Utc::now();
+    let mut retried = 0usize;
+
+    for task in &tasks {
+        if retried >= 1 {
+            break;
+        }
+        if task.paused || task.cancelled {
+            continue;
+        }
+        if task.status != TaskStatus::Blocked {
+            continue;
+        }
+        if is_merge_gate_block(task) || is_dependency_gate_block(task) {
+            continue;
+        }
+
+        let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
+        let latest = task_workflows.iter().max_by_key(|w| w.started_at);
+
+        let Some(latest) = latest else {
+            continue;
+        };
+        if latest.status != WorkflowStatus::Failed {
+            continue;
+        }
+
+        let failed_count = task_workflows
+            .iter()
+            .filter(|w| w.status == WorkflowStatus::Failed)
+            .count();
+        if failed_count >= max_retries {
+            continue;
+        }
+
+        if let Some(completed_at) = latest.completed_at {
+            let elapsed = now.signed_duration_since(completed_at).num_seconds();
+            if elapsed < cooldown_secs {
+                continue;
+            }
+        }
+
+        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready).await;
+        retried = retried.saturating_add(1);
+    }
+
+    Ok(retried)
+}
+
+const AI_RECOVERY_TIMEOUT_SECS: u64 = 120;
+const AI_RECOVERY_MARKER: &str = "ai-failure-recovery";
+const MAX_DECOMPOSE_SUBTASKS: usize = 3;
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct AiRecoveryResponse {
+    action: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    subtasks: Vec<AiRecoverySubtask>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AiRecoverySubtask {
+    title: String,
+    #[serde(default)]
+    description: String,
+}
+
+enum AiRecoveryAction {
+    Retry,
+    Decompose(Vec<AiRecoverySubtask>),
+    SkipPhase,
+    Fail,
+}
+
+async fn attempt_ai_failure_recovery(
+    project_root: &str,
+    task: &orchestrator_core::OrchestratorTask,
+    phase_id: &str,
+    error_message: &str,
+    decision_history: &[orchestrator_core::WorkflowDecisionRecord],
+) -> AiRecoveryAction {
+    let already_attempted = decision_history.iter().any(|record| {
+        record.phase_id == phase_id && record.reason.contains(AI_RECOVERY_MARKER)
+    });
+    if already_attempted {
+        return AiRecoveryAction::Fail;
+    }
+
+    let model = default_primary_model_for_phase("implementation", None).to_string();
+    let tool = tool_for_model_id(&model).to_string();
+
+    let prompt = format!(
+        r#"A workflow phase has failed. Analyze the error and recommend a recovery action.
+
+## Task
+- Title: {title}
+- Description: {description}
+
+## Failed Phase
+- Phase ID: {phase_id}
+- Error: {error}
+
+## Instructions
+Return exactly one JSON object with your recommendation:
+{{
+  "action": "retry|decompose|skip_phase|fail",
+  "reason": "Brief explanation of your recommendation",
+  "subtasks": [
+    {{"title": "Subtask title", "description": "Subtask description"}}
+  ]
+}}
+
+Rules:
+- "retry" — the error is transient or environmental, retrying might succeed
+- "decompose" — the task is too complex, break it into smaller subtasks (max 3)
+- "skip_phase" — the phase is non-critical and can be skipped safely
+- "fail" — the error is fundamental and cannot be recovered
+- Only include "subtasks" if action is "decompose"
+- Output valid JSON only, no markdown fences"#,
+        title = task.title,
+        description = task.description.chars().take(1000).collect::<String>(),
+        phase_id = phase_id,
+        error = error_message.chars().take(500).collect::<String>(),
+    );
+
+    let result = run_prompt_against_runner(
+        project_root,
+        &prompt,
+        &model,
+        &tool,
+        AI_RECOVERY_TIMEOUT_SECS,
+    )
+    .await;
+
+    let Ok(transcript) = result else {
+        return AiRecoveryAction::Fail;
+    };
+
+    let parsed = parse_ai_recovery_response(&transcript);
+    let Some(response) = parsed else {
+        return AiRecoveryAction::Fail;
+    };
+
+    match response.action.trim().to_ascii_lowercase().as_str() {
+        "retry" => AiRecoveryAction::Retry,
+        "decompose" if !response.subtasks.is_empty() => {
+            let subtasks: Vec<_> = response
+                .subtasks
+                .into_iter()
+                .filter(|s| !s.title.trim().is_empty())
+                .take(MAX_DECOMPOSE_SUBTASKS)
+                .collect();
+            if subtasks.is_empty() {
+                AiRecoveryAction::Fail
+            } else {
+                AiRecoveryAction::Decompose(subtasks)
+            }
+        }
+        "skip_phase" => AiRecoveryAction::SkipPhase,
+        _ => AiRecoveryAction::Fail,
+    }
+}
+
+fn parse_ai_recovery_response(text: &str) -> Option<AiRecoveryResponse> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Ok(response) = serde_json::from_value::<AiRecoveryResponse>(payload) {
+            if !response.action.is_empty() {
+                return Some(response);
+            }
+        }
+    }
+    if let Ok(response) = serde_json::from_str::<AiRecoveryResponse>(text.trim()) {
+        if !response.action.is_empty() {
+            return Some(response);
+        }
+    }
+    None
+}
+
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
     let hub = Arc::new(FileServiceHub::new(&root)?);
@@ -1094,6 +1439,10 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     bootstrap_from_vision_if_needed(hub.clone(), args.startup_cleanup, args.ai_task_generation)
         .await?;
 
+    if args.ai_task_generation {
+        let _ = ensure_tasks_for_unplanned_requirements(hub.clone(), &root).await;
+    }
+
     let mut cleaned_stale_workflows = 0usize;
     let mut resumed_workflows = 0usize;
     if args.resume_interrupted {
@@ -1111,6 +1460,11 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     let reconciled_dependency_tasks =
         reconcile_dependency_gate_tasks_for_project(hub.clone(), &root).await?;
     let reconciled_merge_tasks = reconcile_merge_gate_tasks_for_project(hub.clone(), &root).await?;
+
+    if args.auto_run_ready {
+        let _ = retry_failed_task_workflows(hub.clone()).await;
+        let _ = promote_backlog_tasks_to_ready(hub.clone(), &root).await;
+    }
 
     let started_ready_workflows = if args.auto_run_ready {
         run_ready_task_workflows_for_project(hub.clone(), &root, args.max_tasks_per_tick).await?

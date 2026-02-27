@@ -224,7 +224,7 @@ pub(crate) async fn ensure_ai_generated_tasks_for_requirements(
     Ok(summary)
 }
 
-fn requirement_has_active_tasks(
+pub(crate) fn requirement_has_active_tasks(
     requirement: &RequirementItem,
     all_tasks: &[orchestrator_core::OrchestratorTask],
 ) -> bool {
@@ -561,7 +561,7 @@ async fn run_task_generation_with_model(
     ))
 }
 
-async fn run_prompt_against_runner(
+pub(crate) async fn run_prompt_against_runner(
     project_root: &str,
     prompt: &str,
     model: &str,

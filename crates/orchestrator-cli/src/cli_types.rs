@@ -574,7 +574,7 @@ pub(crate) struct DaemonStartArgs {
     #[arg(
         long,
         action = ArgAction::Set,
-        default_value_t = false,
+        default_value_t = true,
         help = "Enable AI-generated task creation."
     )]
     pub(crate) ai_task_generation: bool,
@@ -668,7 +668,7 @@ pub(crate) struct DaemonRunArgs {
     #[arg(
         long,
         action = ArgAction::Set,
-        default_value_t = false,
+        default_value_t = true,
         help = "Enable AI-generated task creation."
     )]
     pub(crate) ai_task_generation: bool,
