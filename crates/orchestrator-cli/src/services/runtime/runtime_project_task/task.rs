@@ -3,12 +3,20 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Utc;
 use orchestrator_core::{services::ServiceHub, TaskCreateInput, TaskFilter, TaskUpdateInput};
+use serde::Serialize;
 
-use crate::services::runtime::stale_in_progress_summary;
+use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 use crate::{
     ensure_destructive_confirmation, parse_dependency_type, parse_input_json_or,
     parse_priority_opt, parse_task_status, parse_task_type_opt, print_value, TaskCommand,
 };
+
+#[derive(Debug, Serialize)]
+struct TaskStatsOutput {
+    #[serde(flatten)]
+    stats: orchestrator_core::TaskStatistics,
+    stale_in_progress: StaleInProgressSummary,
+}
 
 pub(crate) async fn handle_task(
     command: TaskCommand,
@@ -56,19 +64,19 @@ pub(crate) async fn handle_task(
         TaskCommand::Prioritized => print_value(tasks.list_prioritized().await?, json),
         TaskCommand::Next => print_value(tasks.next_task().await?, json),
         TaskCommand::Stats(args) => {
-            let mut stats = serde_json::to_value(tasks.statistics().await?)?;
-            let stale_summary = stale_in_progress_summary(
+            let stats = tasks.statistics().await?;
+            let stale_in_progress = stale_in_progress_summary(
                 &tasks.list().await?,
                 args.stale_threshold_hours,
                 Utc::now(),
             );
-            if let Some(stats_object) = stats.as_object_mut() {
-                stats_object.insert(
-                    "stale_in_progress".to_string(),
-                    serde_json::to_value(stale_summary)?,
-                );
-            }
-            print_value(stats, json)
+            print_value(
+                TaskStatsOutput {
+                    stats,
+                    stale_in_progress,
+                },
+                json,
+            )
         }
         TaskCommand::Get(args) => print_value(tasks.get(&args.id).await?, json),
         TaskCommand::Create(args) => {

@@ -175,6 +175,16 @@ mod tests {
     }
 
     #[test]
+    fn task_stats_rejects_zero_stale_threshold_hours_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "task", "stats", "--stale-threshold-hours", "0"])
+            .expect_err("zero stale threshold should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--stale-threshold-hours"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
     fn parses_workflow_phase_approve_from_workflow_module() {
         let cli = Cli::try_parse_from([
             "ao",

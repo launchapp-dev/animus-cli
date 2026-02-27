@@ -120,9 +120,15 @@ mod tests {
         }
     }
 
+    fn fixed_now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")
+            .expect("valid fixed timestamp")
+            .with_timezone(&Utc)
+    }
+
     #[test]
     fn stale_detector_includes_exact_threshold_boundary() {
-        let now = Utc::now();
+        let now = fixed_now();
         let tasks = vec![sample_task(
             "TASK-001",
             TaskStatus::InProgress,
@@ -138,7 +144,7 @@ mod tests {
 
     #[test]
     fn stale_detector_excludes_non_in_progress_tasks() {
-        let now = Utc::now();
+        let now = fixed_now();
         let tasks = vec![
             sample_task("TASK-001", TaskStatus::Ready, now - Duration::hours(48)),
             sample_task("TASK-002", TaskStatus::Blocked, now - Duration::hours(48)),
@@ -151,8 +157,23 @@ mod tests {
     }
 
     #[test]
+    fn stale_detector_excludes_tasks_with_future_updated_at() {
+        let now = fixed_now();
+        let tasks = vec![sample_task(
+            "TASK-001",
+            TaskStatus::InProgress,
+            now + Duration::hours(6),
+        )];
+
+        let summary = stale_in_progress_summary(&tasks, 24, now);
+
+        assert_eq!(summary.count, 0);
+        assert!(summary.tasks.is_empty());
+    }
+
+    #[test]
     fn stale_detector_sorts_by_updated_at_then_task_id() {
-        let now = Utc::now();
+        let now = fixed_now();
         let tied_timestamp = now - Duration::hours(30);
         let tasks = vec![
             sample_task("TASK-003", TaskStatus::InProgress, tied_timestamp),
