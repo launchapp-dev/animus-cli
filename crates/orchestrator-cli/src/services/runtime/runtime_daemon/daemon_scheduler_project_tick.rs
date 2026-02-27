@@ -1199,16 +1199,13 @@ async fn execute_running_workflow_phases_for_project(
     project_root: &str,
     max_phases_per_tick: usize,
 ) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
-    if max_phases_per_tick == 0 {
-        return Ok((0, 0, Vec::new()));
-    }
-
     let mut executed = 0usize;
     let mut failed = 0usize;
     let mut phase_events = Vec::new();
     let mut completions = Vec::new();
+    let completion_poll_limit = max_phases_per_tick.max(1);
     with_reactive_phase_pool_state_mut(project_root, |state| {
-        for _ in 0..max_phases_per_tick {
+        for _ in 0..completion_poll_limit {
             match state.completion_rx.try_recv() {
                 Ok(completion) => {
                     state.in_flight_workflow_ids.remove(&completion.workflow.id);
@@ -1233,6 +1230,12 @@ async fn execute_running_workflow_phases_for_project(
             &mut phase_events,
         )
         .await?;
+    }
+
+    // Always process completions even when spawns are disabled (for example, during
+    // shutdown drains or defensive call sites that pass a zero spawn budget).
+    if max_phases_per_tick == 0 {
+        return Ok((executed, failed, phase_events));
     }
 
     let (allow_spawns, mut in_flight_workflow_ids, completion_tx) =
@@ -3075,6 +3078,93 @@ mod tests {
             project_root: None,
         };
         assert_eq!(ready_task_dispatch_limit(3, &saturated), 0);
+    }
+
+    #[tokio::test]
+    async fn execute_running_workflow_phases_processes_completions_when_spawn_limit_is_zero() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "completion-processing-zero-spawn-limit".to_string(),
+                description: "completion queue should still be drained".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.in_flight_workflow_ids.insert(workflow.id.clone());
+            state
+                .completion_tx
+                .send(ReactivePhaseCompletion {
+                    workflow: workflow.clone(),
+                    task: task.clone(),
+                    phase_id: phase_id.clone(),
+                    run_result: Ok(PhaseExecutionRunResult {
+                        outcome: PhaseExecutionOutcome::ManualPending {
+                            instructions: "manual approval required".to_string(),
+                            approval_note_required: false,
+                        },
+                        metadata: PhaseExecutionMetadata {
+                            phase_id,
+                            phase_mode: "manual".to_string(),
+                            phase_definition_hash: "test".to_string(),
+                            agent_runtime_config_hash: "test".to_string(),
+                            agent_runtime_schema:
+                                orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID
+                                    .to_string(),
+                            agent_runtime_version:
+                                orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                            agent_runtime_source: "test".to_string(),
+                            agent_id: None,
+                            agent_profile_hash: None,
+                            selected_tool: None,
+                            selected_model: None,
+                        },
+                        signals: Vec::new(),
+                    }),
+                })
+                .expect("completion should enqueue");
+        });
+
+        let (executed, failed, events) = execute_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            0,
+        )
+        .await
+        .expect("completion processing should succeed");
+
+        assert_eq!(executed, 0);
+        assert_eq!(failed, 0);
+        assert!(events.is_empty());
+        assert!(
+            !has_running_workflow_phase_pool_activity(&project_root_str),
+            "in-flight marker should be cleared after completion processing"
+        );
+
+        clear_running_workflow_phase_pool(&project_root_str);
     }
 
     #[test]
