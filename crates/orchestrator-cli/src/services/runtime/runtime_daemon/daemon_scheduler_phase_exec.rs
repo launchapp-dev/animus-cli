@@ -357,7 +357,9 @@ fn parse_phase_decision_from_payload(payload: &Value) -> Option<orchestrator_cor
     }
 }
 
-pub(super) fn parse_phase_decision_from_text(text: &str) -> Option<orchestrator_core::PhaseDecision> {
+pub(super) fn parse_phase_decision_from_text(
+    text: &str,
+) -> Option<orchestrator_core::PhaseDecision> {
     for (_raw, payload) in collect_json_payload_lines(text) {
         if let Some(decision) = parse_phase_decision_from_payload(&payload) {
             return Some(decision);
@@ -763,7 +765,9 @@ pub(super) async fn run_workflow_phase_with_agent(
             {
                 Ok(mut outcome) => {
                     if phase_requires_commit_message_with_config(project_root, phase_id) {
-                        if let PhaseExecutionOutcome::Completed { commit_message, .. } = &mut outcome {
+                        if let PhaseExecutionOutcome::Completed { commit_message, .. } =
+                            &mut outcome
+                        {
                             let resolved_commit_message =
                                 commit_message.clone().unwrap_or_else(|| {
                                     fallback_implementation_commit_message(task_id, task_title)
