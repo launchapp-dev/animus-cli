@@ -265,10 +265,7 @@ async fn authenticate_runner_stream<S>(stream: &mut S, config_dir: &Path) -> Opt
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let token = protocol::Config::load_from_dir(config_dir)
-        .ok()?
-        .get_token()
-        .ok()?;
+    let token = runner_auth_token_from_config(config_dir)?;
     let request = serde_json::to_string(&IpcAuthRequest::new(token)).ok()?;
     stream.write_all(request.as_bytes()).await.ok()?;
     stream.write_all(b"\n").await.ok()?;
@@ -289,6 +286,15 @@ where
 
     let response = serde_json::from_str::<IpcAuthResult>(line.trim()).ok()?;
     response.ok.then_some(())
+}
+
+fn runner_auth_token_from_config(config_dir: &Path) -> Option<String> {
+    let config = protocol::Config::load_from_dir(config_dir).ok()?;
+    let token = config.agent_runner_token?.trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
 }
 
 #[cfg(unix)]
@@ -431,6 +437,22 @@ pub(super) fn find_agent_runner_binary() -> Result<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let binary_name = "agent-runner";
 
+    // Allows deterministic overrides in tests and controlled operator setups.
+    if let Some(override_path) = std::env::var("AO_RUNNER_BINARY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        let binary = PathBuf::from(&override_path);
+        if binary.is_file() {
+            return Ok(binary);
+        }
+        return Err(anyhow!(
+            "AO_RUNNER_BINARY points to a missing or non-file path: {}",
+            binary.display()
+        ));
+    }
+
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             #[cfg(target_os = "macos")]
@@ -508,6 +530,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
     let mut command = Command::new(&binary);
     command
         .env("AO_CONFIG_DIR", &config_dir)
+        .env_remove("AGENT_RUNNER_TOKEN")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .stdin(Stdio::null());
@@ -687,27 +710,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    struct CurrentDirGuard {
-        previous: PathBuf,
-    }
-
-    #[cfg(unix)]
-    impl CurrentDirGuard {
-        fn set(path: &Path) -> Self {
-            let previous = std::env::current_dir().expect("capture current directory");
-            std::env::set_current_dir(path).expect("set current directory for test");
-            Self { previous }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for CurrentDirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.previous);
-        }
-    }
-
-    #[cfg(unix)]
     fn workspace_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
@@ -717,27 +719,154 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn ensure_agent_runner_binary_available(workspace_root: &Path) {
-        static BUILD_ONCE: OnceLock<()> = OnceLock::new();
-        BUILD_ONCE.get_or_init(|| {
-            let binary = workspace_root
-                .join("target")
-                .join("debug")
-                .join("agent-runner");
-            if binary.exists() {
-                return;
+    fn ensure_agent_runner_binary_available(workspace_root: &Path) -> PathBuf {
+        static BINARY_PATH: OnceLock<PathBuf> = OnceLock::new();
+        BINARY_PATH
+            .get_or_init(|| {
+                let binary = workspace_root
+                    .join("target")
+                    .join("debug")
+                    .join("agent-runner");
+                if binary.exists() {
+                    return binary;
+                }
+
+                let status = Command::new("cargo")
+                    .current_dir(workspace_root)
+                    .args(["build", "-p", "agent-runner"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .expect("spawn cargo build -p agent-runner");
+                assert!(status.success(), "cargo build -p agent-runner failed");
+                assert!(binary.exists(), "agent-runner binary was not produced");
+                binary
+            })
+            .clone()
+    }
+
+    #[cfg(unix)]
+    fn force_kill_process(pid: u32) {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(unix)]
+    async fn assert_runner_startup_auto_provision(
+        parent_token_override: Option<&str>,
+    ) -> Result<()> {
+        let workspace_root = workspace_root();
+        let runner_binary = ensure_agent_runner_binary_available(&workspace_root);
+
+        let project_root = tempfile::tempdir().expect("project tempdir");
+        let config_root = tempfile::tempdir().expect("config tempdir");
+        let config_dir = config_root.path().join("runner-config");
+        std::fs::create_dir_all(&config_dir).expect("create runner config dir");
+
+        let config_dir_str = config_dir
+            .to_str()
+            .expect("runner config dir should be valid UTF-8");
+        let runner_binary_str = runner_binary.to_string_lossy().to_string();
+
+        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", Some(config_dir_str));
+        let _runner_binary = EnvVarGuard::set("AO_RUNNER_BINARY", Some(runner_binary_str.as_str()));
+        let _runner_token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", parent_token_override);
+        let _skip_runner_start = EnvVarGuard::set("AO_SKIP_RUNNER_START", None);
+
+        let mut first_pid: Option<u32> = None;
+        let test_result: Result<()> = async {
+            let initial_config =
+                protocol::Config::load_from_dir(&config_dir).context("load initial config")?;
+            anyhow::ensure!(
+                initial_config
+                    .agent_runner_token
+                    .as_deref()
+                    .map_or(true, |token| token.trim().is_empty()),
+                "expected precondition with missing or blank token"
+            );
+
+            let started_pid = ensure_agent_runner_running(project_root.path())
+                .await?
+                .ok_or_else(|| anyhow!("runner startup unexpectedly skipped"))?;
+            anyhow::ensure!(started_pid > 0, "runner startup should return a valid pid");
+            first_pid = Some(started_pid);
+
+            let generated_token = protocol::Config::load_from_dir(&config_dir)
+                .context("load generated token config")?
+                .agent_runner_token
+                .ok_or_else(|| anyhow!("expected generated token"))?;
+            anyhow::ensure!(
+                !generated_token.trim().is_empty(),
+                "generated token should be non-empty"
+            );
+            anyhow::ensure!(
+                Uuid::parse_str(&generated_token).is_ok(),
+                "generated token should be UUID-formatted"
+            );
+            if let Some(parent_token) = parent_token_override {
+                anyhow::ensure!(
+                    generated_token != parent_token.trim(),
+                    "generated token should not mirror parent AGENT_RUNNER_TOKEN override"
+                );
             }
 
-            let status = Command::new("cargo")
-                .current_dir(workspace_root)
-                .args(["build", "-p", "agent-runner"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .expect("spawn cargo build -p agent-runner");
-            assert!(status.success(), "cargo build -p agent-runner failed");
-            assert!(binary.exists(), "agent-runner binary was not produced");
-        });
+            let status = query_runner_status(&config_dir).await;
+            anyhow::ensure!(
+                status.is_some(),
+                "runner status probe should succeed with generated token"
+            );
+
+            let second_pid = ensure_agent_runner_running(project_root.path())
+                .await?
+                .ok_or_else(|| anyhow!("second runner startup unexpectedly skipped"))?;
+            anyhow::ensure!(second_pid > 0, "second startup should return a valid pid");
+
+            let reused_token = protocol::Config::load_from_dir(&config_dir)
+                .context("load token after second startup")?
+                .agent_runner_token
+                .ok_or_else(|| anyhow!("expected token after second startup"))?;
+            anyhow::ensure!(
+                reused_token == generated_token,
+                "token should be preserved across immediate repeated startup"
+            );
+
+            Ok(())
+        }
+        .await;
+
+        let stop_result = stop_agent_runner_process_at_config_dir(&config_dir).await;
+        if is_agent_runner_ready(&config_dir).await {
+            let _ = stop_agent_runner_process_at_config_dir(&config_dir).await;
+        }
+        if let Some(pid) = first_pid {
+            if is_runner_process_alive(pid) {
+                force_kill_process(pid);
+            }
+        }
+        let ready_after_cleanup = is_agent_runner_ready(&config_dir).await;
+
+        if let Err(error) = test_result {
+            return Err(error);
+        }
+
+        let stopped = stop_result.context("stop runner after successful startup flow")?;
+        anyhow::ensure!(
+            stopped || !ready_after_cleanup,
+            "runner cleanup should leave no active runner endpoint"
+        );
+        anyhow::ensure!(
+            read_runner_pid_from_lock(&config_dir).is_none(),
+            "runner lock should be removed during cleanup"
+        );
+        anyhow::ensure!(
+            !ready_after_cleanup,
+            "runner should not be ready after cleanup"
+        );
+        Ok(())
     }
 
     #[test]
@@ -930,97 +1059,19 @@ mod tests {
         let _env_guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_runner_startup_auto_provision(None)
+            .await
+            .expect("runner startup with missing token should succeed");
+    }
 
-        let workspace_root = workspace_root();
-        let _cwd_guard = CurrentDirGuard::set(&workspace_root);
-        ensure_agent_runner_binary_available(&workspace_root);
-
-        let project_root = tempfile::tempdir().expect("project tempdir");
-        let config_root = tempfile::tempdir().expect("config tempdir");
-        let config_dir = config_root.path().join("runner-config");
-        std::fs::create_dir_all(&config_dir).expect("create runner config dir");
-
-        let config_dir_str = config_dir
-            .to_str()
-            .expect("runner config dir should be valid UTF-8");
-        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", Some(config_dir_str));
-        let _runner_token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
-        let _skip_runner_start = EnvVarGuard::set("AO_SKIP_RUNNER_START", None);
-
-        let test_result: Result<()> = async {
-            let initial_config =
-                protocol::Config::load_from_dir(&config_dir).context("load initial config")?;
-            anyhow::ensure!(
-                initial_config
-                    .agent_runner_token
-                    .as_deref()
-                    .map_or(true, |token| token.trim().is_empty()),
-                "expected precondition with missing or blank token"
-            );
-
-            let first_pid = ensure_agent_runner_running(project_root.path())
-                .await?
-                .ok_or_else(|| anyhow!("runner startup unexpectedly skipped"))?;
-            anyhow::ensure!(first_pid > 0, "runner startup should return a valid pid");
-
-            let generated_token = protocol::Config::load_from_dir(&config_dir)
-                .context("load generated token config")?
-                .agent_runner_token
-                .ok_or_else(|| anyhow!("expected generated token"))?;
-            anyhow::ensure!(
-                !generated_token.trim().is_empty(),
-                "generated token should be non-empty"
-            );
-            anyhow::ensure!(
-                Uuid::parse_str(&generated_token).is_ok(),
-                "generated token should be UUID-formatted"
-            );
-
-            let status = query_runner_status(&config_dir).await;
-            anyhow::ensure!(
-                status.is_some(),
-                "runner status probe should succeed with generated token"
-            );
-
-            let second_pid = ensure_agent_runner_running(project_root.path())
-                .await?
-                .ok_or_else(|| anyhow!("second runner startup unexpectedly skipped"))?;
-            anyhow::ensure!(second_pid > 0, "second startup should return a valid pid");
-
-            let reused_token = protocol::Config::load_from_dir(&config_dir)
-                .context("load token after second startup")?
-                .agent_runner_token
-                .ok_or_else(|| anyhow!("expected token after second startup"))?;
-            anyhow::ensure!(
-                reused_token == generated_token,
-                "token should be preserved across immediate repeated startup"
-            );
-
-            Ok(())
-        }
-        .await;
-
-        let stop_result = stop_agent_runner_process_at_config_dir(&config_dir).await;
-        if is_agent_runner_ready(&config_dir).await {
-            let _ = stop_agent_runner_process_at_config_dir(&config_dir).await;
-        }
-        let ready_after_cleanup = is_agent_runner_ready(&config_dir).await;
-
-        if let Err(error) = test_result {
-            panic!("{error:#}");
-        }
-        let stopped = stop_result.expect("stop runner after successful startup");
-        assert!(
-            stopped || !ready_after_cleanup,
-            "runner cleanup should leave no active runner endpoint"
-        );
-        assert!(
-            read_runner_pid_from_lock(&config_dir).is_none(),
-            "runner lock should be removed during cleanup"
-        );
-        assert!(
-            !ready_after_cleanup,
-            "runner should not be ready after cleanup"
-        );
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_runner_startup_ignores_parent_env_token_override() {
+        let _env_guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_runner_startup_auto_provision(Some("parent-env-override-token"))
+            .await
+            .expect("runner startup should ignore AGENT_RUNNER_TOKEN parent override");
     }
 }
