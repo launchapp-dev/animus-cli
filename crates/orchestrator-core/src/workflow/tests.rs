@@ -195,6 +195,7 @@ fn lifecycle_marks_completed_workflow_as_merge_conflict() {
     executor.mark_current_phase_success(&mut workflow);
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
+    assert!(workflow.completed_at.is_some());
 
     executor.mark_merge_conflict(
         &mut workflow,
@@ -206,6 +207,7 @@ fn lifecycle_marks_completed_workflow_as_merge_conflict() {
         workflow.failure_reason.as_deref(),
         Some("failed to merge source branch into target branch")
     );
+    assert!(workflow.completed_at.is_none());
 }
 
 #[test]
@@ -225,9 +227,11 @@ fn lifecycle_resolves_merge_conflict_and_clears_failure_reason() {
     );
     assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
     assert!(workflow.failure_reason.is_some());
+    assert!(workflow.completed_at.is_none());
 
     executor.resolve_merge_conflict(&mut workflow);
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
     assert!(workflow.failure_reason.is_none());
+    assert!(workflow.completed_at.is_some());
 }

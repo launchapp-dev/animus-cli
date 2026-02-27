@@ -136,7 +136,6 @@ pub fn builtin_state_machines_document() -> StateMachinesDocument {
             initial_state: WorkflowMachineState::Idle,
             terminal_states: vec![
                 WorkflowMachineState::Completed,
-                WorkflowMachineState::MergeConflict,
                 WorkflowMachineState::Failed,
                 WorkflowMachineState::Cancelled,
             ],

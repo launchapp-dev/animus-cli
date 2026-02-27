@@ -293,7 +293,7 @@ impl WorkflowLifecycleExecutor {
             workflow.machine_state = WorkflowMachineState::MergeConflict;
         }
         workflow.failure_reason = Some(error);
-        workflow.completed_at = Some(Utc::now());
+        workflow.completed_at = None;
     }
 
     pub fn resolve_merge_conflict(&self, workflow: &mut OrchestratorWorkflow) {

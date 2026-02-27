@@ -368,6 +368,23 @@ mod tests {
     }
 
     #[test]
+    fn builtin_workflow_machine_marks_merge_conflict_as_non_terminal() {
+        let compiled = compile_state_machines_document(
+            builtin_state_machines_document(),
+            MachineSource::Builtin,
+        )
+        .expect("compile should succeed");
+
+        assert!(!compiled
+            .workflow
+            .is_terminal(WorkflowMachineState::MergeConflict));
+        assert!(compiled
+            .workflow
+            .is_terminal(WorkflowMachineState::Completed));
+        assert!(compiled.workflow.is_terminal(WorkflowMachineState::Failed));
+    }
+
+    #[test]
     fn workflow_apply_uses_ordered_first_match() {
         let compiled = compile_state_machines_document(
             builtin_state_machines_document(),
