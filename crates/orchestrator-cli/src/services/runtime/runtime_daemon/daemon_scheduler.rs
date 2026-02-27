@@ -2,8 +2,8 @@ use super::daemon_registry::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
 use crate::shared::{
     build_runtime_contract, collect_json_payload_lines, connect_runner,
-    ensure_ai_generated_tasks_for_requirements, event_matches_run,
-    requirement_has_active_tasks, run_prompt_against_runner, runner_config_dir, write_json_line,
+    ensure_ai_generated_tasks_for_requirements, event_matches_run, requirement_has_active_tasks,
+    run_prompt_against_runner, runner_config_dir, write_json_line,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
@@ -1619,8 +1619,21 @@ async fn post_success_merge_push_and_cleanup(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task: &orchestrator_core::OrchestratorTask,
-) -> Result<bool> {
+) -> Result<git_ops::PostMergeOutcome> {
     git_ops::post_success_merge_push_and_cleanup(hub, project_root, task).await
+}
+
+async fn finalize_merge_conflict_resolution(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    task: &orchestrator_core::OrchestratorTask,
+    context: &git_ops::MergeConflictContext,
+) -> Result<()> {
+    git_ops::finalize_merge_conflict_resolution(hub, project_root, task, context).await
+}
+
+fn cleanup_merge_conflict_worktree(project_root: &str, context: &git_ops::MergeConflictContext) {
+    git_ops::cleanup_merge_conflict_worktree(project_root, context)
 }
 
 fn flush_git_integration_outbox(project_root: &str) -> Result<()> {

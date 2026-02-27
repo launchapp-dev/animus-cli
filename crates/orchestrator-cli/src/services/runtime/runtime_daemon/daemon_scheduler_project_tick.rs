@@ -375,11 +375,72 @@ async fn sync_task_status_for_workflow_result(
             };
 
             match post_success_merge_push_and_cleanup(hub.clone(), project_root, &task).await {
-                Ok(true) => {
+                Ok(git_ops::PostMergeOutcome::Completed) => {
                     let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
                     return;
                 }
-                Ok(false) => {}
+                Ok(git_ops::PostMergeOutcome::Skipped) => {}
+                Ok(git_ops::PostMergeOutcome::Conflict { context }) => {
+                    let conflict_summary = if context.conflicted_files.is_empty() {
+                        "merge conflict detected".to_string()
+                    } else {
+                        format!(
+                            "merge conflict detected in files: {}",
+                            context.conflicted_files.join(", ")
+                        )
+                    };
+                    if let Some(workflow_id) = workflow_id {
+                        let _ = hub
+                            .workflows()
+                            .mark_merge_conflict(workflow_id, conflict_summary)
+                            .await;
+                    }
+
+                    let recovery_result =
+                        attempt_ai_merge_conflict_recovery(project_root, &task, &context).await;
+                    if let Err(error) = recovery_result {
+                        cleanup_merge_conflict_worktree(project_root, &context);
+                        let _ = set_task_blocked_with_reason(
+                            hub.clone(),
+                            &task,
+                            format!(
+                                "{MERGE_GATE_PREFIX} auto-merge conflict recovery failed: {error}"
+                            ),
+                            None,
+                        )
+                        .await;
+                        return;
+                    }
+
+                    match finalize_merge_conflict_resolution(
+                        hub.clone(),
+                        project_root,
+                        &task,
+                        &context,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            if let Some(workflow_id) = workflow_id {
+                                let _ = hub.workflows().resolve_merge_conflict(workflow_id).await;
+                            }
+                            let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                        }
+                        Err(error) => {
+                            cleanup_merge_conflict_worktree(project_root, &context);
+                            let _ = set_task_blocked_with_reason(
+                                hub.clone(),
+                                &task,
+                                format!(
+                                    "{MERGE_GATE_PREFIX} merge conflict recovery finalize failed: {error}"
+                                ),
+                                None,
+                            )
+                            .await;
+                        }
+                    }
+                    return;
+                }
                 Err(error) => {
                     if let Some(workflow_id) = workflow_id {
                         let _ = hub
@@ -914,10 +975,7 @@ async fn execute_running_workflow_phases_for_project(
                         continue;
                     }
                     AiRecoveryAction::SkipPhase => {
-                        let updated = hub
-                            .workflows()
-                            .complete_current_phase(&workflow.id)
-                            .await?;
+                        let updated = hub.workflows().complete_current_phase(&workflow.id).await?;
                         sync_task_status_for_workflow_result(
                             hub.clone(),
                             project_root,
@@ -1170,8 +1228,7 @@ async fn ensure_tasks_for_unplanned_requirements(
         return Ok(0);
     }
 
-    let summary =
-        ensure_ai_generated_tasks_for_requirements(hub, project_root, &unplanned).await?;
+    let summary = ensure_ai_generated_tasks_for_requirements(hub, project_root, &unplanned).await?;
     Ok(summary.requirements_generated)
 }
 
@@ -1321,9 +1378,9 @@ async fn attempt_ai_failure_recovery(
     error_message: &str,
     decision_history: &[orchestrator_core::WorkflowDecisionRecord],
 ) -> AiRecoveryAction {
-    let already_attempted = decision_history.iter().any(|record| {
-        record.phase_id == phase_id && record.reason.contains(AI_RECOVERY_MARKER)
-    });
+    let already_attempted = decision_history
+        .iter()
+        .any(|record| record.phase_id == phase_id && record.reason.contains(AI_RECOVERY_MARKER));
     if already_attempted {
         return AiRecoveryAction::Fail;
     }
@@ -1417,6 +1474,246 @@ fn parse_ai_recovery_response(text: &str) -> Option<AiRecoveryResponse> {
         }
     }
     None
+}
+
+const MERGE_CONFLICT_RECOVERY_TIMEOUT_SECS: u64 = 300;
+const MERGE_CONFLICT_RECOVERY_RESULT_KIND: &str = "merge_conflict_resolution_result";
+const MERGE_CONFLICT_RECOVERY_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/runtime/merge_conflict_recovery.prompt"
+));
+
+#[derive(Debug, Clone, Deserialize)]
+struct MergeConflictRecoveryResponse {
+    kind: String,
+    status: String,
+    #[serde(default)]
+    commit_message: String,
+    #[serde(default)]
+    reason: String,
+}
+
+fn build_merge_conflict_recovery_prompt(
+    task: &orchestrator_core::OrchestratorTask,
+    context: &git_ops::MergeConflictContext,
+) -> String {
+    let conflicted_files = if context.conflicted_files.is_empty() {
+        "- (none detected by git)".to_string()
+    } else {
+        context
+            .conflicted_files
+            .iter()
+            .map(|path| format!("- {}", path))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    MERGE_CONFLICT_RECOVERY_PROMPT_TEMPLATE
+        .replace("__TASK_TITLE__", task.title.trim())
+        .replace(
+            "__TASK_DESCRIPTION__",
+            task.description
+                .chars()
+                .take(2000)
+                .collect::<String>()
+                .as_str(),
+        )
+        .replace("__SOURCE_BRANCH__", context.source_branch.as_str())
+        .replace("__TARGET_BRANCH__", context.target_branch.as_str())
+        .replace(
+            "__MERGE_WORKTREE_PATH__",
+            context.merge_worktree_path.as_str(),
+        )
+        .replace("__CONFLICTED_FILES__", conflicted_files.as_str())
+}
+
+async fn run_merge_conflict_recovery_prompt_against_runner(
+    project_root: &str,
+    execution_cwd: &str,
+    prompt: &str,
+    model: &str,
+    tool: &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    let run_id = RunId(format!("merge-conflict-recovery-{}", Uuid::new_v4()));
+    let mut context = serde_json::json!({
+        "tool": tool,
+        "prompt": prompt,
+        "cwd": execution_cwd,
+        "project_root": project_root,
+        "planning_stage": "merge-conflict-recovery",
+        "allowed_tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+        "timeout_secs": timeout_secs,
+    });
+    if let Some(runtime_contract) = build_runtime_contract(tool, model, prompt) {
+        context["runtime_contract"] = runtime_contract;
+    }
+
+    let request = AgentRunRequest {
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        run_id: run_id.clone(),
+        model: ModelId(model.to_string()),
+        context,
+        timeout_secs: Some(timeout_secs),
+    };
+
+    let config_dir = runner_config_dir(Path::new(project_root));
+    let stream = connect_runner(&config_dir).await?;
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    write_json_line(&mut write_half, &request).await?;
+
+    let mut lines = BufReader::new(read_half).lines();
+    let mut transcript = String::new();
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
+            continue;
+        };
+        if !event_matches_run(&event, &run_id) {
+            continue;
+        }
+
+        match event {
+            AgentRunEvent::OutputChunk { text, .. } => {
+                transcript.push_str(&text);
+                transcript.push('\n');
+            }
+            AgentRunEvent::Thinking { content, .. } => {
+                transcript.push_str(&content);
+                transcript.push('\n');
+            }
+            AgentRunEvent::Error { error, .. } => {
+                anyhow::bail!("merge conflict recovery run failed: {error}");
+            }
+            AgentRunEvent::Finished { exit_code, .. } => {
+                if exit_code.unwrap_or_default() != 0 {
+                    anyhow::bail!(
+                        "merge conflict recovery run exited with non-zero code: {:?}",
+                        exit_code
+                    );
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if transcript.trim().is_empty() {
+        anyhow::bail!("merge conflict recovery run produced empty output");
+    }
+
+    Ok(transcript)
+}
+
+async fn attempt_ai_merge_conflict_recovery(
+    project_root: &str,
+    task: &orchestrator_core::OrchestratorTask,
+    context: &git_ops::MergeConflictContext,
+) -> Result<()> {
+    let model = default_primary_model_for_phase("implementation", None).to_string();
+    let tool = tool_for_model_id(&model).to_string();
+    let prompt = build_merge_conflict_recovery_prompt(task, context);
+    let transcript = run_merge_conflict_recovery_prompt_against_runner(
+        project_root,
+        context.merge_worktree_path.as_str(),
+        &prompt,
+        &model,
+        &tool,
+        MERGE_CONFLICT_RECOVERY_TIMEOUT_SECS,
+    )
+    .await?;
+
+    let response = parse_merge_conflict_recovery_response(&transcript)
+        .ok_or_else(|| anyhow!("merge conflict recovery output was not parseable JSON"))?;
+
+    if !response
+        .kind
+        .trim()
+        .eq_ignore_ascii_case(MERGE_CONFLICT_RECOVERY_RESULT_KIND)
+    {
+        anyhow::bail!(
+            "merge conflict recovery output kind mismatch: expected '{}'",
+            MERGE_CONFLICT_RECOVERY_RESULT_KIND
+        );
+    }
+
+    match response.status.trim().to_ascii_lowercase().as_str() {
+        "resolved" => {
+            if response.commit_message.trim().is_empty() {
+                anyhow::bail!("merge conflict recovery output is missing non-empty commit_message");
+            }
+            run_cargo_check(context.merge_worktree_path.as_str())?;
+            Ok(())
+        }
+        "failed" => {
+            let reason = response.reason.trim();
+            if reason.is_empty() {
+                anyhow::bail!("merge conflict recovery agent reported failure");
+            }
+            anyhow::bail!("merge conflict recovery agent reported failure: {reason}");
+        }
+        other => anyhow::bail!("merge conflict recovery output has invalid status: {other}"),
+    }
+}
+
+fn parse_merge_conflict_recovery_response(text: &str) -> Option<MergeConflictRecoveryResponse> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Ok(response) = serde_json::from_value::<MergeConflictRecoveryResponse>(payload) {
+            if !response.status.trim().is_empty() {
+                return Some(response);
+            }
+        }
+    }
+
+    if let Ok(response) = serde_json::from_str::<MergeConflictRecoveryResponse>(text.trim()) {
+        if !response.status.trim().is_empty() {
+            return Some(response);
+        }
+    }
+    None
+}
+
+fn run_cargo_check(cwd: &str) -> Result<()> {
+    let status = ProcessCommand::new("cargo")
+        .current_dir(cwd)
+        .arg("check")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to run cargo check in {}", cwd))?;
+    if !status.success() {
+        anyhow::bail!("cargo check failed in {}", cwd);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_merge_conflict_recovery_response_parses_json_line_output() {
+        let transcript = r#"
+thinking...
+{"kind":"merge_conflict_resolution_result","status":"resolved","commit_message":"Resolve merge conflict","reason":""}
+"#;
+        let parsed = parse_merge_conflict_recovery_response(transcript)
+            .expect("response should parse from transcript JSON line");
+        assert_eq!(parsed.kind, "merge_conflict_resolution_result");
+        assert_eq!(parsed.status, "resolved");
+        assert_eq!(parsed.commit_message, "Resolve merge conflict");
+    }
+
+    #[test]
+    fn parse_merge_conflict_recovery_response_rejects_non_json_output() {
+        assert!(
+            parse_merge_conflict_recovery_response("merge fixed, please continue").is_none(),
+            "non-json output should not parse as recovery response"
+        );
+    }
 }
 
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {

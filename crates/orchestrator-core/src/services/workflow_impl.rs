@@ -201,6 +201,16 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         WorkflowLifecycleExecutor::default().mark_merge_conflict(workflow, error);
         Ok(workflow.clone())
     }
+
+    async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow> {
+        let mut lock = self.state.write().await;
+        let workflow = lock
+            .workflows
+            .get_mut(id)
+            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+        WorkflowLifecycleExecutor::default().resolve_merge_conflict(workflow);
+        Ok(workflow.clone())
+    }
 }
 
 #[async_trait]
@@ -431,6 +441,31 @@ impl WorkflowServiceApi for FileServiceHub {
             state_machines,
         )
         .mark_merge_conflict(&mut workflow, error);
+        manager.save(&workflow)?;
+        let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+
+        let snapshot = {
+            let mut lock = self.state.write().await;
+            lock.workflows.insert(id.to_string(), workflow.clone());
+            lock.clone()
+        };
+
+        Self::persist_snapshot(&self.state_file, &snapshot)?;
+        Ok(workflow)
+    }
+
+    async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow> {
+        let manager = self.workflow_manager();
+        let mut workflow = manager.load(id)?;
+        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        WorkflowLifecycleExecutor::with_state_machines(
+            resolve_phase_plan(
+                Some(self.project_root.as_path()),
+                workflow.pipeline_id.as_deref().unwrap_or_default(),
+            )?,
+            state_machines,
+        )
+        .resolve_merge_conflict(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
 

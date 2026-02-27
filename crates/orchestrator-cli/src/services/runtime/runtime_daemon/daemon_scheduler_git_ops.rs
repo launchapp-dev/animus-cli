@@ -584,6 +584,139 @@ fn pull_request_body(task: &orchestrator_core::OrchestratorTask) -> String {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct MergeConflictContext {
+    pub(super) source_branch: String,
+    pub(super) target_branch: String,
+    pub(super) merge_worktree_path: String,
+    pub(super) conflicted_files: Vec<String>,
+    pub(super) merge_queue_branch: String,
+    pub(super) push_remote: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub(super) enum PostMergeOutcome {
+    Skipped,
+    Completed,
+    Conflict { context: MergeConflictContext },
+}
+
+fn remove_worktree_path(project_root: &str, worktree_path: &str) {
+    let _ = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["worktree", "remove", "--force", worktree_path])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let path = Path::new(worktree_path);
+    if path.exists() {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
+fn conflicted_files_in_worktree(cwd: &str) -> Result<Vec<String>> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to inspect conflicted files in {}", cwd))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to inspect conflicted files in {}: {}",
+            cwd,
+            summarize_command_output(&output.stdout, &output.stderr)
+        );
+    }
+
+    let mut files: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn merge_head_exists(cwd: &str) -> Result<bool> {
+    let status = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to inspect MERGE_HEAD in {}", cwd))?;
+    Ok(status.success())
+}
+
+fn head_parent_count(cwd: &str) -> Result<usize> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to inspect HEAD commit parents in {}", cwd))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to inspect HEAD commit parents in {}: {}",
+            cwd,
+            summarize_command_output(&output.stdout, &output.stderr)
+        );
+    }
+
+    let parents = String::from_utf8_lossy(&output.stdout);
+    let token_count = parents.split_whitespace().count();
+    if token_count == 0 {
+        anyhow::bail!("failed to parse HEAD commit parents in {}", cwd);
+    }
+    Ok(token_count.saturating_sub(1))
+}
+
+fn persist_merge_result_and_push(project_root: &str, context: &MergeConflictContext) -> Result<()> {
+    git_status(
+        context.merge_worktree_path.as_str(),
+        &["branch", "-f", context.merge_queue_branch.as_str(), "HEAD"],
+        "persist merge commit ref",
+    )?;
+
+    if push_ref(
+        context.merge_worktree_path.as_str(),
+        context.push_remote.as_str(),
+        "HEAD",
+        context.target_branch.as_str(),
+    )
+    .is_err()
+    {
+        enqueue_git_integration_operation(
+            project_root,
+            GitIntegrationOperation::PushRef {
+                cwd: project_root.to_string(),
+                remote: context.push_remote.clone(),
+                source_ref: context.merge_queue_branch.clone(),
+                target_ref: context.target_branch.clone(),
+            },
+        )?;
+    } else {
+        let _ = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(["branch", "-D", context.merge_queue_branch.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    Ok(())
+}
+
 pub(super) fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<()> {
     let commit_message = commit_message.trim();
     if commit_message.is_empty() {
@@ -616,20 +749,20 @@ pub(super) async fn post_success_merge_push_and_cleanup(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task: &orchestrator_core::OrchestratorTask,
-) -> Result<bool> {
+) -> Result<PostMergeOutcome> {
     let cfg = load_post_success_git_config(project_root);
     if !is_git_repo(project_root) {
-        return Ok(false);
+        return Ok(PostMergeOutcome::Skipped);
     }
 
     let do_pr_flow = cfg.auto_pr_enabled;
     let do_direct_merge = cfg.auto_merge_enabled && !cfg.auto_pr_enabled;
     if !do_pr_flow && !do_direct_merge {
-        return Ok(false);
+        return Ok(PostMergeOutcome::Skipped);
     }
 
     let Some(source_branch) = resolve_task_source_branch(task) else {
-        return Ok(false);
+        return Ok(PostMergeOutcome::Skipped);
     };
 
     let source_push_cwd = task
@@ -734,30 +867,23 @@ pub(super) async fn post_success_merge_push_and_cleanup(
             sanitize_identifier_for_git(cfg.auto_merge_target_branch.as_str())
         ));
         let merge_worktree_path_str = merge_worktree_path.to_string_lossy().to_string();
-        let merge_queue_branch = merge_queue_branch_name(&task.id);
+        let merge_context = MergeConflictContext {
+            source_branch: source_branch.clone(),
+            target_branch: cfg.auto_merge_target_branch.clone(),
+            merge_worktree_path: merge_worktree_path_str.clone(),
+            conflicted_files: Vec::new(),
+            merge_queue_branch: merge_queue_branch_name(&task.id),
+            push_remote: cfg.auto_push_remote.clone(),
+        };
 
         if merge_worktree_path.exists() {
-            let _ = ProcessCommand::new("git")
-                .arg("-C")
-                .arg(project_root)
-                .args([
-                    "worktree",
-                    "remove",
-                    "--force",
-                    merge_worktree_path_str.as_str(),
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            if merge_worktree_path.exists() {
-                let _ = fs::remove_dir_all(&merge_worktree_path);
-            }
+            remove_worktree_path(project_root, merge_worktree_path_str.as_str());
         }
         if let Some(parent) = merge_worktree_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let merge_result = (|| -> Result<()> {
+        let merge_result = (|| -> Result<PostMergeOutcome> {
             git_status(
                 project_root,
                 &[
@@ -852,6 +978,15 @@ pub(super) async fn post_success_merge_push_and_cleanup(
                 .status()
                 .context("failed to merge source branch into target branch")?;
             if !merge_status.success() {
+                let conflicted_files =
+                    conflicted_files_in_worktree(merge_worktree_path_str.as_str())
+                        .unwrap_or_default();
+                if !conflicted_files.is_empty() {
+                    let mut context = merge_context.clone();
+                    context.conflicted_files = conflicted_files;
+                    return Ok(PostMergeOutcome::Conflict { context });
+                }
+
                 anyhow::bail!(
                     "failed to merge '{}' into '{}'",
                     source_branch,
@@ -859,61 +994,37 @@ pub(super) async fn post_success_merge_push_and_cleanup(
                 );
             }
 
-            git_status(
-                merge_worktree_path_str.as_str(),
-                &["branch", "-f", merge_queue_branch.as_str(), "HEAD"],
-                "persist merge commit ref",
-            )?;
-
-            if push_ref(
-                merge_worktree_path_str.as_str(),
-                cfg.auto_push_remote.as_str(),
-                "HEAD",
-                cfg.auto_merge_target_branch.as_str(),
-            )
-            .is_err()
-            {
-                enqueue_git_integration_operation(
-                    project_root,
-                    GitIntegrationOperation::PushRef {
-                        cwd: project_root.to_string(),
-                        remote: cfg.auto_push_remote.clone(),
-                        source_ref: merge_queue_branch.clone(),
-                        target_ref: cfg.auto_merge_target_branch.clone(),
-                    },
-                )?;
-            } else {
-                let _ = ProcessCommand::new("git")
-                    .arg("-C")
-                    .arg(project_root)
-                    .args(["branch", "-D", merge_queue_branch.as_str()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-            Ok(())
+            persist_merge_result_and_push(project_root, &merge_context)?;
+            Ok(PostMergeOutcome::Completed)
         })();
 
-        let _ = ProcessCommand::new("git")
-            .arg("-C")
-            .arg(project_root)
-            .args([
-                "worktree",
-                "remove",
-                "--force",
-                merge_worktree_path_str.as_str(),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if merge_worktree_path.exists() {
-            let _ = fs::remove_dir_all(&merge_worktree_path);
+        match merge_result {
+            Ok(PostMergeOutcome::Completed) => {
+                remove_worktree_path(project_root, merge_worktree_path_str.as_str());
+            }
+            Ok(PostMergeOutcome::Conflict { context }) => {
+                return Ok(PostMergeOutcome::Conflict { context });
+            }
+            Ok(PostMergeOutcome::Skipped) => {}
+            Err(error) => {
+                remove_worktree_path(project_root, merge_worktree_path_str.as_str());
+                return Err(error);
+            }
         }
-        merge_result?;
     }
 
+    cleanup_task_worktree_if_enabled(hub, project_root, task, &cfg).await?;
+    Ok(PostMergeOutcome::Completed)
+}
+
+async fn cleanup_task_worktree_if_enabled(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    task: &orchestrator_core::OrchestratorTask,
+    cfg: &PostSuccessGitConfig,
+) -> Result<()> {
     if !cfg.auto_cleanup_worktree_enabled {
-        return Ok(true);
+        return Ok(());
     }
 
     let Some(worktree_path_raw) = task
@@ -922,7 +1033,7 @@ pub(super) async fn post_success_merge_push_and_cleanup(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(true);
+        return Ok(());
     };
     let worktree_path = PathBuf::from(worktree_path_raw);
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
@@ -943,7 +1054,46 @@ pub(super) async fn post_success_merge_push_and_cleanup(
     updated.worktree_path = None;
     updated.metadata.updated_by = "ao-daemon".to_string();
     hub.tasks().replace(updated).await?;
-    Ok(true)
+    Ok(())
+}
+
+pub(super) async fn finalize_merge_conflict_resolution(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    task: &orchestrator_core::OrchestratorTask,
+    context: &MergeConflictContext,
+) -> Result<()> {
+    if !Path::new(context.merge_worktree_path.as_str()).exists() {
+        anyhow::bail!(
+            "merge conflict worktree no longer exists: {}",
+            context.merge_worktree_path
+        );
+    }
+
+    let unresolved = conflicted_files_in_worktree(context.merge_worktree_path.as_str())?;
+    if !unresolved.is_empty() {
+        anyhow::bail!(
+            "merge conflict still unresolved in files: {}",
+            unresolved.join(", ")
+        );
+    }
+    if merge_head_exists(context.merge_worktree_path.as_str())? {
+        anyhow::bail!("merge conflict recovery did not complete merge commit");
+    }
+    if head_parent_count(context.merge_worktree_path.as_str())? < 2 {
+        anyhow::bail!("merge conflict recovery did not produce a merge commit");
+    }
+
+    persist_merge_result_and_push(project_root, context)?;
+    remove_worktree_path(project_root, context.merge_worktree_path.as_str());
+
+    let cfg = load_post_success_git_config(project_root);
+    cleanup_task_worktree_if_enabled(hub, project_root, task, &cfg).await?;
+    Ok(())
+}
+
+pub(super) fn cleanup_merge_conflict_worktree(project_root: &str, context: &MergeConflictContext) {
+    remove_worktree_path(project_root, context.merge_worktree_path.as_str());
 }
 
 pub(super) fn task_status_label(status: TaskStatus) -> &'static str {
