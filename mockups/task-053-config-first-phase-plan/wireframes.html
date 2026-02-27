@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-053 Config-First Phase Plan Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-053: Config-First Workflow Phase Plans</h1>
+      <p>
+        Concrete wireframes for deterministic phase-source behavior across
+        <code>workflow run</code>, planning execute, workflow inspection, and
+        invalid-config recovery. Hardcoded phase arrays are visible only as
+        explicit fallback for missing config.
+      </p>
+    </header>
+
+    <main class="board-grid">
+      <section class="board" aria-labelledby="s1-title">
+        <h2 class="board-title" id="s1-title">S1 Config Authoring</h2>
+        <div class="surface">
+          <header class="surface-header">
+            <p class="surface-path">
+              .ao / state / workflow-config.v2.json / pipeline: ui-ux-standard
+            </p>
+            <div class="chip-row" aria-label="Config status">
+              <span class="chip config">source: config</span>
+              <span class="chip success">save: valid</span>
+            </div>
+          </header>
+
+          <div class="split">
+            <article class="card" aria-labelledby="s1-edit-title">
+              <h3 id="s1-edit-title">Pipeline Phase Edit</h3>
+              <p>
+                Maintainer inserts a new phase in config without touching Rust
+                code. The next workflow run should materialize this order.
+              </p>
+              <pre class="cmd-block">{
+  "id": "ui-ux-standard",
+  "phases": [
+    "requirements",
+    "ux-research",
+    "wireframe",
+    "mockup-review",
+    "accessibility-audit",
+    "implementation",
+    "code-review",
+    "testing"
+  ]
+}</pre>
+              <p class="inline-note">
+                Deterministic contract: order in this file is execution order.
+              </p>
+            </article>
+
+            <aside class="card" aria-labelledby="s1-summary-title">
+              <h3 id="s1-summary-title">Save Summary</h3>
+              <dl class="kv-list">
+                <div>
+                  <dt>Schema</dt>
+                  <dd>ao.workflow-config.v2</dd>
+                </div>
+                <div>
+                  <dt>Default pipeline</dt>
+                  <dd>standard</dd>
+                </div>
+                <div>
+                  <dt>Edited pipeline</dt>
+                  <dd>ui-ux-standard</dd>
+                </div>
+                <div>
+                  <dt>Delta</dt>
+                  <dd>+ accessibility-audit at index 5</dd>
+                </div>
+              </dl>
+              <div class="status-row" aria-label="Validation state">
+                <span class="status-pill active">validate: passed</span>
+                <span class="status-pill next">ready: run workflow</span>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="s2-title">
+        <h2 class="board-title" id="s2-title">S2 Direct Workflow Run</h2>
+        <div class="surface">
+          <header class="surface-header">
+            <p class="surface-path">
+              ao workflow run --task-id TASK-053 --pipeline-id ui-ux-standard --json
+            </p>
+            <div class="chip-row" aria-label="Resolution mode">
+              <span class="chip config">phase source: workflow-config.v2.json</span>
+              <span class="chip success">outcome: started</span>
+            </div>
+          </header>
+
+          <div class="split">
+            <article class="card" aria-labelledby="s2-output-title">
+              <h3 id="s2-output-title">Command Output (Deterministic)</h3>
+              <div class="terminal" role="status" aria-live="polite">
+                <pre><span class="ok-line">status: started</span>
+workflow_id: wf_053a9c2b
+task_id: TASK-053
+pipeline_id: ui-ux-standard
+phase_source: config:/repo/.ao/state/workflow-config.v2.json
+
+phases:
+1. requirements
+2. ux-research
+3. wireframe
+4. mockup-review
+5. accessibility-audit
+6. implementation
+7. code-review
+8. testing
+
+next_step: ao workflow get --id wf_053a9c2b --json</pre>
+              </div>
+            </article>
+
+            <aside class="card" aria-labelledby="s2-detail-title">
+              <h3 id="s2-detail-title">Run Detail</h3>
+              <dl class="kv-list">
+                <div>
+                  <dt>Requested pipeline</dt>
+                  <dd>ui-ux-standard</dd>
+                </div>
+                <div>
+                  <dt>Resolved source</dt>
+                  <dd>workflow-config.v2.json</dd>
+                </div>
+                <div>
+                  <dt>Current phase</dt>
+                  <dd>requirements</dd>
+                </div>
+                <div>
+                  <dt>Next phase</dt>
+                  <dd>ux-research</dd>
+                </div>
+              </dl>
+              <ol class="phase-list" aria-label="Resolved phase order">
+                <li><strong>requirements</strong></li>
+                <li>ux-research</li>
+                <li>wireframe</li>
+                <li>mockup-review</li>
+                <li>accessibility-audit</li>
+                <li>implementation</li>
+                <li>code-review</li>
+                <li>testing</li>
+              </ol>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="s3-title">
+        <h2 class="board-title" id="s3-title">S3 Planning Execute Parity</h2>
+        <div class="surface">
+          <header class="surface-header">
+            <p class="surface-path">
+              ao execute run --requirement-id REQ-053 --start-workflows true --pipeline-id ui-ux-standard --json
+            </p>
+            <div class="chip-row" aria-label="Parity state">
+              <span class="chip success">parity: match</span>
+              <span class="chip config">source: config</span>
+            </div>
+          </header>
+
+          <div class="triple">
+            <article class="card" aria-labelledby="s3-summary-title">
+              <h3 id="s3-summary-title">Execute Summary</h3>
+              <p>
+                Requirement execution materializes tasks and starts workflow with
+                the same phase source and ordering as direct run.
+              </p>
+              <ul class="phase-list compact" aria-label="Execute phase order">
+                <li>requirements</li>
+                <li>ux-research</li>
+                <li>wireframe</li>
+                <li>mockup-review</li>
+                <li>accessibility-audit</li>
+                <li>implementation</li>
+                <li>code-review</li>
+                <li>testing</li>
+              </ul>
+            </article>
+
+            <article class="card" aria-labelledby="s3-run-title">
+              <h3 id="s3-run-title">Direct Run Baseline</h3>
+              <p>
+                Baseline snapshot retained for operator confidence and automation
+                checks.
+              </p>
+              <ul class="phase-list compact" aria-label="Direct run phase order">
+                <li>requirements</li>
+                <li>ux-research</li>
+                <li>wireframe</li>
+                <li>mockup-review</li>
+                <li>accessibility-audit</li>
+                <li>implementation</li>
+                <li>code-review</li>
+                <li>testing</li>
+              </ul>
+            </article>
+
+            <aside class="card" aria-labelledby="s3-proof-title">
+              <h3 id="s3-proof-title">Parity Proof</h3>
+              <dl class="kv-list">
+                <div>
+                  <dt>Source equality</dt>
+                  <dd>config == config</dd>
+                </div>
+                <div>
+                  <dt>Phase count</dt>
+                  <dd>8 == 8</dd>
+                </div>
+                <div>
+                  <dt>Diff</dt>
+                  <dd>none</dd>
+                </div>
+              </dl>
+              <p class="inline-note">
+                Guardrail: any mismatch raises `phase_plan_source_mismatch`.
+              </p>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="s4-title">
+        <h2 class="board-title" id="s4-title">S4 Workflow Inspection</h2>
+        <div class="surface">
+          <header class="surface-header">
+            <p class="surface-path">
+              /workflows/wf_053a9c2b and ao workflow get --id wf_053a9c2b --json
+            </p>
+            <div class="chip-row">
+              <span class="chip config">source evidence: attached</span>
+              <span class="chip">lifecycle: running</span>
+            </div>
+          </header>
+
+          <div class="split">
+            <article class="card" aria-labelledby="s4-timeline-title">
+              <h3 id="s4-timeline-title">Checkpoint Timeline</h3>
+              <ul class="timeline" aria-label="Ordered checkpoints">
+                <li>
+                  <p class="title">requirements started</p>
+                  <p class="meta">checkpoint=requirements.01.start | 2026-02-27 10:14:03 UTC</p>
+                </li>
+                <li>
+                  <p class="title">requirements completed</p>
+                  <p class="meta">checkpoint=requirements.01.done | 2026-02-27 10:21:48 UTC</p>
+                </li>
+                <li>
+                  <p class="title">ux-research active</p>
+                  <p class="meta">checkpoint=ux-research.02.start | 2026-02-27 10:22:01 UTC</p>
+                </li>
+              </ul>
+            </article>
+
+            <aside class="card" aria-labelledby="s4-source-title">
+              <h3 id="s4-source-title">Resolved Plan Metadata</h3>
+              <dl class="kv-list">
+                <div>
+                  <dt>Pipeline</dt>
+                  <dd>ui-ux-standard</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>/repo/.ao/state/workflow-config.v2.json</dd>
+                </div>
+                <div>
+                  <dt>Plan hash</dt>
+                  <dd>sha256:2ea4db67...d91a1f0e</dd>
+                </div>
+              </dl>
+              <div class="status-row">
+                <span class="status-pill active">current: ux-research</span>
+                <span class="status-pill next">next: wireframe</span>
+              </div>
+              <ol class="phase-list compact" aria-label="Upcoming phase order">
+                <li>wireframe</li>
+                <li>mockup-review</li>
+                <li>accessibility-audit</li>
+                <li>implementation</li>
+                <li>code-review</li>
+                <li>testing</li>
+              </ol>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="s5-title">
+        <h2 class="board-title" id="s5-title">S5 Fallback and Invalid Config</h2>
+        <div class="surface">
+          <div class="split">
+            <article class="card" aria-labelledby="s5-fallback-title">
+              <h3 id="s5-fallback-title">Missing Config Compatibility Fallback</h3>
+              <p>
+                No config file present. System starts workflow with hardcoded
+                plan and explicitly labels source.
+              </p>
+              <div class="chip-row" aria-label="Fallback status">
+                <span class="chip fallback">phase source: fallback-hardcoded</span>
+                <span class="chip success">outcome: started</span>
+              </div>
+              <div class="terminal" role="status" aria-live="polite">
+                <pre><span class="warn-line">status: started-with-fallback</span>
+reason: missing workflow config at /repo/.ao/state/workflow-config.v2.json
+pipeline_id: standard
+phase_source: fallback-hardcoded:phase_plan.rs
+
+phases:
+1. requirements
+2. implementation
+3. code-review
+4. testing</pre>
+              </div>
+            </article>
+
+            <article class="card error-card" aria-labelledby="s5-error-title">
+              <h3 id="s5-error-title">Invalid Config Fast Fail</h3>
+              <p>
+                Config file exists but validation fails. No silent fallback
+                occurs; remediation steps are shown.
+              </p>
+              <div class="chip-row" aria-label="Error status">
+                <span class="chip error">phase source: invalid-config</span>
+                <span class="chip error">outcome: failed</span>
+              </div>
+              <pre class="json-envelope" role="alert">{
+  "schema": "ao.cli.v1",
+  "ok": false,
+  "error": {
+    "code": "invalid_input",
+    "message": "invalid workflow config at /repo/.ao/state/workflow-config.v2.json: pipeline 'ui-ux-standard' phase 'wireframex' is missing from phase_catalog",
+    "exit_code": 2
+  }
+}</pre>
+              <ol class="remediation-list">
+                <li>Fix phase id typo in workflow config.</li>
+                <li>Run <code>ao workflow config validate --json</code>.</li>
+                <li>Rerun workflow command.</li>
+              </ol>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="board" aria-labelledby="mobile-title">
+        <h2 class="board-title" id="mobile-title">Mobile 320px Narrow-Terminal Behavior</h2>
+        <div class="surface compact">
+          <p class="surface-path">
+            Render mode: &lt;80 columns, one phase per line, stable numeric order.
+          </p>
+          <article class="phone-frame" aria-label="320px mobile terminal wireframe">
+            <div class="phone-screen">
+              <h3>ao workflow run --pipeline-id ui-ux-standard</h3>
+              <p>Source label remains explicit above wrapped phase list.</p>
+              <pre>status: started
+phase_source: config
+pipeline_id: ui-ux-standard
+
+phases:
+1. requirements
+2. ux-research
+3. wireframe
+4. mockup-review
+5. accessibility-audit
+6. implementation
+7. code-review
+8. testing</pre>
+              <ol class="mobile-phase-list" aria-hidden="true">
+                <li>No horizontal page scroll</li>
+                <li>Copy-safe ASCII output</li>
+                <li>Screen-reader token order preserved</li>
+              </ol>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

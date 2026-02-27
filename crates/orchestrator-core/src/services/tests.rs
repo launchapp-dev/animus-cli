@@ -882,6 +882,126 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
 }
 
 #[tokio::test]
+async fn file_hub_errors_when_requested_pipeline_is_missing_from_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let err = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput {
+            task_id: "TASK-1".to_string(),
+            pipeline_id: Some("missing-pipeline".to_string()),
+        },
+    )
+    .await
+    .expect_err("unknown pipeline should fail when workflow config exists");
+
+    let message = err.to_string();
+    assert!(message.contains("missing-pipeline"));
+    assert!(message.contains("workflow-config.v2.json"));
+}
+
+#[tokio::test]
+async fn planning_execute_starts_workflows_with_config_phase_plan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load config");
+    workflow_config.pipelines.push(crate::PipelineDefinition {
+        id: "planning-custom".to_string(),
+        name: "Planning Custom".to_string(),
+        description: "planning execution pipeline".to_string(),
+        phases: vec![
+            "requirements".to_string(),
+            "testing".to_string(),
+            "implementation".to_string(),
+        ],
+    });
+    crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
+
+    PlanningServiceApi::draft_vision(
+        &hub,
+        VisionDraftInput {
+            project_name: Some("Planning Config Parity".to_string()),
+            problem_statement: "Need config-first planning workflow start".to_string(),
+            target_users: vec!["Engineers".to_string()],
+            goals: vec!["Start workflows from planning execution".to_string()],
+            constraints: vec![],
+            value_proposition: Some("One phase source for run and planning".to_string()),
+            complexity_assessment: None,
+        },
+    )
+    .await
+    .expect("draft vision");
+
+    let now = chrono::Utc::now();
+    let requirement = PlanningServiceApi::upsert_requirement(
+        &hub,
+        RequirementItem {
+            id: String::new(),
+            title: "Use configured planning pipeline".to_string(),
+            description: "Planning execution should honor workflow config pipeline phases."
+                .to_string(),
+            body: None,
+            legacy_id: None,
+            category: None,
+            requirement_type: None,
+            acceptance_criteria: vec![
+                "Workflow starts with configured phase order.".to_string(),
+                "Planning and workflow run resolve the same phase source.".to_string(),
+            ],
+            priority: RequirementPriority::Should,
+            status: RequirementStatus::Draft,
+            source: "manual".to_string(),
+            tags: vec![],
+            links: crate::types::RequirementLinks::default(),
+            comments: vec![],
+            relative_path: None,
+            linked_task_ids: vec![],
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("upsert requirement");
+
+    let execution = PlanningServiceApi::execute_requirements(
+        &hub,
+        RequirementsExecutionInput {
+            requirement_ids: vec![requirement.id.clone()],
+            start_workflows: true,
+            pipeline_id: Some("planning-custom".to_string()),
+            include_wont: false,
+        },
+    )
+    .await
+    .expect("execute requirements");
+    assert!(!execution.workflow_ids_started.is_empty());
+
+    for workflow_id in &execution.workflow_ids_started {
+        let workflow = WorkflowServiceApi::get(&hub, workflow_id)
+            .await
+            .expect("workflow should exist");
+        assert_eq!(
+            workflow.pipeline_id.as_deref(),
+            Some("planning-custom"),
+            "workflow should preserve configured pipeline id"
+        );
+
+        let phase_ids = workflow
+            .phases
+            .iter()
+            .map(|phase| phase.phase_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phase_ids,
+            vec!["requirements", "testing", "implementation"],
+            "planning-started workflows should use configured phase order"
+        );
+    }
+}
+
+#[tokio::test]
 async fn project_service_tracks_active_project_and_rename() {
     let hub = InMemoryServiceHub::new();
     let first = ProjectServiceApi::create(

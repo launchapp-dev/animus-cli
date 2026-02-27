@@ -550,6 +550,7 @@ fn unsatisfied_blocked_dependencies(lock: &CoreState, task: &OrchestratorTask) -
 pub(super) fn execute_requirements_and_record(
     lock: &mut CoreState,
     input: RequirementsExecutionInput,
+    project_root: Option<&std::path::Path>,
     workflow_manager: Option<&WorkflowStateManager>,
     state_machines: Option<&CompiledStateMachines>,
 ) -> Result<RequirementsExecutionResult> {
@@ -788,16 +789,12 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                     STANDARD_PIPELINE_ID.to_string()
                 }
             });
-            let executor = WorkflowLifecycleExecutor::new(phase_plan_for_pipeline_id(Some(
-                pipeline_id.as_str(),
-            )));
+            let phase_plan =
+                crate::resolve_phase_plan_for_pipeline(project_root, Some(pipeline_id.as_str()))?;
             let executor = if let Some(machine_catalog) = state_machines {
-                WorkflowLifecycleExecutor::with_state_machines(
-                    phase_plan_for_pipeline_id(Some(pipeline_id.as_str())),
-                    machine_catalog.clone(),
-                )
+                WorkflowLifecycleExecutor::with_state_machines(phase_plan, machine_catalog.clone())
             } else {
-                executor
+                WorkflowLifecycleExecutor::new(phase_plan)
             };
             let workflow_id = Uuid::new_v4().to_string();
             let workflow = executor.bootstrap(

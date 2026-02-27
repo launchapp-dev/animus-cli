@@ -19,24 +19,6 @@ fn effective_pipeline_id(
     crate::workflow::STANDARD_PIPELINE_ID.to_string()
 }
 
-fn resolve_phase_plan(
-    project_root: Option<&std::path::Path>,
-    pipeline_id: &str,
-) -> Result<Vec<String>> {
-    if let Some(root) = project_root {
-        let workflow_config = crate::load_workflow_config(root)?;
-        let runtime_config = crate::load_agent_runtime_config(root)?;
-        crate::validate_workflow_and_runtime_configs(&workflow_config, &runtime_config)?;
-        if let Some(phases) =
-            crate::resolve_pipeline_phase_plan(&workflow_config, Some(pipeline_id))
-        {
-            return Ok(phases);
-        }
-    }
-
-    Ok(crate::phase_plan_for_pipeline_id(Some(pipeline_id)))
-}
-
 fn load_compiled_state_machines(
     project_root: &std::path::Path,
 ) -> Result<crate::state_machines::CompiledStateMachines> {
@@ -117,7 +99,10 @@ impl WorkflowServiceApi for InMemoryServiceHub {
             let mut lock = self.state.write().await;
             let task = lock.tasks.get(&input.task_id).cloned();
             let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
-            let executor = WorkflowLifecycleExecutor::new(resolve_phase_plan(None, &pipeline_id)?);
+            let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_pipeline(
+                None,
+                Some(pipeline_id.as_str()),
+            )?);
             let workflow = executor.bootstrap(
                 id.clone(),
                 WorkflowRunInput {
@@ -268,7 +253,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let task = self.state.read().await.tasks.get(&input.task_id).cloned();
         let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(Some(self.project_root.as_path()), &pipeline_id)?,
+            crate::resolve_phase_plan_for_pipeline(
+                Some(self.project_root.as_path()),
+                Some(pipeline_id.as_str()),
+            )?,
             state_machines,
         );
         let workflow = executor.bootstrap(
@@ -296,9 +284,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         );
@@ -319,9 +307,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -342,9 +330,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -365,9 +353,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -388,9 +376,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -411,9 +399,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -434,9 +422,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )
@@ -459,9 +447,9 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            resolve_phase_plan(
+            crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
-                workflow.pipeline_id.as_deref().unwrap_or_default(),
+                workflow.pipeline_id.as_deref(),
             )?,
             state_machines,
         )

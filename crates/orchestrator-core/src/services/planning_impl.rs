@@ -113,7 +113,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
         input: RequirementsExecutionInput,
     ) -> Result<RequirementsExecutionResult> {
         let mut lock = self.state.write().await;
-        planning_shared::execute_requirements_and_record(&mut lock, input, None, None)
+        planning_shared::execute_requirements_and_record(&mut lock, input, None, None, None)
     }
 }
 
@@ -319,6 +319,7 @@ impl PlanningServiceApi for FileServiceHub {
                 planning_shared::execute_requirements_and_record(
                     state,
                     input,
+                    Some(self.project_root.as_path()),
                     Some(&manager),
                     Some(&loaded_state_machines.compiled),
                 )

@@ -72,9 +72,9 @@ pub use types::{
     WorkflowStatus,
 };
 pub use workflow::{
-    phase_plan_for_pipeline_id, ResumabilityStatus, ResumeConfig, WorkflowLifecycleExecutor,
-    WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager, STANDARD_PIPELINE_ID,
-    UI_UX_PIPELINE_ID,
+    phase_plan_for_pipeline_id, resolve_phase_plan_for_pipeline, ResumabilityStatus, ResumeConfig,
+    WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
+    STANDARD_PIPELINE_ID, UI_UX_PIPELINE_ID,
 };
 pub use workflow_config::{
     builtin_workflow_config, ensure_workflow_config_file, legacy_workflow_config_paths,
