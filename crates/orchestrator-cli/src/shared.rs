@@ -1,8 +1,10 @@
+mod cli_error;
 mod output;
 mod parsing;
 mod runner;
 mod task_generation;
 
+pub(crate) use cli_error::*;
 pub(crate) use output::*;
 pub(crate) use parsing::*;
 pub(crate) use runner::*;
@@ -227,18 +229,15 @@ mod tests {
 
     #[test]
     fn classify_error_maps_expected_exit_codes() {
-        let invalid = anyhow!("invalid status");
-        let clap_required = anyhow!("error: required arguments were not provided: --id <ID>");
-        let clap_unexpected = anyhow!("error: unexpected argument '--bogus' found");
-        let confirmation = anyhow!("CONFIRMATION_REQUIRED: rerun command with --confirm TASK-1");
-        let unavailable = anyhow!("failed to connect to runner");
-        let not_found = anyhow!("task not found");
-        let conflict = anyhow!("architecture entity already exists");
+        let invalid = invalid_input_error("invalid status");
+        let confirmation =
+            invalid_input_error("CONFIRMATION_REQUIRED: rerun command with --confirm TASK-1");
+        let unavailable = unavailable_error("failed to connect to runner");
+        let not_found = not_found_error("task not found");
+        let conflict = conflict_error("architecture entity already exists");
         let internal = anyhow!("runner returned status payload while waiting for control response");
 
         assert_eq!(classify_exit_code(&invalid), 2);
-        assert_eq!(classify_exit_code(&clap_required), 2);
-        assert_eq!(classify_exit_code(&clap_unexpected), 2);
         assert_eq!(classify_exit_code(&confirmation), 2);
         assert_eq!(classify_exit_code(&not_found), 3);
         assert_eq!(classify_exit_code(&conflict), 4);

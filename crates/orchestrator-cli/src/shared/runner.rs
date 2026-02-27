@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{
     AgentControlAction, AgentRunEvent, IpcAuthRequest, IpcAuthResult, ModelStatus,
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 
-use crate::{AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
+use crate::{unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
 
 #[cfg(unix)]
 const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;
@@ -270,34 +270,32 @@ pub(crate) async fn connect_runner(config_dir: &Path) -> Result<tokio::net::Unix
         Ok(Ok(mut stream)) => {
             authenticate_runner_stream(&mut stream, config_dir)
                 .await
-                .with_context(|| {
-                    format!(
-                        "failed to authenticate runner connection at {}",
+                .map_err(|error| {
+                    unavailable_error(format!(
+                        "failed to authenticate runner connection at {}: {error}",
                         socket_path.display()
-                    )
+                    ))
                 })?;
             Ok(stream)
         }
         Ok(Err(error)) => {
-            let stale_hint = if socket_path.exists() {
-                " socket file exists and may be stale"
+            let base_message = format!(
+                "failed to connect to runner socket at {} (timeout={}s)",
+                socket_path.display(),
+                connect_timeout_secs
+            );
+            let hint = if socket_path.exists() {
+                format!("{base_message}. socket file exists and may be stale")
             } else {
-                ""
+                base_message
             };
-            Err(error).with_context(|| {
-                format!(
-                    "failed to connect to runner socket at {} (timeout={}s).{}",
-                    socket_path.display(),
-                    connect_timeout_secs,
-                    stale_hint
-                )
-            })
+            Err(unavailable_error(format!("{hint}: {error}")))
         }
-        Err(_) => Err(anyhow!(
+        Err(_) => Err(unavailable_error(format!(
             "timed out connecting to runner socket at {} after {}s; if no runner is active, remove stale socket and restart runner",
             socket_path.display(),
             connect_timeout_secs
-        )),
+        ))),
     }
 }
 
@@ -305,10 +303,18 @@ pub(crate) async fn connect_runner(config_dir: &Path) -> Result<tokio::net::Unix
 pub(crate) async fn connect_runner(config_dir: &Path) -> Result<tokio::net::TcpStream> {
     let mut stream = tokio::net::TcpStream::connect("127.0.0.1:9001")
         .await
-        .context("failed to connect to runner at 127.0.0.1:9001")?;
+        .map_err(|error| {
+            unavailable_error(format!(
+                "failed to connect to runner at 127.0.0.1:9001: {error}"
+            ))
+        })?;
     authenticate_runner_stream(&mut stream, config_dir)
         .await
-        .context("failed to authenticate runner connection at 127.0.0.1:9001")?;
+        .map_err(|error| {
+            unavailable_error(format!(
+                "failed to authenticate runner connection at 127.0.0.1:9001: {error}"
+            ))
+        })?;
     Ok(stream)
 }
 
@@ -317,18 +323,25 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let token = protocol::Config::load_from_dir(config_dir)
-        .with_context(|| {
-            format!(
-                "failed to load runner config for authentication from {}",
+        .map_err(|error| {
+            unavailable_error(format!(
+                "failed to load runner config for authentication from {}: {error}",
                 config_dir.display()
-            )
+            ))
         })?
         .get_token()
-        .context("agent runner token unavailable; set AGENT_RUNNER_TOKEN or configure agent_runner_token")?;
+        .map_err(|error| {
+            format!(
+                "agent runner token unavailable; set AGENT_RUNNER_TOKEN or configure agent_runner_token: {error}"
+            )
+        })
+        .map_err(unavailable_error)?;
 
     write_json_line(stream, &IpcAuthRequest::new(token))
         .await
-        .context("failed to send runner auth payload")?;
+        .map_err(|error| {
+            unavailable_error(format!("failed to send runner auth payload: {error}"))
+        })?;
 
     let mut line = String::new();
     let read_len = tokio::time::timeout(Duration::from_secs(2), async {
@@ -336,15 +349,18 @@ where
         reader.read_line(&mut line).await
     })
     .await
-    .context("timed out waiting for runner auth response")?
-    .context("failed to read runner auth response")?;
+    .map_err(|_| unavailable_error("timed out waiting for runner auth response"))?
+    .map_err(|error| unavailable_error(format!("failed to read runner auth response: {error}")))?;
 
     if read_len == 0 {
-        bail!("runner closed connection before auth completed");
+        return Err(unavailable_error(
+            "runner closed connection before auth completed",
+        ));
     }
 
-    let response: IpcAuthResult =
-        serde_json::from_str(line.trim()).context("received malformed runner auth response")?;
+    let response: IpcAuthResult = serde_json::from_str(line.trim()).map_err(|error| {
+        unavailable_error(format!("received malformed runner auth response: {error}"))
+    })?;
     if response.ok {
         return Ok(());
     }
@@ -353,7 +369,9 @@ where
     let message = response
         .message
         .unwrap_or_else(|| "unauthorized".to_string());
-    bail!("runner authentication failed ({failure_code}): {message}");
+    Err(unavailable_error(format!(
+        "runner authentication failed ({failure_code}): {message}"
+    )))
 }
 
 pub(crate) async fn write_json_line<W: AsyncWrite + Unpin, T: serde::Serialize>(

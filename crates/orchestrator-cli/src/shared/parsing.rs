@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use orchestrator_core::{DependencyType, Priority, ProjectType, TaskStatus, TaskType};
 use protocol::{AgentRunEvent, RunId};
 use serde_json::Value;
 
-use crate::{ensure_safe_run_id, event_matches_run, run_dir};
+use crate::{ensure_safe_run_id, event_matches_run, invalid_input_error, not_found_error, run_dir};
 
 const TASK_STATUS_EXPECTED: &str =
     "backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled";
@@ -18,9 +18,9 @@ pub(crate) const COMMAND_HELP_HINT: &str = "run the same command with --help";
 fn invalid_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
     let value = value.trim();
     let normalized_value = if value.is_empty() { "<empty>" } else { value };
-    anyhow!(
+    invalid_input_error(format!(
         "invalid {domain} '{normalized_value}'; expected one of: {expected}; {COMMAND_HELP_HINT}"
-    )
+    ))
 }
 
 pub(crate) fn parse_input_json_or<T, F>(input_json: Option<String>, fallback: F) -> Result<T>
@@ -29,13 +29,11 @@ where
     F: FnOnce() -> Result<T>,
 {
     match input_json {
-        Some(raw) => {
-            serde_json::from_str::<T>(&raw).with_context(|| {
-                format!(
-                    "failed to parse --input-json payload as JSON; {COMMAND_HELP_HINT} for the expected shape"
-                )
-            })
-        }
+        Some(raw) => serde_json::from_str::<T>(&raw).map_err(|error| {
+            invalid_input_error(format!(
+                "failed to parse --input-json payload as JSON: {error}; {COMMAND_HELP_HINT} for the expected shape"
+            ))
+        }),
         None => fallback(),
     }
 }
@@ -48,17 +46,21 @@ pub(crate) fn ensure_destructive_confirmation(
 ) -> Result<()> {
     let expected = expected.trim();
     if expected.is_empty() {
-        anyhow::bail!("invalid confirmation token for {command_path}");
+        return Err(invalid_input_error(format!(
+            "invalid confirmation token for {command_path}"
+        )));
     }
 
     let command_path = command_path.trim();
     if command_path.is_empty() {
-        anyhow::bail!("invalid confirmation command path");
+        return Err(invalid_input_error("invalid confirmation command path"));
     }
 
     let id_flag = id_flag.trim();
     if id_flag.is_empty() || !id_flag.starts_with("--") {
-        anyhow::bail!("invalid confirmation id flag for {command_path}");
+        return Err(invalid_input_error(format!(
+            "invalid confirmation id flag for {command_path}"
+        )));
     }
 
     let provided = confirm.map(str::trim).filter(|value| !value.is_empty());
@@ -66,9 +68,9 @@ pub(crate) fn ensure_destructive_confirmation(
         return Ok(());
     }
 
-    anyhow::bail!(
+    Err(invalid_input_error(format!(
         "CONFIRMATION_REQUIRED: rerun 'ao {command_path} {id_flag} {expected} --confirm {expected}'; use --dry-run to preview changes"
-    );
+    )))
 }
 
 pub(crate) fn read_agent_status(
@@ -80,11 +82,11 @@ pub(crate) fn read_agent_status(
     let run_id = RunId(run_id.to_string());
     let events_path = run_dir(project_root, &run_id, jsonl_dir_override).join("events.jsonl");
     if !events_path.exists() {
-        return Err(anyhow!(
+        return Err(not_found_error(format!(
             "no event log found for run {} at {}",
             run_id.0,
             events_path.display()
-        ));
+        )));
     }
 
     let mut event_count = 0usize;

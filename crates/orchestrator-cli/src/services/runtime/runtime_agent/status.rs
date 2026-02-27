@@ -10,9 +10,9 @@ use protocol::{
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
-    default_model_status_targets, print_model_status, print_value, read_agent_status,
-    write_json_line, AgentControlArgs, AgentModelStatusArgs, AgentRunnerStatusArgs,
-    AgentStatusArgs,
+    default_model_status_targets, internal_error, not_found_error, print_model_status, print_value,
+    read_agent_status, write_json_line, AgentControlArgs, AgentModelStatusArgs,
+    AgentRunnerStatusArgs, AgentStatusArgs,
 };
 
 use super::connection::connect_runner_for_agent_command;
@@ -58,8 +58,8 @@ pub(super) async fn handle_agent_control(
         }
 
         if serde_json::from_str::<RunnerStatusResponse>(line).is_ok() {
-            return Err(anyhow!(
-                "runner returned status payload while waiting for control response; ensure agent-runner is up to date"
+            return Err(internal_error(
+                "runner returned status payload while waiting for control response; ensure agent-runner is up to date",
             ));
         }
     }
@@ -143,7 +143,7 @@ pub(super) async fn handle_agent_status(
     match query_agent_status_from_runner(&hub, project_root, &args.run_id, args.start_runner).await
     {
         Ok(AgentStatusLookup::Found(status)) => print_value(status, json),
-        Ok(AgentStatusLookup::NotFound { message }) => Err(anyhow!(message)),
+        Ok(AgentStatusLookup::NotFound { message }) => Err(not_found_error(message)),
         Err(_) => {
             let status = read_agent_status(project_root, &args.run_id, args.jsonl_dir.as_deref())?;
             print_value(status, json)

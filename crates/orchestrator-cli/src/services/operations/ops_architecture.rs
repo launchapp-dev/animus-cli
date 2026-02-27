@@ -9,9 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    parse_input_json_or, print_ok, print_value, ArchitectureCommand, ArchitectureEdgeCommand,
-    ArchitectureEdgeCreateArgs, ArchitectureEntityCommand, ArchitectureEntityCreateArgs,
-    ArchitectureEntityUpdateArgs, IdArgs,
+    conflict_error, invalid_input_error, not_found_error, parse_input_json_or, print_ok,
+    print_value, ArchitectureCommand, ArchitectureEdgeCommand, ArchitectureEdgeCreateArgs,
+    ArchitectureEntityCommand, ArchitectureEntityCreateArgs, ArchitectureEntityUpdateArgs, IdArgs,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -264,15 +264,18 @@ fn create_entity(
     })?;
 
     if input.id.trim().is_empty() {
-        return Err(anyhow!("architecture entity id is required"));
+        return Err(invalid_input_error("architecture entity id is required"));
     }
     if input.name.trim().is_empty() {
-        return Err(anyhow!("architecture entity name is required"));
+        return Err(invalid_input_error("architecture entity name is required"));
     }
 
     let mut graph = load_architecture_graph(project_root)?;
     if graph.entities.iter().any(|entity| entity.id == input.id) {
-        return Err(anyhow!("architecture entity already exists: {}", input.id));
+        return Err(conflict_error(format!(
+            "architecture entity already exists: {}",
+            input.id
+        )));
     }
 
     let entity = ArchitectureEntity {
@@ -321,11 +324,13 @@ fn update_entity(
         .entities
         .iter_mut()
         .find(|entity| entity.id == args.id)
-        .ok_or_else(|| anyhow!("architecture entity not found: {}", args.id))?;
+        .ok_or_else(|| not_found_error(format!("architecture entity not found: {}", args.id)))?;
 
     if let Some(name) = input.name {
         if name.trim().is_empty() {
-            return Err(anyhow!("architecture entity name cannot be empty"));
+            return Err(invalid_input_error(
+                "architecture entity name cannot be empty",
+            ));
         }
         entity.name = name;
     }
@@ -392,7 +397,10 @@ fn delete_entity(project_root: &str, args: IdArgs) -> Result<()> {
     let before = graph.entities.len();
     graph.entities.retain(|entity| entity.id != args.id);
     if graph.entities.len() == before {
-        return Err(anyhow!("architecture entity not found: {}", args.id));
+        return Err(not_found_error(format!(
+            "architecture entity not found: {}",
+            args.id
+        )));
     }
 
     save_architecture_graph(project_root, &graph)
@@ -411,31 +419,38 @@ fn create_edge(project_root: &str, args: ArchitectureEdgeCreateArgs) -> Result<A
     })?;
 
     if input.from.trim().is_empty() || input.to.trim().is_empty() {
-        return Err(anyhow!("architecture edge endpoints are required"));
+        return Err(invalid_input_error(
+            "architecture edge endpoints are required",
+        ));
     }
     if input.relation.trim().is_empty() {
-        return Err(anyhow!("architecture edge relation is required"));
+        return Err(invalid_input_error(
+            "architecture edge relation is required",
+        ));
     }
 
     let mut graph = load_architecture_graph(project_root)?;
     if !graph.has_entity(&input.from) {
-        return Err(anyhow!(
+        return Err(not_found_error(format!(
             "architecture edge references unknown from entity: {}",
             input.from
-        ));
+        )));
     }
     if !graph.has_entity(&input.to) {
-        return Err(anyhow!(
+        return Err(not_found_error(format!(
             "architecture edge references unknown to entity: {}",
             input.to
-        ));
+        )));
     }
 
     let edge_id = input
         .id
         .unwrap_or_else(|| next_edge_id(&graph, &input.from, &input.relation, &input.to));
     if graph.edges.iter().any(|edge| edge.id == edge_id) {
-        return Err(anyhow!("architecture edge already exists: {}", edge_id));
+        return Err(conflict_error(format!(
+            "architecture edge already exists: {}",
+            edge_id
+        )));
     }
 
     let edge = ArchitectureEdge {
@@ -456,7 +471,10 @@ fn delete_edge(project_root: &str, args: IdArgs) -> Result<()> {
     let before = graph.edges.len();
     graph.edges.retain(|edge| edge.id != args.id);
     if graph.edges.len() == before {
-        return Err(anyhow!("architecture edge not found: {}", args.id));
+        return Err(not_found_error(format!(
+            "architecture edge not found: {}",
+            args.id
+        )));
     }
     save_architecture_graph(project_root, &graph)
 }
@@ -466,7 +484,7 @@ fn suggest_paths_for_task(project_root: &str, task_id: &str) -> Result<Value> {
     let tasks = extract_tasks(&state);
     let task = tasks
         .get(task_id)
-        .ok_or_else(|| anyhow!("task not found: {task_id}"))?;
+        .ok_or_else(|| not_found_error(format!("task not found: {task_id}")))?;
     let graph = load_architecture_graph(project_root)?;
 
     let mut resolved_entities = Vec::new();
@@ -524,7 +542,9 @@ pub(crate) async fn handle_architecture(
                     .entities
                     .into_iter()
                     .find(|entity| entity.id == args.id)
-                    .ok_or_else(|| anyhow!("architecture entity not found: {}", args.id))?;
+                    .ok_or_else(|| {
+                        not_found_error(format!("architecture entity not found: {}", args.id))
+                    })?;
                 print_value(entity, json)
             }
             ArchitectureEntityCommand::Create(args) => {
