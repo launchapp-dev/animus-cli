@@ -73,7 +73,10 @@ pub fn resolve_phase_plan_for_pipeline(
     };
 
     let workflow_config_path = crate::workflow_config_path(root);
-    if !workflow_config_path.exists() {
+    let has_legacy_workflow_config = crate::legacy_workflow_config_paths(root)
+        .iter()
+        .any(|candidate| candidate.exists());
+    if !workflow_config_path.exists() && !has_legacy_workflow_config {
         return Ok(phase_plan_for_pipeline_id(
             normalized_pipeline_id.as_deref(),
         ));
@@ -152,6 +155,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_phase_plan_errors_when_legacy_workflow_config_exists_without_v2() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let legacy_path = crate::legacy_workflow_config_paths(temp.path())[0].clone();
+        let parent = legacy_path.parent().expect("legacy parent directory");
+        std::fs::create_dir_all(parent).expect("create legacy directory");
+        std::fs::write(legacy_path, "{}").expect("write legacy config placeholder");
+
+        let err = resolve_phase_plan_for_pipeline(Some(temp.path()), Some("standard"))
+            .expect_err("legacy config should return migration guidance");
+        let message = err.to_string();
+        assert!(message.contains("workflow config v2 is required"));
+        assert!(message.contains("migrate-v2"));
+    }
+
+    #[test]
     fn resolve_phase_plan_errors_when_pipeline_is_missing_from_config() {
         let temp = tempfile::tempdir().expect("tempdir");
 
@@ -165,6 +183,54 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("pipeline 'does-not-exist' not found"));
         assert!(message.contains(crate::WORKFLOW_CONFIG_FILE_NAME));
+    }
+
+    #[test]
+    fn resolve_phase_plan_uses_config_phases_for_standard_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow_config = crate::builtin_workflow_config();
+
+        let standard_pipeline = workflow_config
+            .pipelines
+            .iter_mut()
+            .find(|pipeline| pipeline.id == STANDARD_PIPELINE_ID)
+            .expect("standard pipeline should exist");
+        standard_pipeline.phases = vec![
+            "requirements".to_string(),
+            "testing".to_string(),
+            "implementation".to_string(),
+        ];
+
+        crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let phases = resolve_phase_plan_for_pipeline(Some(temp.path()), Some(STANDARD_PIPELINE_ID))
+            .expect("resolver should use configured standard pipeline phases");
+        assert_eq!(
+            phases,
+            vec![
+                "requirements".to_string(),
+                "testing".to_string(),
+                "implementation".to_string(),
+            ]
+        );
+        assert_ne!(phases, standard_phase_plan());
+    }
+
+    #[test]
+    fn resolve_phase_plan_uses_config_default_pipeline_when_none_is_requested() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow_config = crate::builtin_workflow_config();
+        workflow_config.default_pipeline_id = UI_UX_PIPELINE_ID.to_string();
+
+        crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let phases = resolve_phase_plan_for_pipeline(Some(temp.path()), None)
+            .expect("resolver should use configured default pipeline");
+        assert_eq!(phases, ui_ux_phase_plan());
     }
 
     #[test]
