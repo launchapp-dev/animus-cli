@@ -149,6 +149,35 @@ fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     assert_eq!(before, after, "hub startup should not rewrite core-state");
 }
 
+#[test]
+fn file_hub_new_bootstraps_ao_without_initializing_git_repository() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _hub = file_hub(temp.path()).expect("create hub");
+
+    assert!(temp.path().join(".ao").join("core-state.json").exists());
+    assert!(!temp.path().join(".git").exists());
+
+    let git_repo_status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(temp.path())
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("git should be available");
+    assert!(!git_repo_status.success());
+
+    let head_status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(temp.path())
+        .args(["rev-parse", "--verify", "HEAD"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("git should be available");
+    assert!(!head_status.success());
+}
+
 #[tokio::test]
 async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -188,11 +217,24 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
         .join("state")
         .join("agent-runtime-config.v2.json")
         .exists());
+    assert!(!project_path.join(".git").exists());
+}
+
+#[test]
+fn file_hub_explicit_git_bootstrap_initializes_repository_and_head() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project_path = temp.path().join("explicit-git-bootstrap");
+
+    FileServiceHub::bootstrap_project_git_repository(&project_path)
+        .expect("bootstrap git repository");
+    assert!(project_path.join(".git").exists());
 
     let git_repo_status = std::process::Command::new("git")
         .arg("-C")
         .arg(&project_path)
         .args(["rev-parse", "--is-inside-work-tree"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .expect("git should be available");
     assert!(git_repo_status.success());
@@ -201,6 +243,8 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
         .arg("-C")
         .arg(&project_path)
         .args(["rev-parse", "--verify", "HEAD"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .expect("git should resolve HEAD");
     assert!(head_status.success());
