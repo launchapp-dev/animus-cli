@@ -611,7 +611,8 @@ fn e2e_requirements_backfill_category_and_type_for_req_007_through_req_024() -> 
             "{id} should start with category unset"
         );
         assert!(
-            requirement.get("type").is_none() || requirement.get("type").is_some_and(Value::is_null),
+            requirement.get("type").is_none()
+                || requirement.get("type").is_some_and(Value::is_null),
             "{id} should start with type unset"
         );
     }
