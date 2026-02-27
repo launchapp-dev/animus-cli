@@ -255,6 +255,7 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
     let nice_to_have_task_ids = normalized_task_id_set(&options.nice_to_have_task_ids);
     validate_override_task_ids(&task_ids, &essential_task_ids, "essential_task_ids")?;
     validate_override_task_ids(&task_ids, &nice_to_have_task_ids, "nice_to_have_task_ids")?;
+    validate_conflicting_override_task_ids(&essential_task_ids, &nice_to_have_task_ids)?;
 
     let mut target_priorities: HashMap<String, Priority> = HashMap::new();
     for task in tasks
@@ -389,6 +390,26 @@ fn validate_override_task_ids(
     Err(anyhow!(
         "unknown task ids provided in {field_name}: {}",
         unknown_ids.join(", ")
+    ))
+}
+
+fn validate_conflicting_override_task_ids(
+    essential_task_ids: &HashSet<String>,
+    nice_to_have_task_ids: &HashSet<String>,
+) -> Result<()> {
+    let mut overlapping_ids: Vec<&str> = essential_task_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|task_id| nice_to_have_task_ids.contains(*task_id))
+        .collect();
+    overlapping_ids.sort_unstable();
+    if overlapping_ids.is_empty() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "conflicting task ids provided in overrides; same id cannot be both essential and nice-to-have: {}",
+        overlapping_ids.join(", ")
     ))
 }
 

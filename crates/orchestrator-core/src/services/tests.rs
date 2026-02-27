@@ -1378,6 +1378,43 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
 }
 
 #[tokio::test]
+async fn task_priority_rebalance_rejects_conflicting_override_task_ids() {
+    let hub = InMemoryServiceHub::new();
+    let task = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Conflicting override".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Medium),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create task");
+    TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Ready)
+        .await
+        .expect("set status");
+
+    let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
+    let error = plan_task_priority_rebalance(
+        &tasks,
+        TaskPriorityRebalanceOptions {
+            high_budget_percent: 20,
+            essential_task_ids: vec![task.id.clone()],
+            nice_to_have_task_ids: vec![task.id.clone()],
+        },
+    )
+    .expect_err("conflicting overrides should fail");
+    let message = error.to_string();
+    assert!(message.contains("conflicting task ids provided in overrides"));
+    assert!(message.contains(task.id.as_str()));
+}
+
+#[tokio::test]
 async fn task_service_rejects_unknown_architecture_entities() {
     let hub = InMemoryServiceHub::new();
     let error = TaskServiceApi::create(

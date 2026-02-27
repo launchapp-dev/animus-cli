@@ -596,6 +596,43 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
 }
 
 #[test]
+fn e2e_task_control_rebalance_priority_rejects_conflicting_overrides() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let created = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Conflicting override",
+        "--description",
+        "Should fail validation",
+    ])?;
+    let task_id = created
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("task create should return data.id")?
+        .to_string();
+    harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "ready"])?;
+
+    let payload = harness.run_json_err(&[
+        "task-control",
+        "rebalance-priority",
+        "--essential-task-id",
+        &task_id,
+        "--nice-to-have-task-id",
+        &task_id,
+    ])?;
+    let message = payload
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(message.contains("conflicting task ids provided in overrides"));
+    assert!(message.contains(task_id.as_str()));
+
+    Ok(())
+}
+
+#[test]
 fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() -> Result<()> {
     let harness = CliHarness::new()?;
 
