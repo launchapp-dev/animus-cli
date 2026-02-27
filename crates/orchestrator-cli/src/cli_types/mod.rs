@@ -185,6 +185,54 @@ mod tests {
     }
 
     #[test]
+    fn task_control_rebalance_priority_parses_apply_and_overrides() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "task-control",
+            "rebalance-priority",
+            "--high-budget-percent",
+            "15",
+            "--essential-task-id",
+            "TASK-001",
+            "--nice-to-have-task-id",
+            "TASK-009",
+            "--apply",
+            "--confirm",
+            "apply",
+        ])
+        .expect("task-control rebalance-priority should parse");
+
+        match cli.command {
+            Command::TaskControl {
+                command: TaskControlCommand::RebalancePriority(args),
+            } => {
+                assert_eq!(args.high_budget_percent, 15);
+                assert_eq!(args.essential_task_id, vec!["TASK-001".to_string()]);
+                assert_eq!(args.nice_to_have_task_id, vec!["TASK-009".to_string()]);
+                assert!(args.apply);
+                assert_eq!(args.confirm.as_deref(), Some("apply"));
+            }
+            _ => panic!("expected task-control rebalance-priority command"),
+        }
+    }
+
+    #[test]
+    fn task_control_rebalance_priority_rejects_budget_above_100() {
+        let error = Cli::try_parse_from([
+            "ao",
+            "task-control",
+            "rebalance-priority",
+            "--high-budget-percent",
+            "101",
+        ])
+        .expect_err("budget above 100 should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--high-budget-percent"));
+        assert!(message.contains("between 0 and 100"));
+    }
+
+    #[test]
     fn parses_workflow_phase_approve_from_workflow_module() {
         let cli = Cli::try_parse_from([
             "ao",

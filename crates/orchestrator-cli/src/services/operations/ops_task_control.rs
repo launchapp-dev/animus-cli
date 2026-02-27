@@ -1,10 +1,18 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use orchestrator_core::{services::ServiceHub, TaskStatus};
+use orchestrator_core::{
+    plan_task_priority_rebalance, services::ServiceHub, TaskPriorityRebalanceOptions, TaskStatus,
+};
 
-use crate::{ensure_destructive_confirmation, parse_priority_opt, print_value, TaskControlCommand};
+use crate::{
+    ensure_destructive_confirmation, invalid_input_error, parse_priority_opt, print_value,
+    TaskControlCommand,
+};
+
+const PRIORITY_REBALANCE_OPERATION: &str = "task-control.rebalance-priority";
+const PRIORITY_REBALANCE_CONFIRM_TOKEN: &str = "apply";
 
 pub(crate) async fn handle_task_control(
     command: TaskControlCommand,
@@ -164,5 +172,85 @@ pub(crate) async fn handle_task_control(
                 json,
             )
         }
+        TaskControlCommand::RebalancePriority(args) => {
+            let all_tasks = tasks.list().await?;
+            let plan = plan_task_priority_rebalance(
+                &all_tasks,
+                TaskPriorityRebalanceOptions {
+                    high_budget_percent: args.high_budget_percent,
+                    essential_task_ids: args.essential_task_id,
+                    nice_to_have_task_ids: args.nice_to_have_task_id,
+                },
+            )?;
+
+            if !args.apply {
+                return print_value(
+                    serde_json::json!({
+                        "operation": PRIORITY_REBALANCE_OPERATION,
+                        "target": {
+                            "task_count": all_tasks.len(),
+                        },
+                        "action": PRIORITY_REBALANCE_OPERATION,
+                        "dry_run": true,
+                        "destructive": true,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "reserve critical for blocked active tasks",
+                            "enforce high-priority budget for active tasks",
+                            "rebalance remaining tasks to medium/low",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao task-control rebalance-priority --apply --confirm {}' to apply",
+                            PRIORITY_REBALANCE_CONFIRM_TOKEN
+                        ),
+                        "plan": plan,
+                    }),
+                    json,
+                );
+            }
+
+            ensure_priority_rebalance_confirmation(args.confirm.as_deref())?;
+
+            let mut tasks_by_id: HashMap<String, orchestrator_core::OrchestratorTask> = all_tasks
+                .into_iter()
+                .map(|task| (task.id.clone(), task))
+                .collect();
+            for change in &plan.changes {
+                if let Some(mut task) = tasks_by_id.remove(change.task_id.as_str()) {
+                    task.priority = change.to;
+                    task.metadata.updated_by = "ao-cli".to_string();
+                    tasks.replace(task).await?;
+                }
+            }
+
+            let changed_task_ids: Vec<String> = plan
+                .changes
+                .iter()
+                .map(|change| change.task_id.clone())
+                .collect();
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "operation": PRIORITY_REBALANCE_OPERATION,
+                    "dry_run": false,
+                    "applied": true,
+                    "changed_count": changed_task_ids.len(),
+                    "changed_task_ids": changed_task_ids,
+                    "plan": plan,
+                }),
+                json,
+            )
+        }
     }
+}
+
+fn ensure_priority_rebalance_confirmation(confirm: Option<&str>) -> Result<()> {
+    if confirm.map(str::trim) == Some(PRIORITY_REBALANCE_CONFIRM_TOKEN) {
+        return Ok(());
+    }
+
+    Err(invalid_input_error(format!(
+        "CONFIRMATION_REQUIRED: rerun 'ao task-control rebalance-priority --apply --confirm {token}'; run without --apply to preview changes",
+        token = PRIORITY_REBALANCE_CONFIRM_TOKEN
+    )))
 }

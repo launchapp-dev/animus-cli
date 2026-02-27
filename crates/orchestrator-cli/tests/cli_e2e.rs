@@ -425,6 +425,177 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
 }
 
 #[test]
+fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let blocked = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Blocked candidate",
+        "--description",
+        "Should become critical",
+        "--priority",
+        "high",
+    ])?;
+    let blocked_id = blocked
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("blocked task should return id")?
+        .to_string();
+    harness.run_json_ok(&["task", "status", "--id", &blocked_id, "--status", "blocked"])?;
+
+    let early = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Early in progress",
+        "--description",
+        "Should become high from medium",
+        "--priority",
+        "medium",
+    ])?;
+    let early_id = early
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("early task should return id")?
+        .to_string();
+    harness.run_json_ok(&[
+        "task",
+        "status",
+        "--id",
+        &early_id,
+        "--status",
+        "in-progress",
+    ])?;
+    harness.run_json_ok(&[
+        "task-control",
+        "set-deadline",
+        "--task-id",
+        &early_id,
+        "--deadline",
+        "2026-03-01T09:00:00Z",
+    ])?;
+
+    let late = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Late in progress",
+        "--description",
+        "Should be demoted to medium",
+        "--priority",
+        "high",
+    ])?;
+    let late_id = late
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("late task should return id")?
+        .to_string();
+    harness.run_json_ok(&[
+        "task",
+        "status",
+        "--id",
+        &late_id,
+        "--status",
+        "in-progress",
+    ])?;
+    harness.run_json_ok(&[
+        "task-control",
+        "set-deadline",
+        "--task-id",
+        &late_id,
+        "--deadline",
+        "2026-03-10T09:00:00Z",
+    ])?;
+
+    let dry_run = harness.run_json_ok(&[
+        "task-control",
+        "rebalance-priority",
+        "--high-budget-percent",
+        "34",
+    ])?;
+    assert_eq!(
+        dry_run.pointer("/data/dry_run").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        dry_run.pointer("/data/operation").and_then(Value::as_str),
+        Some("task-control.rebalance-priority")
+    );
+    assert_eq!(
+        dry_run
+            .pointer("/data/plan/high_budget_percent")
+            .and_then(Value::as_u64),
+        Some(34)
+    );
+    assert_eq!(
+        dry_run
+            .pointer("/data/plan/after/active_by_priority/high")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let confirmation_error = harness.run_json_err(&[
+        "task-control",
+        "rebalance-priority",
+        "--high-budget-percent",
+        "34",
+        "--apply",
+    ])?;
+    let confirmation_message = confirmation_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        confirmation_message.contains("CONFIRMATION_REQUIRED"),
+        "apply mode should require confirmation"
+    );
+
+    let applied = harness.run_json_ok(&[
+        "task-control",
+        "rebalance-priority",
+        "--high-budget-percent",
+        "34",
+        "--apply",
+        "--confirm",
+        "apply",
+    ])?;
+    assert_eq!(
+        applied.pointer("/data/success").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        applied.pointer("/data/dry_run").and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let blocked_after = harness.run_json_ok(&["task", "get", "--id", &blocked_id])?;
+    assert_eq!(
+        blocked_after
+            .pointer("/data/priority")
+            .and_then(Value::as_str),
+        Some("critical")
+    );
+
+    let early_after = harness.run_json_ok(&["task", "get", "--id", &early_id])?;
+    assert_eq!(
+        early_after
+            .pointer("/data/priority")
+            .and_then(Value::as_str),
+        Some("high")
+    );
+
+    let late_after = harness.run_json_ok(&["task", "get", "--id", &late_id])?;
+    assert_eq!(
+        late_after.pointer("/data/priority").and_then(Value::as_str),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() -> Result<()> {
     let harness = CliHarness::new()?;
 

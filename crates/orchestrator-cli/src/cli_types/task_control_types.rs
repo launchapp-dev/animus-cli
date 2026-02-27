@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::{TaskIdArgs, TASK_PRIORITY_HELP};
+use super::{parse_percentage_u8, TaskIdArgs, TASK_PRIORITY_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum TaskControlCommand {
@@ -14,6 +14,8 @@ pub(crate) enum TaskControlCommand {
     SetPriority(TaskControlPriorityArgs),
     /// Set or clear task deadline.
     SetDeadline(TaskControlDeadlineArgs),
+    /// Rebalance task priorities using a high-priority budget policy.
+    RebalancePriority(TaskControlRebalancePriorityArgs),
 }
 
 #[derive(Debug, Args)]
@@ -53,4 +55,40 @@ pub(crate) struct TaskControlDeadlineArgs {
         help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z."
     )]
     pub(crate) deadline: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskControlRebalancePriorityArgs {
+    #[arg(
+        long,
+        value_name = "PERCENT",
+        default_value_t = 20,
+        value_parser = parse_percentage_u8,
+        help = "Maximum percentage of active tasks allowed at high priority (0-100)."
+    )]
+    pub(crate) high_budget_percent: u8,
+    #[arg(
+        long = "essential-task-id",
+        value_name = "TASK_ID",
+        help = "Task ids to prioritize first when selecting high-priority tasks. Repeat to add multiple ids."
+    )]
+    pub(crate) essential_task_id: Vec<String>,
+    #[arg(
+        long = "nice-to-have-task-id",
+        value_name = "TASK_ID",
+        help = "Task ids to force low priority unless promoted to critical by blocked status. Repeat to add multiple ids."
+    )]
+    pub(crate) nice_to_have_task_id: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Apply planned priority changes. Without this flag, command runs in dry-run mode."
+    )]
+    pub(crate) apply: bool,
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        help = "Confirmation token required with --apply. Use 'apply'."
+    )]
+    pub(crate) confirm: Option<String>,
 }

@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
-use orchestrator_core::{services::ServiceHub, TaskCreateInput, TaskFilter, TaskUpdateInput};
+use orchestrator_core::{
+    evaluate_task_priority_policy, services::ServiceHub, TaskCreateInput, TaskFilter,
+    TaskPriorityPolicyReport, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+};
 use serde::Serialize;
 
 use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
@@ -16,6 +19,7 @@ struct TaskStatsOutput {
     #[serde(flatten)]
     stats: orchestrator_core::TaskStatistics,
     stale_in_progress: StaleInProgressSummary,
+    priority_policy: TaskPriorityPolicyReport,
 }
 
 pub(crate) async fn handle_task(
@@ -64,16 +68,17 @@ pub(crate) async fn handle_task(
         TaskCommand::Prioritized => print_value(tasks.list_prioritized().await?, json),
         TaskCommand::Next => print_value(tasks.next_task().await?, json),
         TaskCommand::Stats(args) => {
+            let task_list = tasks.list().await?;
             let stats = tasks.statistics().await?;
-            let stale_in_progress = stale_in_progress_summary(
-                &tasks.list().await?,
-                args.stale_threshold_hours,
-                Utc::now(),
-            );
+            let stale_in_progress =
+                stale_in_progress_summary(&task_list, args.stale_threshold_hours, Utc::now());
+            let priority_policy =
+                evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
             print_value(
                 TaskStatsOutput {
                     stats,
                     stale_in_progress,
+                    priority_policy,
                 },
                 json,
             )

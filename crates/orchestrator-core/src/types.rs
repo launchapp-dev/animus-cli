@@ -1219,6 +1219,68 @@ pub struct TaskStatistics {
     pub completed: usize,
 }
 
+pub const DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT: u8 = 20;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPriorityDistribution {
+    pub critical: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPriorityPolicyReport {
+    pub high_budget_percent: u8,
+    pub high_budget_limit: usize,
+    pub total_tasks: usize,
+    pub active_tasks: usize,
+    pub total_by_priority: TaskPriorityDistribution,
+    pub active_by_priority: TaskPriorityDistribution,
+    pub high_budget_compliant: bool,
+    pub high_budget_overflow: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPriorityRebalanceChange {
+    pub task_id: String,
+    pub from: Priority,
+    pub to: Priority,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPriorityRebalancePlan {
+    pub high_budget_percent: u8,
+    pub before: TaskPriorityPolicyReport,
+    pub after: TaskPriorityPolicyReport,
+    #[serde(default)]
+    pub changes: Vec<TaskPriorityRebalanceChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPriorityRebalanceOptions {
+    #[serde(default = "default_high_priority_budget_percent")]
+    pub high_budget_percent: u8,
+    #[serde(default)]
+    pub essential_task_ids: Vec<String>,
+    #[serde(default)]
+    pub nice_to_have_task_ids: Vec<String>,
+}
+
+impl Default for TaskPriorityRebalanceOptions {
+    fn default() -> Self {
+        Self {
+            high_budget_percent: DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+            essential_task_ids: Vec::new(),
+            nice_to_have_task_ids: Vec::new(),
+        }
+    }
+}
+
+const fn default_high_priority_budget_percent() -> u8 {
+    DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunInput {
     pub task_id: String,

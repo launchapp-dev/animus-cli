@@ -46,8 +46,9 @@ pub use runtime_contract::{
     CliSessionResumeMode, CliSessionResumePlan,
 };
 pub use services::{
-    DaemonServiceApi, FileServiceHub, InMemoryServiceHub, PlanningServiceApi, ProjectServiceApi,
-    ReviewServiceApi, ServiceHub, TaskServiceApi, WorkflowServiceApi,
+    evaluate_task_priority_policy, plan_task_priority_rebalance, DaemonServiceApi, FileServiceHub,
+    InMemoryServiceHub, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ServiceHub,
+    TaskServiceApi, WorkflowServiceApi,
 };
 pub use state_machines::{
     load_state_machines_for_project, state_machines_path, write_state_machines_document,
@@ -65,12 +66,14 @@ pub use types::{
     RequirementLinks, RequirementPriority, RequirementRange, RequirementStatus, RequirementType,
     RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput,
     RequirementsExecutionResult, RequirementsRefineInput, ResourceRequirements, RiskLevel, Scope,
-    TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskStatistics,
-    TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
+    TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata,
+    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange,
+    TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan, TaskStatistics, TaskStatus, TaskType,
+    TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
     WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord,
     WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState,
     WorkflowMetadata, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
-    WorkflowStatus,
+    WorkflowStatus, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 pub use workflow::{
     phase_plan_for_pipeline_id, resolve_phase_plan_for_pipeline, ResumabilityStatus, ResumeConfig,

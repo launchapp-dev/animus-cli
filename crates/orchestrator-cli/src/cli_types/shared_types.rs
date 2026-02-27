@@ -39,6 +39,16 @@ pub(crate) fn parse_positive_usize(value: &str) -> Result<usize, String> {
     Ok(parsed)
 }
 
+pub(crate) fn parse_percentage_u8(value: &str) -> Result<u8, String> {
+    let parsed = value
+        .parse::<u16>()
+        .map_err(|_| "must be a whole number".to_string())?;
+    if parsed > 100 {
+        return Err("must be between 0 and 100".to_string());
+    }
+    Ok(parsed as u8)
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct IdArgs {
     #[arg(long, value_name = "ID", help = "Entity identifier.")]

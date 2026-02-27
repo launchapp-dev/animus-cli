@@ -1137,6 +1137,247 @@ async fn task_service_supports_priority_checklists_and_dependencies() {
 }
 
 #[tokio::test]
+async fn task_priority_policy_reports_active_high_budget_overflow() {
+    let hub = InMemoryServiceHub::new();
+    let first = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "High one".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create first high task");
+    let second = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "High two".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create second high task");
+    let done = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "High done".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create terminal high task");
+    TaskServiceApi::set_status(&hub, &first.id, TaskStatus::Ready)
+        .await
+        .expect("set first status");
+    TaskServiceApi::set_status(&hub, &second.id, TaskStatus::InProgress)
+        .await
+        .expect("set second status");
+    TaskServiceApi::set_status(&hub, &done.id, TaskStatus::Done)
+        .await
+        .expect("set terminal status");
+
+    let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
+    let report = evaluate_task_priority_policy(&tasks, 20).expect("evaluate policy");
+    assert_eq!(report.total_tasks, 3);
+    assert_eq!(report.active_tasks, 2);
+    assert_eq!(report.high_budget_limit, 0);
+    assert_eq!(report.active_by_priority.high, 2);
+    assert_eq!(report.high_budget_overflow, 2);
+    assert!(!report.high_budget_compliant);
+}
+
+#[tokio::test]
+async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
+    let hub = InMemoryServiceHub::new();
+    let blocked = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Blocked".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create blocked task");
+    TaskServiceApi::set_status(&hub, &blocked.id, TaskStatus::Blocked)
+        .await
+        .expect("set blocked status");
+
+    let essential = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Essential".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Medium),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create essential task");
+    TaskServiceApi::set_status(&hub, &essential.id, TaskStatus::Ready)
+        .await
+        .expect("set essential status");
+
+    let early = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Early".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Medium),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create early task");
+    TaskServiceApi::set_status(&hub, &early.id, TaskStatus::InProgress)
+        .await
+        .expect("set early status");
+    let mut early_with_deadline = TaskServiceApi::get(&hub, &early.id)
+        .await
+        .expect("load early");
+    early_with_deadline.deadline = Some("2026-03-01T09:00:00Z".to_string());
+    TaskServiceApi::replace(&hub, early_with_deadline)
+        .await
+        .expect("set early deadline");
+
+    let late = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Late".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create late task");
+    TaskServiceApi::set_status(&hub, &late.id, TaskStatus::InProgress)
+        .await
+        .expect("set late status");
+    let mut late_with_deadline = TaskServiceApi::get(&hub, &late.id)
+        .await
+        .expect("load late");
+    late_with_deadline.deadline = Some("2026-03-10T09:00:00Z".to_string());
+    TaskServiceApi::replace(&hub, late_with_deadline)
+        .await
+        .expect("set late deadline");
+
+    let nice_to_have = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Nice to have".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create nice-to-have task");
+    TaskServiceApi::set_status(&hub, &nice_to_have.id, TaskStatus::InProgress)
+        .await
+        .expect("set nice-to-have status");
+
+    let low_existing = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Existing low".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Low),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create low task");
+    TaskServiceApi::set_status(&hub, &low_existing.id, TaskStatus::Backlog)
+        .await
+        .expect("set low status");
+
+    let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
+    let options = TaskPriorityRebalanceOptions {
+        high_budget_percent: 40,
+        essential_task_ids: vec![essential.id.clone()],
+        nice_to_have_task_ids: vec![nice_to_have.id.clone()],
+    };
+    let plan = plan_task_priority_rebalance(&tasks, options.clone()).expect("build plan");
+    let repeat_plan = plan_task_priority_rebalance(&tasks, options).expect("build repeated plan");
+    assert_eq!(plan, repeat_plan);
+
+    assert_eq!(plan.after.active_by_priority.high, 2);
+    assert_eq!(plan.after.active_by_priority.critical, 1);
+    assert!(plan.after.high_budget_compliant);
+
+    let mut resulting_priorities: std::collections::HashMap<String, Priority> = tasks
+        .iter()
+        .map(|task| (task.id.clone(), task.priority))
+        .collect();
+    for change in &plan.changes {
+        resulting_priorities.insert(change.task_id.clone(), change.to);
+    }
+
+    assert_eq!(
+        resulting_priorities.get(&blocked.id),
+        Some(&Priority::Critical)
+    );
+    assert_eq!(
+        resulting_priorities.get(&essential.id),
+        Some(&Priority::High)
+    );
+    assert_eq!(resulting_priorities.get(&early.id), Some(&Priority::High));
+    assert_eq!(resulting_priorities.get(&late.id), Some(&Priority::Medium));
+    assert_eq!(
+        resulting_priorities.get(&nice_to_have.id),
+        Some(&Priority::Low)
+    );
+    assert_eq!(
+        resulting_priorities.get(&low_existing.id),
+        Some(&Priority::Low)
+    );
+}
+
+#[tokio::test]
 async fn task_service_rejects_unknown_architecture_entities() {
     let hub = InMemoryServiceHub::new();
     let error = TaskServiceApi::create(

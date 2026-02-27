@@ -22,8 +22,10 @@ use crate::types::{
     ProjectType, RequirementItem, RequirementStatus, RequirementsDraftInput,
     RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
     RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency,
-    TaskFilter, TaskMetadata, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput,
-    VisionDocument, VisionDraftInput, WorkflowMetadata, WorkflowRunInput,
+    TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
+    TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
+    TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
+    WorkflowMetadata, WorkflowRunInput,
 };
 use crate::workflow::{
     ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager, STANDARD_PIPELINE_ID,
@@ -47,6 +49,20 @@ use planning_utils::*;
 use runner_helpers::*;
 use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
 use task_shared::*;
+
+pub fn evaluate_task_priority_policy(
+    tasks: &[OrchestratorTask],
+    high_budget_percent: u8,
+) -> Result<TaskPriorityPolicyReport> {
+    evaluate_task_priority_policy_report(tasks, high_budget_percent)
+}
+
+pub fn plan_task_priority_rebalance(
+    tasks: &[OrchestratorTask],
+    options: TaskPriorityRebalanceOptions,
+) -> Result<TaskPriorityRebalancePlan> {
+    plan_task_priority_rebalance_from_tasks(tasks, options)
+}
 
 #[async_trait]
 pub trait DaemonServiceApi: Send + Sync {
