@@ -147,14 +147,20 @@ pub(super) fn reopen_task(task: &mut OrchestratorTask, status: TaskStatus) -> Re
 }
 
 pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus) {
+    let previous_status = task.status;
     task.status = status;
     task.paused = status.is_blocked();
     task.cancelled = matches!(status, TaskStatus::Cancelled);
     if status == TaskStatus::InProgress && task.metadata.started_at.is_none() {
         task.metadata.started_at = Some(Utc::now());
     }
-    if status == TaskStatus::Done && task.metadata.completed_at.is_none() {
-        task.metadata.completed_at = Some(Utc::now());
+    if status == TaskStatus::Done {
+        if task.metadata.completed_at.is_none() {
+            task.metadata.completed_at = Some(Utc::now());
+        }
+    } else if previous_status == TaskStatus::Done {
+        // Reopened tasks should record the next completion time when they reach done again.
+        task.metadata.completed_at = None;
     }
     if status == TaskStatus::Blocked {
         if task.blocked_reason.is_none() {
@@ -412,13 +418,22 @@ mod tests {
     }
 
     #[test]
-    fn set_status_rejects_in_progress_from_blocked() {
-        let error = evaluate_task_status_transition(
+    fn set_status_rejects_in_progress_from_non_ready_states() {
+        let blocked_error = evaluate_task_status_transition(
             TaskStatus::Blocked,
             TaskStatusTransitionEvent::SetStatus(TaskStatus::InProgress),
         )
         .expect_err("blocked -> in-progress should be rejected");
-        assert!(error
+        assert!(blocked_error
+            .to_string()
+            .contains("in-progress requires prior status backlog or ready"));
+
+        let on_hold_error = evaluate_task_status_transition(
+            TaskStatus::OnHold,
+            TaskStatusTransitionEvent::SetStatus(TaskStatus::InProgress),
+        )
+        .expect_err("on-hold -> in-progress should be rejected");
+        assert!(on_hold_error
             .to_string()
             .contains("in-progress requires prior status backlog or ready"));
     }
@@ -521,5 +536,24 @@ mod tests {
         assert_eq!(task.metadata.updated_by, original_updated_by);
         assert_eq!(task.metadata.version, original_version);
         assert_eq!(task.metadata.updated_at, original_updated_at);
+    }
+
+    #[test]
+    fn reopen_from_done_clears_stale_completed_at_and_recomputes_on_next_done() {
+        let mut task = sample_task(TaskStatus::Done);
+        let stale_completed_at = Utc::now() - chrono::Duration::days(1);
+        task.metadata.completed_at = Some(stale_completed_at);
+
+        reopen_task(&mut task, TaskStatus::Ready).expect("reopen from done should succeed");
+        assert!(task.metadata.completed_at.is_none());
+
+        set_task_status(&mut task, TaskStatus::InProgress)
+            .expect("ready -> in-progress should succeed");
+        set_task_status(&mut task, TaskStatus::Done).expect("in-progress -> done should succeed");
+        let refreshed_completed_at = task
+            .metadata
+            .completed_at
+            .expect("completed_at should be recomputed after reaching done");
+        assert!(refreshed_completed_at > stale_completed_at);
     }
 }

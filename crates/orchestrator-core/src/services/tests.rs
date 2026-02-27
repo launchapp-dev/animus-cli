@@ -1216,6 +1216,14 @@ async fn task_reopen_requires_terminal_source_and_allowed_target() {
         .expect("cancelled should be allowed");
     assert!(cancelled.cancelled);
 
+    let cancelled_set_status_error =
+        TaskServiceApi::set_status(&hub, &task.id, TaskStatus::InProgress)
+            .await
+            .expect_err("cancelled task should require explicit reopen");
+    assert!(cancelled_set_status_error
+        .to_string()
+        .contains("terminal states require explicit reopen action"));
+
     let reopened = TaskServiceApi::reopen(&hub, &task.id, TaskStatus::Backlog)
         .await
         .expect("cancelled task should reopen to backlog");
@@ -1225,22 +1233,35 @@ async fn task_reopen_requires_terminal_source_and_allowed_target() {
     TaskServiceApi::set_status(&hub, &task.id, TaskStatus::InProgress)
         .await
         .expect("in-progress should be allowed");
-    TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Done)
+    let done_once = TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Done)
         .await
         .expect("done should be allowed");
+    let first_completed_at = done_once
+        .metadata
+        .completed_at
+        .expect("done status should set completed_at");
 
     let reopened_done = TaskServiceApi::reopen(&hub, &task.id, TaskStatus::Ready)
         .await
         .expect("done task should reopen to ready");
     assert_eq!(reopened_done.status, TaskStatus::Ready);
     assert!(!reopened_done.cancelled);
+    assert!(
+        reopened_done.metadata.completed_at.is_none(),
+        "reopen should clear stale completion timestamp"
+    );
 
     TaskServiceApi::set_status(&hub, &task.id, TaskStatus::InProgress)
         .await
         .expect("in-progress should be allowed");
-    TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Done)
+    let done_twice = TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Done)
         .await
         .expect("done should be allowed");
+    let second_completed_at = done_twice
+        .metadata
+        .completed_at
+        .expect("done status should set completed_at");
+    assert!(second_completed_at > first_completed_at);
 
     let invalid_target_error = TaskServiceApi::reopen(&hub, &task.id, TaskStatus::InProgress)
         .await
