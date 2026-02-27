@@ -121,7 +121,7 @@ pub(crate) struct TaskCreateArgs {
     #[arg(
         long,
         value_name = "PERCENT",
-        help = "Maximum CPU budget percentage (0-100)."
+        help = "Maximum CPU budget percentage (greater than 0 and up to 100)."
     )]
     pub(crate) max_cpu_percent: Option<f32>,
     #[arg(long, value_name = "MB", help = "Maximum memory budget in MB.")]
@@ -177,7 +177,7 @@ pub(crate) struct TaskUpdateArgs {
     #[arg(
         long,
         value_name = "PERCENT",
-        help = "Updated maximum CPU budget percentage (0-100)."
+        help = "Updated maximum CPU budget percentage (greater than 0 and up to 100)."
     )]
     pub(crate) max_cpu_percent: Option<f32>,
     #[arg(long, value_name = "MB", help = "Updated maximum memory budget in MB.")]

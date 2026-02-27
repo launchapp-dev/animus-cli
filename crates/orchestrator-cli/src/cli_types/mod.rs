@@ -153,6 +153,59 @@ mod tests {
     }
 
     #[test]
+    fn parses_task_create_extended_fields_from_task_module() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "task",
+            "create",
+            "--title",
+            "TASK-100",
+            "--risk",
+            "high",
+            "--scope",
+            "large",
+            "--complexity",
+            "high",
+            "--impact-area",
+            "frontend",
+            "--impact-area",
+            "backend",
+            "--estimated-effort",
+            "2d",
+            "--max-cpu-percent",
+            "75",
+            "--max-memory-mb",
+            "2048",
+            "--requires-network",
+            "false",
+            "--linked-architecture-entity",
+            "ARCH-42",
+        ])
+        .expect("task create extended flags should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Create(args),
+            } => {
+                assert_eq!(args.title, "TASK-100");
+                assert_eq!(args.risk.as_deref(), Some("high"));
+                assert_eq!(args.scope.as_deref(), Some("large"));
+                assert_eq!(args.complexity.as_deref(), Some("high"));
+                assert_eq!(
+                    args.impact_area,
+                    vec!["frontend".to_string(), "backend".to_string()]
+                );
+                assert_eq!(args.estimated_effort.as_deref(), Some("2d"));
+                assert_eq!(args.max_cpu_percent, Some(75.0));
+                assert_eq!(args.max_memory_mb, Some(2048));
+                assert_eq!(args.requires_network, Some(false));
+                assert_eq!(args.linked_architecture_entity, vec!["ARCH-42".to_string()]);
+            }
+            _ => panic!("expected task create command"),
+        }
+    }
+
+    #[test]
     fn parses_task_update_extended_fields_from_task_module() {
         let cli = Cli::try_parse_from([
             "ao",
