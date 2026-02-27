@@ -17,7 +17,7 @@ pub struct RequirementNode {
     pub title: String,
     pub description: Option<String>,
     pub r#type: RequirementType,
-    pub priority: Priority,
+    pub priority: RequirementPriority,
     pub status: Status,
     pub tags: Vec<String>,
     pub position: NodePosition,

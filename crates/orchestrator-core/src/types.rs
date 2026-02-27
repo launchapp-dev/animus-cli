@@ -92,6 +92,7 @@ impl TaskType {
     }
 }
 
+/// Task urgency used for task ordering and scheduling (`critical|high|medium|low`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
@@ -371,6 +372,7 @@ pub struct VisionDocument {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Requirement-level MoSCoW priority (`must|should|could|wont`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RequirementPriority {

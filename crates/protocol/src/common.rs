@@ -31,14 +31,19 @@ impl Timestamp {
     }
 }
 
+/// Requirement-level MoSCoW priority used in protocol requirement payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Priority {
+pub enum RequirementPriority {
     Must,
     Should,
     Could,
     Wont,
 }
+
+/// Backward-compatible alias for legacy imports.
+#[deprecated(note = "Use RequirementPriority for requirement-level MoSCoW priority.")]
+pub type Priority = RequirementPriority;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
