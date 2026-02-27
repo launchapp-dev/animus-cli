@@ -32,6 +32,18 @@ struct ProjectRootInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct PaginatedProjectRootInput {
+    #[serde(default)]
+    project_root: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 struct TaskListInput {
     #[serde(default)]
     project_root: Option<String>,
@@ -49,6 +61,12 @@ struct TaskListInput {
     linked_requirement: Option<String>,
     #[serde(default)]
     search: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    max_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -174,6 +192,12 @@ const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
 const OUTPUT_TAIL_SCHEMA: &str = "ao.output.tail.v1";
 const DEFAULT_OUTPUT_TAIL_LIMIT: usize = 50;
 const MAX_OUTPUT_TAIL_LIMIT: usize = 500;
+const MCP_LIST_RESULT_SCHEMA: &str = "ao.mcp.list.result.v1";
+const DEFAULT_MCP_LIST_LIMIT: usize = 25;
+const MAX_MCP_LIST_LIMIT: usize = 200;
+const DEFAULT_MCP_LIST_MAX_TOKENS: usize = 3000;
+const MIN_MCP_LIST_MAX_TOKENS: usize = 256;
+const MAX_MCP_LIST_MAX_TOKENS: usize = 12_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct AgentRunInput {
@@ -349,6 +373,19 @@ struct IdInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct IdListInput {
+    id: String,
+    #[serde(default)]
+    project_root: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    max_tokens: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CliExecutionResult {
     command: String,
@@ -361,6 +398,37 @@ struct CliExecutionResult {
     stderr: String,
     stdout_json: Option<Value>,
     stderr_json: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ListGuardInput {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListSizeGuardMode {
+    Full,
+    SummaryFields,
+    SummaryOnly,
+}
+
+impl ListSizeGuardMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::SummaryFields => "summary_fields",
+            Self::SummaryOnly => "summary_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ListToolProfile {
+    summary_fields: &'static [&'static str],
+    digest_id_fields: &'static [&'static str],
+    digest_status_fields: &'static [&'static str],
 }
 
 #[derive(Debug, Clone)]
@@ -429,37 +497,50 @@ impl AoMcpServer {
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
                 if result.success {
-                    let data = result
-                        .stdout_json
-                        .map(|envelope| match envelope {
-                            Value::Object(mut map) => {
-                                map.remove("data").unwrap_or(Value::Object(map))
-                            }
-                            other => other,
-                        })
-                        .unwrap_or(Value::Null);
-
-                    let data = summarize_list_if_needed(tool_name, data);
+                    let data = extract_cli_success_data(result.stdout_json);
 
                     Ok(CallToolResult::structured(json!({
                         "tool": tool_name,
                         "result": data,
                     })))
                 } else {
-                    let mut payload = json!({ "tool": tool_name });
-                    if let Some(envelope) = result.stdout_json {
-                        if let Some(error) = envelope.get("error") {
-                            payload["error"] = error.clone();
-                        } else if let Some(data) = envelope.get("data") {
-                            payload["error"] = data.clone();
-                        }
+                    Ok(CallToolResult::structured_error(build_tool_error_payload(
+                        tool_name, &result,
+                    )))
+                }
+            }
+            Err(err) => Ok(CallToolResult::structured_error(json!({
+                "tool": tool_name,
+                "error": err.to_string(),
+            }))),
+        }
+    }
+
+    async fn run_list_tool(
+        &self,
+        tool_name: &str,
+        requested_args: Vec<String>,
+        project_root_override: Option<String>,
+        guard: ListGuardInput,
+    ) -> Result<CallToolResult, McpError> {
+        match self.execute_ao(requested_args, project_root_override).await {
+            Ok(result) => {
+                if result.success {
+                    let data = extract_cli_success_data(result.stdout_json);
+                    match build_guarded_list_result(tool_name, data, guard) {
+                        Ok(shaped) => Ok(CallToolResult::structured(json!({
+                            "tool": tool_name,
+                            "result": shaped,
+                        }))),
+                        Err(error) => Ok(CallToolResult::structured_error(json!({
+                            "tool": tool_name,
+                            "error": error.to_string(),
+                        }))),
                     }
-                    payload["exit_code"] = json!(result.exit_code);
-                    let stderr = result.stderr.trim().to_string();
-                    if !stderr.is_empty() {
-                        payload["stderr"] = json!(stderr);
-                    }
-                    Ok(CallToolResult::structured_error(payload))
+                } else {
+                    Ok(CallToolResult::structured_error(build_tool_error_payload(
+                        tool_name, &result,
+                    )))
                 }
             }
             Err(err) => Ok(CallToolResult::structured_error(json!({
@@ -475,16 +556,22 @@ impl AoMcpServer {
     #[tool(
         name = "ao.project.list",
         description = "List known projects.",
-        input_schema = ao_schema_for_type::<ProjectRootInput>()
+        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
     )]
     async fn ao_project_list(
         &self,
-        params: Parameters<ProjectRootInput>,
+        params: Parameters<PaginatedProjectRootInput>,
     ) -> Result<CallToolResult, McpError> {
-        self.run_tool(
+        let input = params.0;
+        self.run_list_tool(
             "ao.project.list",
             vec!["project".to_string(), "list".to_string()],
-            params.0.project_root,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
         )
         .await
     }
@@ -510,8 +597,17 @@ impl AoMcpServer {
         }
         push_opt(&mut args, "--linked-requirement", input.linked_requirement);
         push_opt(&mut args, "--search", input.search);
-        self.run_tool("ao.task.list", args, input.project_root)
-            .await
+        self.run_list_tool(
+            "ao.task.list",
+            args,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
+        )
+        .await
     }
 
     #[tool(
@@ -613,16 +709,22 @@ impl AoMcpServer {
     #[tool(
         name = "ao.requirements.list",
         description = "List requirements.",
-        input_schema = ao_schema_for_type::<ProjectRootInput>()
+        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
     )]
     async fn ao_requirements_list(
         &self,
-        params: Parameters<ProjectRootInput>,
+        params: Parameters<PaginatedProjectRootInput>,
     ) -> Result<CallToolResult, McpError> {
-        self.run_tool(
+        let input = params.0;
+        self.run_list_tool(
             "ao.requirements.list",
             vec!["requirements".to_string(), "list".to_string()],
-            params.0.project_root,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
         )
         .await
     }
@@ -645,16 +747,22 @@ impl AoMcpServer {
     #[tool(
         name = "ao.workflow.list",
         description = "List workflows.",
-        input_schema = ao_schema_for_type::<ProjectRootInput>()
+        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
     )]
     async fn ao_workflow_list(
         &self,
-        params: Parameters<ProjectRootInput>,
+        params: Parameters<PaginatedProjectRootInput>,
     ) -> Result<CallToolResult, McpError> {
-        self.run_tool(
+        let input = params.0;
+        self.run_list_tool(
             "ao.workflow.list",
             vec!["workflow".to_string(), "list".to_string()],
-            params.0.project_root,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
         )
         .await
     }
@@ -1106,16 +1214,22 @@ impl AoMcpServer {
     #[tool(
         name = "ao.task.prioritized",
         description = "List tasks in priority order.",
-        input_schema = ao_schema_for_type::<ProjectRootInput>()
+        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
     )]
     async fn ao_task_prioritized(
         &self,
-        params: Parameters<ProjectRootInput>,
+        params: Parameters<PaginatedProjectRootInput>,
     ) -> Result<CallToolResult, McpError> {
-        self.run_tool(
+        let input = params.0;
+        self.run_list_tool(
             "ao.task.prioritized",
             vec!["task".to_string(), "prioritized".to_string()],
-            params.0.project_root,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
         )
         .await
     }
@@ -1332,11 +1446,11 @@ impl AoMcpServer {
     #[tool(
         name = "ao.workflow.checkpoints.list",
         description = "List workflow checkpoints.",
-        input_schema = ao_schema_for_type::<IdInput>()
+        input_schema = ao_schema_for_type::<IdListInput>()
     )]
     async fn ao_workflow_checkpoints_list(
         &self,
-        params: Parameters<IdInput>,
+        params: Parameters<IdListInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = vec![
@@ -1346,8 +1460,17 @@ impl AoMcpServer {
             "--id".to_string(),
             input.id,
         ];
-        self.run_tool("ao.workflow.checkpoints.list", args, input.project_root)
-            .await
+        self.run_list_tool(
+            "ao.workflow.checkpoints.list",
+            args,
+            input.project_root,
+            ListGuardInput {
+                limit: input.limit,
+                offset: input.offset,
+                max_tokens: input.max_tokens,
+            },
+        )
+        .await
     }
 }
 
@@ -1405,6 +1528,17 @@ fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObj
     std::sync::Arc::new(object)
 }
 
+const PROJECT_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "project_root",
+    "status",
+    "active",
+    "archived",
+    "created_at",
+    "updated_at",
+];
+
 const TASK_SUMMARY_FIELDS: &[&str] = &[
     "id",
     "title",
@@ -1427,21 +1561,274 @@ const REQUIREMENT_SUMMARY_FIELDS: &[&str] = &[
     "linked_task_ids",
 ];
 
-fn summarize_list_if_needed(tool_name: &str, data: Value) -> Value {
-    let keep_fields: &[&str] = match tool_name {
-        "ao.task.list" | "ao.task.prioritized" => TASK_SUMMARY_FIELDS,
-        "ao.requirements.list" => REQUIREMENT_SUMMARY_FIELDS,
-        _ => return data,
-    };
+const WORKFLOW_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "task_id",
+    "pipeline_id",
+    "status",
+    "current_phase",
+    "current_phase_index",
+    "started_at",
+    "completed_at",
+    "failure_reason",
+    "total_reworks",
+];
 
-    match data {
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(|item| retain_fields(item, keep_fields))
-                .collect(),
-        ),
-        other => other,
+const WORKFLOW_CHECKPOINT_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "workflow_id",
+    "task_id",
+    "phase_id",
+    "phase_index",
+    "reason",
+    "created_at",
+];
+
+const PROJECT_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: PROJECT_SUMMARY_FIELDS,
+    digest_id_fields: &["id", "name", "project_root"],
+    digest_status_fields: &["status"],
+};
+
+const TASK_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: TASK_SUMMARY_FIELDS,
+    digest_id_fields: &["id", "title"],
+    digest_status_fields: &["status", "priority"],
+};
+
+const REQUIREMENT_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: REQUIREMENT_SUMMARY_FIELDS,
+    digest_id_fields: &["id", "title"],
+    digest_status_fields: &["status", "priority"],
+};
+
+const WORKFLOW_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: WORKFLOW_SUMMARY_FIELDS,
+    digest_id_fields: &["id", "task_id"],
+    digest_status_fields: &["status", "current_phase"],
+};
+
+const WORKFLOW_CHECKPOINT_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: WORKFLOW_CHECKPOINT_SUMMARY_FIELDS,
+    digest_id_fields: &["id", "workflow_id", "task_id", "phase_id"],
+    digest_status_fields: &["status", "reason"],
+};
+
+fn list_tool_profile(tool_name: &str) -> Option<ListToolProfile> {
+    match tool_name {
+        "ao.project.list" => Some(PROJECT_LIST_PROFILE),
+        "ao.task.list" | "ao.task.prioritized" => Some(TASK_LIST_PROFILE),
+        "ao.requirements.list" => Some(REQUIREMENT_LIST_PROFILE),
+        "ao.workflow.list" => Some(WORKFLOW_LIST_PROFILE),
+        "ao.workflow.checkpoints.list" => Some(WORKFLOW_CHECKPOINT_LIST_PROFILE),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ListSizeGuardResult {
+    items: Vec<Value>,
+    estimated_tokens: usize,
+    mode: ListSizeGuardMode,
+    truncated: bool,
+}
+
+fn extract_cli_success_data(stdout_json: Option<Value>) -> Value {
+    stdout_json
+        .map(|envelope| match envelope {
+            Value::Object(mut map) => map.remove("data").unwrap_or(Value::Object(map)),
+            other => other,
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn build_tool_error_payload(tool_name: &str, result: &CliExecutionResult) -> Value {
+    let mut payload = json!({ "tool": tool_name });
+    if let Some(envelope) = &result.stdout_json {
+        if let Some(error) = envelope.get("error") {
+            payload["error"] = error.clone();
+        } else if let Some(data) = envelope.get("data") {
+            payload["error"] = data.clone();
+        }
+    }
+    payload["exit_code"] = json!(result.exit_code);
+    let stderr = result.stderr.trim().to_string();
+    if !stderr.is_empty() {
+        payload["stderr"] = json!(stderr);
+    }
+    payload
+}
+
+fn list_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(DEFAULT_MCP_LIST_LIMIT)
+        .max(1)
+        .min(MAX_MCP_LIST_LIMIT)
+}
+
+fn list_offset(offset: Option<usize>) -> usize {
+    offset.unwrap_or(0)
+}
+
+fn list_max_tokens(max_tokens: Option<usize>) -> usize {
+    max_tokens
+        .unwrap_or(DEFAULT_MCP_LIST_MAX_TOKENS)
+        .max(MIN_MCP_LIST_MAX_TOKENS)
+        .min(MAX_MCP_LIST_MAX_TOKENS)
+}
+
+fn estimate_json_tokens(value: &Value) -> usize {
+    let char_count = serde_json::to_string(value)
+        .map(|serialized| serialized.chars().count())
+        .unwrap_or_default();
+    ((char_count + 3) / 4).max(1)
+}
+
+fn build_guarded_list_result(tool_name: &str, data: Value, guard: ListGuardInput) -> Result<Value> {
+    let profile = list_tool_profile(tool_name).ok_or_else(|| {
+        invalid_input_error(format!(
+            "unsupported MCP list tool '{tool_name}' for paginated response"
+        ))
+    })?;
+    let all_items = data.as_array().cloned().ok_or_else(|| {
+        invalid_input_error(format!(
+            "{tool_name} expected list data as JSON array but received {}",
+            value_kind(&data)
+        ))
+    })?;
+
+    let limit = list_limit(guard.limit);
+    let offset = list_offset(guard.offset);
+    let max_tokens = list_max_tokens(guard.max_tokens);
+
+    let total = all_items.len();
+    let start = offset.min(total);
+    let page_items: Vec<Value> = all_items.into_iter().skip(start).take(limit).collect();
+    let returned = page_items.len();
+    let has_more = start.saturating_add(returned) < total;
+    let next_offset = has_more.then_some(start.saturating_add(returned));
+    let size_guard = apply_list_size_guard(page_items, profile, max_tokens);
+
+    Ok(json!({
+        "schema": MCP_LIST_RESULT_SCHEMA,
+        "tool": tool_name,
+        "items": size_guard.items,
+        "pagination": {
+            "limit": limit,
+            "offset": start,
+            "returned": returned,
+            "total": total,
+            "has_more": has_more,
+            "next_offset": next_offset,
+        },
+        "size_guard": {
+            "max_tokens_hint": max_tokens,
+            "estimated_tokens": size_guard.estimated_tokens,
+            "mode": size_guard.mode.as_str(),
+            "truncated": size_guard.truncated,
+        }
+    }))
+}
+
+fn apply_list_size_guard(
+    full_page_items: Vec<Value>,
+    profile: ListToolProfile,
+    max_tokens: usize,
+) -> ListSizeGuardResult {
+    let full_value = Value::Array(full_page_items.clone());
+    let full_tokens = estimate_json_tokens(&full_value);
+    if full_tokens <= max_tokens {
+        return ListSizeGuardResult {
+            items: full_page_items,
+            estimated_tokens: full_tokens,
+            mode: ListSizeGuardMode::Full,
+            truncated: false,
+        };
+    }
+
+    let summary_items: Vec<Value> = full_page_items
+        .iter()
+        .cloned()
+        .map(|item| retain_fields(item, profile.summary_fields))
+        .collect();
+    let summary_value = Value::Array(summary_items.clone());
+    let summary_tokens = estimate_json_tokens(&summary_value);
+    if summary_tokens <= max_tokens {
+        return ListSizeGuardResult {
+            items: summary_items,
+            estimated_tokens: summary_tokens,
+            mode: ListSizeGuardMode::SummaryFields,
+            truncated: true,
+        };
+    }
+
+    let summary_only_item = build_summary_only_digest(&full_page_items, profile);
+    let summary_only_items = vec![summary_only_item];
+    let summary_only_tokens = estimate_json_tokens(&Value::Array(summary_only_items.clone()));
+    ListSizeGuardResult {
+        items: summary_only_items,
+        estimated_tokens: summary_only_tokens,
+        mode: ListSizeGuardMode::SummaryOnly,
+        truncated: true,
+    }
+}
+
+fn build_summary_only_digest(items: &[Value], profile: ListToolProfile) -> Value {
+    let mut ids = Vec::new();
+    let mut status_counts = std::collections::BTreeMap::new();
+
+    for item in items {
+        if ids.len() < 10 {
+            if let Some(raw_id) = find_text_field(item, profile.digest_id_fields) {
+                ids.push(clamp_text(&raw_id, 64));
+            }
+        }
+        if let Some(raw_status) = find_text_field(item, profile.digest_status_fields) {
+            let status = clamp_text(&raw_status, 32);
+            *status_counts.entry(status).or_insert(0usize) += 1;
+        }
+    }
+
+    json!({
+        "kind": "summary_only",
+        "item_count": items.len(),
+        "ids": ids,
+        "status_counts": status_counts,
+    })
+}
+
+fn find_text_field(value: &Value, fields: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    fields.iter().find_map(|field| {
+        let raw = object.get(*field)?;
+        match raw {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            Value::Bool(boolean) => Some(boolean.to_string()),
+            _ => None,
+        }
+    })
+}
+
+fn clamp_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let trimmed: String = value.chars().take(max_chars - 3).collect();
+    format!("{trimmed}...")
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -2370,6 +2757,197 @@ mod tests {
                 "REQ-123".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn list_limit_defaults_and_clamps() {
+        assert_eq!(list_limit(None), DEFAULT_MCP_LIST_LIMIT);
+        assert_eq!(list_limit(Some(0)), 1);
+        assert_eq!(
+            list_limit(Some(MAX_MCP_LIST_LIMIT + 10)),
+            MAX_MCP_LIST_LIMIT
+        );
+    }
+
+    #[test]
+    fn list_max_tokens_defaults_and_clamps() {
+        assert_eq!(list_max_tokens(None), DEFAULT_MCP_LIST_MAX_TOKENS);
+        assert_eq!(list_max_tokens(Some(0)), MIN_MCP_LIST_MAX_TOKENS);
+        assert_eq!(
+            list_max_tokens(Some(MAX_MCP_LIST_MAX_TOKENS + 500)),
+            MAX_MCP_LIST_MAX_TOKENS
+        );
+    }
+
+    #[test]
+    fn build_guarded_list_result_applies_offset_then_limit() {
+        let data = json!([
+            { "id": "TASK-1", "status": "todo" },
+            { "id": "TASK-2", "status": "in-progress" },
+            { "id": "TASK-3", "status": "blocked" },
+            { "id": "TASK-4", "status": "done" }
+        ]);
+        let result = build_guarded_list_result(
+            "ao.task.list",
+            data,
+            ListGuardInput {
+                limit: Some(2),
+                offset: Some(1),
+                max_tokens: Some(3000),
+            },
+        )
+        .expect("guarded list should build");
+
+        assert_eq!(
+            result.get("schema").and_then(Value::as_str),
+            Some(MCP_LIST_RESULT_SCHEMA)
+        );
+        assert_eq!(
+            result.get("tool").and_then(Value::as_str),
+            Some("ao.task.list")
+        );
+        let items = result
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("items should be an array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].get("id").and_then(Value::as_str), Some("TASK-2"));
+        assert_eq!(items[1].get("id").and_then(Value::as_str), Some("TASK-3"));
+
+        let pagination = result
+            .get("pagination")
+            .and_then(Value::as_object)
+            .expect("pagination should be object");
+        assert_eq!(pagination.get("limit").and_then(Value::as_u64), Some(2));
+        assert_eq!(pagination.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(pagination.get("returned").and_then(Value::as_u64), Some(2));
+        assert_eq!(pagination.get("total").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            pagination.get("has_more").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            pagination.get("next_offset").and_then(Value::as_u64),
+            Some(3)
+        );
+
+        let size_guard = result
+            .get("size_guard")
+            .and_then(Value::as_object)
+            .expect("size_guard should be object");
+        assert_eq!(size_guard.get("mode").and_then(Value::as_str), Some("full"));
+        assert_eq!(
+            size_guard.get("truncated").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn build_guarded_list_result_falls_back_to_summary_fields_mode() {
+        let data = json!([{
+            "id": "wf-1",
+            "task_id": "TASK-077",
+            "status": "running",
+            "pipeline_id": "default",
+            "decision_history": "x".repeat(8000),
+            "raw_state": { "huge_blob": "y".repeat(4000) }
+        }]);
+
+        let result = build_guarded_list_result(
+            "ao.workflow.list",
+            data,
+            ListGuardInput {
+                limit: Some(25),
+                offset: Some(0),
+                max_tokens: Some(256),
+            },
+        )
+        .expect("guarded list should build");
+
+        assert_eq!(
+            result
+                .pointer("/size_guard/mode")
+                .and_then(Value::as_str)
+                .expect("size guard mode"),
+            "summary_fields"
+        );
+        assert_eq!(
+            result
+                .pointer("/size_guard/truncated")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let item = result
+            .pointer("/items/0")
+            .and_then(Value::as_object)
+            .expect("summary field item should be object");
+        assert_eq!(item.get("id").and_then(Value::as_str), Some("wf-1"));
+        assert!(item.get("decision_history").is_none());
+        assert!(item.get("raw_state").is_none());
+    }
+
+    #[test]
+    fn build_guarded_list_result_falls_back_to_summary_only_mode() {
+        let items: Vec<Value> = (0..25)
+            .map(|idx| {
+                json!({
+                    "id": format!("TASK-{idx:03}"),
+                    "title": "x".repeat(120),
+                    "status": "in-progress",
+                    "details": "y".repeat(500)
+                })
+            })
+            .collect();
+
+        let result = build_guarded_list_result(
+            "ao.task.list",
+            Value::Array(items),
+            ListGuardInput {
+                limit: Some(25),
+                offset: Some(0),
+                max_tokens: Some(256),
+            },
+        )
+        .expect("guarded list should build");
+
+        assert_eq!(
+            result
+                .pointer("/size_guard/mode")
+                .and_then(Value::as_str)
+                .expect("size guard mode"),
+            "summary_only"
+        );
+        let items = result
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("summary-only items should be array");
+        assert_eq!(items.len(), 1);
+        let digest = items[0].as_object().expect("digest should be object");
+        assert_eq!(
+            digest.get("kind").and_then(Value::as_str),
+            Some("summary_only")
+        );
+        assert_eq!(digest.get("item_count").and_then(Value::as_u64), Some(25));
+        assert!(digest
+            .get("ids")
+            .and_then(Value::as_array)
+            .map(|ids| ids.len() <= 10)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn build_guarded_list_result_rejects_non_array_payloads() {
+        let err = build_guarded_list_result(
+            "ao.workflow.list",
+            json!({"id": "wf-1"}),
+            ListGuardInput {
+                limit: None,
+                offset: None,
+                max_tokens: None,
+            },
+        )
+        .expect_err("non-array list payload should fail");
+        assert!(err.to_string().contains("expected list data as JSON array"));
     }
 
     #[test]
