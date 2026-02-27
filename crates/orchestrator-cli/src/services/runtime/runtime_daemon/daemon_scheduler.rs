@@ -116,6 +116,8 @@ pub(super) struct TaskStateTransition {
     pub(super) workflow_id: Option<String>,
     #[serde(default)]
     pub(super) phase_id: Option<String>,
+    #[serde(default)]
+    pub(super) selection_source: Option<String>,
 }
 
 #[cfg(test)]
@@ -1988,6 +1990,10 @@ fn is_branch_merged(project_root: &str, branch_name: &str) -> Result<Option<bool
     git_ops::is_branch_merged(project_root, branch_name)
 }
 
+fn daemon_repo_runtime_root(project_root: &str) -> Result<PathBuf> {
+    git_ops::daemon_repo_runtime_root(project_root)
+}
+
 fn dependency_blocked_reason(issues: &[String]) -> String {
     format!("{DEPENDENCY_GATE_PREFIX} {}", issues.join("; "))
 }
@@ -2048,6 +2054,7 @@ async fn run_ready_task_workflows_for_project(
 ) -> Result<usize> {
     project_tick_ops::run_ready_task_workflows_for_project(hub, project_root, max_tasks_per_tick)
         .await
+        .map(|summary| summary.started)
 }
 
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {

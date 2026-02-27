@@ -1,6 +1,225 @@
 use super::*;
 use crate::services::runtime::stale_in_progress_summary;
 
+const EM_WORK_QUEUE_STATE_FILE: &str = "em-work-queue.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskSelectionSource {
+    EmQueue,
+    FallbackPicker,
+}
+
+impl TaskSelectionSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EmQueue => "em_queue",
+            Self::FallbackPicker => "fallback_picker",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ReadyTaskWorkflowStart {
+    task_id: String,
+    workflow_id: String,
+    selection_source: TaskSelectionSource,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ReadyTaskWorkflowStartSummary {
+    pub(super) started: usize,
+    pub(super) started_workflows: Vec<ReadyTaskWorkflowStart>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EmWorkQueueEntryStatus {
+    Pending,
+    Assigned,
+    #[serde(other)]
+    Unknown,
+}
+
+impl Default for EmWorkQueueEntryStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EmWorkQueueEntry {
+    task_id: String,
+    #[serde(default)]
+    status: EmWorkQueueEntryStatus,
+    #[serde(default)]
+    workflow_id: Option<String>,
+    #[serde(default)]
+    assigned_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct EmWorkQueueState {
+    #[serde(default)]
+    entries: Vec<EmWorkQueueEntry>,
+}
+
+fn em_work_queue_state_path(project_root: &str) -> Result<PathBuf> {
+    Ok(daemon_repo_runtime_root(project_root)?
+        .join("scheduler")
+        .join(EM_WORK_QUEUE_STATE_FILE))
+}
+
+fn load_em_work_queue_state(project_root: &str) -> Result<Option<EmWorkQueueState>> {
+    let path = em_work_queue_state_path(project_root)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read EM work queue state file at {}",
+            path.display()
+        )
+    })?;
+    if content.trim().is_empty() {
+        return Ok(Some(EmWorkQueueState::default()));
+    }
+
+    serde_json::from_str::<EmWorkQueueState>(&content)
+        .map(Some)
+        .or_else(|_| {
+            serde_json::from_str::<Vec<EmWorkQueueEntry>>(&content)
+                .map(|entries| Some(EmWorkQueueState { entries }))
+        })
+        .with_context(|| {
+            format!(
+                "failed to parse EM work queue state file at {}",
+                path.display()
+            )
+        })
+}
+
+fn save_em_work_queue_state(project_root: &str, state: &EmWorkQueueState) -> Result<()> {
+    let path = em_work_queue_state_path(project_root)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if state.entries.is_empty() {
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        return Ok(());
+    }
+
+    let payload = serde_json::to_string_pretty(state)?;
+    let tmp_path = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(EM_WORK_QUEUE_STATE_FILE),
+        Uuid::new_v4()
+    ));
+    fs::write(&tmp_path, payload)?;
+    fs::rename(&tmp_path, &path)?;
+    Ok(())
+}
+
+fn mark_em_work_queue_entry_assigned(
+    project_root: &str,
+    task_id: &str,
+    workflow_id: &str,
+) -> Result<bool> {
+    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+        return Ok(false);
+    };
+
+    let mut updated = false;
+    for entry in &mut state.entries {
+        if entry.task_id != task_id {
+            continue;
+        }
+        if entry.status != EmWorkQueueEntryStatus::Pending {
+            continue;
+        }
+        entry.status = EmWorkQueueEntryStatus::Assigned;
+        entry.workflow_id = Some(workflow_id.to_string());
+        entry.assigned_at = Some(Utc::now().to_rfc3339());
+        updated = true;
+        break;
+    }
+
+    if updated {
+        save_em_work_queue_state(project_root, &state)?;
+    }
+
+    Ok(updated)
+}
+
+fn remove_terminal_em_work_queue_entry(
+    project_root: &str,
+    task_id: &str,
+    workflow_id: Option<&str>,
+) -> Result<usize> {
+    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+        return Ok(0);
+    };
+
+    let before = state.entries.len();
+    state.entries.retain(|entry| {
+        if entry.task_id != task_id {
+            return true;
+        }
+        if entry.status != EmWorkQueueEntryStatus::Assigned {
+            return true;
+        }
+        if let Some(workflow_id) = workflow_id {
+            if entry
+                .workflow_id
+                .as_deref()
+                .is_some_and(|entry_workflow_id| entry_workflow_id != workflow_id)
+            {
+                return true;
+            }
+        }
+        false
+    });
+    let removed = before.saturating_sub(state.entries.len());
+    if removed > 0 {
+        save_em_work_queue_state(project_root, &state)?;
+    }
+    Ok(removed)
+}
+
+fn remove_terminal_em_work_queue_entry_non_fatal(
+    project_root: &str,
+    task_id: &str,
+    workflow_id: Option<&str>,
+) {
+    if let Err(error) = remove_terminal_em_work_queue_entry(project_root, task_id, workflow_id) {
+        eprintln!(
+            "ao-daemon: failed to remove terminal EM queue entry for task {}: {}",
+            task_id, error
+        );
+    }
+}
+
+fn ready_task_dispatch_limit(
+    max_tasks_per_tick: usize,
+    health: &orchestrator_core::DaemonHealth,
+) -> usize {
+    if max_tasks_per_tick == 0 {
+        return 0;
+    }
+    match health.max_agents {
+        Some(max_agents) => {
+            let available_agent_slots = max_agents.saturating_sub(health.active_agents);
+            max_tasks_per_tick.min(available_agent_slots)
+        }
+        None => max_tasks_per_tick,
+    }
+}
+
 fn normalize_requirement_lifecycle_phase(phase: &str) -> Option<&'static str> {
     match phase.trim().to_ascii_lowercase().as_str() {
         "refine" | "refined" => Some("refine"),
@@ -181,6 +400,7 @@ fn collect_task_state_transitions(
     after: &[orchestrator_core::OrchestratorTask],
     workflows: &[orchestrator_core::OrchestratorWorkflow],
     phase_events: &[PhaseExecutionEvent],
+    ready_starts: &[ReadyTaskWorkflowStart],
 ) -> Vec<TaskStateTransition> {
     let before_lookup: std::collections::HashMap<&str, &orchestrator_core::OrchestratorTask> =
         before.iter().map(|task| (task.id.as_str(), task)).collect();
@@ -216,6 +436,18 @@ fn collect_task_state_transitions(
         }
     }
 
+    let mut selection_source_by_task: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for start in ready_starts {
+        selection_source_by_task.insert(
+            start.task_id.clone(),
+            (
+                start.workflow_id.clone(),
+                start.selection_source.as_str().to_string(),
+            ),
+        );
+    }
+
     let mut transitions = Vec::new();
     for task in after {
         let Some(previous) = before_lookup.get(task.id.as_str()) else {
@@ -225,7 +457,7 @@ fn collect_task_state_transitions(
             continue;
         }
 
-        let (workflow_id, phase_id) = match phase_context_by_task.get(task.id.as_str()) {
+        let (mut workflow_id, phase_id) = match phase_context_by_task.get(task.id.as_str()) {
             Some((workflow_id, phase_id)) => (
                 Some(workflow_id.clone()),
                 normalize_optional_id(Some(phase_id.as_str())),
@@ -235,6 +467,14 @@ fn collect_task_state_transitions(
                 .map(|(workflow_id, phase_id, _)| (Some(workflow_id.clone()), phase_id.clone()))
                 .unwrap_or((None, None)),
         };
+        let selection_source = selection_source_by_task.get(task.id.as_str()).map(
+            |(started_workflow_id, selection_source)| {
+                if workflow_id.is_none() {
+                    workflow_id = Some(started_workflow_id.clone());
+                }
+                selection_source.clone()
+            },
+        );
 
         transitions.push(TaskStateTransition {
             task_id: task.id.clone(),
@@ -243,6 +483,7 @@ fn collect_task_state_transitions(
             changed_at: task.metadata.updated_at.to_rfc3339(),
             workflow_id,
             phase_id,
+            selection_source,
         });
     }
 
@@ -437,6 +678,7 @@ async fn sync_task_status_for_workflow_result(
 ) {
     match workflow_status {
         WorkflowStatus::Completed => {
+            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let task = hub.tasks().get(task_id).await;
             let Ok(task) = task else {
                 let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
@@ -563,9 +805,11 @@ async fn sync_task_status_for_workflow_result(
             }
         }
         WorkflowStatus::Failed => {
+            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
         }
         WorkflowStatus::Cancelled => {
+            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = hub.tasks().set_status(task_id, TaskStatus::Cancelled).await;
         }
         WorkflowStatus::Paused | WorkflowStatus::Running | WorkflowStatus::Pending => {
@@ -686,9 +930,9 @@ pub(super) async fn run_ready_task_workflows_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     max_tasks_per_tick: usize,
-) -> Result<usize> {
+) -> Result<ReadyTaskWorkflowStartSummary> {
     if max_tasks_per_tick == 0 {
-        return Ok(0);
+        return Ok(ReadyTaskWorkflowStartSummary::default());
     }
 
     let workflows = hub.workflows().list().await.unwrap_or_default();
@@ -708,33 +952,99 @@ pub(super) async fn run_ready_task_workflows_for_project(
         .map(|workflow| workflow.task_id.clone())
         .collect();
 
-    let mut started = 0usize;
     let candidates = hub.tasks().list_prioritized().await?;
-    for task in candidates {
-        if started >= max_tasks_per_tick {
-            break;
-        }
-        if task.paused || task.cancelled {
-            continue;
-        }
-        if task.status != TaskStatus::Ready {
-            continue;
-        }
-        if active_task_ids.contains(&task.id) {
-            continue;
-        }
-        if completed_task_ids.contains(&task.id) {
-            let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
-            continue;
-        }
-        let dependency_issues =
-            dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-        if !dependency_issues.is_empty() {
-            let reason = dependency_blocked_reason(&dependency_issues);
-            let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
-            continue;
-        }
+    let task_lookup: std::collections::HashMap<String, orchestrator_core::OrchestratorTask> =
+        candidates
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect();
 
+    let mut selected_for_start: Vec<(orchestrator_core::OrchestratorTask, TaskSelectionSource)> =
+        Vec::new();
+    let mut selected_task_ids: HashSet<String> = HashSet::new();
+
+    match load_em_work_queue_state(project_root) {
+        Ok(Some(queue_state)) => {
+            for entry in queue_state.entries {
+                if selected_for_start.len() >= max_tasks_per_tick {
+                    break;
+                }
+                if entry.status != EmWorkQueueEntryStatus::Pending {
+                    continue;
+                }
+
+                let Some(task) = task_lookup.get(entry.task_id.as_str()).cloned() else {
+                    continue;
+                };
+                if !selected_task_ids.insert(task.id.clone()) {
+                    continue;
+                }
+                if task.paused || task.cancelled {
+                    continue;
+                }
+                if task.status != TaskStatus::Ready {
+                    continue;
+                }
+                if active_task_ids.contains(&task.id) {
+                    continue;
+                }
+                if completed_task_ids.contains(&task.id) {
+                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
+                    continue;
+                }
+                let dependency_issues =
+                    dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+                if !dependency_issues.is_empty() {
+                    let reason = dependency_blocked_reason(&dependency_issues);
+                    let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
+                    continue;
+                }
+
+                selected_for_start.push((task, TaskSelectionSource::EmQueue));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("ao-daemon: failed to load EM work queue state: {}", error);
+        }
+    }
+
+    if selected_for_start.is_empty() {
+        for task in candidates {
+            if selected_for_start.len() >= max_tasks_per_tick {
+                break;
+            }
+            if !selected_task_ids.insert(task.id.clone()) {
+                continue;
+            }
+            if task.paused || task.cancelled {
+                continue;
+            }
+            if task.status != TaskStatus::Ready {
+                continue;
+            }
+            if active_task_ids.contains(&task.id) {
+                continue;
+            }
+            if completed_task_ids.contains(&task.id) {
+                let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
+                continue;
+            }
+            let dependency_issues =
+                dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+            if !dependency_issues.is_empty() {
+                let reason = dependency_blocked_reason(&dependency_issues);
+                let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
+                continue;
+            }
+
+            selected_for_start.push((task, TaskSelectionSource::FallbackPicker));
+        }
+    }
+
+    let mut started_workflows = Vec::new();
+    for (task, selection_source) in selected_for_start {
         let workflow = hub
             .workflows()
             .run(WorkflowRunInput {
@@ -742,6 +1052,16 @@ pub(super) async fn run_ready_task_workflows_for_project(
                 pipeline_id: Some(pipeline_for_task(&task)),
             })
             .await?;
+        if selection_source == TaskSelectionSource::EmQueue {
+            if let Err(error) =
+                mark_em_work_queue_entry_assigned(project_root, &task.id, workflow.id.as_str())
+            {
+                eprintln!(
+                    "ao-daemon: failed to mark EM queue entry assigned for task {}: {}",
+                    task.id, error
+                );
+            }
+        }
         auto_assign_task_to_daemon_agent(hub.clone(), project_root, &task, &workflow).await?;
         sync_task_status_for_workflow_result(
             hub.clone(),
@@ -752,10 +1072,17 @@ pub(super) async fn run_ready_task_workflows_for_project(
         )
         .await;
         active_task_ids.insert(task.id.clone());
-        started = started.saturating_add(1);
+        started_workflows.push(ReadyTaskWorkflowStart {
+            task_id: task.id.clone(),
+            workflow_id: workflow.id.clone(),
+            selection_source,
+        });
     }
 
-    Ok(started)
+    Ok(ReadyTaskWorkflowStartSummary {
+        started: started_workflows.len(),
+        started_workflows,
+    })
 }
 
 async fn execute_running_workflow_phases_for_project(
@@ -926,7 +1253,8 @@ async fn execute_running_workflow_phases_for_project(
                 match result.outcome {
                     PhaseExecutionOutcome::Completed { phase_decision, .. } => {
                         enforce_frontend_phase_gate(project_root, &workflow.id, &phase_id, &task)?;
-                        let updated = hub.workflows()
+                        let updated = hub
+                            .workflows()
                             .complete_current_phase_with_decision(&workflow.id, phase_decision)
                             .await?;
                         sync_task_status_for_workflow_result(
@@ -1783,7 +2111,40 @@ fn run_cargo_check(cwd: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orchestrator_core::Priority;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[tokio::test]
     async fn daemon_agent_assignee_defaults_to_unknown_role_when_phase_metadata_missing() {
@@ -1833,6 +2194,342 @@ mod tests {
         assert!(model
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()));
+    }
+
+    #[tokio::test]
+    async fn run_ready_prefers_em_queue_and_marks_selected_entry_assigned() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let fallback_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "fallback-high-priority".to_string(),
+                description: "should be skipped when queue has dispatchable item".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Critical),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("fallback task should be created");
+        hub.tasks()
+            .set_status(&fallback_task.id, TaskStatus::Ready)
+            .await
+            .expect("fallback task should be ready");
+
+        let queue_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "queue-low-priority".to_string(),
+                description: "should be selected from queue first".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Low),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("queue task should be created");
+        hub.tasks()
+            .set_status(&queue_task.id, TaskStatus::Ready)
+            .await
+            .expect("queue task should be ready");
+
+        save_em_work_queue_state(
+            &project_root_str,
+            &EmWorkQueueState {
+                entries: vec![
+                    EmWorkQueueEntry {
+                        task_id: queue_task.id.clone(),
+                        status: EmWorkQueueEntryStatus::Pending,
+                        workflow_id: None,
+                        assigned_at: None,
+                    },
+                    EmWorkQueueEntry {
+                        task_id: fallback_task.id.clone(),
+                        status: EmWorkQueueEntryStatus::Pending,
+                        workflow_id: None,
+                        assigned_at: None,
+                    },
+                ],
+            },
+        )
+        .expect("queue state should be stored");
+
+        let summary = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            1,
+        )
+        .await
+        .expect("ready runner should succeed");
+
+        assert_eq!(summary.started, 1);
+        assert_eq!(summary.started_workflows.len(), 1);
+        let started = &summary.started_workflows[0];
+        assert_eq!(started.task_id, queue_task.id);
+        assert_eq!(started.selection_source, TaskSelectionSource::EmQueue);
+
+        let queue_state = load_em_work_queue_state(&project_root_str)
+            .expect("queue should load")
+            .expect("queue should exist");
+        let queue_entry = queue_state
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == queue_task.id)
+            .expect("queue task entry should remain present");
+        assert_eq!(queue_entry.status, EmWorkQueueEntryStatus::Assigned);
+        assert_eq!(
+            queue_entry.workflow_id.as_deref(),
+            Some(started.workflow_id.as_str())
+        );
+
+        let fallback_entry = queue_state
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == fallback_task.id)
+            .expect("fallback queue entry should remain present");
+        assert_eq!(fallback_entry.status, EmWorkQueueEntryStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn run_ready_falls_back_when_queue_has_no_dispatchable_entries() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let queue_only_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "queue-backlog".to_string(),
+                description: "queue entry points at non-ready task".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("queue task should be created");
+
+        let fallback_ready_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "fallback-ready".to_string(),
+                description: "ready task should start via fallback picker".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("fallback task should be created");
+        hub.tasks()
+            .set_status(&fallback_ready_task.id, TaskStatus::Ready)
+            .await
+            .expect("fallback task should be ready");
+
+        save_em_work_queue_state(
+            &project_root_str,
+            &EmWorkQueueState {
+                entries: vec![EmWorkQueueEntry {
+                    task_id: queue_only_task.id.clone(),
+                    status: EmWorkQueueEntryStatus::Pending,
+                    workflow_id: None,
+                    assigned_at: None,
+                }],
+            },
+        )
+        .expect("queue state should be stored");
+
+        let summary = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            1,
+        )
+        .await
+        .expect("ready runner should succeed");
+        assert_eq!(summary.started, 1);
+        assert_eq!(summary.started_workflows.len(), 1);
+        let started = &summary.started_workflows[0];
+        assert_eq!(started.task_id, fallback_ready_task.id);
+        assert_eq!(
+            started.selection_source,
+            TaskSelectionSource::FallbackPicker
+        );
+    }
+
+    #[tokio::test]
+    async fn run_ready_falls_back_when_queue_state_is_invalid_json() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let fallback_ready_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "fallback-ready-invalid-queue".to_string(),
+                description: "ready task should still run when queue decode fails".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("fallback task should be created");
+        hub.tasks()
+            .set_status(&fallback_ready_task.id, TaskStatus::Ready)
+            .await
+            .expect("fallback task should be ready");
+
+        let queue_path = em_work_queue_state_path(&project_root_str).expect("queue path");
+        if let Some(parent) = queue_path.parent() {
+            fs::create_dir_all(parent).expect("queue parent should be created");
+        }
+        fs::write(&queue_path, "{ invalid json").expect("invalid queue payload should be written");
+
+        let summary = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            1,
+        )
+        .await
+        .expect("ready runner should continue when queue state is invalid");
+        assert_eq!(summary.started, 1);
+        assert_eq!(summary.started_workflows.len(), 1);
+        assert_eq!(
+            summary.started_workflows[0].selection_source,
+            TaskSelectionSource::FallbackPicker
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_task_status_for_workflow_result_removes_assigned_queue_entries_on_failure() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "queue-terminal-cleanup".to_string(),
+                description: "assigned queue entry should be removed after failure".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::InProgress)
+            .await
+            .expect("task should be in-progress");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        save_em_work_queue_state(
+            &project_root_str,
+            &EmWorkQueueState {
+                entries: vec![EmWorkQueueEntry {
+                    task_id: task.id.clone(),
+                    status: EmWorkQueueEntryStatus::Assigned,
+                    workflow_id: Some(workflow.id.clone()),
+                    assigned_at: Some(Utc::now().to_rfc3339()),
+                }],
+            },
+        )
+        .expect("queue state should be written");
+
+        sync_task_status_for_workflow_result(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            task.id.as_str(),
+            WorkflowStatus::Failed,
+            Some(workflow.id.as_str()),
+        )
+        .await;
+
+        let queue_state =
+            load_em_work_queue_state(&project_root_str).expect("queue should load after cleanup");
+        assert!(
+            queue_state.is_none()
+                || queue_state
+                    .as_ref()
+                    .is_some_and(|state| state.entries.is_empty())
+        );
+    }
+
+    #[test]
+    fn ready_task_dispatch_limit_honors_available_agent_capacity() {
+        let uncapped = orchestrator_core::DaemonHealth {
+            healthy: true,
+            status: orchestrator_core::DaemonStatus::Running,
+            runner_connected: true,
+            runner_pid: None,
+            active_agents: 1,
+            max_agents: None,
+            project_root: None,
+        };
+        assert_eq!(ready_task_dispatch_limit(4, &uncapped), 4);
+
+        let capped = orchestrator_core::DaemonHealth {
+            healthy: true,
+            status: orchestrator_core::DaemonStatus::Running,
+            runner_connected: true,
+            runner_pid: None,
+            active_agents: 3,
+            max_agents: Some(5),
+            project_root: None,
+        };
+        assert_eq!(ready_task_dispatch_limit(10, &capped), 2);
+        assert_eq!(ready_task_dispatch_limit(1, &capped), 1);
+
+        let saturated = orchestrator_core::DaemonHealth {
+            healthy: true,
+            status: orchestrator_core::DaemonStatus::Running,
+            runner_connected: true,
+            runner_pid: None,
+            active_agents: 5,
+            max_agents: Some(5),
+            project_root: None,
+        };
+        assert_eq!(ready_task_dispatch_limit(3, &saturated), 0);
     }
 
     #[test]
@@ -1938,10 +2635,18 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         let _ = promote_backlog_tasks_to_ready(hub.clone(), &root).await;
     }
 
-    let started_ready_workflows = if args.auto_run_ready {
-        run_ready_task_workflows_for_project(hub.clone(), &root, args.max_tasks_per_tick).await?
+    let ready_dispatch_limit = if args.auto_run_ready {
+        match daemon.health().await {
+            Ok(health) => ready_task_dispatch_limit(args.max_tasks_per_tick, &health),
+            Err(_) => args.max_tasks_per_tick,
+        }
     } else {
         0
+    };
+    let ready_workflow_starts = if args.auto_run_ready {
+        run_ready_task_workflows_for_project(hub.clone(), &root, ready_dispatch_limit).await?
+    } else {
+        ReadyTaskWorkflowStartSummary::default()
     };
     let _ = refresh_runtime_binaries_if_main_advanced(
         hub.clone(),
@@ -1994,8 +2699,13 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     let requirements_after = hub.planning().list_requirements().await.unwrap_or_default();
     let requirement_lifecycle_transitions =
         collect_requirement_lifecycle_transitions(&requirements_before, &requirements_after);
-    let task_state_transitions =
-        collect_task_state_transitions(&tasks_before, &tasks, &workflows, &phase_execution_events);
+    let task_state_transitions = collect_task_state_transitions(
+        &tasks_before,
+        &tasks,
+        &workflows,
+        &phase_execution_events,
+        &ready_workflow_starts.started_workflows,
+    );
 
     Ok(ProjectTickSummary {
         project_root: root,
@@ -2017,7 +2727,7 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         reconciled_stale_tasks: reconciled_stale_tasks
             .saturating_add(reconciled_dependency_tasks)
             .saturating_add(reconciled_merge_tasks),
-        started_ready_workflows,
+        started_ready_workflows: ready_workflow_starts.started,
         executed_workflow_phases,
         failed_workflow_phases,
         phase_execution_events,

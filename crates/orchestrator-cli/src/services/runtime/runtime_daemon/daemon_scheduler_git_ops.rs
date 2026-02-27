@@ -1783,6 +1783,10 @@ fn repo_ao_root(project_root: &str) -> Result<PathBuf> {
     Ok(ao_root_dir()?.join(repo_worktree_scope(project_root)))
 }
 
+pub(super) fn daemon_repo_runtime_root(project_root: &str) -> Result<PathBuf> {
+    repo_ao_root(project_root)
+}
+
 fn repo_worktrees_root(project_root: &str) -> Result<PathBuf> {
     Ok(repo_ao_root(project_root)?.join("worktrees"))
 }
