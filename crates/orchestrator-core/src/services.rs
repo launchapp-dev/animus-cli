@@ -754,9 +754,13 @@ impl FileServiceHub {
         Ok(())
     }
 
+    pub fn bootstrap_project_git_repository(project_root: &Path) -> Result<()> {
+        std::fs::create_dir_all(project_root)?;
+        Self::ensure_project_git_repository(project_root)
+    }
+
     fn bootstrap_project_base_configs(project_root: &Path) -> Result<()> {
         std::fs::create_dir_all(project_root)?;
-        Self::ensure_project_git_repository(project_root)?;
 
         let ao_dir = project_root.join(".ao");
         let state_dir = ao_dir.join("state");

@@ -183,10 +183,24 @@ fn e2e_requirements_create_update_and_list() -> Result<()> {
         "second criterion should be appended"
     );
 
-    let requirements_dir = harness.project_root().join(".ao/requirements/generated");
+    let requirements_docs = harness.project_root().join(".ao/docs/requirements.json");
     assert!(
-        requirements_dir.exists(),
-        "requirements generated directory should exist"
+        requirements_docs.exists(),
+        "requirements docs file should exist"
+    );
+    let requirements_docs_payload: Value = serde_json::from_str(
+        &std::fs::read_to_string(&requirements_docs)
+            .context("requirements docs should be readable")?,
+    )
+    .context("requirements docs should contain valid JSON")?;
+    let docs_items = requirements_docs_payload
+        .as_array()
+        .context("requirements docs should contain an array")?;
+    assert!(
+        docs_items
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(requirement_id.as_str())),
+        "requirements docs should contain the created requirement"
     );
 
     Ok(())
@@ -621,6 +635,50 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
     assert!(
         worktree_path.exists(),
         "dry-run should not remove worktree path"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn e2e_git_repo_init_failure_is_reported_and_not_registered() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let occupied_path = harness.project_root().join("occupied-path");
+    std::fs::write(&occupied_path, "blocking file\n")
+        .context("failed to create occupied path file")?;
+    let occupied_path_string = occupied_path.to_string_lossy().to_string();
+
+    let failed_init = harness.run_json_err(&[
+        "git",
+        "repo",
+        "init",
+        "--name",
+        "broken",
+        "--path",
+        &occupied_path_string,
+    ])?;
+    let error_message = failed_init
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        error_message.contains("git init failed"),
+        "expected git init failure message, got: {error_message}"
+    );
+
+    let listed = harness.run_json_ok(&["git", "repo", "list"])?;
+    let repos = listed
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("git repo list should return data array")?;
+    assert!(
+        !repos.iter().any(|repo| {
+            repo.get("name")
+                .and_then(Value::as_str)
+                .map(|name| name == "broken")
+                .unwrap_or(false)
+        }),
+        "failed git init should not register repo entry"
     );
 
     Ok(())

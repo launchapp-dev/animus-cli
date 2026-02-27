@@ -53,11 +53,20 @@ pub(super) fn handle_git_repo(
             if let Some(parent) = repo_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            ProcessCommand::new("git")
+            let output = ProcessCommand::new("git")
                 .arg("init")
                 .arg(&repo_path)
                 .output()
                 .with_context(|| format!("failed to initialize repo at {}", repo_path.display()))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stderr = if stderr.is_empty() {
+                    "git init returned a non-zero exit code without stderr output".to_string()
+                } else {
+                    stderr
+                };
+                anyhow::bail!("git init failed for {}: {stderr}", repo_path.display());
+            }
             let mut registry = load_git_repo_registry(project_root)?;
             registry.repos.retain(|repo| repo.name != args.name);
             registry.repos.push(GitRepoRefCli {

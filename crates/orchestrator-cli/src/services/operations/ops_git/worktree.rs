@@ -20,8 +20,10 @@ pub(super) fn handle_git_worktree(
             command.arg("-C").arg(&repo_path).arg("worktree").arg("add");
             if args.create_branch {
                 command.arg("-b").arg(&args.branch);
+                command.arg(&args.worktree_path);
+            } else {
+                command.arg(&args.worktree_path).arg(&args.branch);
             }
-            command.arg(&args.worktree_path).arg(&args.branch);
             let output = command.output()?;
             if !output.status.success() {
                 anyhow::bail!(
