@@ -1162,6 +1162,7 @@ mod tests {
             .await
             .expect("blocked task should load");
         assert_eq!(unblocked_state.status, TaskStatus::Ready);
+        assert!(!unblocked_state.paused);
         assert!(unblocked_state.blocked_reason.is_none());
     }
 

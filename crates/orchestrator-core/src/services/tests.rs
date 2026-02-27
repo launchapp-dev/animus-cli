@@ -2290,3 +2290,99 @@ async fn execute_requirements_maps_requirement_priority_to_task_priority() {
         }
     }
 }
+
+fn assert_unblocked_task_state(task: &OrchestratorTask, expected_status: TaskStatus) {
+    assert_eq!(task.status, expected_status);
+    assert!(!task.paused);
+    assert!(task.blocked_reason.is_none());
+    assert!(task.blocked_at.is_none());
+    assert!(task.blocked_phase.is_none());
+    assert!(task.blocked_by.is_none());
+}
+
+#[tokio::test]
+async fn set_status_from_blocked_to_ready_clears_paused_and_blocked_fields() {
+    let hub = InMemoryServiceHub::new();
+    let created = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Paused state reset regression".to_string(),
+            description: "Ensure paused flag clears when unblocking".to_string(),
+            task_type: Some(TaskType::Bugfix),
+            priority: Some(Priority::Medium),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create task");
+
+    let blocked = TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Blocked)
+        .await
+        .expect("set blocked status");
+    assert!(blocked.paused);
+    assert!(blocked.blocked_reason.is_some());
+    assert!(blocked.blocked_at.is_some());
+
+    let ready = TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Ready)
+        .await
+        .expect("set ready status");
+    assert_unblocked_task_state(&ready, TaskStatus::Ready);
+}
+
+#[tokio::test]
+async fn update_status_from_on_hold_to_in_progress_clears_paused_and_blocked_fields() {
+    let hub = InMemoryServiceHub::new();
+    let created = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Paused state reset via update".to_string(),
+            description: "Ensure update path clears paused and blocked fields".to_string(),
+            task_type: Some(TaskType::Bugfix),
+            priority: Some(Priority::Medium),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("create task");
+
+    TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Blocked)
+        .await
+        .expect("set blocked status");
+    let on_hold = TaskServiceApi::set_status(&hub, &created.id, TaskStatus::OnHold)
+        .await
+        .expect("set on-hold status");
+    assert_eq!(on_hold.status, TaskStatus::OnHold);
+    assert!(on_hold.paused);
+    assert!(on_hold.blocked_reason.is_some());
+    assert!(on_hold.blocked_at.is_some());
+
+    let in_progress = TaskServiceApi::update(
+        &hub,
+        &created.id,
+        TaskUpdateInput {
+            title: None,
+            description: None,
+            priority: None,
+            status: Some(TaskStatus::InProgress),
+            assignee: None,
+            tags: None,
+            updated_by: Some("tester".to_string()),
+            deadline: None,
+            linked_architecture_entities: None,
+        },
+    )
+    .await
+    .expect("update status to in-progress");
+
+    assert_unblocked_task_state(&in_progress, TaskStatus::InProgress);
+    assert!(
+        in_progress.metadata.started_at.is_some(),
+        "in-progress transition should set started_at"
+    );
+}

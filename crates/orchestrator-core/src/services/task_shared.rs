@@ -12,8 +12,9 @@ pub(super) fn next_task_id(tasks: &HashMap<String, OrchestratorTask>) -> String 
 }
 
 pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus) {
+    let is_blocked_status = status.is_blocked();
     task.status = status;
-    task.paused = status.is_blocked();
+    task.paused = is_blocked_status;
     task.cancelled = matches!(status, TaskStatus::Cancelled);
     if status == TaskStatus::InProgress && task.metadata.started_at.is_none() {
         task.metadata.started_at = Some(Utc::now());
@@ -29,7 +30,8 @@ pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus)
             task.blocked_at = Some(Utc::now());
         }
     }
-    if !status.is_blocked() {
+    if !is_blocked_status {
+        task.paused = false;
         task.blocked_reason = None;
         task.blocked_at = None;
         task.blocked_phase = None;
