@@ -1,5 +1,10 @@
-use crate::McpCommand;
+use crate::{
+    ensure_safe_run_id, event_matches_run, invalid_input_error, not_found_error, run_dir,
+    McpCommand,
+};
 use anyhow::{Context, Result};
+use orchestrator_core::{OrchestratorWorkflow, WorkflowStateManager, WorkflowStatus};
+use protocol::{AgentRunEvent, RunId};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, JsonObject, ServerCapabilities, ServerInfo},
@@ -11,7 +16,12 @@ use schemars::generate::SchemaSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, VecDeque};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::UNIX_EPOCH;
 use tokio::process::Command as TokioCommand;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
@@ -160,6 +170,9 @@ struct DaemonEventsInput {
 
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
 const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
+const OUTPUT_TAIL_SCHEMA: &str = "ao.output.tail.v1";
+const DEFAULT_OUTPUT_TAIL_LIMIT: usize = 50;
+const MAX_OUTPUT_TAIL_LIMIT: usize = 500;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct AgentRunInput {
@@ -228,6 +241,20 @@ struct OutputMonitorInput {
     task_id: Option<String>,
     #[serde(default)]
     phase_id: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct OutputTailInput {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    event_types: Option<Vec<String>>,
     #[serde(default)]
     project_root: Option<String>,
 }
@@ -909,6 +936,27 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.output.tail",
+        description = "Return the most recent output, error, or thinking events for a run or task.",
+        input_schema = ao_schema_for_type::<OutputTailInput>()
+    )]
+    async fn ao_output_tail(
+        &self,
+        params: Parameters<OutputTailInput>,
+    ) -> Result<CallToolResult, McpError> {
+        match build_output_tail_result(&self.default_project_root, params.0) {
+            Ok(result) => Ok(CallToolResult::structured(json!({
+                "tool": "ao.output.tail",
+                "result": result,
+            }))),
+            Err(error) => Ok(CallToolResult::structured_error(json!({
+                "tool": "ao.output.tail",
+                "error": error.to_string(),
+            }))),
+        }
+    }
+
+    #[tool(
         name = "ao.output.jsonl",
         description = "Get JSONL log for an agent run.",
         input_schema = ao_schema_for_type::<OutputJsonlInput>()
@@ -1577,6 +1625,407 @@ fn build_requirements_get_args(id: String) -> Vec<String> {
     ]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputTailEventType {
+    Output,
+    Error,
+    Thinking,
+}
+
+impl OutputTailEventType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Output => "output",
+            Self::Error => "error",
+            Self::Thinking => "thinking",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct OutputTailEventRecord {
+    event_type: String,
+    run_id: String,
+    text: String,
+    source_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stream_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OutputTailResolution {
+    run_id: String,
+    run_dir: PathBuf,
+    resolved_from: &'static str,
+}
+
+fn build_output_tail_result(default_project_root: &str, input: OutputTailInput) -> Result<Value> {
+    let project_root = resolve_daemon_events_project_root(default_project_root, input.project_root);
+    let run_id = normalize_non_empty(input.run_id);
+    let task_id = normalize_non_empty(input.task_id);
+    let event_types = parse_output_tail_event_types(input.event_types)?;
+    let limit = output_tail_limit(input.limit);
+    let resolved = resolve_output_tail_resolution(project_root.as_str(), run_id, task_id)?;
+    let resolved_run_id = RunId(resolved.run_id.clone());
+    let events_path = resolved.run_dir.join("events.jsonl");
+    let events = read_output_tail_events(&events_path, &resolved_run_id, &event_types, limit)?;
+
+    Ok(json!({
+        "schema": OUTPUT_TAIL_SCHEMA,
+        "resolved_run_id": resolved_run_id.0,
+        "resolved_from": resolved.resolved_from,
+        "events_path": events_path.display().to_string(),
+        "limit": limit,
+        "event_types": event_types
+            .iter()
+            .map(|event_type| event_type.as_str())
+            .collect::<Vec<_>>(),
+        "count": events.len(),
+        "events": events,
+    }))
+}
+
+fn normalize_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+fn output_tail_limit(limit: Option<usize>) -> usize {
+    let normalized = limit.unwrap_or(DEFAULT_OUTPUT_TAIL_LIMIT).max(1);
+    normalized.min(MAX_OUTPUT_TAIL_LIMIT)
+}
+
+fn parse_output_tail_event_types(raw: Option<Vec<String>>) -> Result<Vec<OutputTailEventType>> {
+    let values = match raw {
+        Some(values) if values.is_empty() => {
+            return Err(invalid_input_error(
+                "event_types must include at least one of: output|error|thinking",
+            ));
+        }
+        Some(values) => values,
+        None => {
+            return Ok(vec![
+                OutputTailEventType::Output,
+                OutputTailEventType::Thinking,
+            ]);
+        }
+    };
+
+    let mut parsed = Vec::new();
+    for value in values {
+        let event_type = parse_output_tail_event_type(value.as_str())?;
+        if !parsed.contains(&event_type) {
+            parsed.push(event_type);
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_output_tail_event_type(value: &str) -> Result<OutputTailEventType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "output" => Ok(OutputTailEventType::Output),
+        "error" => Ok(OutputTailEventType::Error),
+        "thinking" => Ok(OutputTailEventType::Thinking),
+        _ => Err(invalid_input_error(format!(
+            "invalid event type '{value}'; expected one of: output|error|thinking"
+        ))),
+    }
+}
+
+fn resolve_output_tail_resolution(
+    project_root: &str,
+    run_id: Option<String>,
+    task_id: Option<String>,
+) -> Result<OutputTailResolution> {
+    match (run_id, task_id) {
+        (Some(run_id), None) => resolve_output_tail_run_id(project_root, run_id),
+        (None, Some(task_id)) => resolve_output_tail_task_id(project_root, task_id),
+        (Some(_), Some(_)) => Err(invalid_input_error(
+            "provide exactly one of run_id or task_id",
+        )),
+        (None, None) => Err(invalid_input_error(
+            "provide exactly one of run_id or task_id",
+        )),
+    }
+}
+
+fn resolve_output_tail_run_id(project_root: &str, run_id: String) -> Result<OutputTailResolution> {
+    ensure_safe_run_id(run_id.as_str())?;
+    let run_dir =
+        crate::services::operations::resolve_run_dir_for_lookup(project_root, run_id.as_str())?
+            .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
+    Ok(OutputTailResolution {
+        run_id,
+        run_dir,
+        resolved_from: "run_id",
+    })
+}
+
+fn resolve_output_tail_task_id(
+    project_root: &str,
+    task_id: String,
+) -> Result<OutputTailResolution> {
+    let workflows = workflow_candidates_for_task(project_root, task_id.as_str())?;
+    if workflows.is_empty() {
+        return Err(not_found_error(format!(
+            "workflow not found for task {task_id}"
+        )));
+    }
+
+    for workflow in workflows {
+        if let Some((run_id, run_dir)) =
+            resolve_latest_workflow_run_dir(project_root, workflow.id.as_str())?
+        {
+            return Ok(OutputTailResolution {
+                run_id,
+                run_dir,
+                resolved_from: "task_id",
+            });
+        }
+    }
+
+    Err(not_found_error(format!(
+        "run directory not found for task {task_id}"
+    )))
+}
+
+fn workflow_candidates_for_task(
+    project_root: &str,
+    task_id: &str,
+) -> Result<Vec<OrchestratorWorkflow>> {
+    let manager = WorkflowStateManager::new(project_root);
+    let mut workflows: Vec<OrchestratorWorkflow> = manager
+        .list()
+        .with_context(|| format!("failed to load workflows for task {task_id}"))?
+        .into_iter()
+        .filter(|workflow| workflow.task_id.eq_ignore_ascii_case(task_id))
+        .collect();
+    workflows.sort_by(compare_workflow_candidates);
+    Ok(workflows)
+}
+
+fn compare_workflow_candidates(
+    left: &OrchestratorWorkflow,
+    right: &OrchestratorWorkflow,
+) -> Ordering {
+    workflow_status_priority(left.status)
+        .cmp(&workflow_status_priority(right.status))
+        .then_with(|| workflow_timestamp(right).cmp(&workflow_timestamp(left)))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn workflow_status_priority(status: WorkflowStatus) -> usize {
+    match status {
+        WorkflowStatus::Running => 0,
+        WorkflowStatus::Paused => 1,
+        WorkflowStatus::Pending => 2,
+        WorkflowStatus::Failed => 3,
+        WorkflowStatus::Completed => 4,
+        WorkflowStatus::Cancelled => 5,
+    }
+}
+
+fn workflow_timestamp(workflow: &OrchestratorWorkflow) -> i64 {
+    workflow
+        .completed_at
+        .unwrap_or(workflow.started_at)
+        .timestamp_millis()
+}
+
+fn resolve_latest_workflow_run_dir(
+    project_root: &str,
+    workflow_id: &str,
+) -> Result<Option<(String, PathBuf)>> {
+    let run_ids = run_ids_for_workflow(project_root, workflow_id)?;
+    let mut candidates = Vec::new();
+    for run_id in run_ids {
+        let Some(run_dir) =
+            crate::services::operations::resolve_run_dir_for_lookup(project_root, run_id.as_str())?
+        else {
+            continue;
+        };
+        let events_path = run_dir.join("events.jsonl");
+        let has_events = events_path.exists();
+        let modified_millis = if has_events {
+            path_modified_millis(events_path.as_path())
+        } else {
+            path_modified_millis(run_dir.as_path())
+        };
+        candidates.push((run_id, run_dir, has_events, modified_millis));
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .2
+            .cmp(&left.2)
+            .then_with(|| right.3.cmp(&left.3))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    Ok(candidates
+        .into_iter()
+        .next()
+        .map(|(run_id, run_dir, _, _)| (run_id, run_dir)))
+}
+
+fn run_ids_for_workflow(project_root: &str, workflow_id: &str) -> Result<BTreeSet<String>> {
+    let mut run_ids = BTreeSet::new();
+    let prefix = format!("wf-{workflow_id}-");
+    for runs_root in runs_root_candidates(project_root) {
+        if !runs_root.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&runs_root)
+            .with_context(|| format!("failed to read run directory {}", runs_root.display()))?
+        {
+            let entry = entry?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                continue;
+            };
+            if !name.starts_with(prefix.as_str()) {
+                continue;
+            }
+            if ensure_safe_run_id(name.as_str()).is_err() {
+                continue;
+            }
+            run_ids.insert(name);
+        }
+    }
+    Ok(run_ids)
+}
+
+fn runs_root_candidates(project_root: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(scoped_parent) = run_dir(
+        project_root,
+        &RunId("output-tail-root-probe".to_string()),
+        None,
+    )
+    .parent()
+    {
+        candidates.push(scoped_parent.to_path_buf());
+    }
+    candidates.push(Path::new(project_root).join(".ao").join("runs"));
+    candidates.push(
+        Path::new(project_root)
+            .join(".ao")
+            .join("state")
+            .join("runs"),
+    );
+
+    let mut deduped = Vec::new();
+    for candidate in candidates {
+        if deduped.iter().all(|existing| existing != &candidate) {
+            deduped.push(candidate);
+        }
+    }
+    deduped
+}
+
+fn path_modified_millis(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn read_output_tail_events(
+    events_path: &Path,
+    run_id: &RunId,
+    event_types: &[OutputTailEventType],
+    limit: usize,
+) -> Result<Vec<OutputTailEventRecord>> {
+    if !events_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(events_path)
+        .with_context(|| format!("failed to read events log {}", events_path.display()))?;
+    let mut tail = VecDeque::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
+            continue;
+        };
+        if !event_matches_run(&event, run_id) {
+            continue;
+        }
+        let Some(record) = normalize_tail_event(event, event_types) else {
+            continue;
+        };
+        if tail.len() == limit {
+            let _ = tail.pop_front();
+        }
+        tail.push_back(record);
+    }
+    Ok(tail.into_iter().collect())
+}
+
+fn normalize_tail_event(
+    event: AgentRunEvent,
+    event_types: &[OutputTailEventType],
+) -> Option<OutputTailEventRecord> {
+    match event {
+        AgentRunEvent::OutputChunk {
+            run_id,
+            stream_type,
+            text,
+        } => {
+            if !event_types.contains(&OutputTailEventType::Output) {
+                return None;
+            }
+            Some(OutputTailEventRecord {
+                event_type: OutputTailEventType::Output.as_str().to_string(),
+                run_id: run_id.0,
+                text,
+                source_kind: "output_chunk".to_string(),
+                stream_type: serde_json::to_value(stream_type)
+                    .ok()
+                    .and_then(|value| value.as_str().map(ToOwned::to_owned)),
+            })
+        }
+        AgentRunEvent::Error { run_id, error } => {
+            if !event_types.contains(&OutputTailEventType::Error) {
+                return None;
+            }
+            Some(OutputTailEventRecord {
+                event_type: OutputTailEventType::Error.as_str().to_string(),
+                run_id: run_id.0,
+                text: error,
+                source_kind: "error".to_string(),
+                stream_type: None,
+            })
+        }
+        AgentRunEvent::Thinking { run_id, content } => {
+            if !event_types.contains(&OutputTailEventType::Thinking) {
+                return None;
+            }
+            Some(OutputTailEventRecord {
+                event_type: OutputTailEventType::Thinking.as_str().to_string(),
+                run_id: run_id.0,
+                text: content,
+                source_kind: "thinking".to_string(),
+                stream_type: None,
+            })
+        }
+        AgentRunEvent::Started { .. }
+        | AgentRunEvent::Metadata { .. }
+        | AgentRunEvent::Finished { .. }
+        | AgentRunEvent::ToolCall { .. }
+        | AgentRunEvent::ToolResult { .. }
+        | AgentRunEvent::Artifact { .. } => None,
+    }
+}
+
 fn parse_json(raw: &str) -> Option<Value> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1626,6 +2075,8 @@ mod tests {
     use super::*;
     use crate::services::runtime::daemon_events_log_path;
     use crate::services::runtime::DaemonEventRecord;
+    use chrono::{Duration, Utc};
+    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
 
@@ -1682,6 +2133,72 @@ mod tests {
             .map(|line| format!("{line}\n"))
             .collect::<String>();
         std::fs::write(path, content).expect("daemon event log should be written");
+    }
+
+    fn write_run_events(project_root: &str, run_id: &str, lines: &[String]) {
+        let run_path = run_dir(project_root, &RunId(run_id.to_string()), None);
+        std::fs::create_dir_all(&run_path).expect("run directory should be created");
+        let payload = lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        std::fs::write(run_path.join("events.jsonl"), payload)
+            .expect("run events should be written");
+    }
+
+    fn output_event(run_id: &str, text: &str) -> String {
+        serde_json::to_string(&AgentRunEvent::OutputChunk {
+            run_id: RunId(run_id.to_string()),
+            stream_type: protocol::OutputStreamType::Stdout,
+            text: text.to_string(),
+        })
+        .expect("output event should serialize")
+    }
+
+    fn thinking_event(run_id: &str, content: &str) -> String {
+        serde_json::to_string(&AgentRunEvent::Thinking {
+            run_id: RunId(run_id.to_string()),
+            content: content.to_string(),
+        })
+        .expect("thinking event should serialize")
+    }
+
+    fn error_event(run_id: &str, error: &str) -> String {
+        serde_json::to_string(&AgentRunEvent::Error {
+            run_id: RunId(run_id.to_string()),
+            error: error.to_string(),
+        })
+        .expect("error event should serialize")
+    }
+
+    fn save_workflow(
+        project_root: &str,
+        workflow_id: &str,
+        task_id: &str,
+        status: WorkflowStatus,
+        started_at: chrono::DateTime<Utc>,
+        completed_at: Option<chrono::DateTime<Utc>>,
+    ) {
+        let manager = WorkflowStateManager::new(project_root);
+        manager
+            .save(&OrchestratorWorkflow {
+                id: workflow_id.to_string(),
+                task_id: task_id.to_string(),
+                pipeline_id: None,
+                status,
+                current_phase_index: 0,
+                phases: Vec::new(),
+                machine_state: orchestrator_core::WorkflowMachineState::Idle,
+                current_phase: None,
+                started_at,
+                completed_at,
+                failure_reason: None,
+                checkpoint_metadata: orchestrator_core::WorkflowCheckpointMetadata::default(),
+                rework_counts: HashMap::new(),
+                total_reworks: 0,
+                decision_history: Vec::new(),
+            })
+            .expect("workflow should be written");
     }
 
     #[test]
@@ -2106,5 +2623,275 @@ mod tests {
         assert!(events.iter().all(|event| {
             event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str())
         }));
+    }
+
+    #[test]
+    fn build_output_tail_result_requires_exactly_one_identifier() {
+        let err_none = build_output_tail_result(
+            "/tmp/project",
+            OutputTailInput {
+                run_id: None,
+                task_id: None,
+                limit: None,
+                event_types: None,
+                project_root: None,
+            },
+        )
+        .expect_err("missing identifiers should fail");
+        assert!(err_none.to_string().contains("exactly one"));
+
+        let err_both = build_output_tail_result(
+            "/tmp/project",
+            OutputTailInput {
+                run_id: Some("run-1".to_string()),
+                task_id: Some("TASK-1".to_string()),
+                limit: None,
+                event_types: None,
+                project_root: None,
+            },
+        )
+        .expect_err("multiple identifiers should fail");
+        assert!(err_both.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn build_output_tail_result_rejects_invalid_event_type() {
+        let err = build_output_tail_result(
+            "/tmp/project",
+            OutputTailInput {
+                run_id: Some("run-1".to_string()),
+                task_id: None,
+                limit: None,
+                event_types: Some(vec!["unknown".to_string()]),
+                project_root: None,
+            },
+        )
+        .expect_err("unknown filter should fail");
+        assert!(err.to_string().contains("invalid event type"));
+    }
+
+    #[test]
+    fn build_output_tail_result_defaults_to_output_and_thinking() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let temp = TempDir::new().expect("tempdir should be created");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should exist");
+        let root = project_root.to_string_lossy().to_string();
+        let run_id = "wf-default-filter-phase-0-a1";
+        write_run_events(
+            root.as_str(),
+            run_id,
+            &[
+                output_event(run_id, "first output"),
+                "{malformed".to_string(),
+                error_event(run_id, "ignored error"),
+                thinking_event(run_id, "visible thought"),
+            ],
+        );
+
+        let result = build_output_tail_result(
+            root.as_str(),
+            OutputTailInput {
+                run_id: Some(run_id.to_string()),
+                task_id: None,
+                limit: None,
+                event_types: None,
+                project_root: None,
+            },
+        )
+        .expect("tail result should build");
+
+        assert_eq!(
+            result.get("schema").and_then(Value::as_str),
+            Some(OUTPUT_TAIL_SCHEMA)
+        );
+        assert_eq!(
+            result.get("resolved_from").and_then(Value::as_str),
+            Some("run_id")
+        );
+        assert_eq!(result.get("limit").and_then(Value::as_u64), Some(50));
+        assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].get("event_type").and_then(Value::as_str),
+            Some("output")
+        );
+        assert_eq!(
+            events[0].get("text").and_then(Value::as_str),
+            Some("first output")
+        );
+        assert_eq!(
+            events[1].get("event_type").and_then(Value::as_str),
+            Some("thinking")
+        );
+        assert_eq!(
+            events[1].get("text").and_then(Value::as_str),
+            Some("visible thought")
+        );
+    }
+
+    #[test]
+    fn build_output_tail_result_applies_filter_and_limit_in_order() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let temp = TempDir::new().expect("tempdir should be created");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should exist");
+        let root = project_root.to_string_lossy().to_string();
+        let run_id = "wf-limit-filter-phase-0-b2";
+        write_run_events(
+            root.as_str(),
+            run_id,
+            &[
+                output_event(run_id, "out-1"),
+                thinking_event(run_id, "think-1"),
+                output_event(run_id, "out-2"),
+                error_event(run_id, "err-1"),
+            ],
+        );
+
+        let result = build_output_tail_result(
+            root.as_str(),
+            OutputTailInput {
+                run_id: Some(run_id.to_string()),
+                task_id: None,
+                limit: Some(2),
+                event_types: Some(vec![
+                    "output".to_string(),
+                    "thinking".to_string(),
+                    "error".to_string(),
+                ]),
+                project_root: None,
+            },
+        )
+        .expect("tail result should build");
+
+        assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events[0].get("text").and_then(Value::as_str), Some("out-2"));
+        assert_eq!(events[1].get("text").and_then(Value::as_str), Some("err-1"));
+        assert_eq!(
+            events[1].get("event_type").and_then(Value::as_str),
+            Some("error")
+        );
+    }
+
+    #[test]
+    fn build_output_tail_result_clamps_limit_to_minimum() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let temp = TempDir::new().expect("tempdir should be created");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should exist");
+        let root = project_root.to_string_lossy().to_string();
+        let run_id = "wf-limit-min-phase-0-c3";
+        write_run_events(
+            root.as_str(),
+            run_id,
+            &[error_event(run_id, "first"), error_event(run_id, "second")],
+        );
+
+        let result = build_output_tail_result(
+            root.as_str(),
+            OutputTailInput {
+                run_id: Some(run_id.to_string()),
+                task_id: None,
+                limit: Some(0),
+                event_types: Some(vec!["error".to_string()]),
+                project_root: None,
+            },
+        )
+        .expect("tail result should build");
+
+        assert_eq!(result.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(result.get("count").and_then(Value::as_u64), Some(1));
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("text").and_then(Value::as_str),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn build_output_tail_result_resolves_task_to_running_workflow_run() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let temp = TempDir::new().expect("tempdir should be created");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should exist");
+        let root = project_root.to_string_lossy().to_string();
+        let now = Utc::now();
+
+        save_workflow(
+            root.as_str(),
+            "wf-completed",
+            "TASK-043",
+            WorkflowStatus::Completed,
+            now - Duration::minutes(20),
+            Some(now - Duration::minutes(10)),
+        );
+        save_workflow(
+            root.as_str(),
+            "wf-running",
+            "TASK-043",
+            WorkflowStatus::Running,
+            now - Duration::minutes(1),
+            None,
+        );
+
+        let completed_run = "wf-wf-completed-implementation-0-old";
+        let running_run = "wf-wf-running-implementation-0-new";
+        write_run_events(
+            root.as_str(),
+            completed_run,
+            &[output_event(completed_run, "completed-output")],
+        );
+        write_run_events(
+            root.as_str(),
+            running_run,
+            &[output_event(running_run, "running-output")],
+        );
+
+        let result = build_output_tail_result(
+            root.as_str(),
+            OutputTailInput {
+                run_id: None,
+                task_id: Some("TASK-043".to_string()),
+                limit: Some(10),
+                event_types: Some(vec!["output".to_string()]),
+                project_root: None,
+            },
+        )
+        .expect("tail result should build");
+
+        assert_eq!(
+            result.get("resolved_from").and_then(Value::as_str),
+            Some("task_id")
+        );
+        assert_eq!(
+            result.get("resolved_run_id").and_then(Value::as_str),
+            Some(running_run)
+        );
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("text").and_then(Value::as_str),
+            Some("running-output")
+        );
     }
 }

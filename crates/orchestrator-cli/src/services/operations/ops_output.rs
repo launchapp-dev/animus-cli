@@ -40,7 +40,10 @@ fn run_dir_candidates(project_root: &str, run_id: &str) -> Vec<PathBuf> {
     ]
 }
 
-fn resolve_run_dir_for_lookup(project_root: &str, run_id: &str) -> Result<Option<PathBuf>> {
+pub(crate) fn resolve_run_dir_for_lookup(
+    project_root: &str,
+    run_id: &str,
+) -> Result<Option<PathBuf>> {
     ensure_safe_run_id(run_id)?;
     Ok(run_dir_candidates(project_root, run_id)
         .into_iter()
