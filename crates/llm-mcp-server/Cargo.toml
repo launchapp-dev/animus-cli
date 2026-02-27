@@ -23,7 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Web server for HTTP transport
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors"] }
 tower = { version = "0.4", features = ["util"] }
 
