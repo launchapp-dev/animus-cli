@@ -23,9 +23,9 @@
     "created_at": "2026-02-27T16:06:05.747967Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-27T16:06:05.747967Z",
+    "updated_at": "2026-02-27T16:09:25.181485Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add GraphQL API endpoint alongside REST",
   "type": "feature",

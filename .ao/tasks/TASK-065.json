@@ -23,9 +23,9 @@
     "created_at": "2026-02-27T16:05:12.945608Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-27T16:05:12.945608Z",
+    "updated_at": "2026-02-27T16:09:11.100918Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add real-time dashboard with live daemon metrics and SSE integration",
   "type": "feature",

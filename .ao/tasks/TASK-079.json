@@ -23,9 +23,9 @@
     "created_at": "2026-02-27T16:06:02.786910Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-27T16:06:02.786910Z",
+    "updated_at": "2026-02-27T16:09:24.479122Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add batch/multi-task operation tools to MCP",
   "type": "feature",

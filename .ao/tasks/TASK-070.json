@@ -23,9 +23,9 @@
     "created_at": "2026-02-27T16:05:29.494050Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-27T16:05:29.494050Z",
+    "updated_at": "2026-02-27T16:09:14.361038Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add interactive task management to TUI (CRUD, status updates, assign)",
   "type": "feature",
