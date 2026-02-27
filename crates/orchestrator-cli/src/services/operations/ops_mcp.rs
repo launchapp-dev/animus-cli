@@ -152,6 +152,9 @@ struct DaemonEventsInput {
     project_root: Option<String>,
 }
 
+const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
+const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct AgentRunInput {
     #[serde(default = "default_codex")]
@@ -762,16 +765,16 @@ impl AoMcpServer {
         &self,
         params: Parameters<DaemonEventsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec![
-            "daemon".to_string(),
-            "events".to_string(),
-            "--follow".to_string(),
-            "false".to_string(),
-        ];
-        push_opt_usize(&mut args, "--limit", input.limit);
-        self.run_tool("ao.daemon.events", args, input.project_root)
-            .await
+        match build_daemon_events_poll_result(&self.default_project_root, params.0) {
+            Ok(result) => Ok(CallToolResult::structured(json!({
+                "tool": "ao.daemon.events",
+                "result": result,
+            }))),
+            Err(error) => Ok(CallToolResult::structured_error(json!({
+                "tool": "ao.daemon.events",
+                "error": error.to_string(),
+            }))),
+        }
     }
 
     #[tool(
@@ -1465,7 +1468,11 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_bool_set(&mut args, "--auto-merge", input.auto_merge);
     push_bool_set(&mut args, "--auto-pr", input.auto_pr);
-    push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
+    push_bool_set(
+        &mut args,
+        "--auto-commit-before-merge",
+        input.auto_commit_before_merge,
+    );
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
@@ -1553,9 +1560,93 @@ fn parse_json(raw: &str) -> Option<Value> {
     serde_json::from_str(trimmed).ok()
 }
 
+fn daemon_events_poll_limit(limit: Option<usize>) -> usize {
+    let normalized = limit.unwrap_or(DEFAULT_DAEMON_EVENTS_LIMIT).max(1);
+    normalized.min(MAX_DAEMON_EVENTS_LIMIT)
+}
+
+fn build_daemon_events_poll_result(
+    default_project_root: &str,
+    input: DaemonEventsInput,
+) -> Result<Value> {
+    let project_root = input
+        .project_root
+        .unwrap_or_else(|| default_project_root.to_string());
+    let limit = daemon_events_poll_limit(input.limit);
+    let response =
+        crate::services::runtime::poll_daemon_events(Some(limit), Some(project_root.as_str()))?;
+    Ok(json!({
+        "schema": response.schema,
+        "events_path": response.events_path,
+        "project_root": project_root,
+        "limit": limit,
+        "count": response.count,
+        "events": response.events,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::runtime::daemon_events_log_path;
+    use crate::services::runtime::DaemonEventRecord;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::TempDir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn sample_event(seq: u64, event_type: &str, project_root: &str) -> DaemonEventRecord {
+        DaemonEventRecord {
+            schema: "ao.daemon.event.v1".to_string(),
+            id: format!("evt-{seq}"),
+            seq,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            event_type: event_type.to_string(),
+            project_root: Some(project_root.to_string()),
+            data: json!({ "seq": seq }),
+        }
+    }
+
+    fn write_events(lines: &[String]) {
+        let path = daemon_events_log_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("daemon event parent directory should exist");
+        }
+        let content = lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
+        std::fs::write(path, content).expect("daemon event log should be written");
+    }
 
     #[test]
     fn build_task_get_args_includes_id() {
@@ -1649,10 +1740,7 @@ mod tests {
     fn build_daemon_start_args_defaults_minimal() {
         let input = DaemonStartInput::default();
         let args = build_daemon_start_args(&input);
-        assert_eq!(
-            args,
-            vec!["daemon".to_string(), "start".to_string()]
-        );
+        assert_eq!(args, vec!["daemon".to_string(), "start".to_string()]);
     }
 
     #[test]
@@ -1759,5 +1847,98 @@ mod tests {
                 "global".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn daemon_events_poll_limit_defaults_and_clamps() {
+        assert_eq!(daemon_events_poll_limit(None), DEFAULT_DAEMON_EVENTS_LIMIT);
+        assert_eq!(daemon_events_poll_limit(Some(0)), 1);
+        assert_eq!(
+            daemon_events_poll_limit(Some(MAX_DAEMON_EVENTS_LIMIT + 25)),
+            MAX_DAEMON_EVENTS_LIMIT
+        );
+    }
+
+    #[test]
+    fn build_daemon_events_poll_result_returns_non_null_structured_events() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let config_root = TempDir::new().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(config_root.path().to_string_lossy().as_ref()),
+        );
+        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+
+        let project = TempDir::new().expect("project temp dir");
+        let project_root = project.path().to_string_lossy().to_string();
+        write_events(&[
+            serde_json::to_string(&sample_event(1, "queue", project_root.as_str()))
+                .expect("event json"),
+            "{not-json".to_string(),
+            serde_json::to_string(&sample_event(2, "workflow", project_root.as_str()))
+                .expect("event json"),
+        ]);
+
+        let result = build_daemon_events_poll_result(
+            project_root.as_str(),
+            DaemonEventsInput {
+                limit: Some(10),
+                project_root: Some(project_root.clone()),
+            },
+        )
+        .expect("poll result should be built");
+
+        assert_eq!(
+            result.get("schema").and_then(Value::as_str),
+            Some("ao.daemon.events.poll.v1")
+        );
+        assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
+        assert_eq!(events[1].get("seq").and_then(Value::as_u64), Some(2));
+    }
+
+    #[test]
+    fn build_daemon_events_poll_result_filters_by_project_root() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let config_root = TempDir::new().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set(
+            "AO_CONFIG_DIR",
+            Some(config_root.path().to_string_lossy().as_ref()),
+        );
+        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+
+        let project_a = TempDir::new().expect("project A");
+        let project_b = TempDir::new().expect("project B");
+        let root_a = project_a.path().to_string_lossy().to_string();
+        let root_b = project_b.path().to_string_lossy().to_string();
+        write_events(&[
+            serde_json::to_string(&sample_event(1, "queue", root_a.as_str())).expect("event json"),
+            serde_json::to_string(&sample_event(2, "queue", root_b.as_str())).expect("event json"),
+            serde_json::to_string(&sample_event(3, "log", root_a.as_str())).expect("event json"),
+        ]);
+
+        let result = build_daemon_events_poll_result(
+            root_a.as_str(),
+            DaemonEventsInput {
+                limit: Some(50),
+                project_root: Some(root_a.clone()),
+            },
+        )
+        .expect("poll result should be built");
+        let events = result
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("events should be an array");
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| {
+            event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str())
+        }));
+        assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
+        assert_eq!(events[1].get("seq").and_then(Value::as_u64), Some(3));
     }
 }

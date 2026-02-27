@@ -29,7 +29,7 @@ use daemon_registry::{
 };
 use daemon_run::handle_daemon_run;
 
-pub(crate) use daemon_events::{daemon_events_log_path, DaemonEventRecord};
+pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
 pub(crate) use daemon_registry::canonicalize_lossy;
 
 #[cfg(unix)]
