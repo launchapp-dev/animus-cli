@@ -95,12 +95,30 @@ pub struct AgentRuntimeOverrides {
     pub codex_config_overrides: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentToolPolicy {
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub system_prompt: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub mcp_servers: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub tool_policy: AgentToolPolicy,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub capabilities: BTreeMap<String, bool>,
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
@@ -543,6 +561,42 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
         kind: "implementation_result".to_string(),
         required_fields: vec!["commit_message".to_string()],
     };
+    let swe_mcp_servers = BTreeMap::from([(
+        "ao".to_string(),
+        vec![
+            "task.get*".to_string(),
+            "task.list*".to_string(),
+            "workflow.get*".to_string(),
+            "workflow.list*".to_string(),
+            "output.*".to_string(),
+            "history.*".to_string(),
+            "errors.*".to_string(),
+        ],
+    )]);
+    let swe_tool_policy = AgentToolPolicy {
+        allow: vec![
+            "task.*".to_string(),
+            "workflow.*".to_string(),
+            "output.*".to_string(),
+            "history.*".to_string(),
+            "errors.*".to_string(),
+        ],
+        deny: vec![
+            "project.remove".to_string(),
+            "daemon.stop".to_string(),
+            "requirements.delete".to_string(),
+        ],
+    };
+    let swe_capabilities = BTreeMap::from([
+        ("planning".to_string(), false),
+        ("queue_management".to_string(), false),
+        ("scheduling".to_string(), false),
+        ("requirements_authoring".to_string(), false),
+        ("acceptance_validation".to_string(), false),
+        ("implementation".to_string(), true),
+        ("testing".to_string(), true),
+        ("code_review".to_string(), true),
+    ]);
 
     AgentRuntimeConfig {
         schema: AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
@@ -566,6 +620,11 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 AgentProfile {
                     description: "Default workflow phase agent profile".to_string(),
                     system_prompt: "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.".to_string(),
+                    role: None,
+                    mcp_servers: BTreeMap::new(),
+                    tool_policy: AgentToolPolicy::default(),
+                    skills: vec![],
+                    capabilities: BTreeMap::new(),
                     tool: None,
                     model: None,
                     fallback_models: vec![],
@@ -581,8 +640,168 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
             (
                 "implementation".to_string(),
                 AgentProfile {
-                    description: "Implementation-focused coding agent profile".to_string(),
-                    system_prompt: "You are the implementation agent. Make minimal production-ready code changes and emit machine-readable completion payloads required by policy.".to_string(),
+                    description: "Compatibility alias for the software engineer persona.".to_string(),
+                    system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
+                    role: Some("software_engineer".to_string()),
+                    mcp_servers: swe_mcp_servers.clone(),
+                    tool_policy: swe_tool_policy.clone(),
+                    skills: vec![
+                        "implementation".to_string(),
+                        "testing".to_string(),
+                        "code-review".to_string(),
+                        "debugging".to_string(),
+                    ],
+                    capabilities: swe_capabilities.clone(),
+                    tool: None,
+                    model: None,
+                    fallback_models: vec![],
+                    reasoning_effort: None,
+                    web_search: None,
+                    network_access: None,
+                    timeout_secs: None,
+                    max_attempts: None,
+                    extra_args: vec![],
+                    codex_config_overrides: vec![],
+                },
+            ),
+            (
+                "em".to_string(),
+                AgentProfile {
+                    description: "Engineering Manager persona for prioritization, queue management, and scheduling.".to_string(),
+                    system_prompt: "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.".to_string(),
+                    role: Some("engineering_manager".to_string()),
+                    mcp_servers: BTreeMap::from([(
+                        "ao".to_string(),
+                        vec![
+                            "task.list*".to_string(),
+                            "task.prioritized*".to_string(),
+                            "task.next*".to_string(),
+                            "task.stats*".to_string(),
+                            "task.update*".to_string(),
+                            "task-control.*".to_string(),
+                            "workflow.*".to_string(),
+                            "history.*".to_string(),
+                        ],
+                    )]),
+                    tool_policy: AgentToolPolicy {
+                        allow: vec![
+                            "task.*".to_string(),
+                            "task-control.*".to_string(),
+                            "workflow.*".to_string(),
+                            "history.*".to_string(),
+                        ],
+                        deny: vec![
+                            "task.delete".to_string(),
+                            "requirements.delete".to_string(),
+                            "project.remove".to_string(),
+                            "git.*".to_string(),
+                        ],
+                    },
+                    skills: vec![
+                        "prioritization".to_string(),
+                        "queue-management".to_string(),
+                        "scheduling".to_string(),
+                        "risk-management".to_string(),
+                    ],
+                    capabilities: BTreeMap::from([
+                        ("planning".to_string(), true),
+                        ("queue_management".to_string(), true),
+                        ("scheduling".to_string(), true),
+                        ("requirements_authoring".to_string(), false),
+                        ("acceptance_validation".to_string(), true),
+                        ("implementation".to_string(), false),
+                        ("testing".to_string(), false),
+                        ("code_review".to_string(), true),
+                    ]),
+                    tool: None,
+                    model: None,
+                    fallback_models: vec![],
+                    reasoning_effort: None,
+                    web_search: None,
+                    network_access: None,
+                    timeout_secs: None,
+                    max_attempts: None,
+                    extra_args: vec![],
+                    codex_config_overrides: vec![],
+                },
+            ),
+            (
+                "po".to_string(),
+                AgentProfile {
+                    description: "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.".to_string(),
+                    system_prompt: "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.".to_string(),
+                    role: Some("product_owner".to_string()),
+                    mcp_servers: BTreeMap::from([(
+                        "ao".to_string(),
+                        vec![
+                            "vision.*".to_string(),
+                            "requirements.*".to_string(),
+                            "task.get*".to_string(),
+                            "task.list*".to_string(),
+                            "review.*".to_string(),
+                            "qa.*".to_string(),
+                            "workflow.get*".to_string(),
+                            "workflow.list*".to_string(),
+                        ],
+                    )]),
+                    tool_policy: AgentToolPolicy {
+                        allow: vec![
+                            "vision.*".to_string(),
+                            "requirements.*".to_string(),
+                            "task.*".to_string(),
+                            "review.*".to_string(),
+                            "qa.*".to_string(),
+                            "workflow.*".to_string(),
+                        ],
+                        deny: vec![
+                            "task.delete".to_string(),
+                            "project.remove".to_string(),
+                            "git.*".to_string(),
+                        ],
+                    },
+                    skills: vec![
+                        "vision-alignment".to_string(),
+                        "requirements-management".to_string(),
+                        "acceptance-criteria".to_string(),
+                        "deliverable-validation".to_string(),
+                    ],
+                    capabilities: BTreeMap::from([
+                        ("planning".to_string(), true),
+                        ("queue_management".to_string(), false),
+                        ("scheduling".to_string(), false),
+                        ("requirements_authoring".to_string(), true),
+                        ("acceptance_validation".to_string(), true),
+                        ("implementation".to_string(), false),
+                        ("testing".to_string(), false),
+                        ("code_review".to_string(), true),
+                    ]),
+                    tool: None,
+                    model: None,
+                    fallback_models: vec![],
+                    reasoning_effort: None,
+                    web_search: None,
+                    network_access: None,
+                    timeout_secs: None,
+                    max_attempts: None,
+                    extra_args: vec![],
+                    codex_config_overrides: vec![],
+                },
+            ),
+            (
+                "swe".to_string(),
+                AgentProfile {
+                    description: "Software Engineer persona for implementation, testing, and code review.".to_string(),
+                    system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
+                    role: Some("software_engineer".to_string()),
+                    mcp_servers: swe_mcp_servers,
+                    tool_policy: swe_tool_policy,
+                    skills: vec![
+                        "implementation".to_string(),
+                        "testing".to_string(),
+                        "code-review".to_string(),
+                        "debugging".to_string(),
+                    ],
+                    capabilities: swe_capabilities,
                     tool: None,
                     model: None,
                     fallback_models: vec![],
@@ -618,7 +837,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 "requirements".to_string(),
                 PhaseExecutionDefinition {
                     mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
+                    agent_id: Some("po".to_string()),
                     directive: Some("Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.".to_string()),
                     runtime: None,
                     output_contract: None,
@@ -695,7 +914,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 "implementation".to_string(),
                 PhaseExecutionDefinition {
                     mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("implementation".to_string()),
+                    agent_id: Some("swe".to_string()),
                     directive: Some(
                         "Implement production-quality code for this task. Keep changes focused and executable."
                             .to_string(),
@@ -720,7 +939,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 "code-review".to_string(),
                 PhaseExecutionDefinition {
                     mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
+                    agent_id: Some("swe".to_string()),
                     directive: Some("Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.".to_string()),
                     runtime: None,
                     output_contract: None,
@@ -734,7 +953,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 "testing".to_string(),
                 PhaseExecutionDefinition {
                     mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
+                    agent_id: Some("swe".to_string()),
                     directive: Some("Add or update tests and validate behavior. Ensure failures are addressed before finishing.".to_string()),
                     runtime: None,
                     output_contract: None,
@@ -1226,6 +1445,54 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
                 agent_id
             ));
         }
+
+        if profile
+            .role
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(anyhow!("agents['{}'].role must not be empty", agent_id));
+        }
+
+        if profile.mcp_servers.iter().any(|(server, patterns)| {
+            server.trim().is_empty() || patterns.iter().any(|pattern| pattern.trim().is_empty())
+        }) {
+            return Err(anyhow!(
+                "agents['{}'].mcp_servers must not contain empty server ids or tool patterns",
+                agent_id
+            ));
+        }
+
+        if profile
+            .tool_policy
+            .allow
+            .iter()
+            .chain(profile.tool_policy.deny.iter())
+            .any(|value| value.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "agents['{}'].tool_policy must not contain empty patterns",
+                agent_id
+            ));
+        }
+
+        if profile.skills.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!(
+                "agents['{}'].skills must not contain empty values",
+                agent_id
+            ));
+        }
+
+        if profile
+            .capabilities
+            .keys()
+            .any(|capability| capability.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "agents['{}'].capabilities must not contain empty capability keys",
+                agent_id
+            ));
+        }
     }
 
     if config.phases.is_empty() {
@@ -1267,11 +1534,56 @@ mod tests {
     #[test]
     fn builtin_defaults_expose_phase_definitions() {
         let config = builtin_agent_runtime_config();
-        assert_eq!(
-            config.phase_agent_id("implementation"),
-            Some("implementation")
-        );
+        assert_eq!(config.phase_agent_id("requirements"), Some("po"));
+        assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
+        assert_eq!(config.phase_agent_id("code-review"), Some("swe"));
+        assert_eq!(config.phase_agent_id("testing"), Some("swe"));
         assert!(config.phase_output_json_schema("implementation").is_some());
+    }
+
+    #[test]
+    fn builtin_defaults_include_em_po_and_swe_profiles() {
+        let config = builtin_agent_runtime_config();
+        for agent_id in ["em", "po", "swe"] {
+            let profile = config
+                .agent_profile(agent_id)
+                .expect("builtin profile should exist");
+            assert!(!profile.description.trim().is_empty());
+            assert!(!profile.system_prompt.trim().is_empty());
+            assert!(profile.role.as_deref().is_some_and(|role| !role.is_empty()));
+            assert!(!profile.capabilities.is_empty());
+            assert!(!profile.mcp_servers.is_empty());
+        }
+    }
+
+    #[test]
+    fn builtin_json_and_fallback_match_persona_phase_defaults() {
+        let from_json =
+            serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
+                .expect("builtin json should deserialize");
+        validate_agent_runtime_config(&from_json).expect("builtin json should validate");
+        let fallback = hardcoded_builtin_agent_runtime_config();
+
+        for phase_id in ["requirements", "implementation", "code-review", "testing"] {
+            assert_eq!(
+                from_json.phase_agent_id(phase_id),
+                fallback.phase_agent_id(phase_id)
+            );
+        }
+
+        for agent_id in ["em", "po", "swe"] {
+            let json_profile = from_json
+                .agent_profile(agent_id)
+                .expect("json profile should exist");
+            let fallback_profile = fallback
+                .agent_profile(agent_id)
+                .expect("fallback profile should exist");
+            assert_eq!(json_profile.role, fallback_profile.role);
+            assert_eq!(json_profile.mcp_servers, fallback_profile.mcp_servers);
+            assert_eq!(json_profile.tool_policy, fallback_profile.tool_policy);
+            assert_eq!(json_profile.skills, fallback_profile.skills);
+            assert_eq!(json_profile.capabilities, fallback_profile.capabilities);
+        }
     }
 
     #[test]

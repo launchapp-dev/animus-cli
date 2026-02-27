@@ -529,6 +529,11 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         } else {
                             profile.system_prompt.clone()
                         },
+                        role: None,
+                        mcp_servers: BTreeMap::new(),
+                        tool_policy: Default::default(),
+                        skills: Vec::new(),
+                        capabilities: BTreeMap::new(),
                         tool: profile.tool.clone(),
                         model: profile.model.clone(),
                         fallback_models: profile.fallback_models.clone(),
