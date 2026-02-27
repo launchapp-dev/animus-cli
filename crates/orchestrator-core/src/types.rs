@@ -741,6 +741,57 @@ pub struct WorkflowDecisionRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PhaseDecisionVerdict {
+    Advance,
+    Rework,
+    Fail,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseEvidenceKind {
+    TestsPassed,
+    TestsFailed,
+    CodeReviewClean,
+    CodeReviewIssues,
+    FilesModified,
+    RequirementsMet,
+    ResearchComplete,
+    ManualVerification,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseEvidence {
+    pub kind: PhaseEvidenceKind,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+}
+
+/// A phase-level decision emitted by a workflow phase contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseDecision {
+    pub kind: String,
+    pub phase_id: String,
+    pub verdict: PhaseDecisionVerdict,
+    pub confidence: f32,
+    pub risk: WorkflowDecisionRisk,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub evidence: Vec<PhaseEvidence>,
+    #[serde(default)]
+    pub guardrail_violations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowPhaseStatus {
     Pending,
@@ -1177,7 +1228,11 @@ pub struct WorkflowRunInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{Priority, RequirementPriority};
+    use super::{
+        PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority,
+        RequirementPriority, WorkflowDecisionRisk,
+    };
+    use serde_json::json;
 
     #[test]
     fn requirement_priority_to_task_priority_mapping_is_stable() {
@@ -1188,5 +1243,66 @@ mod tests {
         );
         assert_eq!(RequirementPriority::Could.to_task_priority(), Priority::Low);
         assert_eq!(RequirementPriority::Wont.to_task_priority(), Priority::Low);
+    }
+
+    #[test]
+    fn phase_decision_deserializes_with_expected_defaults() {
+        let input = json!({
+            "kind": "phase_decision",
+            "phase_id": "testing",
+            "verdict": "advance",
+            "confidence": 0.96,
+            "risk": "low"
+        });
+
+        let parsed: PhaseDecision = serde_json::from_value(input)
+            .expect("phase decision should parse with optional fields omitted");
+
+        assert_eq!(parsed.kind, "phase_decision");
+        assert_eq!(parsed.phase_id, "testing");
+        assert_eq!(parsed.verdict, PhaseDecisionVerdict::Advance);
+        assert_eq!(parsed.confidence, 0.96);
+        assert_eq!(parsed.risk, WorkflowDecisionRisk::Low);
+        assert!(parsed.reason.is_empty());
+        assert!(parsed.evidence.is_empty());
+        assert!(parsed.guardrail_violations.is_empty());
+        assert!(parsed.commit_message.is_none());
+    }
+
+    #[test]
+    fn phase_decision_serializes_with_evidence_payload() {
+        let decision = PhaseDecision {
+            kind: "phase_decision".to_string(),
+            phase_id: "testing".to_string(),
+            verdict: PhaseDecisionVerdict::Advance,
+            confidence: 0.99,
+            risk: WorkflowDecisionRisk::Low,
+            reason: "All required checks passed".to_string(),
+            evidence: vec![PhaseEvidence {
+                kind: PhaseEvidenceKind::TestsPassed,
+                description: "cargo test -p orchestrator-core".to_string(),
+                file_path: Some("crates/orchestrator-core/src/types.rs".to_string()),
+                value: Some(json!({ "tests": 2 })),
+            }],
+            guardrail_violations: vec![],
+            commit_message: Some("test: validate phase decision contract".to_string()),
+        };
+
+        let serialized =
+            serde_json::to_value(&decision).expect("phase decision should serialize successfully");
+
+        assert_eq!(serialized["kind"], "phase_decision");
+        assert_eq!(serialized["verdict"], "advance");
+        assert_eq!(serialized["risk"], "low");
+        assert_eq!(serialized["evidence"][0]["kind"], "tests_passed");
+        assert_eq!(
+            serialized["evidence"][0]["description"],
+            "cargo test -p orchestrator-core"
+        );
+        assert_eq!(serialized["evidence"][0]["value"]["tests"], 2);
+        assert_eq!(
+            serialized["commit_message"],
+            "test: validate phase decision contract"
+        );
     }
 }
