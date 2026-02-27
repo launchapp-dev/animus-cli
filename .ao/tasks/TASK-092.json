@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Extend AgentProfile in agent_runtime_config.rs to support: role (string), mcp_servers (map of server configs with tool_policy), skills (vec of skill IDs), capabilities (map of bool flags), and project_overrides. Add new types: AgentToolPolicy (allowlist/blocklist with glob patterns), AgentMcpServerConfig (source: builtin|custom, tool_policy, env vars), AgentCapabilities. Keep backward compatible \u2014 all new fields are Option with defaults. Existing 'default' and 'implementation' profiles continue working unchanged.",
+  "estimated_effort": null,
+  "id": "TASK-092",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T16:27:07.926140Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T16:27:07.926140Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "ready",
+  "tags": [],
+  "title": "Extend agent profile schema with role, mcp_servers, skills, tool_policy, and capabilities",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

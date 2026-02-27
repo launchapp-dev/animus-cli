@@ -1,0 +1,46 @@
+{
+  "acceptance_criteria": [
+    "Agent profiles are defined in agent-runtime-config with: role, system_prompt, model, mcp_servers, skills, tool_access_policy, and per-project overrides.",
+    "When the daemon spawns an agent, it automatically configures the agent's MCP connections based on its profile \u2014 the agent receives only the tools its role permits.",
+    "The built-in ao CLI MCP server is available to all agents by default, with tool access scoped by the agent's tool_access_policy (e.g., EM gets task.* and queue.*, PO gets requirement.* and vision.*).",
+    "Custom MCP servers can be registered per-project in .ao/config.json with command/args/env definitions, and assigned to agent profiles.",
+    "At least 3 built-in agent personas exist: EM (Engineering Manager), PO (Product Owner), SWE (Software Engineer), each with distinct system prompts, tool access, and default behaviors.",
+    "Agent profiles support a skills array that defines reusable prompt fragments or behavioral directives injected into the agent's context.",
+    "Tool access policies support both allowlist (only these tools) and blocklist (everything except these) patterns with glob-style matching (e.g., 'ao.task.*').",
+    "Project-level overrides in .ao/config.json can extend or restrict any agent profile field without modifying the global config.",
+    "The MCP server injection works for all supported CLI tools (codex, claude, gemini, opencode) using existing native MCP config mechanisms.",
+    "Agent profiles are manageable via CLI commands: ao agent-profile list, ao agent-profile show <id>, ao agent-profile create, ao agent-profile update.",
+    "Inter-agent communication is possible through a shared MCP tool (ao.agent.message) that posts messages to other running agents' context."
+  ],
+  "category": "agent-system",
+  "comments": [],
+  "created_at": "2026-02-27T16:26:56.930685+00:00",
+  "description": "Define a rich agent persona and customization system that gives each spawned agent role-specific tools, MCP servers, skills, and system prompts.\n\n## Problem\n\nCurrently, agent profiles in agent-runtime-config.v2.json are minimal \u2014 just a system_prompt and model. All agents get the same capabilities regardless of their role. There's no way to:\n- Scope which MCP tools an agent can access based on its role\n- Add custom/project-specific MCP servers to agents\n- Define reusable skills or behavioral directives per agent type\n- Customize agents at the project level without changing global config\n- Have agents communicate with each other through structured channels\n\n## Vision\n\nTransform the agent profile system into a full persona engine:\n\n### Agent Profile Schema (extended)\n```json\n{\n  \"agents\": {\n    \"em\": {\n      \"role\": \"engineering-manager\",\n      \"description\": \"Manages work queue, prioritizes tasks, allocates resources\",\n      \"system_prompt\": \"You are the Engineering Manager agent...\",\n      \"model\": \"gpt-5.3-codex\",\n      \"mcp_servers\": {\n        \"ao\": {\n          \"source\": \"builtin\",\n          \"tool_policy\": {\n            \"mode\": \"allowlist\",\n            \"patterns\": [\"ao.task.*\", \"ao.queue.*\", \"ao.workflow.*\", \"ao.daemon.*\", \"ao.agent.*\"]\n          }\n        }\n      },\n      \"skills\": [\"prioritization\", \"estimation\", \"dependency-analysis\"],\n      \"capabilities\": {\n        \"can_create_tasks\": true,\n        \"can_assign_agents\": true,\n        \"can_start_workflows\": true,\n        \"can_modify_requirements\": false,\n        \"can_write_code\": false\n      }\n    },\n    \"po\": {\n      \"role\": \"product-owner\",\n      \"description\": \"Owns requirements, refines acceptance criteria, validates deliverables\",\n      \"system_prompt\": \"You are the Product Owner agent...\",\n      \"model\": \"gpt-5.3-codex\",\n      \"mcp_servers\": {\n        \"ao\": {\n          \"source\": \"builtin\",\n          \"tool_policy\": {\n            \"mode\": \"allowlist\",\n            \"patterns\": [\"ao.requirement.*\", \"ao.task.list\", \"ao.task.get\", \"ao.vision.*\"]\n          }\n        }\n      },\n      \"skills\": [\"requirement-refinement\", \"acceptance-criteria\", \"user-story-mapping\"],\n      \"capabilities\": {\n        \"can_create_tasks\": false,\n        \"can_modify_requirements\": true,\n        \"can_approve_deliverables\": true,\n        \"can_write_code\": false\n      }\n    },\n    \"swe\": {\n      \"role\": \"software-engineer\",\n      \"description\": \"Writes production code, runs tests, reviews implementations\",\n      \"system_prompt\": \"You are the Software Engineer agent...\",\n      \"model\": \"gpt-5.3-codex\",\n      \"mcp_servers\": {\n        \"ao\": {\n          \"source\": \"builtin\",\n          \"tool_policy\": {\n            \"mode\": \"allowlist\",\n            \"patterns\": [\"ao.task.*\", \"ao.workflow.*\", \"ao.output.*\", \"ao.agent.*\"]\n          }\n        }\n      },\n      \"skills\": [\"implementation\", \"testing\", \"code-review\", \"debugging\"],\n      \"capabilities\": {\n        \"can_write_code\": true,\n        \"can_run_tests\": true,\n        \"can_create_tasks\": false,\n        \"can_modify_requirements\": false\n      }\n    }\n  }\n}\n```\n\n### Custom MCP Server Registration (per-project .ao/config.json)\n```json\n{\n  \"mcp_servers\": {\n    \"browser-testing\": {\n      \"command\": \"npx\",\n      \"args\": [\"@playwright/mcp-server\"],\n      \"env\": {\"BROWSER\": \"chromium\"},\n      \"assign_to\": [\"swe\"]\n    },\n    \"design-system\": {\n      \"command\": \"node\",\n      \"args\": [\"./tools/design-mcp/index.js\"],\n      \"assign_to\": [\"po\", \"swe\"]\n    }\n  }\n}\n```\n\n### Plugin/Skill System\nSkills are reusable prompt fragments or behavioral directives:\n```json\n{\n  \"skills\": {\n    \"prioritization\": {\n      \"description\": \"Evaluate task priority using MoSCoW + effort estimation\",\n      \"prompt_fragment\": \"When prioritizing tasks, use MoSCoW (Must/Should/Could/Won't)...\"\n    },\n    \"code-review\": {\n      \"description\": \"Systematic code review checklist\",\n      \"prompt_fragment\": \"When reviewing code: 1) Check correctness 2) Security 3) Performance...\"\n    }\n  }\n}\n```\n\n### Inter-Agent Communication\nAgents can post messages to other running agents:\n- ao.agent.message tool: send structured messages (question, handoff, status update)\n- Messages queued if target agent isn't running, delivered on next run\n- Enables EM to ask PO for requirement clarification, SWE to request code review, etc.\n\n## Implementation Strategy\n1. Extend agent profile schema in agent-runtime-config\n2. Build tool access policy engine (pattern matching on MCP tool names)\n3. Wire MCP server injection into agent-runner spawn flow\n4. Add custom MCP server registration to project config\n5. Define built-in personas (EM, PO, SWE)\n6. Add skills/prompt fragment system\n7. Add inter-agent messaging via shared MCP tool\n8. Add CLI management commands",
+  "id": "REQ-030",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [
+      "REQ-025",
+      "REQ-026",
+      "REQ-027"
+    ],
+    "tasks": [],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "must",
+  "status": "draft",
+  "tags": [
+    "agent-system",
+    "mcp",
+    "plugins",
+    "personas",
+    "customization",
+    "lens-product"
+  ],
+  "title": "Agent persona system with role-based MCP tool access, custom servers, skills, and inter-agent communication",
+  "type": "product",
+  "updated_at": "2026-02-27T16:26:56.930933+00:00"
+}

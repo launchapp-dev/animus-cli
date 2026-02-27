@@ -1,0 +1,57 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "task_id": "TASK-092",
+      "dependency_type": "blocked-by"
+    }
+  ],
+  "description": "Add 3 built-in agent profiles to agent-runtime-config.v2.json: 'em' (Engineering Manager \u2014 task prioritization, queue management, scheduling), 'po' (Product Owner \u2014 requirements, vision, acceptance criteria, deliverable validation), 'swe' (Software Engineer \u2014 code implementation, testing, code review). Each gets a tailored system prompt, appropriate MCP tool access patterns, and role-specific capabilities flags. Update the default pipeline to use appropriate personas per phase (e.g., requirements phase uses 'po', implementation uses 'swe').",
+  "estimated_effort": null,
+  "id": "TASK-096",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T16:27:21.459789Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T16:27:21.459789Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Define built-in agent personas: EM, PO, and SWE with distinct prompts and tool access",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}
