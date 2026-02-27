@@ -63,6 +63,44 @@ fn json_success_envelope_contract_is_stable() -> Result<()> {
 }
 
 #[test]
+fn status_command_json_payload_includes_dashboard_schema_and_slices() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let status = harness.run_json_ok(&["status"])?;
+    assert_success_envelope(&status);
+    assert_eq!(
+        status.pointer("/data/schema").and_then(Value::as_str),
+        Some("ao.status.v1")
+    );
+    assert!(
+        status.pointer("/data/daemon/status").is_some(),
+        "status payload should include daemon.status"
+    );
+    assert!(
+        status.pointer("/data/active_agents/count").is_some(),
+        "status payload should include active_agents.count"
+    );
+    assert!(
+        status.pointer("/data/task_summary/total").is_some(),
+        "status payload should include task_summary.total"
+    );
+    assert!(
+        status.pointer("/data/recent_completions/entries").is_some(),
+        "status payload should include recent_completions.entries"
+    );
+    assert!(
+        status.pointer("/data/recent_failures/entries").is_some(),
+        "status payload should include recent_failures.entries"
+    );
+    assert!(
+        status.pointer("/data/ci/available").is_some(),
+        "status payload should include ci.available"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn json_success_envelope_wraps_print_ok_messages() -> Result<()> {
     let harness = CliHarness::new()?;
 

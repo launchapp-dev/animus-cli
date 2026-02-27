@@ -166,6 +166,9 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                Command::Status => {
+                    services::operations::handle_status(hub.clone(), &project_root, cli.json).await
+                }
                 Command::Output { command } => {
                     services::operations::handle_output(command, &project_root, cli.json).await
                 }
