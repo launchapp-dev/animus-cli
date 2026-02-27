@@ -26,6 +26,10 @@ impl CliHarness {
         self.project_root.path()
     }
 
+    pub(crate) fn config_root(&self) -> &Path {
+        self.config_root.path()
+    }
+
     pub(crate) fn run_json_ok(&self, args: &[&str]) -> Result<Value> {
         let output = self.run_json_command(args)?;
 

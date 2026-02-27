@@ -215,6 +215,31 @@ fn help_surfaces_accepted_values_and_confirmation_guidance(
         "git worktree remove help should explain --dry-run behavior"
     );
 
+    let git_worktree_prune_help = Command::new(&binary)
+        .args(["git", "worktree", "prune", "--help"])
+        .output()?;
+    assert!(
+        git_worktree_prune_help.status.success(),
+        "git worktree prune help should succeed"
+    );
+    let git_worktree_prune_stdout = String::from_utf8(git_worktree_prune_help.stdout)?;
+    assert!(
+        git_worktree_prune_stdout.contains(
+            "Delete remote branches for pruned worktrees when branch metadata is available."
+        ),
+        "git worktree prune help should explain --delete-remote-branch behavior"
+    );
+    assert!(
+        git_worktree_prune_stdout
+            .contains("Approved confirmation id required before pruning worktrees."),
+        "git worktree prune help should explain --confirmation-id semantics"
+    );
+    assert!(
+        git_worktree_prune_stdout
+            .contains("Preview prune actions without changing repository state."),
+        "git worktree prune help should explain prune-specific --dry-run behavior"
+    );
+
     Ok(())
 }
 

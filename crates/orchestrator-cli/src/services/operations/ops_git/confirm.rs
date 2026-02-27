@@ -21,7 +21,12 @@ pub(super) fn handle_git_confirm(
             let operation = args.operation_type.trim().to_ascii_lowercase();
             let required = matches!(
                 operation.as_str(),
-                "force_push" | "remove_worktree" | "remove_repo" | "hard_reset" | "clean_untracked"
+                "force_push"
+                    | "remove_worktree"
+                    | "prune_worktrees"
+                    | "remove_repo"
+                    | "hard_reset"
+                    | "clean_untracked"
             );
             let blocked = false;
             let reason = if required {

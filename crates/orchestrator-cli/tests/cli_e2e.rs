@@ -734,7 +734,12 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
     let task_token = task_id.to_ascii_lowercase();
     let branch_name = format!("ao/{task_token}");
     let worktree_name = format!("task-{task_token}");
-    let worktree_path = harness.project_root().join("managed").join(&worktree_name);
+    let managed_root = harness
+        .config_root()
+        .join(".ao")
+        .join(protocol::repository_scope_for_path(harness.project_root()))
+        .join("worktrees");
+    let worktree_path = managed_root.join(&worktree_name);
     if let Some(parent) = worktree_path.parent() {
         std::fs::create_dir_all(parent).context("failed to create worktree parent directory")?;
     }
@@ -763,10 +768,7 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
         "--delete-remote-branch",
         "--dry-run",
     ])?;
-    assert_eq!(
-        preview.pointer("/data/operation").and_then(Value::as_str),
-        Some("git.worktree.prune")
-    );
+    assert_shared_destructive_dry_run_contract(&preview, "git.worktree.prune", true);
     assert_eq!(
         preview
             .pointer("/data/candidate_count")
@@ -784,7 +786,50 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
         "dry-run should not remove candidate worktree path"
     );
 
-    let pruned = harness.run_json_ok(&["git", "worktree", "prune", "--repo", "demo"])?;
+    let prune_confirmation_error =
+        harness.run_json_err(&["git", "worktree", "prune", "--repo", "demo"])?;
+    let prune_confirmation_message = prune_confirmation_error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        prune_confirmation_message,
+        "CONFIRMATION_REQUIRED: request and approve a git confirmation for 'prune_worktrees' on 'demo', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
+        "git worktree prune confirmation message should use canonical token order"
+    );
+
+    let confirmation_request = harness.run_json_ok(&[
+        "git",
+        "confirm",
+        "request",
+        "--operation-type",
+        "prune_worktrees",
+        "--repo-name",
+        "demo",
+    ])?;
+    let confirmation_id = confirmation_request
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("git confirm request should return data.id")?
+        .to_string();
+    harness.run_json_ok(&[
+        "git",
+        "confirm",
+        "respond",
+        "--request-id",
+        &confirmation_id,
+        "--approved",
+    ])?;
+
+    let pruned = harness.run_json_ok(&[
+        "git",
+        "worktree",
+        "prune",
+        "--repo",
+        "demo",
+        "--confirmation-id",
+        &confirmation_id,
+    ])?;
     assert_eq!(
         pruned.pointer("/data/pruned_count").and_then(Value::as_u64),
         Some(1)
@@ -792,6 +837,15 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
     assert!(
         !worktree_path.exists(),
         "prune should remove candidate worktree path"
+    );
+
+    let task_after_prune = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
+    assert!(
+        task_after_prune
+            .pointer("/data/worktree_path")
+            .map(Value::is_null)
+            .unwrap_or(true),
+        "prune should clear stale task worktree_path metadata"
     );
 
     let listed = harness.run_json_ok(&["git", "worktree", "list", "--repo", "demo"])?;

@@ -1,9 +1,9 @@
 use super::*;
 use crate::not_found_error;
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use anyhow::{anyhow, Context, Result};
+use orchestrator_core::{FileServiceHub, ServiceHub, TaskStatus};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::process::Output;
 
 use super::model::GitSyncStatusCli;
@@ -15,18 +15,8 @@ use super::store::{
 #[derive(Debug, Clone)]
 struct TaskPruneMeta {
     id: String,
-    status: String,
+    status: TaskStatus,
     worktree_path: Option<String>,
-    branch_name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskPruneRecord {
-    id: String,
-    status: String,
-    #[serde(default)]
-    worktree_path: Option<String>,
-    #[serde(default)]
     branch_name: Option<String>,
 }
 
@@ -40,12 +30,18 @@ struct PruneCandidate {
     remote_branch: Option<String>,
 }
 
-fn normalize_task_status(status: &str) -> String {
-    status.trim().to_ascii_lowercase().replace('_', "-")
-}
+const PRUNE_WORKTREES_CONFIRMATION_OPERATION: &str = "prune_worktrees";
 
-fn is_terminal_task_status(status: &str) -> bool {
-    matches!(normalize_task_status(status).as_str(), "done" | "cancelled")
+fn task_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Backlog => "backlog",
+        TaskStatus::Ready => "ready",
+        TaskStatus::InProgress => "in-progress",
+        TaskStatus::Blocked => "blocked",
+        TaskStatus::OnHold => "on-hold",
+        TaskStatus::Done => "done",
+        TaskStatus::Cancelled => "cancelled",
+    }
 }
 
 fn normalize_branch(branch: &str) -> String {
@@ -93,6 +89,13 @@ fn branch_for_remote_delete(
     task: Option<&TaskPruneMeta>,
     worktree_branch: Option<&str>,
 ) -> Option<String> {
+    if let Some(branch_name) = worktree_branch
+        .map(normalize_branch)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(branch_name);
+    }
+
     if let Some(branch_name) = task
         .and_then(|record| record.branch_name.as_deref())
         .map(normalize_branch)
@@ -118,49 +121,66 @@ fn summarize_output(output: &Output) -> String {
     "command returned non-zero exit code without output".to_string()
 }
 
-fn load_tasks_for_prune(project_root: &str) -> Result<Vec<TaskPruneMeta>> {
-    let tasks_root = Path::new(project_root).join(".ao").join("tasks");
-    if !tasks_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut task_files = Vec::new();
-    for entry in fs::read_dir(&tasks_root)
-        .with_context(|| format!("failed to read task directory {}", tasks_root.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("");
-        if file_name.starts_with("TASK-") && file_name.ends_with(".json") {
-            task_files.push(path);
-        }
-    }
-    task_files.sort();
-
-    let mut tasks = Vec::new();
-    for path in task_files {
-        let payload = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read task file {}", path.display()))?;
-        let record: TaskPruneRecord = serde_json::from_str(&payload)
-            .with_context(|| format!("invalid task JSON {}", path.display()))?;
-        tasks.push(TaskPruneMeta {
-            id: record.id,
-            status: normalize_task_status(&record.status),
-            worktree_path: record.worktree_path,
-            branch_name: record.branch_name.map(|branch| normalize_branch(&branch)),
-        });
-    }
-
-    Ok(tasks)
+fn managed_worktrees_root(project_root: &str) -> Result<PathBuf> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow!("failed to resolve home directory for managed worktree pruning"))?;
+    let project_path = Path::new(project_root)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(project_root));
+    Ok(home
+        .join(".ao")
+        .join(protocol::repository_scope_for_path(&project_path))
+        .join("worktrees"))
 }
 
-pub(super) fn handle_git_worktree(
+fn path_is_within_root(path: &str, root: &Path) -> bool {
+    let path_normalized = PathBuf::from(normalize_path_for_match(path));
+    let root_normalized = PathBuf::from(normalize_path_for_match(&root.to_string_lossy()));
+    path_normalized == root_normalized || path_normalized.starts_with(&root_normalized)
+}
+
+fn is_remote_branch_protected(branch_name: &str) -> bool {
+    let normalized = normalize_branch(branch_name).to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "main" | "master" | "develop" | "dev" | "trunk" | "stable"
+    ) || normalized.starts_with("release/")
+        || normalized.starts_with("hotfix/")
+}
+
+fn is_task_branch(branch_name: &str) -> bool {
+    let normalized = normalize_branch(branch_name).to_ascii_lowercase();
+    normalized.starts_with("ao/task-") || normalized.starts_with("task-")
+}
+
+async fn clear_task_worktree_path_if_matches(
+    task_service: &std::sync::Arc<dyn orchestrator_core::TaskServiceApi>,
+    task_id: &str,
+    removed_path: &str,
+) -> Result<bool> {
+    let task = task_service
+        .get(task_id)
+        .await
+        .with_context(|| format!("failed to load task {} for prune metadata cleanup", task_id))?;
+
+    let Some(current_path) = task.worktree_path.as_deref() else {
+        return Ok(false);
+    };
+    if normalize_path_for_match(current_path) != normalize_path_for_match(removed_path) {
+        return Ok(false);
+    }
+
+    let mut updated = task;
+    updated.worktree_path = None;
+    updated.metadata.updated_by = "ao-cli".to_string();
+    task_service
+        .replace(updated)
+        .await
+        .with_context(|| format!("failed to clear task worktree path for {}", task_id))?;
+    Ok(true)
+}
+
+pub(super) async fn handle_git_worktree(
     command: GitWorktreeCommand,
     project_root: &str,
     json: bool,
@@ -264,29 +284,48 @@ pub(super) fn handle_git_worktree(
             let repo_path = resolve_repo_path(project_root, &args.repo)?;
             let repo_path_display = repo_path.display().to_string();
             let repo_path_normalized = normalize_path_for_match(&repo_path_display);
-            let worktrees = load_worktrees(&repo_path)?;
-            let tasks = load_tasks_for_prune(project_root)?;
+            let managed_root = managed_worktrees_root(project_root)?;
+            let managed_root_display = managed_root.display().to_string();
+
+            let mut worktrees = load_worktrees(&repo_path)?;
+            worktrees.sort_by(|left, right| {
+                normalize_path_for_match(&left.path).cmp(&normalize_path_for_match(&right.path))
+            });
+
+            let task_service = FileServiceHub::new(project_root)
+                .with_context(|| format!("failed to initialize services for {}", project_root))?
+                .tasks();
+            let tasks = task_service
+                .list()
+                .await
+                .context("failed to load task records for worktree pruning")?;
 
             let mut tasks_by_id: HashMap<String, TaskPruneMeta> = HashMap::new();
             let mut tasks_by_branch: HashMap<String, TaskPruneMeta> = HashMap::new();
             let mut tasks_by_worktree_path: HashMap<String, TaskPruneMeta> = HashMap::new();
             for task in tasks {
-                tasks_by_id.insert(task.id.to_ascii_uppercase(), task.clone());
-                if let Some(branch_name) = task
+                let task_meta = TaskPruneMeta {
+                    id: task.id.clone(),
+                    status: task.status,
+                    worktree_path: task.worktree_path.clone(),
+                    branch_name: task.branch_name.clone(),
+                };
+                tasks_by_id.insert(task.id.to_ascii_uppercase(), task_meta.clone());
+                if let Some(branch_name) = task_meta
                     .branch_name
                     .as_deref()
                     .map(normalize_branch)
                     .filter(|value| !value.is_empty())
                 {
-                    tasks_by_branch.insert(branch_name.to_ascii_lowercase(), task.clone());
+                    tasks_by_branch.insert(branch_name.to_ascii_lowercase(), task_meta.clone());
                 }
-                if let Some(path) = task
+                if let Some(path) = task_meta
                     .worktree_path
                     .as_deref()
                     .map(normalize_path_for_match)
                     .filter(|value| !value.is_empty())
                 {
-                    tasks_by_worktree_path.insert(path, task);
+                    tasks_by_worktree_path.insert(path, task_meta);
                 }
             }
 
@@ -297,31 +336,51 @@ pub(super) fn handle_git_worktree(
                 let branch_normalized = entry.branch.as_deref().map(normalize_branch);
                 let inferred_task_id = infer_task_id(entry.branch.as_deref(), &entry.worktree_name);
 
-                let matched_task = tasks_by_worktree_path
-                    .get(&normalized_path)
-                    .or_else(|| {
-                        branch_normalized
-                            .as_deref()
-                            .and_then(|branch| tasks_by_branch.get(&branch.to_ascii_lowercase()))
-                    })
-                    .or_else(|| {
-                        inferred_task_id
-                            .as_deref()
-                            .and_then(|task_id| tasks_by_id.get(&task_id.to_ascii_uppercase()))
-                    });
+                let matched_by_path = tasks_by_worktree_path.get(&normalized_path);
+                let matched_by_branch = branch_normalized
+                    .as_deref()
+                    .and_then(|branch| tasks_by_branch.get(&branch.to_ascii_lowercase()));
+                let matched_by_inferred_task_id = inferred_task_id
+                    .as_deref()
+                    .and_then(|task_id| tasks_by_id.get(&task_id.to_ascii_uppercase()));
 
-                let matched_task = matched_task.cloned();
+                let mut matched_task_ids = BTreeSet::new();
+                for maybe_task in [
+                    matched_by_path,
+                    matched_by_branch,
+                    matched_by_inferred_task_id,
+                ] {
+                    if let Some(task) = maybe_task {
+                        matched_task_ids.insert(task.id.clone());
+                    }
+                }
+
+                let ambiguous_task_match = matched_task_ids.len() > 1;
+                let matched_task = if ambiguous_task_match {
+                    None
+                } else {
+                    matched_by_path
+                        .or(matched_by_branch)
+                        .or(matched_by_inferred_task_id)
+                        .cloned()
+                };
                 let primary_repo_worktree = normalized_path == repo_path_normalized;
+                let outside_managed_root = !path_is_within_root(&entry.path, &managed_root);
                 let task_id = matched_task
                     .as_ref()
                     .map(|task| task.id.clone())
                     .or_else(|| inferred_task_id.clone());
-                let task_status = matched_task.as_ref().map(|task| task.status.clone());
-                let terminal_task = task_status
-                    .as_deref()
-                    .map(is_terminal_task_status)
+                let task_status = matched_task
+                    .as_ref()
+                    .map(|task| task_status_label(task.status).to_string());
+                let terminal_task = matched_task
+                    .as_ref()
+                    .map(|task| task.status.is_terminal())
                     .unwrap_or(false);
-                let is_candidate = terminal_task && !primary_repo_worktree;
+                let is_candidate = terminal_task
+                    && !primary_repo_worktree
+                    && !outside_managed_root
+                    && !ambiguous_task_match;
                 let remote_branch =
                     branch_for_remote_delete(matched_task.as_ref(), entry.branch.as_deref());
 
@@ -338,6 +397,10 @@ pub(super) fn handle_git_worktree(
 
                 let reason = if primary_repo_worktree {
                     Some("primary repository worktree".to_string())
+                } else if outside_managed_root {
+                    Some("outside managed worktree root".to_string())
+                } else if ambiguous_task_match {
+                    Some("ambiguous task match".to_string())
                 } else if task_id.is_none() {
                     Some("no matching task found".to_string())
                 } else if !terminal_task {
@@ -390,16 +453,38 @@ pub(super) fn handle_git_worktree(
                 .collect();
 
             if args.dry_run {
+                let mut planned_effects = vec![
+                    "remove git worktree registrations for terminal task worktrees".to_string(),
+                    "remove task worktree directories under managed root".to_string(),
+                ];
+                if args.delete_remote_branch {
+                    planned_effects.push(format!(
+                        "delete eligible task branches from remote '{}'",
+                        args.remote
+                    ));
+                }
                 return print_value(
                     json!({
                         "operation": "git.worktree.prune",
+                        "target": {
+                            "repo": args.repo,
+                            "remote": args.remote,
+                            "delete_remote_branch": args.delete_remote_branch,
+                        },
+                        "action": "git.worktree.prune",
+                        "destructive": true,
                         "repo": args.repo,
                         "repo_path": repo_path_display,
+                        "managed_worktrees_root": managed_root_display,
                         "dry_run": true,
+                        "requires_confirmation": true,
+                        "planned_effects": planned_effects,
+                        "next_step": git_confirmation_next_step(PRUNE_WORKTREES_CONFIRMATION_OPERATION, &args.repo),
                         "delete_remote_branch": args.delete_remote_branch,
                         "remote": args.remote,
                         "total_worktrees": worktree_reports.len(),
                         "candidate_count": candidate_reports.len(),
+                        "skipped_count": worktree_reports.len().saturating_sub(candidate_reports.len()),
                         "worktrees": worktree_reports,
                         "candidates": candidate_reports,
                         "pruned_count": 0,
@@ -410,10 +495,20 @@ pub(super) fn handle_git_worktree(
                 );
             }
 
+            if !candidates.is_empty() {
+                ensure_confirmation(
+                    project_root,
+                    args.confirmation_id.as_deref(),
+                    PRUNE_WORKTREES_CONFIRMATION_OPERATION,
+                    &args.repo,
+                )?;
+            }
+
             let mut results = Vec::new();
             let mut errors = Vec::new();
             let mut pruned_count = 0usize;
             let mut remote_deleted_count = 0usize;
+            let mut updated_task_ids = HashSet::new();
             for candidate in candidates {
                 let remove_output = ProcessCommand::new("git")
                     .arg("-C")
@@ -426,6 +521,7 @@ pub(super) fn handle_git_worktree(
 
                 let mut removed = remove_output.status.success();
                 let mut remove_error = None;
+                let candidate_path_normalized = normalize_path_for_match(&candidate.path);
                 if !removed {
                     remove_error = Some(summarize_output(&remove_output));
                     let worktree_path = Path::new(&candidate.path);
@@ -438,7 +534,6 @@ pub(super) fn handle_git_worktree(
                         .args(["worktree", "prune"])
                         .output();
 
-                    let candidate_path_normalized = normalize_path_for_match(&candidate.path);
                     let still_present = load_worktrees(&repo_path)?.into_iter().any(|entry| {
                         normalize_path_for_match(&entry.path) == candidate_path_normalized
                     });
@@ -460,11 +555,57 @@ pub(super) fn handle_git_worktree(
                     }));
                 }
 
+                if removed {
+                    let task_id_key = candidate.task_id.to_ascii_uppercase();
+                    if !updated_task_ids.contains(&task_id_key) {
+                        if let Some(task) = tasks_by_id.get(&task_id_key) {
+                            let matches_task_worktree = task
+                                .worktree_path
+                                .as_deref()
+                                .map(normalize_path_for_match)
+                                .map(|path| path == candidate_path_normalized)
+                                .unwrap_or(false);
+                            if matches_task_worktree {
+                                match clear_task_worktree_path_if_matches(
+                                    &task_service,
+                                    &task.id,
+                                    &candidate.path,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        updated_task_ids.insert(task_id_key);
+                                    }
+                                    Err(error) => errors.push(json!({
+                                        "worktree_name": candidate.worktree_name,
+                                        "path": candidate.path,
+                                        "task_id": candidate.task_id,
+                                        "stage": "update_task_worktree",
+                                        "message": error.to_string(),
+                                    })),
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let mut remote_deleted = None;
                 let mut remote_error = None;
                 if args.delete_remote_branch {
-                    if let Some(branch_name) = candidate.remote_branch.as_deref() {
-                        if !matches!(branch_name, "main" | "master") {
+                    if !removed {
+                        remote_deleted = Some(false);
+                        remote_error = Some(
+                            "local worktree removal failed; skipped remote branch deletion"
+                                .to_string(),
+                        );
+                    } else if let Some(branch_name) = candidate.remote_branch.as_deref() {
+                        if is_remote_branch_protected(branch_name) {
+                            remote_deleted = Some(false);
+                            remote_error = Some("protected branch not deleted".to_string());
+                        } else if !is_task_branch(branch_name) {
+                            remote_deleted = Some(false);
+                            remote_error = Some("branch is not a task branch".to_string());
+                        } else {
                             let remote_output = ProcessCommand::new("git")
                                 .arg("-C")
                                 .arg(&repo_path)
@@ -488,9 +629,6 @@ pub(super) fn handle_git_worktree(
                                     "message": remote_error.clone(),
                                 }));
                             }
-                        } else {
-                            remote_deleted = Some(false);
-                            remote_error = Some("protected branch not deleted".to_string());
                         }
                     } else {
                         remote_deleted = Some(false);
@@ -532,11 +670,13 @@ pub(super) fn handle_git_worktree(
                     "operation": "git.worktree.prune",
                     "repo": args.repo,
                     "repo_path": repo_path_display,
+                    "managed_worktrees_root": managed_root_display,
                     "dry_run": false,
                     "delete_remote_branch": args.delete_remote_branch,
                     "remote": args.remote,
                     "total_worktrees": worktree_reports.len(),
                     "candidate_count": candidate_reports.len(),
+                    "skipped_count": worktree_reports.len().saturating_sub(candidate_reports.len()),
                     "pruned_count": pruned_count,
                     "remote_deleted_count": remote_deleted_count,
                     "worktrees": worktree_reports,

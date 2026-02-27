@@ -785,16 +785,16 @@ async fn auto_prune_completed_task_worktrees_after_merge(
 
     let mut updated_tasks = HashSet::new();
     for (entry, normalized_path, task) in candidates {
-        remove_worktree_path(project_root, &entry.path);
-
-        if updated_tasks.contains(&task.id) {
-            continue;
-        }
         let task_worktree_normalized = task
             .worktree_path
             .as_deref()
             .map(normalize_path_for_match)
             .unwrap_or_default();
+        remove_worktree_path(project_root, &entry.path);
+
+        if updated_tasks.contains(&task.id) {
+            continue;
+        }
         if task_worktree_normalized != normalized_path {
             continue;
         }
@@ -1746,4 +1746,301 @@ pub(super) fn is_branch_merged(project_root: &str, branch_name: &str) -> Result<
     }
 
     Ok(if saw_false { Some(false) } else { None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::TempDir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn init_git_repo(project_root: &Path) {
+        let init_main = ProcessCommand::new("git")
+            .arg("init")
+            .arg("-b")
+            .arg("main")
+            .current_dir(project_root)
+            .status()
+            .expect("git init should run");
+        if !init_main.success() {
+            let init = ProcessCommand::new("git")
+                .arg("init")
+                .current_dir(project_root)
+                .status()
+                .expect("git init should run");
+            assert!(init.success(), "git init should succeed");
+            let rename = ProcessCommand::new("git")
+                .args(["branch", "-M", "main"])
+                .current_dir(project_root)
+                .status()
+                .expect("git branch -M should run");
+            assert!(rename.success(), "git branch -M main should succeed");
+        }
+
+        let email = ProcessCommand::new("git")
+            .args(["config", "user.email", "ao-test@example.com"])
+            .current_dir(project_root)
+            .status()
+            .expect("git config user.email should run");
+        assert!(email.success(), "git config user.email should succeed");
+        let name = ProcessCommand::new("git")
+            .args(["config", "user.name", "AO Test"])
+            .current_dir(project_root)
+            .status()
+            .expect("git config user.name should run");
+        assert!(name.success(), "git config user.name should succeed");
+
+        std::fs::write(project_root.join("README.md"), "# test\n")
+            .expect("readme should be written");
+        run_git(project_root, &["add", "README.md"], "git add readme");
+        run_git(project_root, &["commit", "-m", "init"], "git commit readme");
+    }
+
+    fn run_git(cwd: &Path, args: &[&str], operation: &str) {
+        let status = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("git command should run");
+        assert!(
+            status.success(),
+            "git command failed for operation '{operation}': git {}",
+            args.join(" ")
+        );
+    }
+
+    fn prune_config(enabled: bool) -> PostSuccessGitConfig {
+        PostSuccessGitConfig {
+            auto_merge_enabled: false,
+            auto_pr_enabled: false,
+            auto_commit_before_merge: false,
+            auto_merge_target_branch: "main".to_string(),
+            auto_merge_no_ff: true,
+            auto_push_remote: "origin".to_string(),
+            auto_cleanup_worktree_enabled: true,
+            auto_prune_worktrees_after_merge: enabled,
+        }
+    }
+
+    async fn create_task_with_worktree(
+        hub: &Arc<FileServiceHub>,
+        project_root: &str,
+        status: TaskStatus,
+        title: &str,
+    ) -> (String, PathBuf, String) {
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: title.to_string(),
+                description: format!("{title} description"),
+                task_type: Some(TaskType::Feature),
+                priority: None,
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&task.id, status)
+            .await
+            .expect("task status should be updated");
+
+        let branch_name = format!("ao/{}", task.id.to_ascii_lowercase());
+        let worktree_name = format!("task-{}", task.id.to_ascii_lowercase());
+        let worktree_path = repo_worktrees_root(project_root)
+            .expect("repo worktree root should resolve")
+            .join(worktree_name);
+        if let Some(parent) = worktree_path.parent() {
+            std::fs::create_dir_all(parent).expect("worktree parent should be created");
+        }
+        let worktree_path_string = worktree_path.to_string_lossy().to_string();
+        run_git(
+            Path::new(project_root),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch_name.as_str(),
+                worktree_path_string.as_str(),
+                "main",
+            ],
+            "create task worktree",
+        );
+
+        let mut updated = hub
+            .tasks()
+            .get(&task.id)
+            .await
+            .expect("task should be readable");
+        updated.branch_name = Some(branch_name);
+        updated.worktree_path = Some(worktree_path_string.clone());
+        updated.metadata.updated_by = "test".to_string();
+        hub.tasks()
+            .replace(updated)
+            .await
+            .expect("task worktree metadata should be saved");
+
+        (task.id, worktree_path, worktree_path_string)
+    }
+
+    #[tokio::test]
+    async fn auto_prune_completed_task_worktrees_after_merge_prunes_terminal_tasks() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("temp home");
+        let home_path = home.path().to_string_lossy().to_string();
+        let _home = EnvVarGuard::set("HOME", Some(home_path.as_str()));
+
+        let repo = TempDir::new().expect("temp repo");
+        init_git_repo(repo.path());
+        let project_root = repo.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let (done_task_id, done_worktree_path, done_worktree_path_string) =
+            create_task_with_worktree(&hub, &project_root, TaskStatus::Done, "done candidate")
+                .await;
+        let (active_task_id, active_worktree_path, active_worktree_path_string) =
+            create_task_with_worktree(
+                &hub,
+                &project_root,
+                TaskStatus::InProgress,
+                "active candidate",
+            )
+            .await;
+
+        auto_prune_completed_task_worktrees_after_merge(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root,
+            &prune_config(true),
+        )
+        .await
+        .expect("auto-prune should succeed");
+
+        assert!(
+            !done_worktree_path.exists(),
+            "done task worktree should be removed"
+        );
+        assert!(
+            active_worktree_path.exists(),
+            "non-terminal task worktree should remain"
+        );
+
+        let done_after = hub
+            .tasks()
+            .get(&done_task_id)
+            .await
+            .expect("done task should be readable");
+        assert!(
+            done_after.worktree_path.is_none(),
+            "done task worktree_path metadata should be cleared"
+        );
+
+        let active_after = hub
+            .tasks()
+            .get(&active_task_id)
+            .await
+            .expect("active task should be readable");
+        assert_eq!(
+            active_after.worktree_path.as_deref(),
+            Some(active_worktree_path_string.as_str()),
+            "non-terminal task worktree metadata should be unchanged"
+        );
+
+        let listed = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(&project_root)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .expect("git worktree list should run");
+        assert!(listed.status.success(), "git worktree list should succeed");
+        let listed_stdout = String::from_utf8_lossy(&listed.stdout);
+        assert!(
+            !listed_stdout.contains(done_worktree_path_string.as_str()),
+            "pruned done task worktree should be removed from git metadata"
+        );
+        assert!(
+            listed_stdout.contains(active_worktree_path_string.as_str()),
+            "active task worktree should remain in git metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_prune_completed_task_worktrees_after_merge_skips_when_disabled() {
+        let _lock = env_lock().lock().expect("env lock should be available");
+        let home = TempDir::new().expect("temp home");
+        let home_path = home.path().to_string_lossy().to_string();
+        let _home = EnvVarGuard::set("HOME", Some(home_path.as_str()));
+
+        let repo = TempDir::new().expect("temp repo");
+        init_git_repo(repo.path());
+        let project_root = repo.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let (done_task_id, done_worktree_path, done_worktree_path_string) =
+            create_task_with_worktree(
+                &hub,
+                &project_root,
+                TaskStatus::Cancelled,
+                "cancelled candidate",
+            )
+            .await;
+
+        auto_prune_completed_task_worktrees_after_merge(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root,
+            &prune_config(false),
+        )
+        .await
+        .expect("disabled auto-prune should return ok");
+
+        assert!(
+            done_worktree_path.exists(),
+            "worktree should remain when auto-prune is disabled"
+        );
+        let done_after = hub
+            .tasks()
+            .get(&done_task_id)
+            .await
+            .expect("task should be readable");
+        assert_eq!(
+            done_after.worktree_path.as_deref(),
+            Some(done_worktree_path_string.as_str()),
+            "task worktree_path should remain unchanged when auto-prune is disabled"
+        );
+    }
 }

@@ -2296,6 +2296,12 @@ pub(crate) struct GitWorktreePruneArgs {
     pub(crate) remote: String,
     #[arg(
         long,
+        value_name = "ID",
+        help = "Approved confirmation id required before pruning worktrees."
+    )]
+    pub(crate) confirmation_id: Option<String>,
+    #[arg(
+        long,
         default_value_t = false,
         help = "Preview prune actions without changing repository state."
     )]
