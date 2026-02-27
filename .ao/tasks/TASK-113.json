@@ -1,0 +1,57 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "task_id": "TASK-109",
+      "dependency_type": "blocked-by"
+    }
+  ],
+  "description": "Batch 3/5 \u2014 Observability (1 of 2)\n\nExtend DaemonHealth and the daemon status response to include pool metrics:\n\n- pool_size: configured maximum concurrent agents\n- active_agents: currently running (already exists)\n- queued_tasks: tasks/workflows waiting for a pool slot\n- pool_utilization_percent: active_agents / pool_size * 100\n- avg_agent_duration_secs: moving average of recent agent execution times\n- total_agents_spawned: since daemon start\n- total_agents_completed: since daemon start\n- total_agents_failed: since daemon start\n\nUpdate DaemonHealth in orchestrator-core/src/types.rs, the daemon health handler, and the MCP ao.daemon.status / ao.runner.health tools to include these fields. The AgentPool struct (from TASK-109) should track these metrics internally.",
+  "estimated_effort": null,
+  "id": "TASK-113",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T17:18:52.661706Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T17:18:52.661706Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "medium",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Add pool utilization metrics to daemon status and health endpoints",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

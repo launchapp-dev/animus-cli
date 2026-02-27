@@ -1,6 +1,8 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
   "blocked_at": null,
   "blocked_by": null,
@@ -22,10 +24,10 @@
     "completed_at": null,
     "created_at": "2026-02-27T16:05:52.890725Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T16:09:22.661674Z",
-    "updated_by": "ao-cli",
-    "version": 2
+    "started_at": "2026-02-27T17:13:48.677193Z",
+    "updated_at": "2026-02-27T17:13:48.677194Z",
+    "updated_by": "ao-daemon",
+    "version": 4
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add streaming output for long-running MCP operations",
   "type": "feature",

@@ -1,0 +1,24 @@
+{
+  "id": "REQ-031",
+  "title": "Daemon process reliability \u2014 health monitoring, crash recovery, and clean lifecycle management",
+  "description": "The daemon scheduler process (ao daemon run) must be resilient against silent crashes, stale state, and orphaned workflows. When the daemon process dies, it currently leaves workflows in 'running' state with no agents actually executing. The daemon status MCP tool reports 'running' based on stale state rather than checking the actual process. There is no logging, no crash recovery, and no watchdog. This requirement covers: (1) daemon stderr/stdout logging to a file instead of /dev/null, (2) PID-file-based liveness detection for daemon status, (3) automatic workflow cleanup on daemon startup for orphaned running workflows, (4) daemon watchdog that auto-restarts on crash, (5) clean pause/stop that cancels or checkpoints in-flight workflows before exit.",
+  "priority": "must-have",
+  "status": "draft",
+  "acceptance_criteria": [
+    "Daemon process writes logs to ~/.ao/<scope>/daemon/daemon.log with rotation",
+    "ao daemon status verifies the daemon PID is alive, not just state file presence",
+    "On startup, daemon detects and resets orphaned 'running' workflows whose agents are no longer alive",
+    "ao daemon stop gracefully waits for in-flight phase executions (with configurable timeout) before stopping",
+    "ao daemon pause checkpoints running workflows and stops spawning new agents",
+    "Daemon start can optionally enable a watchdog that auto-restarts on unexpected exit",
+    "All daemon lifecycle events (start, stop, pause, resume, crash) are recorded in daemon event log",
+    "MCP tool ao.daemon.start returns error if daemon subprocess exits within 5 seconds of spawn"
+  ],
+  "metadata": {
+    "created_at": "2026-02-27T17:06:02.855235+00:00",
+    "created_by": "human",
+    "updated_at": "2026-02-27T17:06:02.855560+00:00",
+    "updated_by": "human",
+    "version": 1
+  }
+}

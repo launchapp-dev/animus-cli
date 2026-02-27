@@ -1,0 +1,57 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "task_id": "TASK-109",
+      "dependency_type": "blocked-by"
+    }
+  ],
+  "description": "Batch 1/5 \u2014 Core Pool Infrastructure (3 of 3)\n\nCreate WorkQueue struct that determines what the pool should run next:\n\n- next_slot() -> Option<AgentSlot>: evaluates running workflows needing agent execution + ready tasks needing workflow creation, returns the highest priority one\n- Priority order: (1) EM work queue pending entries, (2) running workflows with no active agent on current phase, (3) ready tasks by priority score\n- Respects dependency gates \u2014 skips tasks with unmet blocked-by dependencies\n- Deduplicates: won't return a task/workflow that already has an active agent\n- Needs access to ServiceHub for task/workflow state and runner health for active agent tracking\n\nThis replaces the logic currently split between run_ready_task_workflows_for_project (lines 940-1095) and the workflow iteration in execute_running_workflow_phases_for_project (lines 1115-1209). Pure extraction + unification \u2014 same selection logic, single entry point.",
+  "estimated_effort": null,
+  "id": "TASK-110",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T17:18:27.527853Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T17:18:27.527853Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Create work queue that feeds the agent pool with priority ordering",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

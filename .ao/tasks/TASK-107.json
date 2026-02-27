@@ -8,26 +8,26 @@
   "blocked_by": null,
   "blocked_phase": null,
   "blocked_reason": null,
-  "branch_name": "ao/task-061",
+  "branch_name": "ao/task-107",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Modify daemon_scheduler_project_tick to read from the EM work queue when it exists and is non-empty. The queue takes precedence over the current naive task picker.\n\nBehavior:\n- If work queue has entries, pop the next N tasks (up to max_agents) and start workflows\n- If work queue is empty, fall back to current priority-based picker\n- After starting a workflow, mark the queue entry as \"assigned\"\n- On workflow completion/failure, remove the entry\n- Log which source selected each task (em_queue vs fallback_picker)",
+  "description": "In the daemon start handler (handle_daemon for DaemonCommand::Start), after spawning the daemon run subprocess, wait 3-5 seconds and verify the process is still alive. If it died immediately, read the log file (from TASK logging) and return the error to the user. Currently spawn_autonomous_daemon_run returns Ok(pid) even if the subprocess crashes 1ms later, giving the user a false 'daemon started' message. Also add this check to the MCP ao.daemon.start tool response.",
   "estimated_effort": null,
-  "id": "TASK-061",
+  "id": "TASK-107",
   "impact_area": [],
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": "2026-02-27T16:29:12.798209Z",
-    "created_at": "2026-02-27T15:58:26.036119Z",
+    "completed_at": null,
+    "created_at": "2026-02-27T17:06:26.093041Z",
     "created_by": "ao-cli",
-    "started_at": "2026-02-27T15:58:34.807189Z",
-    "updated_at": "2026-02-27T16:29:12.798210Z",
+    "started_at": "2026-02-27T17:07:15.014465Z",
+    "updated_at": "2026-02-27T17:13:38.583222Z",
     "updated_by": "ao-daemon",
-    "version": 13
+    "version": 8
   },
   "paused": false,
   "priority": "high",
@@ -38,9 +38,9 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "done",
+  "status": "in-progress",
   "tags": [],
-  "title": "Wire daemon scheduler to consume EM work queue",
+  "title": "Validate daemon subprocess survives startup in daemon start handler",
   "type": "feature",
   "workflow_metadata": {
     "requires_architecture": false,
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-107"
 }

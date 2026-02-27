@@ -1,0 +1,57 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "task_id": "TASK-108",
+      "dependency_type": "blocked-by"
+    }
+  ],
+  "description": "Batch 2/5 \u2014 Reactive Scheduling (2 of 2)\n\nExtract all non-agent housekeeping from project_tick into a standalone housekeeping_tick() function:\n\nOperations to extract:\n- flush_git_integration_outbox\n- bootstrap_from_vision_if_needed\n- ensure_tasks_for_unplanned_requirements (ai_task_generation)\n- resume_interrupted_workflows_for_project\n- reconcile_stale_in_progress_tasks_for_project\n- reconcile_dependency_gate_tasks_for_project\n- reconcile_merge_gate_tasks_for_project\n- retry_failed_task_workflows\n- promote_backlog_tasks_to_ready\n- refresh_runtime_binaries_if_main_advanced\n- Collect summary metrics and emit daemon events\n\nhousekeeping_tick runs on --interval-secs timer (default 5s), independent of agent execution. After housekeeping discovers new ready tasks or resumed workflows, it signals the coordinator to check work_queue and backfill pool slots. The existing project_tick function can delegate to housekeeping_tick + pool operations, preserving backward compatibility for --once mode.",
+  "estimated_effort": null,
+  "id": "TASK-112",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T17:18:44.431614Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T17:18:44.431614Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Separate housekeeping timer from agent execution in daemon run loop",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

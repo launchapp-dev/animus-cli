@@ -11,12 +11,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-059",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Add MCP tools for the EM work queue:\n- ao_queue_list: show the current ordered queue with reasons\n- ao_queue_push: manually add a task to the queue at a position\n- ao_queue_remove: remove a task from the queue\n- ao_queue_reorder: move a task to a different position\n- ao_queue_clear: clear the entire queue\n\nThese let users and external agents inspect and override the EM's decisions when needed.",
   "estimated_effort": null,
   "id": "TASK-062",
@@ -41,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Expose EM work queue via MCP tools",
   "type": "feature",

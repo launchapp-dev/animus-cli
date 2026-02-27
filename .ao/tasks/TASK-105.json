@@ -8,24 +8,24 @@
   "blocked_by": null,
   "blocked_phase": null,
   "blocked_reason": null,
-  "branch_name": null,
+  "branch_name": "ao/task-105",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Add cursor-based pagination to all list endpoints (tasks, workflows, requirements). Add gzip/brotli response compression via tower-http CompressionLayer. Add ETag-based conditional responses for frequently polled endpoints (daemon status, task list). Add configurable page size limits with sensible defaults (50 items).",
+  "description": "On daemon startup (daemon run entry point), detect workflows in 'running' status whose phase agents are not actually running. For each orphaned workflow: check if the agent-runner has an active agent for that workflow's run ID. If not, either reset the workflow phase to allow re-execution, or cancel the workflow and reset the task to 'ready'. This handles the scenario where the daemon crashes mid-execution and restarts — currently these workflows get stuck in 'running' forever with no agent. The reconcile_stale flag partially addresses this but doesn't check agent process liveness.",
   "estimated_effort": null,
-  "id": "TASK-082",
+  "id": "TASK-105",
   "impact_area": [],
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
     "completed_at": null,
-    "created_at": "2026-02-27T16:08:54.066132Z",
+    "created_at": "2026-02-27T17:06:18.892379Z",
     "created_by": "ao-cli",
-    "started_at": "2026-02-27T16:26:16.990102Z",
-    "updated_at": "2026-02-27T17:13:46.571581Z",
+    "started_at": "2026-02-27T17:07:14.316508Z",
+    "updated_at": "2026-02-27T17:13:40.476451Z",
     "updated_by": "ao-daemon",
     "version": 7
   },
@@ -40,7 +40,7 @@
   "scope": "medium",
   "status": "in-progress",
   "tags": [],
-  "title": "Add response pagination, compression, and caching to web API",
+  "title": "Add startup detection of orphaned running workflows and automatic recovery",
   "type": "feature",
   "workflow_metadata": {
     "requires_architecture": false,
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-105"
 }

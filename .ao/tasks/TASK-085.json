@@ -11,12 +11,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-058",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Expose the EM work queue through REST endpoints. GET /api/queue for ordered work items. POST /api/queue/reorder for manual reprioritization. GET /api/queue/stats for queue depth, throughput, and wait time metrics. POST /api/queue/hold/:task_id and POST /api/queue/release/:task_id for manual holds. These endpoints power both the web UI dashboard and external integrations.",
   "estimated_effort": null,
   "id": "TASK-085",
@@ -41,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add queue management and work queue REST API endpoints",
   "type": "feature",

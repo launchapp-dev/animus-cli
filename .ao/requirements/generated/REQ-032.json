@@ -1,0 +1,26 @@
+{
+  "id": "REQ-032",
+  "title": "Reactive bounded agent pool scheduler replacing tick-based batch execution",
+  "description": "The daemon scheduler currently uses a tick-based batch model: each tick spawns up to N agents into a JoinSet, blocks until ALL complete, sleeps for interval_secs, then repeats. This means if one agent takes 20 minutes and another takes 2 minutes, 4 agent slots sit idle for 18 minutes. The scheduler should instead maintain a bounded pool of N concurrent agent slots and reactively fill slots as agents complete \u2014 no waiting for the entire batch.\n\nCurrent flow (daemon_run.rs loop \u2192 project_tick):\n1. project_tick() runs housekeeping (git flush, stale reconciliation, dependency gates, merge gates, binary refresh)\n2. run_ready_task_workflows_for_project() creates workflow state for up to max_tasks_per_tick ready tasks\n3. execute_running_workflow_phases_for_project() spawns agents into JoinSet, BLOCKS until ALL complete\n4. Collect summary metrics, emit events\n5. Sleep interval_secs (default 5s)\n6. Repeat\n\nTarget flow:\n1. Agent pool maintains N concurrent slots via semaphore\n2. When any agent completes \u2192 process result (advance/rework/fail) \u2192 immediately check for next queued task \u2192 spawn if slot available\n3. Separate housekeeping timer runs independently (git ops, stale detection, merges, dependency reconciliation) on its own interval\n4. Work queue feeds the pool with priority ordering\n5. No batch waiting \u2014 individual agent lifecycle is independent\n\nKey constraints:\n- Backward compatible: --max-tasks-per-tick can map to pool size, interval_secs applies to housekeeping only\n- Must preserve all existing housekeeping operations (resume_interrupted, reconcile_stale, dependency gates, merge gates, binary refresh, EM queue)\n- Must preserve all existing event emission (health, queue, task-state-change, phase events)\n- Agent runner IPC is already concurrent-safe (tokio unix socket)\n- FileServiceHub uses atomic writes so concurrent access is safe",
+  "priority": "must-have",
+  "status": "draft",
+  "acceptance_criteria": [
+    "Agent slots are immediately backfilled when an agent completes \u2014 no waiting for batch peers",
+    "Pool maintains exactly N concurrent agents (configurable via --max-agents or AO_MAX_AGENTS)",
+    "Housekeeping operations (git, stale, merge, dependency reconciliation) run on a separate timer independent of agent execution",
+    "Priority ordering is respected when selecting next task from queue",
+    "EM work queue entries take precedence over auto-prioritized tasks",
+    "All existing daemon events (health, queue, task-state-change, phase events) continue to be emitted",
+    "Graceful drain: when pool is shutting down, running agents complete but no new ones start",
+    "Pool utilization is visible via ao daemon status (active_agents, pool_size, queued_tasks)",
+    "Existing CLI flags (--max-tasks-per-tick, --interval-secs, --auto-run-ready) remain functional with reasonable mapping to new model",
+    "No regression in existing integration tests"
+  ],
+  "metadata": {
+    "created_at": "2026-02-27T17:17:57.685369+00:00",
+    "created_by": "human",
+    "updated_at": "2026-02-27T17:17:57.685735+00:00",
+    "updated_by": "human",
+    "version": 1
+  }
+}

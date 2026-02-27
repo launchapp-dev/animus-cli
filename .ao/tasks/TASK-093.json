@@ -1,6 +1,8 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
   "blocked_at": null,
   "blocked_by": null,
@@ -11,12 +13,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-092",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Implement tool access policy evaluation in orchestrator-core. Given an agent profile's tool_policy (allowlist or blocklist with glob patterns like 'ao.task.*'), determine whether a specific tool name is permitted. Used by agent-runner to filter which MCP tools the spawned agent can invoke. Support both 'allowlist' mode (only matching tools) and 'blocklist' mode (everything except matching). Use simple glob matching (wildcard * for segments). Add unit tests for pattern matching edge cases.",
   "estimated_effort": null,
   "id": "TASK-093",
@@ -27,10 +24,10 @@
     "completed_at": null,
     "created_at": "2026-02-27T16:27:10.795389Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T16:27:10.795389Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-02-27T17:07:46.105366Z",
+    "updated_at": "2026-02-27T17:13:42.416830Z",
+    "updated_by": "ao-daemon",
+    "version": 5
   },
   "paused": false,
   "priority": "high",
@@ -41,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "in-progress",
   "tags": [],
   "title": "Build MCP tool access policy engine with glob-pattern matching",
   "type": "feature",

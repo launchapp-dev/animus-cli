@@ -1,0 +1,65 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "task_id": "TASK-109",
+      "dependency_type": "blocked-by"
+    },
+    {
+      "task_id": "TASK-110",
+      "dependency_type": "blocked-by"
+    },
+    {
+      "task_id": "TASK-112",
+      "dependency_type": "blocked-by"
+    }
+  ],
+  "description": "Batch 2/5 \u2014 Reactive Scheduling (1 of 2)\n\nReplace the daemon_run.rs main loop (lines 298-464) and the blocking execute_running_workflow_phases_for_project with a reactive coordinator:\n\nCurrent: loop { project_tick() // blocks on JoinSet; sleep(interval) }\nTarget: loop { select! { result = pool.next_completion() => process_and_backfill(), _ = housekeeping_timer.tick() => run_housekeeping(), _ = ctrl_c => drain_and_exit() } }\n\nThe coordinator:\n1. On agent completion: process_agent_result() \u2192 advance/rework/fail workflow \u2192 call work_queue.next_slot() \u2192 pool.try_spawn() if slot available\n2. On housekeeping tick: run all non-agent operations (git flush, stale reconciliation, dependency gates, merge gates, binary refresh, promote_backlog, retry_failed)\n3. On startup: fill pool to capacity from work queue\n4. On ctrl_c: pool.drain() then exit\n\nThe pool.next_completion() returns via the mpsc channel from TASK-109. This is where the batch model is eliminated \u2014 each agent completion is handled individually and immediately triggers backfill.",
+  "estimated_effort": null,
+  "id": "TASK-111",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-02-27T17:18:37.959078Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-02-27T17:18:37.959078Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Replace JoinSet batch wait with reactive pool coordinator loop",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

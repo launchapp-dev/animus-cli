@@ -11,12 +11,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-092",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Add ao agent-profile subcommands: list (show all profiles with role/model/tool count), show <id> (full profile detail), create (interactive or --json), update <id> (patch fields). Also add ao mcp-server subcommands for managing project-level custom MCP servers: list, add, remove, test (verify server starts and responds to initialize). Output follows existing JSON envelope pattern.",
   "estimated_effort": null,
   "id": "TASK-099",
@@ -28,9 +23,9 @@
     "created_at": "2026-02-27T16:27:31.340318Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-27T16:27:31.340318Z",
+    "updated_at": "2026-02-27T17:03:23.806907Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "low",
@@ -41,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add CLI commands for agent profile management",
   "type": "feature",

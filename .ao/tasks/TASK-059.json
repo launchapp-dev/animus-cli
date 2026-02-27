@@ -11,13 +11,8 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-058",
-      "dependency_type": "blocked-by"
-    }
-  ],
-  "description": "Add an \"em\" (engineering manager) agent profile to agent-runtime-config.v2.json. This agent runs on a periodic tick (configurable interval, default every 5 ticks) to evaluate the backlog and produce an ordered work queue.\n\nAdd a new daemon hook point: before the scheduler picks tasks, if the EM tick is due, run the EM agent first and use its output to populate the work queue. The EM agent should be a lightweight, fast invocation \u2014 not a full workflow.",
+  "dependencies": [],
+  "description": "Add an \"em\" (engineering manager) agent profile to agent-runtime-config.v2.json. This agent runs on a periodic tick (configurable interval, default every 5 ticks) to evaluate the backlog and produce an ordered work queue.\n\nAdd a new daemon hook point: before the scheduler picks tasks, if the EM tick is due, run the EM agent first and use its output to populate the work queue. The EM agent should be a lightweight, fast invocation — not a full workflow.",
   "estimated_effort": null,
   "id": "TASK-059",
   "impact_area": [],
@@ -41,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "done",
   "tags": [],
   "title": "Add EM agent profile and scheduling phase to runtime config",
   "type": "feature",

@@ -11,12 +11,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-087",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Implement the StorageBackend trait for PostgreSQL using sqlx with the postgres feature. Schema mirrors SQLite but uses native JSONB columns, proper foreign keys, and GIN indexes on JSONB fields. Connection configured via AO_DATABASE_URL env var or .ao/config.json database section. Include connection pooling (sqlx pool), retry logic, and migration support. Enables team/multi-machine setups with proper ACID transactions and concurrent access. Feature-gated behind cargo feature \"postgres\" to keep default binary lean.",
   "estimated_effort": null,
   "id": "TASK-089",
@@ -41,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add PostgreSQL storage backend implementation",
   "type": "feature",

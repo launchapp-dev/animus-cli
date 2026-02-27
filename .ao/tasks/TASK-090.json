@@ -11,16 +11,7 @@
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-088",
-      "dependency_type": "blocked-by"
-    },
-    {
-      "task_id": "TASK-089",
-      "dependency_type": "blocked-by"
-    }
-  ],
+  "dependencies": [],
   "description": "Wire the storage backend selection into CLI startup and daemon initialization. Add --storage flag (json-file | sqlite | postgres) and AO_STORAGE_BACKEND env var. Add database connection config to .ao/config.json. Default remains json-file for backward compatibility. Add `ao storage migrate` command to run schema migrations. Add `ao storage export/import` for converting between backends (dump JSON files to DB and vice versa). Update ServiceHub construction to accept any StorageBackend.",
   "estimated_effort": null,
   "id": "TASK-090",
@@ -45,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Add storage backend selection and configuration to CLI and daemon",
   "type": "feature",
