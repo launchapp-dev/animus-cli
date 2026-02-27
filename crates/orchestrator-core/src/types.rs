@@ -1,4 +1,4 @@
-// TODO(TASK-058): Remove this marker after validating phase decision contract prompt injection.
+// TODO(TASK-058): Sentinel marker for phase decision contract prompt injection verification; remove after validation.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1231,7 +1231,7 @@ pub struct WorkflowRunInput {
 mod tests {
     use super::{
         PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority,
-        RequirementPriority, WorkflowDecisionRisk,
+        RequirementPriority, TaskStatus, TaskType, WorkflowDecisionRisk,
     };
     use serde_json::json;
 
@@ -1305,5 +1305,61 @@ mod tests {
             serialized["commit_message"],
             "test: validate phase decision contract"
         );
+    }
+
+    #[test]
+    fn task_status_deserializes_contract_aliases_and_helpers_stay_consistent() {
+        let backlog_alias: TaskStatus =
+            serde_json::from_str("\"todo\"").expect("todo should map to backlog");
+        let in_progress_kebab: TaskStatus =
+            serde_json::from_str("\"in-progress\"").expect("kebab case should parse");
+        let in_progress_snake: TaskStatus =
+            serde_json::from_str("\"in_progress\"").expect("snake case should parse");
+        let on_hold_snake: TaskStatus =
+            serde_json::from_str("\"on_hold\"").expect("on_hold alias should parse");
+        let done_alias: TaskStatus =
+            serde_json::from_str("\"completed\"").expect("completed should map to done");
+
+        assert_eq!(backlog_alias, TaskStatus::Backlog);
+        assert_eq!(in_progress_kebab, TaskStatus::InProgress);
+        assert_eq!(in_progress_snake, TaskStatus::InProgress);
+        assert_eq!(on_hold_snake, TaskStatus::OnHold);
+        assert_eq!(done_alias, TaskStatus::Done);
+
+        assert!(TaskStatus::InProgress.is_active());
+        assert!(TaskStatus::Done.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+        assert!(TaskStatus::Blocked.is_blocked());
+        assert!(TaskStatus::OnHold.is_blocked());
+    }
+
+    #[test]
+    fn task_type_as_str_matches_canonical_serialization_and_aliases() {
+        let variants = [
+            TaskType::Feature,
+            TaskType::Bugfix,
+            TaskType::Hotfix,
+            TaskType::Refactor,
+            TaskType::Docs,
+            TaskType::Test,
+            TaskType::Chore,
+            TaskType::Experiment,
+        ];
+
+        for task_type in variants {
+            let serialized = serde_json::to_string(&task_type)
+                .expect("task type should serialize to canonical string");
+            assert_eq!(serialized, format!("\"{}\"", task_type.as_str()));
+        }
+
+        let bug_alias: TaskType = serde_json::from_str("\"bug\"").expect("bug alias should parse");
+        let docs_alias: TaskType =
+            serde_json::from_str("\"documentation\"").expect("documentation alias should parse");
+        let tests_alias: TaskType =
+            serde_json::from_str("\"tests\"").expect("tests alias should parse");
+
+        assert_eq!(bug_alias, TaskType::Bugfix);
+        assert_eq!(docs_alias, TaskType::Docs);
+        assert_eq!(tests_alias, TaskType::Test);
     }
 }
