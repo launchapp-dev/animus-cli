@@ -1564,6 +1564,7 @@ async fn run_merge_conflict_recovery_prompt_against_runner(
 
     let mut lines = BufReader::new(read_half).lines();
     let mut transcript = String::new();
+    let mut finished_successfully = false;
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
         if line.is_empty() {
@@ -1595,10 +1596,15 @@ async fn run_merge_conflict_recovery_prompt_against_runner(
                         exit_code
                     );
                 }
+                finished_successfully = true;
                 break;
             }
             _ => {}
         }
+    }
+
+    if !finished_successfully {
+        anyhow::bail!("runner disconnected before merge conflict recovery completed");
     }
 
     if transcript.trim().is_empty() {
@@ -1629,18 +1635,10 @@ async fn attempt_ai_merge_conflict_recovery(
     let response = parse_merge_conflict_recovery_response(&transcript)
         .ok_or_else(|| anyhow!("merge conflict recovery output was not parseable JSON"))?;
 
-    if !response
-        .kind
-        .trim()
-        .eq_ignore_ascii_case(MERGE_CONFLICT_RECOVERY_RESULT_KIND)
-    {
-        anyhow::bail!(
-            "merge conflict recovery output kind mismatch: expected '{}'",
-            MERGE_CONFLICT_RECOVERY_RESULT_KIND
-        );
-    }
+    let status = merge_conflict_recovery_status(response.status.as_str())
+        .ok_or_else(|| anyhow!("merge conflict recovery output has invalid status"))?;
 
-    match response.status.trim().to_ascii_lowercase().as_str() {
+    match status {
         "resolved" => {
             if response.commit_message.trim().is_empty() {
                 anyhow::bail!("merge conflict recovery output is missing non-empty commit_message");
@@ -1655,21 +1653,41 @@ async fn attempt_ai_merge_conflict_recovery(
             }
             anyhow::bail!("merge conflict recovery agent reported failure: {reason}");
         }
-        other => anyhow::bail!("merge conflict recovery output has invalid status: {other}"),
+        _ => anyhow::bail!("merge conflict recovery output has invalid status"),
     }
 }
 
+fn merge_conflict_recovery_status(status: &str) -> Option<&'static str> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "resolved" => Some("resolved"),
+        "failed" => Some("failed"),
+        _ => None,
+    }
+}
+
+fn is_valid_merge_conflict_recovery_response(response: &MergeConflictRecoveryResponse) -> bool {
+    response
+        .kind
+        .trim()
+        .eq_ignore_ascii_case(MERGE_CONFLICT_RECOVERY_RESULT_KIND)
+        && merge_conflict_recovery_status(response.status.as_str()).is_some()
+}
+
 fn parse_merge_conflict_recovery_response(text: &str) -> Option<MergeConflictRecoveryResponse> {
+    let mut parsed_response = None;
     for (_raw, payload) in collect_json_payload_lines(text) {
         if let Ok(response) = serde_json::from_value::<MergeConflictRecoveryResponse>(payload) {
-            if !response.status.trim().is_empty() {
-                return Some(response);
+            if is_valid_merge_conflict_recovery_response(&response) {
+                parsed_response = Some(response);
             }
         }
     }
+    if parsed_response.is_some() {
+        return parsed_response;
+    }
 
     if let Ok(response) = serde_json::from_str::<MergeConflictRecoveryResponse>(text.trim()) {
-        if !response.status.trim().is_empty() {
+        if is_valid_merge_conflict_recovery_response(&response) {
             return Some(response);
         }
     }
@@ -1712,6 +1730,40 @@ thinking...
         assert!(
             parse_merge_conflict_recovery_response("merge fixed, please continue").is_none(),
             "non-json output should not parse as recovery response"
+        );
+    }
+
+    #[test]
+    fn parse_merge_conflict_recovery_response_uses_latest_valid_payload() {
+        let transcript = r#"
+{"kind":"merge_conflict_resolution_result","status":"resolved|failed","commit_message":"placeholder","reason":""}
+{"kind":"merge_conflict_resolution_result","status":"resolved","commit_message":"Resolve real conflict","reason":""}
+"#;
+        let parsed = parse_merge_conflict_recovery_response(transcript)
+            .expect("response should parse from latest valid JSON line");
+        assert_eq!(parsed.status, "resolved");
+        assert_eq!(parsed.commit_message, "Resolve real conflict");
+    }
+
+    #[test]
+    fn parse_merge_conflict_recovery_response_rejects_wrong_kind() {
+        let transcript = r#"
+{"kind":"phase_result","status":"resolved","commit_message":"not merge conflict result","reason":""}
+"#;
+        assert!(
+            parse_merge_conflict_recovery_response(transcript).is_none(),
+            "wrong kind should not parse as merge conflict recovery response"
+        );
+    }
+
+    #[test]
+    fn parse_merge_conflict_recovery_response_rejects_invalid_status_only_payload() {
+        let transcript = r#"
+{"kind":"merge_conflict_resolution_result","status":"resolved|failed","commit_message":"placeholder","reason":""}
+"#;
+        assert!(
+            parse_merge_conflict_recovery_response(transcript).is_none(),
+            "status placeholders should not be treated as valid recovery responses"
         );
     }
 }

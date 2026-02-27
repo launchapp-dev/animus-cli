@@ -379,11 +379,7 @@ fn test_ensure_token_exists_generates_token_when_missing() {
 fn test_ensure_token_exists_preserves_existing_token() {
     let config_dir = temp_config_dir("ensure-existing");
     let config_path = config_dir.join("config.json");
-    std::fs::write(
-        &config_path,
-        r#"{ "agent_runner_token": "keep-me" }"#,
-    )
-    .expect("write config");
+    std::fs::write(&config_path, r#"{ "agent_runner_token": "keep-me" }"#).expect("write config");
 
     Config::ensure_token_exists(&config_dir).expect("ensure_token_exists should succeed");
 
@@ -401,11 +397,7 @@ fn test_ensure_token_exists_preserves_existing_token() {
 fn test_ensure_token_exists_replaces_null_token() {
     let config_dir = temp_config_dir("ensure-null");
     let config_path = config_dir.join("config.json");
-    std::fs::write(
-        &config_path,
-        r#"{ "agent_runner_token": null }"#,
-    )
-    .expect("write config");
+    std::fs::write(&config_path, r#"{ "agent_runner_token": null }"#).expect("write config");
 
     Config::ensure_token_exists(&config_dir).expect("ensure_token_exists should succeed");
 

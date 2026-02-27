@@ -60,7 +60,10 @@ mod tests {
         ];
 
         for message in messages {
-            assert_eq!(classify_error(message), protocol::classify_error_message(message));
+            assert_eq!(
+                classify_error(message),
+                protocol::classify_error_message(message)
+            );
         }
     }
 }

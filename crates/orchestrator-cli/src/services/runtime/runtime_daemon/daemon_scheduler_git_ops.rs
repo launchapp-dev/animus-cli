@@ -1080,6 +1080,22 @@ pub(super) async fn finalize_merge_conflict_resolution(
     if merge_head_exists(context.merge_worktree_path.as_str())? {
         anyhow::bail!("merge conflict recovery did not complete merge commit");
     }
+    match git_is_ancestor(
+        context.merge_worktree_path.as_str(),
+        context.source_branch.as_str(),
+        "HEAD",
+    )? {
+        Some(true) => {}
+        Some(false) => anyhow::bail!(
+            "merge conflict recovery did not integrate source branch '{}'",
+            context.source_branch
+        ),
+        None => anyhow::bail!(
+            "unable to verify merged source branch '{}' in {}",
+            context.source_branch,
+            context.merge_worktree_path
+        ),
+    }
     if head_parent_count(context.merge_worktree_path.as_str())? < 2 {
         anyhow::bail!("merge conflict recovery did not produce a merge commit");
     }

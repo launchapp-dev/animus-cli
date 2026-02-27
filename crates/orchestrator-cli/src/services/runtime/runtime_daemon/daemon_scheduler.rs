@@ -1363,6 +1363,93 @@ mod tests {
             .unwrap_or(false));
     }
 
+    #[test]
+    fn is_branch_merged_reports_false_for_unmerged_feature_branch() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+
+        let checkout = ProcessCommand::new("git")
+            .args(["checkout", "-b", "feature/unmerged"])
+            .current_dir(temp.path())
+            .status()
+            .expect("checkout should run");
+        assert!(checkout.success(), "feature branch should be created");
+
+        std::fs::write(temp.path().join("feature.txt"), "feature change\n")
+            .expect("feature file should be written");
+        let add = ProcessCommand::new("git")
+            .args(["add", "feature.txt"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git add should run");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "feature change"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "feature commit should succeed");
+
+        let checkout_main = ProcessCommand::new("git")
+            .args(["checkout", "main"])
+            .current_dir(temp.path())
+            .status()
+            .expect("checkout should run");
+        assert!(checkout_main.success(), "checkout main should succeed");
+
+        let merged = is_branch_merged(&project_root, "feature/unmerged")
+            .expect("branch merge check should succeed");
+        assert_eq!(merged, Some(false));
+    }
+
+    #[test]
+    fn is_branch_merged_reports_true_after_merge_commit() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+
+        let checkout = ProcessCommand::new("git")
+            .args(["checkout", "-b", "feature/merged"])
+            .current_dir(temp.path())
+            .status()
+            .expect("checkout should run");
+        assert!(checkout.success(), "feature branch should be created");
+
+        std::fs::write(temp.path().join("merged.txt"), "merged change\n")
+            .expect("feature file should be written");
+        let add = ProcessCommand::new("git")
+            .args(["add", "merged.txt"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git add should run");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "merged feature change"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "feature commit should succeed");
+
+        let checkout_main = ProcessCommand::new("git")
+            .args(["checkout", "main"])
+            .current_dir(temp.path())
+            .status()
+            .expect("checkout should run");
+        assert!(checkout_main.success(), "checkout main should succeed");
+
+        let merge = ProcessCommand::new("git")
+            .args(["merge", "--no-ff", "feature/merged", "-m", "merge feature"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git merge should run");
+        assert!(merge.success(), "merge should succeed");
+
+        let merged = is_branch_merged(&project_root, "feature/merged")
+            .expect("branch merge check should succeed");
+        assert_eq!(merged, Some(true));
+    }
+
     #[tokio::test]
     async fn project_tick_reconciles_stale_completed_workflow_tasks() {
         let temp = TempDir::new().expect("temp dir");

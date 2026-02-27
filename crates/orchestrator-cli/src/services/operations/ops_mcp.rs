@@ -1465,7 +1465,11 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_bool_set(&mut args, "--auto-merge", input.auto_merge);
     push_bool_set(&mut args, "--auto-pr", input.auto_pr);
-    push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
+    push_bool_set(
+        &mut args,
+        "--auto-commit-before-merge",
+        input.auto_commit_before_merge,
+    );
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
@@ -1649,10 +1653,7 @@ mod tests {
     fn build_daemon_start_args_defaults_minimal() {
         let input = DaemonStartInput::default();
         let args = build_daemon_start_args(&input);
-        assert_eq!(
-            args,
-            vec!["daemon".to_string(), "start".to_string()]
-        );
+        assert_eq!(args, vec!["daemon".to_string(), "start".to_string()]);
     }
 
     #[test]

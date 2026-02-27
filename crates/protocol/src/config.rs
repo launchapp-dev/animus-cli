@@ -93,12 +93,15 @@ impl Config {
     pub fn ensure_token_exists(config_dir: &Path) -> Result<()> {
         let config_path = config_dir.join("config.json");
         let mut config = Self::load_from_dir(config_dir)?;
-        if config.agent_runner_token.as_deref().map_or(true, |t| t.trim().is_empty()) {
+        if config
+            .agent_runner_token
+            .as_deref()
+            .map_or(true, |t| t.trim().is_empty())
+        {
             config.agent_runner_token = Some(Uuid::new_v4().to_string());
             let json = serde_json::to_string_pretty(&config)?;
-            fs::write(&config_path, json).with_context(|| {
-                format!("Failed to write token to {}", config_path.display())
-            })?;
+            fs::write(&config_path, json)
+                .with_context(|| format!("Failed to write token to {}", config_path.display()))?;
         }
         Ok(())
     }

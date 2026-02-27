@@ -135,7 +135,10 @@ fn build_router(state: AppState) -> Router {
         .route("/workflows", get(workflows_list_handler))
         .route("/workflows/run", post(workflows_run_handler))
         .route("/workflows/{id}", get(workflows_get_handler))
-        .route("/workflows/{id}/decisions", get(workflows_decisions_handler))
+        .route(
+            "/workflows/{id}/decisions",
+            get(workflows_decisions_handler),
+        )
         .route(
             "/workflows/{id}/checkpoints",
             get(workflows_checkpoints_handler),
