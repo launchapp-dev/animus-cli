@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::Utc;
 use orchestrator_core::{
     evaluate_task_priority_policy, services::ServiceHub, TaskCreateInput, TaskFilter,
-    TaskPriorityPolicyReport, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    TaskPriorityPolicyReport, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 
@@ -20,6 +20,20 @@ struct TaskStatsOutput {
     stats: orchestrator_core::TaskStatistics,
     stale_in_progress: StaleInProgressSummary,
     priority_policy: TaskPriorityPolicyReport,
+}
+
+const UNLINKED_REQUIREMENTS_WARNING: &str = "warning: creating non-chore task without linked requirements; pass --linked-requirement <REQ_ID> to improve traceability";
+
+fn has_non_empty_linked_requirements(input: &TaskCreateInput) -> bool {
+    input
+        .linked_requirements
+        .iter()
+        .any(|requirement| !requirement.trim().is_empty())
+}
+
+fn should_warn_missing_linked_requirements(input: &TaskCreateInput) -> bool {
+    input.task_type.unwrap_or(TaskType::Feature) != TaskType::Chore
+        && !has_non_empty_linked_requirements(input)
 }
 
 pub(crate) async fn handle_task(
@@ -93,10 +107,13 @@ pub(crate) async fn handle_task(
                     priority: parse_priority_opt(args.priority.as_deref())?,
                     created_by: Some("ao-cli".to_string()),
                     tags: Vec::new(),
-                    linked_requirements: Vec::new(),
+                    linked_requirements: args.linked_requirement,
                     linked_architecture_entities: args.linked_architecture_entity,
                 })
             })?;
+            if should_warn_missing_linked_requirements(&input) {
+                eprintln!("{UNLINKED_REQUIREMENTS_WARNING}");
+            }
             print_value(tasks.create(input).await?, json)
         }
         TaskCommand::Update(args) => {
@@ -229,5 +246,65 @@ pub(crate) async fn handle_task(
             let status = parse_task_status(&args.status)?;
             print_value(tasks.set_status(&args.id, status).await?, json)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_create_input(
+        task_type: Option<TaskType>,
+        linked_requirements: Vec<&str>,
+    ) -> TaskCreateInput {
+        TaskCreateInput {
+            title: "task".to_string(),
+            description: String::new(),
+            task_type,
+            priority: None,
+            created_by: None,
+            tags: Vec::new(),
+            linked_requirements: linked_requirements
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            linked_architecture_entities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn warns_for_default_feature_tasks_without_links() {
+        let input = task_create_input(None, Vec::new());
+        assert!(should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn warns_for_non_chore_tasks_without_links() {
+        let input = task_create_input(Some(TaskType::Feature), Vec::new());
+        assert!(should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn does_not_warn_for_chore_tasks_without_links() {
+        let input = task_create_input(Some(TaskType::Chore), Vec::new());
+        assert!(!should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn does_not_warn_when_linked_requirements_are_present() {
+        let input = task_create_input(Some(TaskType::Feature), vec!["REQ-123"]);
+        assert!(!should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn warns_when_linked_requirements_are_blank() {
+        let input = task_create_input(Some(TaskType::Feature), vec!["", "   "]);
+        assert!(should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn does_not_warn_when_at_least_one_linked_requirement_is_non_blank() {
+        let input = task_create_input(Some(TaskType::Feature), vec!["", "REQ-123", "   "]);
+        assert!(!should_warn_missing_linked_requirements(&input));
     }
 }

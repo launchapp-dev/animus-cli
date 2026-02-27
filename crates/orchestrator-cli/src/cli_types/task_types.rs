@@ -110,6 +110,12 @@ pub(crate) struct TaskCreateArgs {
     #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
     #[arg(
+        long = "linked-requirement",
+        value_name = "REQ_ID",
+        help = "Link requirement ids to the new task. Repeat to add multiple ids."
+    )]
+    pub(crate) linked_requirement: Vec<String>,
+    #[arg(
         long = "linked-architecture-entity",
         value_name = "ENTITY_ID",
         help = "Link architecture entity ids to the new task. Repeat to add multiple ids."

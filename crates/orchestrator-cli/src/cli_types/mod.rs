@@ -160,6 +160,57 @@ mod tests {
     }
 
     #[test]
+    fn parses_task_create_with_single_linked_requirement() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "task",
+            "create",
+            "--title",
+            "Traceability task",
+            "--linked-requirement",
+            "REQ-123",
+        ])
+        .expect("task create should parse linked requirement");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Create(args),
+            } => {
+                assert_eq!(args.linked_requirement, vec!["REQ-123".to_string()]);
+            }
+            _ => panic!("expected task create command"),
+        }
+    }
+
+    #[test]
+    fn parses_task_create_with_repeated_linked_requirements() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "task",
+            "create",
+            "--title",
+            "Traceability task",
+            "--linked-requirement",
+            "REQ-123",
+            "--linked-requirement",
+            "REQ-456",
+        ])
+        .expect("task create should parse repeated linked requirements");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Create(args),
+            } => {
+                assert_eq!(
+                    args.linked_requirement,
+                    vec!["REQ-123".to_string(), "REQ-456".to_string()]
+                );
+            }
+            _ => panic!("expected task create command"),
+        }
+    }
+
+    #[test]
     fn task_stats_parses_stale_threshold_override() {
         let cli = Cli::try_parse_from(["ao", "task", "stats", "--stale-threshold-hours", "72"])
             .expect("task stats command should parse");

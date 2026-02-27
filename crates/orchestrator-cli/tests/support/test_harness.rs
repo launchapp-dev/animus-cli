@@ -112,6 +112,10 @@ impl CliHarness {
         Ok((payload, output.status.code().unwrap_or(-1)))
     }
 
+    pub(crate) fn run_json_output(&self, args: &[&str]) -> Result<std::process::Output> {
+        self.run_json_command(args)
+    }
+
     fn run_json_command(&self, args: &[&str]) -> Result<std::process::Output> {
         Command::new(&self.binary_path)
             .arg("--json")
