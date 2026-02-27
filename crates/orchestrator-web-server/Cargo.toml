@@ -13,7 +13,9 @@ orchestrator-web-api = { path = "../orchestrator-web-api" }
 orchestrator-web-contracts = { path = "../orchestrator-web-contracts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["compression-br", "compression-gzip"] }
 
 [dev-dependencies]
 orchestrator-core = { path = "../orchestrator-core" }

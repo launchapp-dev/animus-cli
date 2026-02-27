@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use async_stream::stream;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
@@ -19,18 +19,27 @@ use orchestrator_web_contracts::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use tower_http::compression::CompressionLayer;
 
 use crate::models::WebServerConfig;
 use crate::services::docs_html::render_openapi_docs_html;
 use crate::services::openapi_spec::build_openapi_spec;
 
 static EMBEDDED_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/embedded");
+const CACHE_CONTROL_REVALIDATE: &str = "private, no-cache";
+const HEADER_PAGE_SIZE: &str = "x-ao-page-size";
+const HEADER_NEXT_CURSOR: &str = "x-ao-next-cursor";
+const HEADER_HAS_MORE: &str = "x-ao-has-more";
+const HEADER_TOTAL_COUNT: &str = "x-ao-total-count";
 
 #[derive(Clone)]
 struct AppState {
     api: WebApiService,
     assets_dir: Option<PathBuf>,
     api_only: bool,
+    default_page_size: usize,
+    max_page_size: usize,
 }
 
 pub struct WebServer {
@@ -48,6 +57,11 @@ impl WebServer {
             api: self.api,
             assets_dir: self.config.assets_dir.map(PathBuf::from),
             api_only: self.config.api_only,
+            default_page_size: self.config.default_page_size.max(1),
+            max_page_size: self
+                .config
+                .max_page_size
+                .max(self.config.default_page_size.max(1)),
         };
 
         let router = build_router(state);
@@ -156,6 +170,7 @@ fn build_router(state: AppState) -> Router {
         .nest("/api/v1", api_router)
         .route("/", get(root_handler))
         .route("/{*path}", get(static_handler))
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
@@ -174,9 +189,9 @@ async fn openapi_docs_handler() -> Response {
     Html(render_openapi_docs_html()).into_response()
 }
 
-async fn daemon_status_handler(State(state): State<AppState>) -> Response {
+async fn daemon_status_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match state.api.daemon_status().await {
-        Ok(data) => success_response(data),
+        Ok(data) => success_response_with_etag(data, &headers),
         Err(error) => error_response(error),
     }
 }
@@ -403,9 +418,21 @@ async fn vision_refine_handler(State(state): State<AppState>, Json(body): Json<V
     }
 }
 
-async fn requirements_list_handler(State(state): State<AppState>) -> Response {
+async fn requirements_list_handler(
+    State(state): State<AppState>,
+    Query(query): Query<ListPaginationQuery>,
+) -> Response {
+    let pagination =
+        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
+            Ok(pagination) => pagination,
+            Err(error) => return error_response(error),
+        };
+
     match state.api.requirements_list().await {
-        Ok(data) => success_response(data),
+        Ok(data) => match paginated_success_response(data, pagination, None) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
         Err(error) => error_response(error),
     }
 }
@@ -474,7 +501,17 @@ async fn requirements_delete_handler(
 async fn tasks_list_handler(
     State(state): State<AppState>,
     Query(query): Query<TasksListQuery>,
+    headers: HeaderMap,
 ) -> Response {
+    let pagination = match normalize_pagination_query(
+        &query.pagination,
+        state.default_page_size,
+        state.max_page_size,
+    ) {
+        Ok(pagination) => pagination,
+        Err(error) => return error_response(error),
+    };
+
     match state
         .api
         .tasks_list(
@@ -490,7 +527,10 @@ async fn tasks_list_handler(
         )
         .await
     {
-        Ok(data) => success_response(data),
+        Ok(data) => match paginated_success_response(data, pagination, Some(&headers)) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
         Err(error) => error_response(error),
     }
 }
@@ -635,9 +675,21 @@ async fn tasks_dependency_remove_handler(
     }
 }
 
-async fn workflows_list_handler(State(state): State<AppState>) -> Response {
+async fn workflows_list_handler(
+    State(state): State<AppState>,
+    Query(query): Query<ListPaginationQuery>,
+) -> Response {
+    let pagination =
+        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
+            Ok(pagination) => pagination,
+            Err(error) => return error_response(error),
+        };
+
     match state.api.workflows_list().await {
-        Ok(data) => success_response(data),
+        Ok(data) => match paginated_success_response(data, pagination, None) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
         Err(error) => error_response(error),
     }
 }
@@ -819,6 +871,164 @@ fn success_response(data: Value) -> Response {
     (StatusCode::OK, Json(envelope)).into_response()
 }
 
+fn success_response_with_etag(data: Value, request_headers: &HeaderMap) -> Response {
+    let etag = compute_etag(&data);
+    if if_none_match_matches(request_headers, &etag) {
+        return not_modified_response(&etag);
+    }
+
+    let mut response = success_response(data);
+    attach_cache_headers(&mut response, &etag);
+    response
+}
+
+fn paginated_success_response(
+    data: Value,
+    pagination: PaginationRequest,
+    conditional_headers: Option<&HeaderMap>,
+) -> std::result::Result<Response, WebApiError> {
+    let paginated = paginate_array_data(data, pagination)?;
+    let mut response = match conditional_headers {
+        Some(headers) => success_response_with_etag(Value::Array(paginated.items.clone()), headers),
+        None => success_response(Value::Array(paginated.items.clone())),
+    };
+    attach_pagination_headers(&mut response, &paginated);
+    Ok(response)
+}
+
+fn normalize_pagination_query(
+    query: &ListPaginationQuery,
+    default_page_size: usize,
+    max_page_size: usize,
+) -> std::result::Result<PaginationRequest, WebApiError> {
+    let max_page_size = max_page_size.max(1);
+    let default_page_size = default_page_size.max(1).min(max_page_size);
+    let requested_page_size = query.page_size.unwrap_or(default_page_size);
+
+    if requested_page_size == 0 {
+        return Err(WebApiError::new(
+            "invalid_input",
+            "page_size must be at least 1",
+            2,
+        ));
+    }
+
+    let page_size = requested_page_size.min(max_page_size);
+    let start = match query.cursor.as_deref() {
+        None => 0,
+        Some(cursor) => parse_pagination_cursor(cursor)?,
+    };
+
+    Ok(PaginationRequest { start, page_size })
+}
+
+fn parse_pagination_cursor(cursor: &str) -> std::result::Result<usize, WebApiError> {
+    cursor.parse::<usize>().map_err(|_| {
+        WebApiError::new(
+            "invalid_input",
+            format!("invalid cursor `{cursor}`: expected unsigned integer"),
+            2,
+        )
+    })
+}
+
+fn paginate_array_data(
+    data: Value,
+    pagination: PaginationRequest,
+) -> std::result::Result<PaginatedArray, WebApiError> {
+    let items = data.as_array().ok_or_else(|| {
+        WebApiError::new(
+            "internal",
+            "expected list endpoint payload to be an array",
+            1,
+        )
+    })?;
+
+    let total_count = items.len();
+    let start = pagination.start.min(total_count);
+    let end = start.saturating_add(pagination.page_size).min(total_count);
+    let page_items = items[start..end].to_vec();
+    let next_cursor = if end < total_count {
+        Some(end.to_string())
+    } else {
+        None
+    };
+
+    Ok(PaginatedArray {
+        items: page_items,
+        page_size: pagination.page_size,
+        total_count,
+        next_cursor,
+    })
+}
+
+fn attach_pagination_headers(response: &mut Response, paginated: &PaginatedArray) {
+    set_response_header(response, HEADER_PAGE_SIZE, &paginated.page_size.to_string());
+    set_response_header(
+        response,
+        HEADER_TOTAL_COUNT,
+        &paginated.total_count.to_string(),
+    );
+    set_response_header(
+        response,
+        HEADER_HAS_MORE,
+        if paginated.next_cursor.is_some() {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    if let Some(next_cursor) = paginated.next_cursor.as_deref() {
+        set_response_header(response, HEADER_NEXT_CURSOR, next_cursor);
+    }
+}
+
+fn compute_etag(data: &Value) -> String {
+    let payload = serde_json::to_vec(data).unwrap_or_default();
+    let digest = Sha256::digest(payload);
+    format!("\"{:x}\"", digest)
+}
+
+fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
+    let normalized_current = normalize_etag(current_etag);
+    headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value.split(',').map(str::trim).any(|candidate| {
+                candidate == "*" || normalize_etag(candidate) == normalized_current
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_etag(value: &str) -> &str {
+    value.trim().strip_prefix("W/").unwrap_or(value.trim())
+}
+
+fn not_modified_response(etag: &str) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_MODIFIED;
+    attach_cache_headers(&mut response, etag);
+    response
+}
+
+fn attach_cache_headers(response: &mut Response, etag: &str) {
+    if let Ok(etag_value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(ETAG, etag_value);
+    }
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(CACHE_CONTROL_REVALIDATE),
+    );
+}
+
+fn set_response_header(response: &mut Response, name: &'static str, value: &str) {
+    if let Ok(header_value) = HeaderValue::from_str(value) {
+        response.headers_mut().insert(name, header_value);
+    }
+}
+
 fn error_response(error: WebApiError) -> Response {
     let status = http_status_for_exit_code(error.exit_code);
     let envelope = CliEnvelopeService::error(error.code, error.message, error.exit_code);
@@ -933,6 +1143,12 @@ struct DaemonLogsQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ListPaginationQuery {
+    cursor: Option<String>,
+    page_size: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct TasksListQuery {
     task_type: Option<String>,
@@ -945,6 +1161,22 @@ struct TasksListQuery {
     linked_requirement: Option<String>,
     linked_architecture_entity: Option<String>,
     search: Option<String>,
+    #[serde(flatten)]
+    pagination: ListPaginationQuery,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaginationRequest {
+    start: usize,
+    page_size: usize,
+}
+
+#[derive(Debug)]
+struct PaginatedArray {
+    items: Vec<Value>,
+    page_size: usize,
+    total_count: usize,
+    next_cursor: Option<String>,
 }
 
 #[cfg(test)]
@@ -952,14 +1184,60 @@ mod tests {
     use std::sync::Arc;
 
     use axum::body::{to_bytes, Body};
-    use axum::http::header::CONTENT_TYPE;
+    use axum::http::header::{CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
     use axum::http::Request;
-    use orchestrator_core::{InMemoryServiceHub, ServiceHub};
+    use axum::Router;
+    use orchestrator_core::{InMemoryServiceHub, ServiceHub, TaskCreateInput};
     use orchestrator_web_api::WebApiContext;
     use serde_json::Value;
     use tower::util::ServiceExt;
 
-    use super::{build_router, AppState};
+    use super::{build_router, AppState, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_PAGE_SIZE};
+
+    fn build_test_app(
+        hub: Arc<dyn ServiceHub>,
+        api_only: bool,
+        default_page_size: usize,
+        max_page_size: usize,
+    ) -> Router {
+        let context = Arc::new(WebApiContext {
+            hub,
+            project_root: "/tmp/project".to_string(),
+            app_version: "test-version".to_string(),
+        });
+        let api = orchestrator_web_api::WebApiService::new(context);
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only,
+            default_page_size,
+            max_page_size,
+        })
+    }
+
+    async fn seed_tasks(hub: &Arc<dyn ServiceHub>, count: usize) {
+        let base_index = hub
+            .tasks()
+            .list()
+            .await
+            .expect("tasks should list for seeding")
+            .len();
+        for index in 0..count {
+            hub.tasks()
+                .create(TaskCreateInput {
+                    title: format!("Task {}", base_index + index),
+                    description: "Task for pagination test".to_string(),
+                    task_type: None,
+                    priority: None,
+                    created_by: Some("test".to_string()),
+                    tags: Vec::new(),
+                    linked_requirements: Vec::new(),
+                    linked_architecture_entities: Vec::new(),
+                })
+                .await
+                .expect("task should be created");
+        }
+    }
 
     #[tokio::test]
     async fn system_info_endpoint_returns_cli_envelope() {
@@ -974,6 +1252,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1003,6 +1283,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1043,6 +1325,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1091,6 +1375,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1143,6 +1429,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let vision_save_response = app
@@ -1299,6 +1587,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1328,6 +1618,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1357,6 +1649,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1386,6 +1680,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: false,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let routes = [
@@ -1452,6 +1748,8 @@ mod tests {
             api,
             assets_dir: None,
             api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
         });
 
         let response = app
@@ -1472,5 +1770,299 @@ mod tests {
             .expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
         assert_eq!(payload.get("ok"), Some(&Value::Bool(false)));
+    }
+
+    #[tokio::test]
+    async fn tasks_list_supports_cursor_pagination_with_default_page_size() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        seed_tasks(&hub, 60).await;
+        let app = build_test_app(hub, true, 50, 200);
+
+        let first_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(first_page.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            first_page
+                .headers()
+                .get(HEADER_PAGE_SIZE)
+                .and_then(|value| value.to_str().ok()),
+            Some("50")
+        );
+        assert_eq!(
+            first_page
+                .headers()
+                .get(HEADER_HAS_MORE)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        let next_cursor = first_page
+            .headers()
+            .get(HEADER_NEXT_CURSOR)
+            .and_then(|value| value.to_str().ok())
+            .expect("first page should return next cursor")
+            .to_string();
+
+        let first_page_body = to_bytes(first_page.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let first_page_payload: Value =
+            serde_json::from_slice(&first_page_body).expect("response should be valid json");
+        assert_eq!(
+            first_page_payload["data"]
+                .as_array()
+                .expect("tasks list payload should be an array")
+                .len(),
+            50
+        );
+
+        let second_page = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/tasks?cursor={next_cursor}"))
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(second_page.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            second_page
+                .headers()
+                .get(HEADER_HAS_MORE)
+                .and_then(|value| value.to_str().ok()),
+            Some("false")
+        );
+        assert!(
+            second_page.headers().get(HEADER_NEXT_CURSOR).is_none(),
+            "final page should not include a next cursor header"
+        );
+
+        let second_page_body = to_bytes(second_page.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let second_page_payload: Value =
+            serde_json::from_slice(&second_page_body).expect("response should be valid json");
+        assert_eq!(
+            second_page_payload["data"]
+                .as_array()
+                .expect("tasks list payload should be an array")
+                .len(),
+            10
+        );
+    }
+
+    #[tokio::test]
+    async fn tasks_list_rejects_invalid_cursor() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks?cursor=not-a-number")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn requirements_list_applies_pagination_headers() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/requirements")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(HEADER_PAGE_SIZE)
+                .and_then(|value| value.to_str().ok()),
+            Some("50")
+        );
+    }
+
+    #[tokio::test]
+    async fn workflows_list_applies_pagination_headers() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/workflows")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(HEADER_PAGE_SIZE)
+                .and_then(|value| value.to_str().ok()),
+            Some("50")
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_status_etag_returns_not_modified_for_matching_if_none_match() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/daemon/status")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(first_response.status(), axum::http::StatusCode::OK);
+        let etag = first_response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("daemon status response should include etag")
+            .to_string();
+
+        let not_modified = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/daemon/status")
+                    .header(IF_NONE_MATCH, etag)
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(not_modified.status(), axum::http::StatusCode::NOT_MODIFIED);
+    }
+
+    #[tokio::test]
+    async fn tasks_list_etag_changes_when_task_data_changes() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        seed_tasks(&hub, 1).await;
+        let app = build_test_app(hub.clone(), true, 50, 200);
+
+        let first_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        let initial_etag = first_response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("tasks list should include etag")
+            .to_string();
+
+        let cached_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks")
+                    .header(IF_NONE_MATCH, initial_etag.as_str())
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(
+            cached_response.status(),
+            axum::http::StatusCode::NOT_MODIFIED
+        );
+
+        seed_tasks(&hub, 1).await;
+
+        let refreshed_response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks")
+                    .header(IF_NONE_MATCH, initial_etag.as_str())
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(refreshed_response.status(), axum::http::StatusCode::OK);
+        let refreshed_etag = refreshed_response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("tasks list should include refreshed etag");
+        assert_ne!(refreshed_etag, initial_etag);
+    }
+
+    #[tokio::test]
+    async fn api_supports_gzip_compression() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        seed_tasks(&hub, 3).await;
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/tasks")
+                    .header("accept-encoding", "gzip")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_ENCODING)
+                .and_then(|value| value.to_str().ok()),
+            Some("gzip")
+        );
     }
 }

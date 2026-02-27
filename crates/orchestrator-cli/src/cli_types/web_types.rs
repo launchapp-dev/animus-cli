@@ -38,6 +38,20 @@ pub(crate) struct WebServeArgs {
         help = "Serve API endpoints only without static assets."
     )]
     pub(crate) api_only: bool,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 50,
+        help = "Default page size for paginated list API endpoints."
+    )]
+    pub(crate) page_size_default: usize,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 200,
+        help = "Maximum allowed page size for paginated list API endpoints."
+    )]
+    pub(crate) page_size_max: usize,
 }
 
 #[derive(Debug, Args)]
