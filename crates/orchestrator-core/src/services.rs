@@ -18,7 +18,7 @@ use crate::types::{
     AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem,
     CheckpointReason, CodebaseInsight, Complexity, ComplexityAssessment, ComplexityTier,
     DaemonHealth, DaemonStatus, DependencyType, LogEntry, LogLevel, OrchestratorProject,
-    OrchestratorTask, OrchestratorWorkflow, Priority, ProjectConfig, ProjectCreateInput,
+    OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig, ProjectCreateInput,
     ProjectType, RequirementItem, RequirementStatus, RequirementsDraftInput,
     RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
     RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency,
@@ -162,6 +162,11 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn cancel(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn request_research(&self, id: &str, reason: String) -> Result<OrchestratorWorkflow>;
     async fn complete_current_phase(&self, id: &str) -> Result<OrchestratorWorkflow>;
+    async fn complete_current_phase_with_decision(
+        &self,
+        id: &str,
+        decision: Option<PhaseDecision>,
+    ) -> Result<OrchestratorWorkflow>;
     async fn fail_current_phase(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;

@@ -112,6 +112,15 @@ fn phase_output_json_schema_for(project_root: &str, phase_id: &str) -> Option<Va
         .cloned()
 }
 
+fn phase_decision_contract_for(
+    project_root: &str,
+    phase_id: &str,
+) -> Option<orchestrator_core::PhaseDecisionContract> {
+    load_agent_runtime_config(project_root)
+        .phase_decision_contract(phase_id)
+        .cloned()
+}
+
 pub(super) fn phase_directive_for(project_root: &str, phase_id: &str) -> String {
     let config = load_agent_runtime_config(project_root);
     config
@@ -152,6 +161,13 @@ pub(super) fn build_phase_prompt(
     };
     let phase_directive = phase_directive_for(project_root, phase_id);
     let phase_safety_rules = phase_safety_rules(phase_id);
+    let phase_decision_rule = if phase_decision_contract_for(project_root, phase_id).is_some() {
+        format!(
+            "- Before finishing, emit one JSON line with your phase assessment:\n  {{\"kind\":\"phase_decision\",\"phase_id\":\"{phase_id}\",\"verdict\":\"advance|rework|fail\",\"confidence\":0.0-1.0,\"risk\":\"low|medium|high\",\"reason\":\"...\",\"evidence\":[{{\"kind\":\"...\",\"description\":\"...\"}}]}}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Be honest about confidence. 0.5 = uncertain, 0.8+ = confident."
+        )
+    } else {
+        String::new()
+    };
 
     let phase_prompt = WORKFLOW_PHASE_PROMPT_TEMPLATE
         .replace("__PROJECT_ROOT__", project_root)
@@ -163,6 +179,7 @@ pub(super) fn build_phase_prompt(
         .replace("__PHASE_DIRECTIVE__", phase_directive.trim())
         .replace("__PRODUCT_CHANGE_RULE__", product_change_rule)
         .replace("__PHASE_SAFETY_RULES__", phase_safety_rules)
+        .replace("__PHASE_DECISION_RULE__", &phase_decision_rule)
         .replace(
             "__IMPLEMENTATION_COMMIT_RULE__",
             implementation_commit_rule.as_str(),
@@ -189,6 +206,8 @@ fn phase_safety_rules(phase_id: &str) -> &'static str {
 pub(super) enum PhaseExecutionOutcome {
     Completed {
         commit_message: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase_decision: Option<orchestrator_core::PhaseDecision>,
     },
     NeedsResearch {
         reason: String,
@@ -295,6 +314,55 @@ pub(super) fn parse_research_reason_from_text(text: &str) -> Option<String> {
         }
     }
 
+    None
+}
+
+fn parse_phase_decision_from_payload(payload: &Value) -> Option<orchestrator_core::PhaseDecision> {
+    match payload {
+        Value::Array(items) => items.iter().find_map(parse_phase_decision_from_payload),
+        Value::Object(object) => {
+            let is_decision = object
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|v| v.eq_ignore_ascii_case("phase_decision"))
+                .unwrap_or(false);
+            if is_decision {
+                if let Ok(decision) =
+                    serde_json::from_value::<orchestrator_core::PhaseDecision>(payload.clone())
+                {
+                    return Some(decision);
+                }
+            }
+
+            for key in ["proposal", "data", "payload", "result", "output", "item"] {
+                if let Some(value) = object.get(key) {
+                    if let Some(decision) = parse_phase_decision_from_payload(value) {
+                        return Some(decision);
+                    }
+                }
+            }
+
+            for key in ["text", "message", "content", "output_text", "delta"] {
+                if let Some(raw) = object.get(key).and_then(Value::as_str) {
+                    if let Some(decision) = parse_phase_decision_from_text(raw) {
+                        return Some(decision);
+                    }
+                }
+            }
+
+            None
+        }
+        Value::String(text) => parse_phase_decision_from_text(text),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_phase_decision_from_text(text: &str) -> Option<orchestrator_core::PhaseDecision> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Some(decision) = parse_phase_decision_from_payload(&payload) {
+            return Some(decision);
+        }
+    }
     None
 }
 
@@ -421,6 +489,8 @@ pub(super) async fn run_workflow_phase_attempt(
     let mut lines = BufReader::new(read_half).lines();
     let mut pending_research_reason: Option<String> = None;
     let mut pending_commit_message: Option<String> = None;
+    let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
+    let parse_phase_decision = phase_decision_contract_for(project_root, phase_id).is_some();
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
     while let Some(line) = lines.next_line().await? {
@@ -458,6 +528,16 @@ pub(super) async fn run_workflow_phase_attempt(
                         pending_commit_message = Some(commit_message);
                     }
                 }
+                if parse_phase_decision && pending_phase_decision.is_none() {
+                    if let Some(decision) = parse_phase_decision_from_text(&text) {
+                        if pending_commit_message.is_none() {
+                            if let Some(ref cm) = decision.commit_message {
+                                pending_commit_message = Some(cm.clone());
+                            }
+                        }
+                        pending_phase_decision = Some(decision);
+                    }
+                }
             }
             AgentRunEvent::Thinking { content, .. } => {
                 if provider_exhaustion_reason.is_none() {
@@ -478,6 +558,16 @@ pub(super) async fn run_workflow_phase_attempt(
                         expected_result_kind.as_str(),
                     ) {
                         pending_commit_message = Some(commit_message);
+                    }
+                }
+                if parse_phase_decision && pending_phase_decision.is_none() {
+                    if let Some(decision) = parse_phase_decision_from_text(&content) {
+                        if pending_commit_message.is_none() {
+                            if let Some(ref cm) = decision.commit_message {
+                                pending_commit_message = Some(cm.clone());
+                            }
+                        }
+                        pending_phase_decision = Some(decision);
                     }
                 }
             }
@@ -523,6 +613,7 @@ pub(super) async fn run_workflow_phase_attempt(
                 }
                 return Ok(PhaseExecutionOutcome::Completed {
                     commit_message: pending_commit_message,
+                    phase_decision: pending_phase_decision,
                 });
             }
             _ => {}
@@ -672,7 +763,7 @@ pub(super) async fn run_workflow_phase_with_agent(
             {
                 Ok(mut outcome) => {
                     if phase_requires_commit_message_with_config(project_root, phase_id) {
-                        if let PhaseExecutionOutcome::Completed { commit_message } = &mut outcome {
+                        if let PhaseExecutionOutcome::Completed { commit_message, .. } = &mut outcome {
                             let resolved_commit_message =
                                 commit_message.clone().unwrap_or_else(|| {
                                     fallback_implementation_commit_message(task_id, task_title)
@@ -1165,7 +1256,7 @@ pub(super) async fn run_workflow_phase(
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
                 match &outcome {
-                    PhaseExecutionOutcome::Completed { commit_message } => {
+                    PhaseExecutionOutcome::Completed { commit_message, .. } => {
                         if definition
                             .output_contract
                             .as_ref()
@@ -1280,6 +1371,7 @@ pub(super) async fn run_workflow_phase(
             Ok(PhaseExecutionRunResult {
                 outcome: PhaseExecutionOutcome::Completed {
                     commit_message: None,
+                    phase_decision: None,
                 },
                 metadata,
                 signals,

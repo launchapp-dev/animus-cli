@@ -763,6 +763,7 @@ pub enum PhaseEvidenceKind {
     RequirementsMet,
     ResearchComplete,
     ManualVerification,
+    #[serde(other)]
     Custom,
 }
 

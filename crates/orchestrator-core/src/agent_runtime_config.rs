@@ -33,6 +33,28 @@ impl PhaseOutputContract {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseDecisionContract {
+    #[serde(default)]
+    pub required_evidence: Vec<crate::types::PhaseEvidenceKind>,
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f32,
+    #[serde(default = "default_max_risk")]
+    pub max_risk: crate::types::WorkflowDecisionRisk,
+    #[serde(default = "default_true")]
+    pub allow_missing_decision: bool,
+}
+
+fn default_min_confidence() -> f32 {
+    0.6
+}
+fn default_max_risk() -> crate::types::WorkflowDecisionRisk {
+    crate::types::WorkflowDecisionRisk::Medium
+}
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseExecutionMode {
@@ -144,6 +166,8 @@ pub struct PhaseExecutionDefinition {
     pub output_contract: Option<PhaseOutputContract>,
     #[serde(default)]
     pub output_json_schema: Option<Value>,
+    #[serde(default)]
+    pub decision_contract: Option<PhaseDecisionContract>,
     #[serde(default)]
     pub command: Option<PhaseCommandDefinition>,
     #[serde(default)]
@@ -420,6 +444,12 @@ impl AgentRuntimeConfig {
             .and_then(|definition| definition.output_contract.as_ref())
     }
 
+    pub fn phase_decision_contract(&self, phase_id: &str) -> Option<&PhaseDecisionContract> {
+        self.phases
+            .get(phase_id)
+            .and_then(|def| def.decision_contract.as_ref())
+    }
+
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.command.as_ref())
@@ -579,6 +609,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -592,6 +623,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -612,6 +644,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     }),
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -625,6 +658,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -638,6 +672,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -651,6 +686,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -675,6 +711,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         },
                         "additionalProperties": true
                     })),
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -688,6 +725,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },
@@ -701,6 +739,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
+                    decision_contract: None,
                     command: None,
                     manual: None,
                 },

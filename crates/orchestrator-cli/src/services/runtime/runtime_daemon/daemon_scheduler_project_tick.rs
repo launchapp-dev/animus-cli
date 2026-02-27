@@ -924,9 +924,11 @@ async fn execute_running_workflow_phases_for_project(
                 ));
 
                 match result.outcome {
-                    PhaseExecutionOutcome::Completed { .. } => {
+                    PhaseExecutionOutcome::Completed { phase_decision, .. } => {
                         enforce_frontend_phase_gate(project_root, &workflow.id, &phase_id, &task)?;
-                        let updated = hub.workflows().complete_current_phase(&workflow.id).await?;
+                        let updated = hub.workflows()
+                            .complete_current_phase_with_decision(&workflow.id, phase_decision)
+                            .await?;
                         sync_task_status_for_workflow_result(
                             hub.clone(),
                             project_root,

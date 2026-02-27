@@ -18,7 +18,8 @@ pub use agent_runtime_config::{
     load_agent_runtime_config, load_agent_runtime_config_or_default, write_agent_runtime_config,
     AgentProfile, AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides,
     AgentRuntimeSource, CommandCwdMode, LoadedAgentRuntimeConfig, PhaseCommandDefinition,
-    PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition, PhaseOutputContract,
+    PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition,
+    PhaseOutputContract,
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{

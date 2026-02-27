@@ -2,10 +2,19 @@ use chrono::Utc;
 
 use crate::state_machines::{builtin_compiled_state_machines, CompiledStateMachines};
 use crate::types::{
-    OrchestratorWorkflow, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
-    WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
-    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
+    OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction,
+    WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent,
+    WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
+    WorkflowStatus,
 };
+
+const MAX_PHASE_REWORKS: u32 = 3;
+
+enum GateEvaluationResult {
+    Pass,
+    Rework { reason: String },
+    Fail { reason: String },
+}
 
 use super::phase_plan::{phase_plan_for_pipeline_id, STANDARD_PIPELINE_ID};
 use super::state_machine::WorkflowStateMachine;
@@ -183,6 +192,14 @@ impl WorkflowLifecycleExecutor {
     }
 
     pub fn mark_current_phase_success(&self, workflow: &mut OrchestratorWorkflow) {
+        self.mark_current_phase_success_with_decision(workflow, None);
+    }
+
+    pub fn mark_current_phase_success_with_decision(
+        &self,
+        workflow: &mut OrchestratorWorkflow,
+        decision: Option<PhaseDecision>,
+    ) {
         if !matches!(workflow.status, WorkflowStatus::Running) {
             return;
         }
@@ -203,45 +220,247 @@ impl WorkflowLifecycleExecutor {
 
         let mut machine = self.state_machine(workflow.machine_state);
         machine.apply(WorkflowMachineEvent::PhaseSucceeded);
-        machine.apply(WorkflowMachineEvent::GatesPassed);
-        machine.apply(WorkflowMachineEvent::PolicyDecisionReady);
 
-        let next_idx = workflow.current_phase_index + 1;
-        if next_idx < workflow.phases.len() {
-            let next_phase_id = workflow.phases[next_idx].phase_id.clone();
-            workflow.current_phase_index = next_idx;
-            if let Some(phase) = workflow.phases.get_mut(next_idx) {
-                phase.status = WorkflowPhaseStatus::Running;
-                phase.started_at = Some(Utc::now());
-                phase.attempt += 1;
-                workflow.current_phase = Some(phase.phase_id.clone());
+        match self.evaluate_gates(&decision, workflow) {
+            GateEvaluationResult::Pass => {
+                machine.apply(WorkflowMachineEvent::GatesPassed);
+                machine.apply(WorkflowMachineEvent::PolicyDecisionReady);
+
+                let (confidence, risk, source) = match &decision {
+                    Some(d) => (d.confidence, d.risk, WorkflowDecisionSource::Llm),
+                    None => (1.0, WorkflowDecisionRisk::Low, WorkflowDecisionSource::Fallback),
+                };
+                let (machine_version, machine_hash, machine_source) = self.machine_metadata();
+                let guardrail_violations = decision
+                    .as_ref()
+                    .map(|d| d.guardrail_violations.clone())
+                    .unwrap_or_default();
+
+                let next_idx = workflow.current_phase_index + 1;
+                if next_idx < workflow.phases.len() {
+                    let next_phase_id = workflow.phases[next_idx].phase_id.clone();
+                    workflow.current_phase_index = next_idx;
+                    if let Some(phase) = workflow.phases.get_mut(next_idx) {
+                        phase.status = WorkflowPhaseStatus::Running;
+                        phase.started_at = Some(Utc::now());
+                        phase.attempt += 1;
+                        workflow.current_phase = Some(phase.phase_id.clone());
+                    }
+                    workflow.decision_history.push(WorkflowDecisionRecord {
+                        timestamp: Utc::now(),
+                        phase_id: current_phase_id,
+                        decision: WorkflowDecisionAction::Advance,
+                        target_phase: Some(next_phase_id),
+                        reason: decision
+                            .as_ref()
+                            .map(|d| d.reason.clone())
+                            .filter(|r| !r.is_empty())
+                            .unwrap_or_else(|| "phase completed successfully".to_string()),
+                        confidence,
+                        risk,
+                        source,
+                        guardrail_violations: guardrail_violations.clone(),
+                        machine_version,
+                        machine_hash: machine_hash.clone(),
+                        machine_source: machine_source.clone(),
+                    });
+                    machine.apply(WorkflowMachineEvent::Start);
+                    machine.apply(WorkflowMachineEvent::PhaseStarted);
+                    workflow.machine_state = machine.state();
+                    workflow.status = WorkflowStatus::Running;
+                } else {
+                    workflow.decision_history.push(WorkflowDecisionRecord {
+                        timestamp: Utc::now(),
+                        phase_id: current_phase_id,
+                        decision: WorkflowDecisionAction::Advance,
+                        target_phase: None,
+                        reason: "workflow completed all phases".to_string(),
+                        confidence,
+                        risk,
+                        source,
+                        guardrail_violations,
+                        machine_version,
+                        machine_hash,
+                        machine_source,
+                    });
+                    machine.apply(WorkflowMachineEvent::NoMorePhases);
+                    workflow.machine_state = machine.state();
+                    workflow.status = WorkflowStatus::Completed;
+                    workflow.completed_at = Some(Utc::now());
+                    workflow.current_phase = None;
+                }
             }
-            workflow.decision_history.push(self.decision_record(
-                current_phase_id,
-                WorkflowDecisionAction::Advance,
-                Some(next_phase_id),
-                "phase completed successfully".to_string(),
-                1.0,
-                WorkflowDecisionRisk::Low,
-            ));
-            machine.apply(WorkflowMachineEvent::Start);
-            machine.apply(WorkflowMachineEvent::PhaseStarted);
-            workflow.machine_state = machine.state();
-            workflow.status = WorkflowStatus::Running;
-        } else {
-            workflow.decision_history.push(self.decision_record(
-                current_phase_id,
-                WorkflowDecisionAction::Advance,
-                None,
-                "workflow completed all phases".to_string(),
-                1.0,
-                WorkflowDecisionRisk::Low,
-            ));
-            machine.apply(WorkflowMachineEvent::NoMorePhases);
-            workflow.machine_state = machine.state();
-            workflow.status = WorkflowStatus::Completed;
-            workflow.completed_at = Some(Utc::now());
-            workflow.current_phase = None;
+            GateEvaluationResult::Rework { reason } => {
+                machine.apply(WorkflowMachineEvent::GatesFailed);
+                workflow.machine_state = machine.state();
+
+                let rework_count = workflow
+                    .rework_counts
+                    .entry(current_phase_id.clone())
+                    .or_insert(0);
+                *rework_count += 1;
+
+                if let Some(phase) = workflow.phases.get_mut(workflow.current_phase_index) {
+                    phase.status = WorkflowPhaseStatus::Running;
+                    phase.completed_at = None;
+                    phase.attempt += 1;
+                }
+
+                let confidence = decision.as_ref().map(|d| d.confidence).unwrap_or(0.5);
+                let risk = decision
+                    .as_ref()
+                    .map(|d| d.risk)
+                    .unwrap_or(WorkflowDecisionRisk::Medium);
+                let (machine_version, machine_hash, machine_source) = self.machine_metadata();
+                workflow.decision_history.push(WorkflowDecisionRecord {
+                    timestamp: Utc::now(),
+                    phase_id: current_phase_id,
+                    decision: WorkflowDecisionAction::Rework,
+                    target_phase: None,
+                    reason,
+                    confidence,
+                    risk,
+                    source: WorkflowDecisionSource::Llm,
+                    guardrail_violations: decision
+                        .as_ref()
+                        .map(|d| d.guardrail_violations.clone())
+                        .unwrap_or_default(),
+                    machine_version,
+                    machine_hash,
+                    machine_source,
+                });
+
+                let mut machine = self.state_machine(workflow.machine_state);
+                machine.apply(WorkflowMachineEvent::Start);
+                machine.apply(WorkflowMachineEvent::PhaseStarted);
+                workflow.machine_state = machine.state();
+                workflow.status = WorkflowStatus::Running;
+            }
+            GateEvaluationResult::Fail { reason } => {
+                machine.apply(WorkflowMachineEvent::GatesFailed);
+                machine.apply(WorkflowMachineEvent::PolicyDecisionFailed);
+                machine.apply(WorkflowMachineEvent::ReworkBudgetExceeded);
+                workflow.machine_state = machine.state();
+                workflow.status = WorkflowStatus::Failed;
+                workflow.completed_at = Some(Utc::now());
+                workflow.failure_reason = Some(reason.clone());
+
+                let confidence = decision.as_ref().map(|d| d.confidence).unwrap_or(0.5);
+                let risk = decision
+                    .as_ref()
+                    .map(|d| d.risk)
+                    .unwrap_or(WorkflowDecisionRisk::High);
+                let (machine_version, machine_hash, machine_source) = self.machine_metadata();
+                workflow.decision_history.push(WorkflowDecisionRecord {
+                    timestamp: Utc::now(),
+                    phase_id: current_phase_id,
+                    decision: WorkflowDecisionAction::Fail,
+                    target_phase: None,
+                    reason,
+                    confidence,
+                    risk,
+                    source: WorkflowDecisionSource::Llm,
+                    guardrail_violations: decision
+                        .as_ref()
+                        .map(|d| d.guardrail_violations.clone())
+                        .unwrap_or_default(),
+                    machine_version,
+                    machine_hash,
+                    machine_source,
+                });
+            }
+        }
+    }
+
+    fn evaluate_gates(
+        &self,
+        decision: &Option<PhaseDecision>,
+        workflow: &OrchestratorWorkflow,
+    ) -> GateEvaluationResult {
+        let decision = match decision {
+            Some(d) => d,
+            None => return GateEvaluationResult::Pass,
+        };
+
+        match decision.verdict {
+            PhaseDecisionVerdict::Fail => {
+                return GateEvaluationResult::Fail {
+                    reason: if decision.reason.is_empty() {
+                        "agent declared phase failed".to_string()
+                    } else {
+                        decision.reason.clone()
+                    },
+                };
+            }
+            PhaseDecisionVerdict::Rework => {
+                let phase_id = workflow
+                    .phases
+                    .get(workflow.current_phase_index)
+                    .map(|p| p.phase_id.as_str())
+                    .unwrap_or("unknown");
+                let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                if rework_count >= MAX_PHASE_REWORKS {
+                    return GateEvaluationResult::Fail {
+                        reason: format!(
+                            "rework budget exceeded for phase {} ({} reworks): {}",
+                            phase_id,
+                            rework_count,
+                            if decision.reason.is_empty() {
+                                "agent requested rework"
+                            } else {
+                                &decision.reason
+                            }
+                        ),
+                    };
+                }
+                return GateEvaluationResult::Rework {
+                    reason: if decision.reason.is_empty() {
+                        "agent requested rework".to_string()
+                    } else {
+                        decision.reason.clone()
+                    },
+                };
+            }
+            PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Skip => {
+                if decision.confidence < 0.5
+                    && matches!(decision.risk, WorkflowDecisionRisk::High)
+                {
+                    let phase_id = workflow
+                        .phases
+                        .get(workflow.current_phase_index)
+                        .map(|p| p.phase_id.as_str())
+                        .unwrap_or("unknown");
+                    let rework_count =
+                        workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                    if rework_count < MAX_PHASE_REWORKS {
+                        return GateEvaluationResult::Rework {
+                            reason: format!(
+                                "low confidence ({:.2}) with high risk — requesting rework",
+                                decision.confidence
+                            ),
+                        };
+                    }
+                }
+                if !decision.guardrail_violations.is_empty() {
+                    let phase_id = workflow
+                        .phases
+                        .get(workflow.current_phase_index)
+                        .map(|p| p.phase_id.as_str())
+                        .unwrap_or("unknown");
+                    let rework_count =
+                        workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                    if rework_count < MAX_PHASE_REWORKS {
+                        return GateEvaluationResult::Rework {
+                            reason: format!(
+                                "guardrail violations: {}",
+                                decision.guardrail_violations.join("; ")
+                            ),
+                        };
+                    }
+                }
+                GateEvaluationResult::Pass
+            }
+            PhaseDecisionVerdict::Unknown => GateEvaluationResult::Pass,
         }
     }
 

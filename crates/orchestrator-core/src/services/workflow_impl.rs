@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::PhaseDecision;
 
 fn effective_pipeline_id(
     requested: Option<&str>,
@@ -158,12 +159,21 @@ impl WorkflowServiceApi for InMemoryServiceHub {
     }
 
     async fn complete_current_phase(&self, id: &str) -> Result<OrchestratorWorkflow> {
+        self.complete_current_phase_with_decision(id, None).await
+    }
+
+    async fn complete_current_phase_with_decision(
+        &self,
+        id: &str,
+        decision: Option<PhaseDecision>,
+    ) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
         let workflow = lock
             .workflows
             .get_mut(id)
             .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
-        WorkflowLifecycleExecutor::default().mark_current_phase_success(workflow);
+        WorkflowLifecycleExecutor::default()
+            .mark_current_phase_success_with_decision(workflow, decision);
         Ok(workflow.clone())
     }
 
@@ -372,6 +382,14 @@ impl WorkflowServiceApi for FileServiceHub {
     }
 
     async fn complete_current_phase(&self, id: &str) -> Result<OrchestratorWorkflow> {
+        self.complete_current_phase_with_decision(id, None).await
+    }
+
+    async fn complete_current_phase_with_decision(
+        &self,
+        id: &str,
+        decision: Option<PhaseDecision>,
+    ) -> Result<OrchestratorWorkflow> {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
@@ -382,7 +400,7 @@ impl WorkflowServiceApi for FileServiceHub {
             )?,
             state_machines,
         )
-        .mark_current_phase_success(&mut workflow);
+        .mark_current_phase_success_with_decision(&mut workflow, decision);
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
         if workflow.status == crate::types::WorkflowStatus::Completed {

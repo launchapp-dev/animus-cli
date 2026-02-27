@@ -15,6 +15,7 @@ __PRODUCT_CHANGE_RULE__
 __IMPLEMENTATION_COMMIT_RULE__
 - If you lack critical information, emit one JSON line exactly like: {"kind":"research_required","reason":"<what to research and why>"}.
 __PHASE_SAFETY_RULES__
+__PHASE_DECISION_RULE__
 - For UI phases, prioritize clarity, hierarchy, spacing, responsive behavior, and accessibility.
 - Keep behavior correct and production-ready.
 - If you run checks, fix failing issues you introduce.
