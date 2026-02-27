@@ -6,7 +6,7 @@
     "UI enforces rule-based action availability (disabled states and rationale) based on workflow/task status and server responses.",
     "Operator actions are idempotent on retry and display conflict-resolution messaging when backend state has changed."
   ],
-  "category": null,
+  "category": "usability",
   "comments": [],
   "created_at": "2026-02-24T19:52:00.207696Z",
   "description": "Create a unified interface for task backlog management, workflow execution controls, phase status visibility, and gated approvals.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Deliver operational task and workflow control center",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.487167Z"
+  "type": "functional",
+  "updated_at": "2026-02-27T06:58:48.698644Z"
 }

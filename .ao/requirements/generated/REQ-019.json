@@ -6,7 +6,7 @@
     "Logging supports redaction rules to avoid exposing secrets or sensitive payloads in UI-visible traces.",
     "Telemetry export format is documented and can be consumed by downstream monitoring tools."
   ],
-  "category": null,
+  "category": "runtime",
   "comments": [],
   "created_at": "2026-02-24T20:06:42.940529Z",
   "description": "Instrument the React web GUI with structured client telemetry, correlation IDs, and operator-facing diagnostics so failures can be triaged quickly against backend run/events.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Add first-class web UI observability and debug logging",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.689364Z"
+  "type": "technical",
+  "updated_at": "2026-02-27T06:58:52.872942Z"
 }

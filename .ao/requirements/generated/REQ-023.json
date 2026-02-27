@@ -1,6 +1,6 @@
 {
   "acceptance_criteria": [],
-  "category": null,
+  "category": "quality",
   "comments": [],
   "created_at": "2026-02-26T14:52:24.887962Z",
   "description": "Eliminate duplicated implementations across crates (sanitize_identifier, repository_scope_for_path, classify_error) and unify conflicting type definitions (Priority enums).",
@@ -21,6 +21,6 @@
   "status": "draft",
   "tags": [],
   "title": "Consolidate duplicated code and unify shared types",
-  "type": null,
-  "updated_at": "2026-02-26T15:10:33.733522Z"
+  "type": "technical",
+  "updated_at": "2026-02-27T06:58:56.198691Z"
 }

@@ -6,7 +6,7 @@
     "Refine/draft actions expose progress, model/tool metadata, fallback behavior, and deterministic completion states.",
     "All planning actions preserve deep links and refresh-safe state so operators can resume after navigation or reload."
   ],
-  "category": null,
+  "category": "usability",
   "comments": [],
   "created_at": "2026-02-24T19:52:00.163350Z",
   "description": "Provide complete interactive flows for drafting/refining vision, drafting/refining requirements, and reviewing requirement quality and links in one coherent workspace.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Implement end-to-end planning UX for vision and requirements",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.448359Z"
+  "type": "functional",
+  "updated_at": "2026-02-27T06:58:47.839656Z"
 }

@@ -6,7 +6,7 @@
     "Error panels map runtime failures to suggested operator next steps (retry, inspect runner health, open history/error details).",
     "UI supports degraded mode when streaming is unavailable, falling back to periodic polling with explicit indicator."
   ],
-  "category": null,
+  "category": "runtime",
   "comments": [],
   "created_at": "2026-02-24T19:52:00.289747Z",
   "description": "Expose live run execution insight including event streams, JSONL outputs, artifacts, and error surfaces so operators can diagnose and recover quickly.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Provide real-time run telemetry and artifact inspection UX",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.528179Z"
+  "type": "functional",
+  "updated_at": "2026-02-27T06:58:49.558954Z"
 }

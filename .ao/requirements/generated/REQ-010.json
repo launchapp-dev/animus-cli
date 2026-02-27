@@ -3,7 +3,7 @@
     "Run artifacts include timestamps, identifiers, and event sequencing metadata sufficient for replay.",
     "Output commands can locate run artifacts from scoped runtime storage without manual path discovery."
   ],
-  "category": null,
+  "category": "runtime",
   "comments": [],
   "created_at": "2026-02-24T19:48:30.934827Z",
   "description": "Ensure every workflow and agent run emits consistent trace artifacts that can be replayed for audit and debugging.",
@@ -23,6 +23,6 @@
   "status": "draft",
   "tags": [],
   "title": "Improve run/event traceability completeness",
-  "type": null,
-  "updated_at": "2026-02-24T19:48:31.028435Z"
+  "type": "non-functional",
+  "updated_at": "2026-02-27T06:58:45.357282Z"
 }

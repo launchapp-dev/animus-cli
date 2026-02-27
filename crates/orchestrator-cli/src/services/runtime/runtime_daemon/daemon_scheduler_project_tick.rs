@@ -1790,8 +1790,9 @@ mod tests {
             .tasks()
             .create(TaskCreateInput {
                 title: "phase-less-workflow-assignee".to_string(),
-                description: "ensure daemon assignment still resolves when workflow phase is absent"
-                    .to_string(),
+                description:
+                    "ensure daemon assignment still resolves when workflow phase is absent"
+                        .to_string(),
                 task_type: Some(TaskType::Feature),
                 priority: None,
                 created_by: Some("test".to_string()),

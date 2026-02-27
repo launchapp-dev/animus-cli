@@ -3,7 +3,7 @@
     "Destructive commands require explicit operator confirmation before state-changing execution.",
     "Each destructive command provides a non-destructive preview path or clear precondition output."
   ],
-  "category": null,
+  "category": "security",
   "comments": [],
   "created_at": "2026-02-24T19:48:30.818389Z",
   "description": "Ensure destructive CLI operations require explicit confirmations and provide deterministic dry-run/preview semantics.",
@@ -23,6 +23,6 @@
   "status": "draft",
   "tags": [],
   "title": "Standardize destructive action safeguards",
-  "type": null,
-  "updated_at": "2026-02-24T19:48:30.902451Z"
+  "type": "functional",
+  "updated_at": "2026-02-27T06:58:44.534371Z"
 }

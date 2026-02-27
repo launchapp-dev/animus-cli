@@ -6,7 +6,7 @@
     "Release checklist defines rollback strategy, compatibility checks versus server API versions, and post-deploy verification steps.",
     "Regression criteria are documented for every new route/action before feature completion is accepted."
   ],
-  "category": null,
+  "category": "release",
   "comments": [],
   "created_at": "2026-02-24T19:52:00.458886Z",
   "description": "Create robust quality gates and release process for the React app so changes are reliable, observable, and safe to deploy with backend evolution.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Establish testing and release discipline for web GUI",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.648568Z"
+  "type": "technical",
+  "updated_at": "2026-02-27T06:58:52.033405Z"
 }

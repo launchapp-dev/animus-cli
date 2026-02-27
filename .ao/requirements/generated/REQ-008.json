@@ -3,7 +3,7 @@
     "Schema validation tests cover ao.cli.v1 success and error envelopes for key command groups.",
     "Breaking schema changes require explicit version bump and migration note."
   ],
-  "category": null,
+  "category": "integration",
   "comments": [],
   "created_at": "2026-02-24T19:48:30.706194Z",
   "description": "Define and test backward-compatible JSON envelope behavior for success/error outputs and key planning/runtime payloads.",
@@ -23,6 +23,6 @@
   "status": "draft",
   "tags": [],
   "title": "Guarantee JSON schema compatibility for CLI envelopes",
-  "type": null,
-  "updated_at": "2026-02-24T19:48:30.786085Z"
+  "type": "non-functional",
+  "updated_at": "2026-02-27T06:58:43.708521Z"
 }

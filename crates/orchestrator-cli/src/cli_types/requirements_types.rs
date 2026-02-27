@@ -1,7 +1,8 @@
 use clap::{ArgAction, Args, Subcommand};
 
 use super::{
-    IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_PRIORITY_HELP, REQUIREMENT_STATUS_HELP,
+    IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_CATEGORY_HELP, REQUIREMENT_PRIORITY_HELP,
+    REQUIREMENT_STATUS_HELP, REQUIREMENT_TYPE_HELP,
 };
 
 #[derive(Debug, Subcommand)]
@@ -98,6 +99,10 @@ pub(crate) struct RequirementCreateArgs {
     pub(crate) description: String,
     #[arg(long, value_name = "PRIORITY", help = REQUIREMENT_PRIORITY_HELP)]
     pub(crate) priority: Option<String>,
+    #[arg(long, value_name = "CATEGORY", help = REQUIREMENT_CATEGORY_HELP)]
+    pub(crate) category: Option<String>,
+    #[arg(long = "type", value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
+    pub(crate) requirement_type: Option<String>,
     #[arg(
         long,
         value_name = "SOURCE",
@@ -126,6 +131,10 @@ pub(crate) struct RequirementUpdateArgs {
     pub(crate) priority: Option<String>,
     #[arg(long, value_name = "STATUS", help = REQUIREMENT_STATUS_HELP)]
     pub(crate) status: Option<String>,
+    #[arg(long, value_name = "CATEGORY", help = REQUIREMENT_CATEGORY_HELP)]
+    pub(crate) category: Option<String>,
+    #[arg(long = "type", value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
+    pub(crate) requirement_type: Option<String>,
     #[arg(
         long,
         value_name = "SOURCE",

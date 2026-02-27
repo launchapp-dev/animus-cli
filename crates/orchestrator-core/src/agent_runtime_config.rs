@@ -436,9 +436,12 @@ impl AgentRuntimeConfig {
             return false;
         }
 
-        if self.phase_execution(trimmed_phase_id).is_some_and(|definition| {
-            definition.output_contract.is_some() || definition.output_json_schema.is_some()
-        }) {
+        if self
+            .phase_execution(trimmed_phase_id)
+            .is_some_and(|definition| {
+                definition.output_contract.is_some() || definition.output_json_schema.is_some()
+            })
+        {
             return true;
         }
 

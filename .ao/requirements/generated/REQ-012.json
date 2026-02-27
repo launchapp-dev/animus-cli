@@ -6,7 +6,7 @@
     "API version compatibility policy is documented with explicit handling for additive and breaking changes.",
     "Contract tests validate SDK behavior against representative success, validation-failure, not-found, and unavailable responses."
   ],
-  "category": null,
+  "category": "integration",
   "comments": [],
   "created_at": "2026-02-24T19:52:00.121671Z",
   "description": "Establish a strict front-end contract layer that maps to orchestrator-web-server endpoints with schema validation, versioning strategy, and deterministic error handling.",
@@ -26,6 +26,6 @@
   "status": "draft",
   "tags": [],
   "title": "Define typed API contract and client SDK for web GUI",
-  "type": null,
-  "updated_at": "2026-02-24T20:06:43.408211Z"
+  "type": "technical",
+  "updated_at": "2026-02-27T06:58:47.003752Z"
 }
