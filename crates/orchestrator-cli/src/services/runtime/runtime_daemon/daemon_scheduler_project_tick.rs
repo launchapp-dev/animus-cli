@@ -1,6 +1,115 @@
 use super::*;
 use crate::services::runtime::stale_in_progress_summary;
 
+const EM_SCHEDULING_RESULT_KIND: &str = "em_scheduling_decision";
+const EM_SCHEDULING_TIMEOUT_SECS: u64 = 120;
+const EM_SCHEDULING_MAX_TASKS: usize = 200;
+const EM_SCHEDULING_MAX_DECISIONS: usize = 40;
+const EM_SCHEDULING_MAX_FAILURES: usize = 20;
+const EM_SCHEDULING_AGENT_TOGGLE_ENV: &str = "AO_ENABLE_EM_SCHEDULING_AGENT";
+const EM_SCHEDULING_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/runtime/em_scheduling.prompt"
+));
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptTaskDependency {
+    task_id: String,
+    dependency_type: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptTask {
+    task_id: String,
+    title: String,
+    status: String,
+    priority: String,
+    risk: String,
+    complexity: String,
+    paused: bool,
+    cancelled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocked_reason: Option<String>,
+    linked_requirements: Vec<String>,
+    dependencies: Vec<EmSchedulingPromptTaskDependency>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptWorkflow {
+    workflow_id: String,
+    task_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptDecisionRecord {
+    workflow_id: String,
+    task_id: String,
+    phase_id: String,
+    decision: String,
+    risk: String,
+    confidence: f32,
+    reason: String,
+    timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptFailure {
+    workflow_id: String,
+    task_id: String,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct EmSchedulingRequirementCoverage {
+    requirement_id: String,
+    total_tasks: usize,
+    ready_tasks: usize,
+    in_progress_tasks: usize,
+    blocked_tasks: usize,
+    done_tasks: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmSchedulingPromptInput {
+    available_agent_slots: usize,
+    tasks: Vec<EmSchedulingPromptTask>,
+    running_workflows: Vec<EmSchedulingPromptWorkflow>,
+    recent_decisions: Vec<EmSchedulingPromptDecisionRecord>,
+    recent_failures: Vec<EmSchedulingPromptFailure>,
+    requirement_coverage: Vec<EmSchedulingRequirementCoverage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EmSchedulingQueueDecision {
+    task_id: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EmSchedulingDecision {
+    kind: String,
+    #[serde(default)]
+    queue: Vec<EmSchedulingQueueDecision>,
+    #[serde(default)]
+    defer: Vec<String>,
+    #[serde(default)]
+    preempt: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct EmSchedulingAppliedDecision {
+    queue_task_ids: Vec<String>,
+    defer_task_ids: Vec<String>,
+    preempt_task_ids: Vec<String>,
+}
+
 fn normalize_requirement_lifecycle_phase(phase: &str) -> Option<&'static str> {
     match phase.trim().to_ascii_lowercase().as_str() {
         "refine" | "refined" => Some("refine"),
@@ -682,6 +791,615 @@ async fn resume_interrupted_workflows_for_project(
     Ok((cleaned, resumed))
 }
 
+fn em_scheduling_agent_enabled() -> bool {
+    std::env::var(EM_SCHEDULING_AGENT_TOGGLE_ENV)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(false)
+}
+
+fn priority_label(priority: orchestrator_core::Priority) -> &'static str {
+    match priority {
+        orchestrator_core::Priority::Critical => "critical",
+        orchestrator_core::Priority::High => "high",
+        orchestrator_core::Priority::Medium => "medium",
+        orchestrator_core::Priority::Low => "low",
+    }
+}
+
+fn risk_label(risk: orchestrator_core::RiskLevel) -> &'static str {
+    match risk {
+        orchestrator_core::RiskLevel::High => "high",
+        orchestrator_core::RiskLevel::Medium => "medium",
+        orchestrator_core::RiskLevel::Low => "low",
+    }
+}
+
+fn complexity_label(complexity: orchestrator_core::Complexity) -> &'static str {
+    match complexity {
+        orchestrator_core::Complexity::High => "high",
+        orchestrator_core::Complexity::Medium => "medium",
+        orchestrator_core::Complexity::Low => "low",
+    }
+}
+
+fn dependency_type_label(kind: DependencyType) -> &'static str {
+    match kind {
+        DependencyType::BlocksBy => "blocks_by",
+        DependencyType::BlockedBy => "blocked_by",
+        DependencyType::RelatedTo => "related_to",
+    }
+}
+
+fn workflow_status_label(status: WorkflowStatus) -> &'static str {
+    match status {
+        WorkflowStatus::Pending => "pending",
+        WorkflowStatus::Running => "running",
+        WorkflowStatus::Paused => "paused",
+        WorkflowStatus::Completed => "completed",
+        WorkflowStatus::Failed => "failed",
+        WorkflowStatus::Cancelled => "cancelled",
+    }
+}
+
+fn workflow_decision_action_label(
+    action: orchestrator_core::WorkflowDecisionAction,
+) -> &'static str {
+    match action {
+        orchestrator_core::WorkflowDecisionAction::Advance => "advance",
+        orchestrator_core::WorkflowDecisionAction::Skip => "skip",
+        orchestrator_core::WorkflowDecisionAction::Rework => "rework",
+        orchestrator_core::WorkflowDecisionAction::Repeat => "repeat",
+        orchestrator_core::WorkflowDecisionAction::Fail => "fail",
+    }
+}
+
+fn workflow_decision_risk_label(risk: orchestrator_core::WorkflowDecisionRisk) -> &'static str {
+    match risk {
+        orchestrator_core::WorkflowDecisionRisk::Low => "low",
+        orchestrator_core::WorkflowDecisionRisk::Medium => "medium",
+        orchestrator_core::WorkflowDecisionRisk::High => "high",
+    }
+}
+
+fn build_em_scheduling_prompt_input(
+    tasks: &[orchestrator_core::OrchestratorTask],
+    workflows: &[orchestrator_core::OrchestratorWorkflow],
+    available_agent_slots: usize,
+) -> EmSchedulingPromptInput {
+    let mut requirement_coverage: std::collections::BTreeMap<
+        String,
+        EmSchedulingRequirementCoverage,
+    > = std::collections::BTreeMap::new();
+
+    let tasks = tasks
+        .iter()
+        .take(EM_SCHEDULING_MAX_TASKS)
+        .map(|task| {
+            for requirement_id in task
+                .linked_requirements
+                .iter()
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let entry = requirement_coverage
+                    .entry(requirement_id.to_string())
+                    .or_insert_with(|| EmSchedulingRequirementCoverage {
+                        requirement_id: requirement_id.to_string(),
+                        ..EmSchedulingRequirementCoverage::default()
+                    });
+                entry.total_tasks = entry.total_tasks.saturating_add(1);
+                match task.status {
+                    TaskStatus::Ready | TaskStatus::Backlog => {
+                        entry.ready_tasks = entry.ready_tasks.saturating_add(1);
+                    }
+                    TaskStatus::InProgress => {
+                        entry.in_progress_tasks = entry.in_progress_tasks.saturating_add(1);
+                    }
+                    TaskStatus::Blocked | TaskStatus::OnHold => {
+                        entry.blocked_tasks = entry.blocked_tasks.saturating_add(1);
+                    }
+                    TaskStatus::Done | TaskStatus::Cancelled => {
+                        entry.done_tasks = entry.done_tasks.saturating_add(1);
+                    }
+                }
+            }
+
+            EmSchedulingPromptTask {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                status: task_status_label(task.status).to_string(),
+                priority: priority_label(task.priority).to_string(),
+                risk: risk_label(task.risk).to_string(),
+                complexity: complexity_label(task.complexity).to_string(),
+                paused: task.paused,
+                cancelled: task.cancelled,
+                blocked_reason: task
+                    .blocked_reason
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
+                linked_requirements: task
+                    .linked_requirements
+                    .iter()
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                dependencies: task
+                    .dependencies
+                    .iter()
+                    .map(|dependency| EmSchedulingPromptTaskDependency {
+                        task_id: dependency.task_id.clone(),
+                        dependency_type: dependency_type_label(dependency.dependency_type)
+                            .to_string(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    let running_workflows = workflows
+        .iter()
+        .filter(|workflow| {
+            matches!(
+                workflow.status,
+                WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
+            )
+        })
+        .map(|workflow| EmSchedulingPromptWorkflow {
+            workflow_id: workflow.id.clone(),
+            task_id: workflow.task_id.clone(),
+            status: workflow_status_label(workflow.status).to_string(),
+            current_phase: workflow_current_phase_id(workflow),
+            failure_reason: workflow
+                .failure_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        })
+        .collect();
+
+    let mut recent_decisions = Vec::new();
+    for workflow in workflows {
+        for record in &workflow.decision_history {
+            recent_decisions.push(EmSchedulingPromptDecisionRecord {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id: record.phase_id.clone(),
+                decision: workflow_decision_action_label(record.decision).to_string(),
+                risk: workflow_decision_risk_label(record.risk).to_string(),
+                confidence: record.confidence,
+                reason: record.reason.clone(),
+                timestamp: record.timestamp.to_rfc3339(),
+            });
+        }
+    }
+    recent_decisions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    recent_decisions.truncate(EM_SCHEDULING_MAX_DECISIONS);
+
+    let mut recent_failures: Vec<(i64, EmSchedulingPromptFailure)> = workflows
+        .iter()
+        .filter_map(|workflow| {
+            let reason = workflow
+                .failure_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    if workflow.status == WorkflowStatus::Failed {
+                        Some("workflow failed without explicit reason".to_string())
+                    } else {
+                        None
+                    }
+                })?;
+            let completed_at = workflow
+                .completed_at
+                .map(|timestamp| timestamp.to_rfc3339());
+            let timestamp_ms = workflow
+                .completed_at
+                .unwrap_or(workflow.started_at)
+                .timestamp_millis();
+            Some((
+                timestamp_ms,
+                EmSchedulingPromptFailure {
+                    workflow_id: workflow.id.clone(),
+                    task_id: workflow.task_id.clone(),
+                    reason,
+                    completed_at,
+                },
+            ))
+        })
+        .collect();
+    recent_failures.sort_by(|left, right| right.0.cmp(&left.0));
+    let recent_failures = recent_failures
+        .into_iter()
+        .map(|(_, failure)| failure)
+        .take(EM_SCHEDULING_MAX_FAILURES)
+        .collect();
+
+    EmSchedulingPromptInput {
+        available_agent_slots,
+        tasks,
+        running_workflows,
+        recent_decisions,
+        recent_failures,
+        requirement_coverage: requirement_coverage.into_values().collect(),
+    }
+}
+
+fn build_em_scheduling_prompt(input: &EmSchedulingPromptInput) -> String {
+    let tasks_json =
+        serde_json::to_string_pretty(&input.tasks).unwrap_or_else(|_| "[]".to_string());
+    let running_workflows_json =
+        serde_json::to_string_pretty(&input.running_workflows).unwrap_or_else(|_| "[]".to_string());
+    let recent_decisions_json =
+        serde_json::to_string_pretty(&input.recent_decisions).unwrap_or_else(|_| "[]".to_string());
+    let recent_failures_json =
+        serde_json::to_string_pretty(&input.recent_failures).unwrap_or_else(|_| "[]".to_string());
+    let requirement_coverage_json = serde_json::to_string_pretty(&input.requirement_coverage)
+        .unwrap_or_else(|_| "[]".to_string());
+
+    EM_SCHEDULING_PROMPT_TEMPLATE
+        .replace(
+            "__AVAILABLE_AGENT_SLOTS__",
+            &input.available_agent_slots.to_string(),
+        )
+        .replace("__TASK_LIST_JSON__", tasks_json.as_str())
+        .replace(
+            "__RUNNING_WORKFLOWS_JSON__",
+            running_workflows_json.as_str(),
+        )
+        .replace("__RECENT_DECISIONS_JSON__", recent_decisions_json.as_str())
+        .replace("__RECENT_FAILURES_JSON__", recent_failures_json.as_str())
+        .replace(
+            "__REQUIREMENT_COVERAGE_JSON__",
+            requirement_coverage_json.as_str(),
+        )
+}
+
+fn is_valid_em_scheduling_decision(decision: &EmSchedulingDecision) -> bool {
+    if !decision
+        .kind
+        .trim()
+        .eq_ignore_ascii_case(EM_SCHEDULING_RESULT_KIND)
+    {
+        return false;
+    }
+
+    if decision
+        .queue
+        .iter()
+        .any(|item| item.task_id.trim().is_empty() || item.reason.trim().is_empty())
+    {
+        return false;
+    }
+
+    if decision
+        .defer
+        .iter()
+        .any(|task_id| task_id.trim().is_empty())
+    {
+        return false;
+    }
+    if decision
+        .preempt
+        .iter()
+        .any(|task_id| task_id.trim().is_empty())
+    {
+        return false;
+    }
+
+    true
+}
+
+fn parse_em_scheduling_decision_from_payload(payload: &Value) -> Option<EmSchedulingDecision> {
+    match payload {
+        Value::Array(items) => {
+            let mut parsed_decision = None;
+            for item in items {
+                if let Some(decision) = parse_em_scheduling_decision_from_payload(item) {
+                    parsed_decision = Some(decision);
+                }
+            }
+            parsed_decision
+        }
+        Value::Object(object) => {
+            if let Ok(decision) = serde_json::from_value::<EmSchedulingDecision>(payload.clone()) {
+                if is_valid_em_scheduling_decision(&decision) {
+                    return Some(decision);
+                }
+            }
+
+            for key in ["proposal", "data", "payload", "result", "output", "item"] {
+                if let Some(value) = object.get(key) {
+                    if let Some(decision) = parse_em_scheduling_decision_from_payload(value) {
+                        return Some(decision);
+                    }
+                }
+            }
+
+            for key in ["text", "message", "content", "output_text", "delta"] {
+                if let Some(raw) = object.get(key).and_then(Value::as_str) {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(nested_payload) = serde_json::from_str::<Value>(trimmed) {
+                        if let Some(decision) =
+                            parse_em_scheduling_decision_from_payload(&nested_payload)
+                        {
+                            return Some(decision);
+                        }
+                    }
+                }
+            }
+
+            None
+        }
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Ok(payload) = serde_json::from_str::<Value>(trimmed) {
+                return parse_em_scheduling_decision_from_payload(&payload);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn parse_em_scheduling_decision_response(text: &str) -> Option<EmSchedulingDecision> {
+    let mut parsed_decision = None;
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Some(decision) = parse_em_scheduling_decision_from_payload(&payload) {
+            parsed_decision = Some(decision);
+        }
+    }
+    if parsed_decision.is_some() {
+        return parsed_decision;
+    }
+
+    if let Ok(payload) = serde_json::from_str::<Value>(text.trim()) {
+        return parse_em_scheduling_decision_from_payload(&payload);
+    }
+    None
+}
+
+fn normalize_em_scheduling_decision(
+    decision: EmSchedulingDecision,
+    known_task_ids: &HashSet<String>,
+) -> EmSchedulingAppliedDecision {
+    let mut defer_seen = HashSet::new();
+    let defer_task_ids: Vec<String> = decision
+        .defer
+        .into_iter()
+        .filter_map(|task_id| normalize_optional_id(Some(task_id.as_str())))
+        .filter(|task_id| known_task_ids.contains(task_id))
+        .filter(|task_id| defer_seen.insert(task_id.clone()))
+        .collect();
+
+    let mut preempt_seen = HashSet::new();
+    let preempt_task_ids: Vec<String> = decision
+        .preempt
+        .into_iter()
+        .filter_map(|task_id| normalize_optional_id(Some(task_id.as_str())))
+        .filter(|task_id| known_task_ids.contains(task_id))
+        .filter(|task_id| preempt_seen.insert(task_id.clone()))
+        .collect();
+
+    let defer_lookup: HashSet<String> = defer_task_ids.iter().cloned().collect();
+    let preempt_lookup: HashSet<String> = preempt_task_ids.iter().cloned().collect();
+    let mut queue_seen = HashSet::new();
+    let queue_task_ids: Vec<String> = decision
+        .queue
+        .into_iter()
+        .filter_map(|item| {
+            let task_id = normalize_optional_id(Some(item.task_id.as_str()))?;
+            if item.reason.trim().is_empty() {
+                return None;
+            }
+            if !known_task_ids.contains(&task_id) {
+                return None;
+            }
+            if defer_lookup.contains(&task_id) || preempt_lookup.contains(&task_id) {
+                return None;
+            }
+            if !queue_seen.insert(task_id.clone()) {
+                return None;
+            }
+            Some(task_id)
+        })
+        .collect();
+
+    EmSchedulingAppliedDecision {
+        queue_task_ids,
+        defer_task_ids,
+        preempt_task_ids,
+    }
+}
+
+async fn apply_em_scheduling_preemptions(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflows: &[orchestrator_core::OrchestratorWorkflow],
+    preempt_task_ids: &[String],
+) {
+    if preempt_task_ids.is_empty() {
+        return;
+    }
+
+    let preempt_lookup: HashSet<String> = preempt_task_ids.iter().cloned().collect();
+    for workflow in workflows {
+        if workflow.status != WorkflowStatus::Running {
+            continue;
+        }
+        if !preempt_lookup.contains(workflow.task_id.as_str()) {
+            continue;
+        }
+
+        match hub.workflows().pause(&workflow.id).await {
+            Ok(updated) => {
+                sync_task_status_for_workflow_result(
+                    hub.clone(),
+                    project_root,
+                    &updated.task_id,
+                    updated.status,
+                    Some(updated.id.as_str()),
+                )
+                .await;
+            }
+            Err(error) => {
+                eprintln!(
+                    "ao-daemon: failed to preempt workflow {} for task {}: {}",
+                    workflow.id, workflow.task_id, error
+                );
+            }
+        }
+    }
+}
+
+async fn run_em_scheduling_prompt_against_runner(
+    project_root: &str,
+    prompt: &str,
+    model: &str,
+    tool: &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    let run_id = RunId(format!("em-scheduling-{}", Uuid::new_v4()));
+    let mut context = serde_json::json!({
+        "tool": tool,
+        "prompt": prompt,
+        "cwd": project_root,
+        "project_root": project_root,
+        "planning_stage": "em-scheduling",
+        "allowed_tools": ["Read", "Glob", "Grep"],
+        "timeout_secs": timeout_secs,
+    });
+    if let Some(runtime_contract) = build_runtime_contract(tool, model, prompt) {
+        context["runtime_contract"] = runtime_contract;
+    }
+
+    let request = AgentRunRequest {
+        protocol_version: PROTOCOL_VERSION.to_string(),
+        run_id: run_id.clone(),
+        model: ModelId(model.to_string()),
+        context,
+        timeout_secs: Some(timeout_secs),
+    };
+
+    let config_dir = runner_config_dir(Path::new(project_root));
+    let stream = connect_runner(&config_dir).await?;
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    write_json_line(&mut write_half, &request).await?;
+
+    let mut lines = BufReader::new(read_half).lines();
+    let mut transcript = String::new();
+    let mut finished_successfully = false;
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
+            continue;
+        };
+        if !event_matches_run(&event, &run_id) {
+            continue;
+        }
+
+        match event {
+            AgentRunEvent::OutputChunk { text, .. } => {
+                transcript.push_str(&text);
+                transcript.push('\n');
+            }
+            AgentRunEvent::Thinking { content, .. } => {
+                transcript.push_str(&content);
+                transcript.push('\n');
+            }
+            AgentRunEvent::Error { error, .. } => {
+                anyhow::bail!("em scheduling run failed: {error}");
+            }
+            AgentRunEvent::Finished { exit_code, .. } => {
+                if exit_code.unwrap_or_default() != 0 {
+                    anyhow::bail!(
+                        "em scheduling run exited with non-zero code: {:?}",
+                        exit_code
+                    );
+                }
+                finished_successfully = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if !finished_successfully {
+        anyhow::bail!("runner disconnected before em scheduling completed");
+    }
+    if transcript.trim().is_empty() {
+        anyhow::bail!("em scheduling run produced empty output");
+    }
+
+    Ok(transcript)
+}
+
+async fn em_scheduling_decision_for_ready_tasks(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    max_tasks_per_tick: usize,
+    workflows: &[orchestrator_core::OrchestratorWorkflow],
+    tasks: &[orchestrator_core::OrchestratorTask],
+) -> Result<Option<EmSchedulingAppliedDecision>> {
+    if max_tasks_per_tick == 0 || tasks.is_empty() {
+        return Ok(None);
+    }
+
+    let prompt_input = build_em_scheduling_prompt_input(tasks, workflows, max_tasks_per_tick);
+    let prompt = build_em_scheduling_prompt(&prompt_input);
+    let model = default_primary_model_for_phase("requirements", None).to_string();
+    let tool = tool_for_model_id(&model).to_string();
+    let transcript = run_em_scheduling_prompt_against_runner(
+        project_root,
+        &prompt,
+        &model,
+        &tool,
+        EM_SCHEDULING_TIMEOUT_SECS,
+    )
+    .await?;
+
+    let decision = parse_em_scheduling_decision_response(&transcript)
+        .ok_or_else(|| anyhow!("EM scheduling output was not parseable JSON"))?;
+    let known_task_ids: HashSet<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let applied_decision = normalize_em_scheduling_decision(decision, &known_task_ids);
+
+    if applied_decision.queue_task_ids.is_empty()
+        && applied_decision.defer_task_ids.is_empty()
+        && applied_decision.preempt_task_ids.is_empty()
+    {
+        return Ok(None);
+    }
+
+    apply_em_scheduling_preemptions(
+        hub,
+        project_root,
+        workflows,
+        &applied_decision.preempt_task_ids,
+    )
+    .await;
+
+    Ok(Some(applied_decision))
+}
+
 pub(super) async fn run_ready_task_workflows_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
@@ -710,7 +1428,41 @@ pub(super) async fn run_ready_task_workflows_for_project(
 
     let mut started = 0usize;
     let candidates = hub.tasks().list_prioritized().await?;
-    for task in candidates {
+    let mut scheduled_candidates = candidates.clone();
+    if em_scheduling_agent_enabled() {
+        match em_scheduling_decision_for_ready_tasks(
+            hub.clone(),
+            project_root,
+            max_tasks_per_tick,
+            &workflows,
+            &candidates,
+        )
+        .await
+        {
+            Ok(Some(decision)) => {
+                let lookup: std::collections::HashMap<String, orchestrator_core::OrchestratorTask> =
+                    candidates
+                        .iter()
+                        .cloned()
+                        .map(|task| (task.id.clone(), task))
+                        .collect();
+                scheduled_candidates = decision
+                    .queue_task_ids
+                    .iter()
+                    .filter_map(|task_id| lookup.get(task_id).cloned())
+                    .collect();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "ao-daemon: failed to compute EM scheduling decision: {}",
+                    error
+                );
+            }
+        }
+    }
+
+    for task in scheduled_candidates {
         if started >= max_tasks_per_tick {
             break;
         }
@@ -926,7 +1678,8 @@ async fn execute_running_workflow_phases_for_project(
                 match result.outcome {
                     PhaseExecutionOutcome::Completed { phase_decision, .. } => {
                         enforce_frontend_phase_gate(project_root, &workflow.id, &phase_id, &task)?;
-                        let updated = hub.workflows()
+                        let updated = hub
+                            .workflows()
                             .complete_current_phase_with_decision(&workflow.id, phase_decision)
                             .await?;
                         sync_task_status_for_workflow_result(
@@ -1783,6 +2536,7 @@ fn run_cargo_check(cwd: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1888,6 +2642,126 @@ thinking...
             parse_merge_conflict_recovery_response(transcript).is_none(),
             "status placeholders should not be treated as valid recovery responses"
         );
+    }
+
+    #[test]
+    fn build_em_scheduling_prompt_includes_contract_and_inputs() {
+        let prompt = build_em_scheduling_prompt(&EmSchedulingPromptInput {
+            available_agent_slots: 2,
+            tasks: vec![EmSchedulingPromptTask {
+                task_id: "TASK-001".to_string(),
+                title: "Ship scheduler prompt".to_string(),
+                status: "ready".to_string(),
+                priority: "high".to_string(),
+                risk: "medium".to_string(),
+                complexity: "medium".to_string(),
+                paused: false,
+                cancelled: false,
+                blocked_reason: None,
+                linked_requirements: vec!["REQ-001".to_string()],
+                dependencies: vec![EmSchedulingPromptTaskDependency {
+                    task_id: "TASK-000".to_string(),
+                    dependency_type: "blocked_by".to_string(),
+                }],
+            }],
+            running_workflows: vec![EmSchedulingPromptWorkflow {
+                workflow_id: "wf-1".to_string(),
+                task_id: "TASK-100".to_string(),
+                status: "running".to_string(),
+                current_phase: Some("implementation".to_string()),
+                failure_reason: None,
+            }],
+            recent_decisions: vec![EmSchedulingPromptDecisionRecord {
+                workflow_id: "wf-1".to_string(),
+                task_id: "TASK-100".to_string(),
+                phase_id: "implementation".to_string(),
+                decision: "advance".to_string(),
+                risk: "low".to_string(),
+                confidence: 0.92,
+                reason: "phase complete".to_string(),
+                timestamp: "2026-02-27T00:00:00Z".to_string(),
+            }],
+            recent_failures: vec![EmSchedulingPromptFailure {
+                workflow_id: "wf-2".to_string(),
+                task_id: "TASK-101".to_string(),
+                reason: "tests failed".to_string(),
+                completed_at: Some("2026-02-26T18:00:00Z".to_string()),
+            }],
+            requirement_coverage: vec![EmSchedulingRequirementCoverage {
+                requirement_id: "REQ-001".to_string(),
+                total_tasks: 3,
+                ready_tasks: 1,
+                in_progress_tasks: 1,
+                blocked_tasks: 1,
+                done_tasks: 0,
+            }],
+        });
+
+        assert!(prompt.contains("em_scheduling_decision"));
+        assert!(prompt.contains("Available agent slots for this tick: 2"));
+        assert!(
+            prompt.contains("Task list (statuses, priorities, dependencies, linked requirements):")
+        );
+        assert!(prompt.contains("Do not propose or perform code changes."));
+    }
+
+    #[test]
+    fn parse_em_scheduling_decision_response_parses_json_line_output() {
+        let transcript = r#"
+thinking...
+{"kind":"em_scheduling_decision","queue":[{"task_id":"TASK-001","reason":"highest priority and unblocked"}],"defer":["TASK-002"],"preempt":[]}
+"#;
+
+        let parsed = parse_em_scheduling_decision_response(transcript)
+            .expect("response should parse from transcript JSON line");
+        assert_eq!(parsed.kind, "em_scheduling_decision");
+        assert_eq!(parsed.queue.len(), 1);
+        assert_eq!(parsed.queue[0].task_id, "TASK-001");
+        assert_eq!(parsed.defer, vec!["TASK-002"]);
+    }
+
+    #[test]
+    fn parse_em_scheduling_decision_response_parses_nested_payload() {
+        let transcript = r#"
+{"type":"result","result":"{\"kind\":\"em_scheduling_decision\",\"queue\":[{\"task_id\":\"TASK-010\",\"reason\":\"ready and unblocked\"}],\"defer\":[],\"preempt\":[\"TASK-099\"]}"}
+"#;
+
+        let parsed =
+            parse_em_scheduling_decision_response(transcript).expect("nested payload should parse");
+        assert_eq!(parsed.queue[0].task_id, "TASK-010");
+        assert_eq!(parsed.preempt, vec!["TASK-099"]);
+    }
+
+    #[test]
+    fn normalize_em_scheduling_decision_filters_unknown_and_duplicate_ids() {
+        let decision = EmSchedulingDecision {
+            kind: "em_scheduling_decision".to_string(),
+            queue: vec![
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-001".to_string(),
+                    reason: "first".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-001".to_string(),
+                    reason: "duplicate".to_string(),
+                },
+                EmSchedulingQueueDecision {
+                    task_id: "TASK-404".to_string(),
+                    reason: "unknown".to_string(),
+                },
+            ],
+            defer: vec!["TASK-002".to_string()],
+            preempt: vec!["TASK-003".to_string(), "TASK-003".to_string()],
+        };
+        let known_task_ids: HashSet<String> = ["TASK-001", "TASK-002", "TASK-003"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        let normalized = normalize_em_scheduling_decision(decision, &known_task_ids);
+        assert_eq!(normalized.queue_task_ids, vec!["TASK-001"]);
+        assert_eq!(normalized.defer_task_ids, vec!["TASK-002"]);
+        assert_eq!(normalized.preempt_task_ids, vec!["TASK-003"]);
     }
 }
 
