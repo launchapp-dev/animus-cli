@@ -16,7 +16,11 @@ use super::daemon_registry::{
     canonicalize_lossy, get_registry_daemon_pid, set_registry_daemon_pid,
     set_registry_runtime_paused, sync_project_registry,
 };
-use super::daemon_scheduler::project_tick;
+use super::daemon_scheduler::{
+    clear_running_workflow_phase_pool, drain_running_workflow_phases_for_project,
+    pause_running_workflow_phase_spawns, project_tick, resume_running_workflow_phase_spawns,
+    subscribe_phase_completion_wake,
+};
 
 struct DaemonRunGuard {
     project_root: String,
@@ -180,6 +184,117 @@ fn emit_daemon_event_with_notifications(
     Ok(())
 }
 
+fn emit_project_tick_summary_events(
+    seq: &mut u64,
+    summary: &super::daemon_scheduler::ProjectTickSummary,
+    json: bool,
+    notification_runtime: &mut Option<DaemonNotificationRuntime>,
+) -> Result<()> {
+    emit_daemon_event_with_notifications(
+        seq,
+        "health",
+        Some(summary.project_root.clone()),
+        summary.health.clone(),
+        json,
+        notification_runtime.as_mut(),
+    )?;
+    emit_daemon_event_with_notifications(
+        seq,
+        "queue",
+        Some(summary.project_root.clone()),
+        serde_json::json!({
+            "tasks_total": summary.tasks_total,
+            "tasks_ready": summary.tasks_ready,
+            "tasks_in_progress": summary.tasks_in_progress,
+            "tasks_blocked": summary.tasks_blocked,
+            "tasks_done": summary.tasks_done,
+            "stale_in_progress_count": summary.stale_in_progress_count,
+            "stale_in_progress_threshold_hours": summary.stale_in_progress_threshold_hours,
+            "stale_in_progress_task_ids": summary.stale_in_progress_task_ids,
+            "workflows_running": summary.workflows_running,
+            "workflows_completed": summary.workflows_completed,
+            "workflows_failed": summary.workflows_failed,
+            "started_ready_workflows": summary.started_ready_workflows,
+            "executed_workflow_phases": summary.executed_workflow_phases,
+            "failed_workflow_phases": summary.failed_workflow_phases,
+        }),
+        json,
+        notification_runtime.as_mut(),
+    )?;
+
+    emit_daemon_event_with_notifications(
+        seq,
+        "workflow",
+        Some(summary.project_root.clone()),
+        serde_json::json!({
+            "resumed_workflows": summary.resumed_workflows,
+            "cleaned_stale_workflows": summary.cleaned_stale_workflows,
+            "reconciled_stale_tasks": summary.reconciled_stale_tasks,
+            "executed_workflow_phases": summary.executed_workflow_phases,
+            "failed_workflow_phases": summary.failed_workflow_phases,
+        }),
+        json,
+        notification_runtime.as_mut(),
+    )?;
+
+    for transition in &summary.requirement_lifecycle_transitions {
+        emit_daemon_event_with_notifications(
+            seq,
+            "requirement-lifecycle",
+            Some(summary.project_root.clone()),
+            serde_json::json!({
+                "requirement_id": transition.requirement_id,
+                "requirement_title": transition.requirement_title,
+                "phase": transition.phase,
+                "status": transition.status,
+                "transition_at": transition.transition_at,
+                "comment": transition.comment,
+            }),
+            json,
+            notification_runtime.as_mut(),
+        )?;
+    }
+
+    for transition in &summary.task_state_transitions {
+        emit_daemon_event_with_notifications(
+            seq,
+            "task-state-change",
+            Some(summary.project_root.clone()),
+            serde_json::json!({
+                "task_id": transition.task_id,
+                "from_status": transition.from_status,
+                "to_status": transition.to_status,
+                "changed_at": transition.changed_at,
+                "workflow_id": transition.workflow_id,
+                "phase_id": transition.phase_id,
+                "selection_source": transition.selection_source,
+            }),
+            json,
+            notification_runtime.as_mut(),
+        )?;
+    }
+
+    for phase_event in &summary.phase_execution_events {
+        emit_daemon_event_with_notifications(
+            seq,
+            &phase_event.event_type,
+            Some(phase_event.project_root.clone()),
+            serde_json::json!({
+                "workflow_id": phase_event.workflow_id,
+                "task_id": phase_event.task_id,
+                "phase_id": phase_event.phase_id,
+                "phase_mode": phase_event.phase_mode,
+                "metadata": phase_event.metadata,
+                "payload": phase_event.payload,
+            }),
+            json,
+            notification_runtime.as_mut(),
+        )?;
+    }
+
+    Ok(())
+}
+
 pub(super) async fn handle_daemon_run(
     args: DaemonRunArgs,
     hub: Arc<dyn ServiceHub>,
@@ -295,9 +410,10 @@ pub(super) async fn handle_daemon_run(
         }
 
         let interval = Duration::from_secs(args.interval_secs.max(1));
+        let mut completion_wake_rx = subscribe_phase_completion_wake();
         loop {
             let entries = sync_project_registry(project_root, args.include_registry)?;
-            for entry in entries {
+            for entry in &entries {
                 if entry.runtime_paused {
                     emit_daemon_event_with_notifications(
                         &mut seq,
@@ -310,112 +426,18 @@ pub(super) async fn handle_daemon_run(
                     continue;
                 }
 
+                resume_running_workflow_phase_spawns(&entry.path);
                 match project_tick(&entry.path, &args).await {
                     Ok(summary) => {
                         if summary.started_daemon {
                             started_daemon_roots.insert(summary.project_root.clone());
                         }
-                        emit_daemon_event_with_notifications(
+                        emit_project_tick_summary_events(
                             &mut seq,
-                            "health",
-                            Some(summary.project_root.clone()),
-                            summary.health.clone(),
+                            &summary,
                             json,
-                            notification_runtime.as_mut(),
+                            &mut notification_runtime,
                         )?;
-                        emit_daemon_event_with_notifications(
-                            &mut seq,
-                            "queue",
-                            Some(summary.project_root.clone()),
-                            serde_json::json!({
-                                "tasks_total": summary.tasks_total,
-                                "tasks_ready": summary.tasks_ready,
-                                "tasks_in_progress": summary.tasks_in_progress,
-                                "tasks_blocked": summary.tasks_blocked,
-                                "tasks_done": summary.tasks_done,
-                                "stale_in_progress_count": summary.stale_in_progress_count,
-                                "stale_in_progress_threshold_hours": summary.stale_in_progress_threshold_hours,
-                                "stale_in_progress_task_ids": summary.stale_in_progress_task_ids,
-                                "workflows_running": summary.workflows_running,
-                                "workflows_completed": summary.workflows_completed,
-                                "workflows_failed": summary.workflows_failed,
-                                "started_ready_workflows": summary.started_ready_workflows,
-                                "executed_workflow_phases": summary.executed_workflow_phases,
-                                "failed_workflow_phases": summary.failed_workflow_phases,
-                            }),
-                            json,
-                            notification_runtime.as_mut(),
-                        )?;
-
-                        emit_daemon_event_with_notifications(
-                            &mut seq,
-                            "workflow",
-                            Some(summary.project_root.clone()),
-                            serde_json::json!({
-                                "resumed_workflows": summary.resumed_workflows,
-                                "cleaned_stale_workflows": summary.cleaned_stale_workflows,
-                                "reconciled_stale_tasks": summary.reconciled_stale_tasks,
-                                "executed_workflow_phases": summary.executed_workflow_phases,
-                                "failed_workflow_phases": summary.failed_workflow_phases,
-                            }),
-                            json,
-                            notification_runtime.as_mut(),
-                        )?;
-
-                        for transition in &summary.requirement_lifecycle_transitions {
-                            emit_daemon_event_with_notifications(
-                                &mut seq,
-                                "requirement-lifecycle",
-                                Some(summary.project_root.clone()),
-                                serde_json::json!({
-                                    "requirement_id": transition.requirement_id,
-                                    "requirement_title": transition.requirement_title,
-                                    "phase": transition.phase,
-                                    "status": transition.status,
-                                    "transition_at": transition.transition_at,
-                                    "comment": transition.comment,
-                                }),
-                                json,
-                                notification_runtime.as_mut(),
-                            )?;
-                        }
-
-                        for transition in &summary.task_state_transitions {
-                            emit_daemon_event_with_notifications(
-                                &mut seq,
-                                "task-state-change",
-                                Some(summary.project_root.clone()),
-                                serde_json::json!({
-                                    "task_id": transition.task_id,
-                                    "from_status": transition.from_status,
-                                    "to_status": transition.to_status,
-                                    "changed_at": transition.changed_at,
-                                    "workflow_id": transition.workflow_id,
-                                    "phase_id": transition.phase_id,
-                                    "selection_source": transition.selection_source,
-                                }),
-                                json,
-                                notification_runtime.as_mut(),
-                            )?;
-                        }
-
-                        for phase_event in &summary.phase_execution_events {
-                            emit_daemon_event_with_notifications(
-                                &mut seq,
-                                &phase_event.event_type,
-                                Some(phase_event.project_root.clone()),
-                                serde_json::json!({
-                                    "workflow_id": phase_event.workflow_id,
-                                    "task_id": phase_event.task_id,
-                                    "phase_id": phase_event.phase_id,
-                                    "phase_mode": phase_event.phase_mode,
-                                    "metadata": phase_event.metadata,
-                                    "payload": phase_event.payload,
-                                }),
-                                json,
-                                notification_runtime.as_mut(),
-                            )?;
-                        }
                     }
                     Err(error) => {
                         emit_daemon_event_with_notifications(
@@ -452,12 +474,119 @@ pub(super) async fn handle_daemon_run(
             }
 
             if args.once {
+                for entry in &entries {
+                    if entry.runtime_paused {
+                        clear_running_workflow_phase_pool(&entry.path);
+                        continue;
+                    }
+                    pause_running_workflow_phase_spawns(&entry.path);
+                    let project_hub: Arc<dyn ServiceHub> = match FileServiceHub::new(&entry.path) {
+                        Ok(hub) => Arc::new(hub),
+                        Err(error) => {
+                            emit_daemon_event_with_notifications(
+                                &mut seq,
+                                "log",
+                                Some(canonicalize_lossy(&entry.path)),
+                                serde_json::json!({
+                                    "level": "error",
+                                    "message": format!(
+                                        "failed to initialize project hub while draining phase pool: {}",
+                                        error
+                                    ),
+                                }),
+                                json,
+                                notification_runtime.as_mut(),
+                            )?;
+                            clear_running_workflow_phase_pool(&entry.path);
+                            continue;
+                        }
+                    };
+                    if let Err(error) = drain_running_workflow_phases_for_project(
+                        project_hub,
+                        &entry.path,
+                        args.max_tasks_per_tick,
+                    )
+                    .await
+                    {
+                        emit_daemon_event_with_notifications(
+                            &mut seq,
+                            "log",
+                            Some(canonicalize_lossy(&entry.path)),
+                            serde_json::json!({
+                                "level": "error",
+                                "message": format!(
+                                    "failed draining in-flight workflow phases during once execution: {}",
+                                    error
+                                ),
+                            }),
+                            json,
+                            notification_runtime.as_mut(),
+                        )?;
+                    }
+                    clear_running_workflow_phase_pool(&entry.path);
+                }
                 break;
             }
 
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
+                    for entry in &entries {
+                        if entry.runtime_paused {
+                            clear_running_workflow_phase_pool(&entry.path);
+                            continue;
+                        }
+                        pause_running_workflow_phase_spawns(&entry.path);
+                        let project_hub: Arc<dyn ServiceHub> = match FileServiceHub::new(&entry.path) {
+                            Ok(hub) => Arc::new(hub),
+                            Err(error) => {
+                                emit_daemon_event_with_notifications(
+                                    &mut seq,
+                                    "log",
+                                    Some(canonicalize_lossy(&entry.path)),
+                                    serde_json::json!({
+                                        "level": "error",
+                                        "message": format!(
+                                            "failed to initialize project hub while draining phase pool: {}",
+                                            error
+                                        ),
+                                    }),
+                                    json,
+                                    notification_runtime.as_mut(),
+                                )?;
+                                clear_running_workflow_phase_pool(&entry.path);
+                                continue;
+                            }
+                        };
+                        if let Err(error) = drain_running_workflow_phases_for_project(
+                            project_hub,
+                            &entry.path,
+                            args.max_tasks_per_tick,
+                        )
+                        .await
+                        {
+                            emit_daemon_event_with_notifications(
+                                &mut seq,
+                                "log",
+                                Some(canonicalize_lossy(&entry.path)),
+                                serde_json::json!({
+                                    "level": "error",
+                                    "message": format!(
+                                        "failed draining in-flight workflow phases during shutdown: {}",
+                                        error
+                                    ),
+                                }),
+                                json,
+                                notification_runtime.as_mut(),
+                            )?;
+                        }
+                        clear_running_workflow_phase_pool(&entry.path);
+                    }
                     break;
+                }
+                wake = completion_wake_rx.recv() => {
+                    if wake.is_err() {
+                        completion_wake_rx = subscribe_phase_completion_wake();
+                    }
                 }
                 _ = sleep(interval) => {}
             }

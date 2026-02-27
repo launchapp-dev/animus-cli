@@ -2059,6 +2059,35 @@ async fn run_ready_task_workflows_for_project(
         .map(|summary| summary.started)
 }
 
+pub(super) fn subscribe_phase_completion_wake() -> tokio::sync::broadcast::Receiver<String> {
+    project_tick_ops::subscribe_phase_completion_wake()
+}
+
+pub(super) fn resume_running_workflow_phase_spawns(project_root: &str) {
+    project_tick_ops::resume_running_workflow_phase_spawns(project_root);
+}
+
+pub(super) fn pause_running_workflow_phase_spawns(project_root: &str) {
+    project_tick_ops::pause_running_workflow_phase_spawns(project_root);
+}
+
+pub(super) fn clear_running_workflow_phase_pool(project_root: &str) {
+    project_tick_ops::clear_running_workflow_phase_pool(project_root);
+}
+
+pub(super) async fn drain_running_workflow_phases_for_project(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    max_phases_per_tick: usize,
+) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
+    project_tick_ops::drain_running_workflow_phases_for_project(
+        hub,
+        project_root,
+        max_phases_per_tick,
+    )
+    .await
+}
+
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
     project_tick_ops::project_tick(root, args).await
 }
