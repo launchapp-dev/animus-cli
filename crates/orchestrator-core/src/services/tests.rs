@@ -1810,3 +1810,88 @@ async fn execute_requirements_can_include_wont_with_opt_in() {
     .expect("wont requirement should run when include_wont=true");
     assert_eq!(result.requirements_considered, 1);
 }
+
+#[tokio::test]
+async fn execute_requirements_maps_requirement_priority_to_task_priority() {
+    let hub = InMemoryServiceHub::new();
+    PlanningServiceApi::draft_vision(
+        &hub,
+        VisionDraftInput {
+            project_name: Some("Priority Mapping".to_string()),
+            problem_statement: "Validate requirement-to-task priority mapping".to_string(),
+            target_users: vec!["Engineering".to_string()],
+            goals: vec!["Maintain stable priority behavior".to_string()],
+            constraints: vec![],
+            value_proposition: None,
+            complexity_assessment: None,
+        },
+    )
+    .await
+    .expect("draft vision");
+
+    let cases = [
+        (RequirementPriority::Must, Priority::High, "must"),
+        (RequirementPriority::Should, Priority::Medium, "should"),
+        (RequirementPriority::Could, Priority::Low, "could"),
+        (RequirementPriority::Wont, Priority::Low, "wont"),
+    ];
+
+    for (index, (requirement_priority, expected_task_priority, label)) in
+        cases.into_iter().enumerate()
+    {
+        let now = chrono::Utc::now();
+        let requirement = PlanningServiceApi::upsert_requirement(
+            &hub,
+            RequirementItem {
+                id: String::new(),
+                title: format!("Priority mapping {label}"),
+                description: format!("Ensure `{label}` maps to expected task priority"),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: vec![format!(
+                    "Task priority generated for `{label}` is deterministic"
+                )],
+                priority: requirement_priority,
+                status: RequirementStatus::Draft,
+                source: "manual".to_string(),
+                tags: vec!["priority".to_string()],
+                links: crate::types::RequirementLinks::default(),
+                comments: vec![],
+                relative_path: None,
+                linked_task_ids: vec![],
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("upsert requirement");
+
+        let execution = PlanningServiceApi::execute_requirements(
+            &hub,
+            RequirementsExecutionInput {
+                requirement_ids: vec![requirement.id.clone()],
+                start_workflows: false,
+                pipeline_id: None,
+                include_wont: true,
+            },
+        )
+        .await
+        .expect("execute requirements");
+        assert!(
+            !execution.task_ids_created.is_empty(),
+            "expected tasks for case {index} ({label})"
+        );
+
+        for task_id in execution.task_ids_created {
+            let task = TaskServiceApi::get(&hub, &task_id)
+                .await
+                .expect("task should exist");
+            assert_eq!(
+                task.priority, expected_task_priority,
+                "unexpected task priority for case {index} ({label})"
+            );
+        }
+    }
+}

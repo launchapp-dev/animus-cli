@@ -1,4 +1,7 @@
-use crate::common::*;
+use crate::common::{
+    AgentId, ModelId, ProjectId, RequirementId, RequirementPriority, RunId, Status, Timestamp,
+    TokenUsage,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +20,7 @@ pub struct RequirementNode {
     pub title: String,
     pub description: Option<String>,
     pub r#type: RequirementType,
-    pub priority: Priority,
+    pub priority: RequirementPriority,
     pub status: Status,
     pub tags: Vec<String>,
     pub position: NodePosition,

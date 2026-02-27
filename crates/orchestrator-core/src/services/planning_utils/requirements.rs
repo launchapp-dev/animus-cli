@@ -1,6 +1,6 @@
 use crate::types::{
-    CodebaseInsight, Priority, RequirementItem, RequirementLinks, RequirementPriority,
-    RequirementStatus, VisionDocument,
+    CodebaseInsight, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
+    VisionDocument,
 };
 use chrono::Utc;
 
@@ -528,14 +528,6 @@ pub(crate) fn build_requirement_candidates(
     }
 
     dedupe_requirements(deduped)
-}
-
-pub(crate) fn task_priority_for_requirement(priority: RequirementPriority) -> Priority {
-    match priority {
-        RequirementPriority::Must => Priority::High,
-        RequirementPriority::Should => Priority::Medium,
-        RequirementPriority::Could | RequirementPriority::Wont => Priority::Low,
-    }
 }
 
 pub(crate) fn requirement_matches_id_filter(

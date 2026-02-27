@@ -1,7 +1,7 @@
 use protocol::{
     ActivityType, AgentControlAction, AgentControlRequest, AgentRunEvent, AgentRunRequest,
-    DaemonEvent, ModelId, OutputStreamType, ProjectId, RunId, Timestamp, TokenUsage, ToolCallInfo,
-    PROTOCOL_VERSION,
+    DaemonEvent, ModelId, OutputStreamType, ProjectId, RequirementPriority, RunId, Timestamp,
+    TokenUsage, ToolCallInfo, PROTOCOL_VERSION,
 };
 use serde_json::json;
 
@@ -135,4 +135,27 @@ fn control_request_roundtrip_shape_is_stable() {
         serde_json::from_value(value).expect("deserialize control request");
     assert_eq!(decoded.run_id.0, "run-control-1");
     assert_eq!(decoded.action, AgentControlAction::Terminate);
+}
+
+#[test]
+fn requirement_priority_serialization_is_lowercase_and_stable() {
+    let value =
+        serde_json::to_value(RequirementPriority::Must).expect("serialize requirement priority");
+    assert_eq!(value, json!("must"));
+
+    let decoded: RequirementPriority =
+        serde_json::from_value(json!("wont")).expect("deserialize requirement priority");
+    assert_eq!(decoded, RequirementPriority::Wont);
+}
+
+#[allow(deprecated)]
+#[test]
+fn legacy_priority_alias_remains_compatible() {
+    let legacy_priority: protocol::Priority = RequirementPriority::Should;
+    let value = serde_json::to_value(legacy_priority).expect("serialize legacy alias");
+    assert_eq!(value, json!("should"));
+
+    let decoded: protocol::Priority =
+        serde_json::from_value(json!("could")).expect("deserialize legacy alias");
+    assert_eq!(decoded, RequirementPriority::Could);
 }

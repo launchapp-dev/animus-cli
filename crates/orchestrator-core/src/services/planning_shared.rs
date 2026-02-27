@@ -667,7 +667,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                     blocked_at: None,
                     blocked_phase: None,
                     blocked_by: None,
-                    priority: task_priority_for_requirement(requirement.priority),
+                    priority: requirement.priority.to_task_priority(),
                     risk: RiskLevel::Medium,
                     scope: Scope::Medium,
                     complexity: Complexity::Medium,

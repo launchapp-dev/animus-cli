@@ -5,8 +5,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    services::ServiceHub, Complexity, Priority, RequirementItem, RequirementPriority, Scope,
-    TaskCreateInput, TaskStatus, TaskType,
+    services::ServiceHub, Complexity, RequirementItem, Scope, TaskCreateInput, TaskStatus, TaskType,
 };
 use protocol::{
     default_fallback_models_for_phase, default_primary_model_for_phase, tool_for_model_id,
@@ -168,7 +167,7 @@ pub(crate) async fn ensure_ai_generated_tasks_for_requirements(
                     title: candidate.title.clone(),
                     description: build_task_description(&requirement, &candidate),
                     task_type: Some(parse_task_type(&candidate.task_type)),
-                    priority: Some(requirement_priority_to_task_priority(requirement.priority)),
+                    priority: Some(requirement.priority.to_task_priority()),
                     created_by: Some("requirement-review-loop-ai".to_string()),
                     tags: task_tags_from_requirement(&requirement),
                     linked_requirements: vec![requirement.id.clone()],
@@ -331,14 +330,6 @@ fn task_tags_from_requirement(requirement: &RequirementItem) -> Vec<String> {
     tags.sort();
     tags.dedup();
     tags
-}
-
-fn requirement_priority_to_task_priority(priority: RequirementPriority) -> Priority {
-    match priority {
-        RequirementPriority::Must => Priority::High,
-        RequirementPriority::Should => Priority::Medium,
-        RequirementPriority::Could | RequirementPriority::Wont => Priority::Low,
-    }
 }
 
 fn parse_task_type(raw: &str) -> TaskType {

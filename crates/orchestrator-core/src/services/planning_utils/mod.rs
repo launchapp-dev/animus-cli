@@ -5,8 +5,7 @@ mod requirements;
 
 pub(super) use complexity::{effective_complexity_assessment, infer_complexity_assessment};
 pub(super) use requirements::{
-    build_requirement_candidates, missing_vision_constraint_coverage,
-    requirement_matches_id_filter, task_priority_for_requirement,
+    build_requirement_candidates, missing_vision_constraint_coverage, requirement_matches_id_filter,
 };
 
 pub(super) fn next_requirement_id(requirements: &HashMap<String, RequirementItem>) -> String {

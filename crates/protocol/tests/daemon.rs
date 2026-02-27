@@ -80,3 +80,25 @@ fn test_output_stream_type() {
     assert_eq!(serde_json::to_string(&stderr).unwrap(), "\"stderr\"");
     assert_eq!(serde_json::to_string(&system).unwrap(), "\"system\"");
 }
+
+#[test]
+fn test_requirement_node_priority_uses_requirement_priority_values() {
+    let node = RequirementNode {
+        id: RequirementId("REQ-001".into()),
+        title: "Document protocol naming".into(),
+        description: Some("Ensure requirement priority type is explicit".into()),
+        r#type: RequirementType::Technical,
+        priority: RequirementPriority::Must,
+        status: Status::Approved,
+        tags: vec!["protocol".into()],
+        position: NodePosition { x: 10.0, y: 20.0 },
+        created_at: Timestamp::now(),
+        updated_at: Timestamp::now(),
+    };
+
+    let value = serde_json::to_value(&node).unwrap();
+    assert_eq!(value["priority"], "must");
+
+    let decoded: RequirementNode = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.priority, RequirementPriority::Must);
+}
