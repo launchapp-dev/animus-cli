@@ -58,6 +58,10 @@ fn json_success_envelope_contract_is_stable() -> Result<()> {
         stats.pointer("/data/total").is_some(),
         "task stats should include data.total"
     );
+    assert!(
+        stats.pointer("/data/stale_in_progress/count").is_some(),
+        "task stats should include data.stale_in_progress.count"
+    );
 
     Ok(())
 }

@@ -273,6 +273,8 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .arg(args.resume_interrupted.to_string())
         .arg("--reconcile-stale")
         .arg(args.reconcile_stale.to_string())
+        .arg("--stale-threshold-hours")
+        .arg(args.stale_threshold_hours.to_string())
         .arg("--max-tasks-per-tick")
         .arg(args.max_tasks_per_tick.to_string())
         .stdout(Stdio::null())

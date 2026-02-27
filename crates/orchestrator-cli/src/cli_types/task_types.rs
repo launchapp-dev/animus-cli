@@ -1,9 +1,9 @@
 use clap::{Args, Subcommand};
 
 use super::{
-    IdArgs, DEPENDENCY_TYPE_HELP, INPUT_JSON_PRECEDENCE_HELP, TASK_PRIORITY_FILTER_HELP,
-    TASK_PRIORITY_HELP, TASK_STATUS_FILTER_HELP, TASK_STATUS_HELP, TASK_TYPE_FILTER_HELP,
-    TASK_TYPE_HELP,
+    parse_positive_u64, IdArgs, DEPENDENCY_TYPE_HELP, INPUT_JSON_PRECEDENCE_HELP,
+    TASK_PRIORITY_FILTER_HELP, TASK_PRIORITY_HELP, TASK_STATUS_FILTER_HELP, TASK_STATUS_HELP,
+    TASK_TYPE_FILTER_HELP, TASK_TYPE_HELP,
 };
 
 #[derive(Debug, Subcommand)]
@@ -15,7 +15,7 @@ pub(crate) enum TaskCommand {
     /// Get the next ready task.
     Next,
     /// Show task statistics.
-    Stats,
+    Stats(TaskStatsArgs),
     /// Get a task by id.
     Get(IdArgs),
     /// Create a task.
@@ -40,6 +40,18 @@ pub(crate) enum TaskCommand {
     DependencyRemove(TaskDependencyRemoveArgs),
     /// Set task status.
     Status(TaskStatusArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskStatsArgs {
+    #[arg(
+        long,
+        value_name = "HOURS",
+        default_value_t = 24,
+        value_parser = parse_positive_u64,
+        help = "Flag in-progress tasks as stale when updated_at age is at least this many hours."
+    )]
+    pub(crate) stale_threshold_hours: u64,
 }
 
 #[derive(Debug, Args)]

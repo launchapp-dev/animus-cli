@@ -92,6 +92,16 @@ mod tests {
     }
 
     #[test]
+    fn daemon_run_rejects_zero_stale_threshold_hours_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "daemon", "run", "--stale-threshold-hours", "0"])
+            .expect_err("zero stale threshold should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--stale-threshold-hours"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
     fn daemon_events_rejects_zero_limit() {
         let error = Cli::try_parse_from(["ao", "daemon", "events", "--limit", "0"])
             .expect_err("zero limit should fail validation");
@@ -147,6 +157,31 @@ mod tests {
             }
             _ => panic!("expected task list command"),
         }
+    }
+
+    #[test]
+    fn task_stats_parses_stale_threshold_override() {
+        let cli = Cli::try_parse_from(["ao", "task", "stats", "--stale-threshold-hours", "72"])
+            .expect("task stats command should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::Stats(args),
+            } => {
+                assert_eq!(args.stale_threshold_hours, 72);
+            }
+            _ => panic!("expected task stats command"),
+        }
+    }
+
+    #[test]
+    fn task_stats_rejects_zero_stale_threshold_hours_with_clear_validation_error() {
+        let error = Cli::try_parse_from(["ao", "task", "stats", "--stale-threshold-hours", "0"])
+            .expect_err("zero stale threshold should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--stale-threshold-hours"));
+        assert!(message.contains("greater than 0"));
     }
 
     #[test]

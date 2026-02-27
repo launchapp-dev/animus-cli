@@ -134,6 +134,14 @@ pub(crate) struct DaemonStartArgs {
     pub(crate) reconcile_stale: bool,
     #[arg(
         long,
+        value_name = "HOURS",
+        default_value_t = 24,
+        value_parser = parse_positive_u64,
+        help = "Flag in-progress tasks as stale when updated_at age is at least this many hours."
+    )]
+    pub(crate) stale_threshold_hours: u64,
+    #[arg(
+        long,
         value_name = "COUNT",
         default_value_t = 2,
         value_parser = parse_positive_usize,
@@ -232,6 +240,14 @@ pub(crate) struct DaemonRunArgs {
         help = "Reconcile stale task/workflow runtime state."
     )]
     pub(crate) reconcile_stale: bool,
+    #[arg(
+        long,
+        value_name = "HOURS",
+        default_value_t = 24,
+        value_parser = parse_positive_u64,
+        help = "Flag in-progress tasks as stale when updated_at age is at least this many hours."
+    )]
+    pub(crate) stale_threshold_hours: u64,
     #[arg(
         long,
         value_name = "COUNT",

@@ -111,6 +111,8 @@ struct DaemonStartInput {
     #[serde(default)]
     interval_secs: Option<u64>,
     #[serde(default)]
+    stale_threshold_hours: Option<u64>,
+    #[serde(default)]
     max_tasks_per_tick: Option<usize>,
     #[serde(default)]
     phase_timeout_secs: Option<u64>,
@@ -1460,6 +1462,11 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     let mut args = vec!["daemon".to_string(), "start".to_string()];
     push_opt_usize(&mut args, "--max-agents", input.max_agents);
     push_opt_num(&mut args, "--interval-secs", input.interval_secs);
+    push_opt_num(
+        &mut args,
+        "--stale-threshold-hours",
+        input.stale_threshold_hours,
+    );
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
     push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
@@ -1786,6 +1793,24 @@ mod tests {
                 "true".to_string(),
                 "--runner-scope".to_string(),
                 "project".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_daemon_start_args_includes_stale_threshold_hours() {
+        let input = DaemonStartInput {
+            stale_threshold_hours: Some(48),
+            ..Default::default()
+        };
+        let args = build_daemon_start_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "daemon".to_string(),
+                "start".to_string(),
+                "--stale-threshold-hours".to_string(),
+                "48".to_string(),
             ]
         );
     }

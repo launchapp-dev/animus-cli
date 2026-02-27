@@ -113,6 +113,12 @@ fn e2e_task_lifecycle_round_trip() -> Result<()> {
             .and_then(Value::as_u64),
         Some(1)
     );
+    assert_eq!(
+        stats
+            .pointer("/data/stale_in_progress/count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
 
     Ok(())
 }

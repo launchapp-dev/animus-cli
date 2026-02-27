@@ -333,6 +333,9 @@ pub(super) async fn handle_daemon_run(
                                 "tasks_in_progress": summary.tasks_in_progress,
                                 "tasks_blocked": summary.tasks_blocked,
                                 "tasks_done": summary.tasks_done,
+                                "stale_in_progress_count": summary.stale_in_progress_count,
+                                "stale_in_progress_threshold_hours": summary.stale_in_progress_threshold_hours,
+                                "stale_in_progress_task_ids": summary.stale_in_progress_task_ids,
                                 "workflows_running": summary.workflows_running,
                                 "workflows_completed": summary.workflows_completed,
                                 "workflows_failed": summary.workflows_failed,
@@ -588,6 +591,7 @@ mod tests {
             startup_cleanup: true,
             resume_interrupted: false,
             reconcile_stale: false,
+            stale_threshold_hours: 24,
             max_tasks_per_tick: 1,
             phase_timeout_secs: None,
             idle_timeout_secs: None,
@@ -628,6 +632,8 @@ mod tests {
             })
             .expect("queue event for primary project should exist");
         for field in [
+            "stale_in_progress_count",
+            "stale_in_progress_threshold_hours",
             "started_ready_workflows",
             "executed_workflow_phases",
             "failed_workflow_phases",
@@ -641,6 +647,14 @@ mod tests {
                 "queue event field `{field}` should be present as an integer"
             );
         }
+        assert!(
+            queue_event
+                .data
+                .get("stale_in_progress_task_ids")
+                .and_then(serde_json::Value::as_array)
+                .is_some(),
+            "queue event field `stale_in_progress_task_ids` should be present as an array"
+        );
     }
 
     #[tokio::test]
@@ -720,6 +734,7 @@ mod tests {
             startup_cleanup: false,
             resume_interrupted: false,
             reconcile_stale: true,
+            stale_threshold_hours: 24,
             max_tasks_per_tick: 1,
             phase_timeout_secs: None,
             idle_timeout_secs: None,
@@ -851,6 +866,7 @@ mod tests {
             startup_cleanup: true,
             resume_interrupted: false,
             reconcile_stale: false,
+            stale_threshold_hours: 24,
             max_tasks_per_tick: 1,
             phase_timeout_secs: None,
             idle_timeout_secs: None,
@@ -935,6 +951,7 @@ mod tests {
             startup_cleanup: false,
             resume_interrupted: false,
             reconcile_stale: false,
+            stale_threshold_hours: 24,
             max_tasks_per_tick: 1,
             phase_timeout_secs: None,
             idle_timeout_secs: None,

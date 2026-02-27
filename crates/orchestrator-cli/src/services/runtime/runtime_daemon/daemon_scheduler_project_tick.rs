@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::runtime::stale_in_progress_summary;
 
 fn normalize_requirement_lifecycle_phase(phase: &str) -> Option<&'static str> {
     match phase.trim().to_ascii_lowercase().as_str() {
@@ -1842,6 +1843,8 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         .iter()
         .filter(|task| task.status.is_terminal())
         .count();
+    let stale_in_progress =
+        stale_in_progress_summary(&tasks, args.stale_threshold_hours, Utc::now());
 
     let workflows_running = workflows
         .iter()
@@ -1875,6 +1878,9 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         tasks_in_progress,
         tasks_blocked,
         tasks_done,
+        stale_in_progress_count: stale_in_progress.count,
+        stale_in_progress_threshold_hours: stale_in_progress.threshold_hours,
+        stale_in_progress_task_ids: stale_in_progress.task_ids(),
         workflows_running,
         workflows_completed,
         workflows_failed,

@@ -1,12 +1,22 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::Utc;
 use orchestrator_core::{services::ServiceHub, TaskCreateInput, TaskFilter, TaskUpdateInput};
+use serde::Serialize;
 
+use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 use crate::{
     ensure_destructive_confirmation, parse_dependency_type, parse_input_json_or,
     parse_priority_opt, parse_task_status, parse_task_type_opt, print_value, TaskCommand,
 };
+
+#[derive(Debug, Serialize)]
+struct TaskStatsOutput {
+    #[serde(flatten)]
+    stats: orchestrator_core::TaskStatistics,
+    stale_in_progress: StaleInProgressSummary,
+}
 
 pub(crate) async fn handle_task(
     command: TaskCommand,
@@ -53,7 +63,21 @@ pub(crate) async fn handle_task(
         }
         TaskCommand::Prioritized => print_value(tasks.list_prioritized().await?, json),
         TaskCommand::Next => print_value(tasks.next_task().await?, json),
-        TaskCommand::Stats => print_value(tasks.statistics().await?, json),
+        TaskCommand::Stats(args) => {
+            let stats = tasks.statistics().await?;
+            let stale_in_progress = stale_in_progress_summary(
+                &tasks.list().await?,
+                args.stale_threshold_hours,
+                Utc::now(),
+            );
+            print_value(
+                TaskStatsOutput {
+                    stats,
+                    stale_in_progress,
+                },
+                json,
+            )
+        }
         TaskCommand::Get(args) => print_value(tasks.get(&args.id).await?, json),
         TaskCommand::Create(args) => {
             let input = parse_input_json_or(args.input_json, || {
