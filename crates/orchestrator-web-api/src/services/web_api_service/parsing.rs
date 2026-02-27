@@ -183,6 +183,8 @@ pub(super) fn build_task_filter(
     linked_architecture_entity: Option<String>,
     search: Option<String>,
 ) -> Result<TaskFilter, WebApiError> {
+    let normalized_tags = normalize_string_list(tags);
+
     Ok(TaskFilter {
         task_type: parse_task_type_opt(task_type.as_deref())?,
         status: status
@@ -192,11 +194,15 @@ pub(super) fn build_task_filter(
             .map_err(WebApiError::from)?,
         priority: parse_priority_opt(priority.as_deref())?,
         risk: parse_risk_opt(risk.as_deref())?,
-        assignee_type,
-        tags: if tags.is_empty() { None } else { Some(tags) },
-        linked_requirement,
-        linked_architecture_entity,
-        search_text: search,
+        assignee_type: parse_assignee_type_opt(assignee_type)?,
+        tags: if normalized_tags.is_empty() {
+            None
+        } else {
+            Some(normalized_tags)
+        },
+        linked_requirement: normalize_optional_string(linked_requirement),
+        linked_architecture_entity: normalize_optional_string(linked_architecture_entity),
+        search_text: normalize_optional_string(search),
     })
 }
 
@@ -213,13 +219,14 @@ pub(super) fn is_empty_task_filter(filter: &TaskFilter) -> bool {
 }
 
 pub(super) fn parse_task_status(value: &str) -> Result<TaskStatus, WebApiError> {
-    let parsed = match value {
+    let normalized = normalize_enum_key(value);
+    let parsed = match normalized.as_str() {
         "todo" | "backlog" => TaskStatus::Backlog,
         "ready" => TaskStatus::Ready,
-        "in_progress" | "in-progress" => TaskStatus::InProgress,
+        "in-progress" => TaskStatus::InProgress,
         "done" => TaskStatus::Done,
         "blocked" => TaskStatus::Blocked,
-        "on_hold" | "on-hold" => TaskStatus::OnHold,
+        "on-hold" => TaskStatus::OnHold,
         "cancelled" => TaskStatus::Cancelled,
         _ => {
             return Err(WebApiError::new(
@@ -332,7 +339,8 @@ pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
         return Ok(None);
     };
 
-    let parsed = match value {
+    let normalized = normalize_enum_key(value);
+    let parsed = match normalized.as_str() {
         "feature" => TaskType::Feature,
         "bugfix" => TaskType::Bugfix,
         "hotfix" => TaskType::Hotfix,
@@ -358,7 +366,8 @@ pub(super) fn parse_priority_opt(value: Option<&str>) -> Result<Option<Priority>
         return Ok(None);
     };
 
-    let parsed = match value {
+    let normalized = normalize_enum_key(value);
+    let parsed = match normalized.as_str() {
         "critical" => Priority::Critical,
         "high" => Priority::High,
         "medium" => Priority::Medium,
@@ -380,7 +389,8 @@ pub(super) fn parse_risk_opt(value: Option<&str>) -> Result<Option<RiskLevel>, W
         return Ok(None);
     };
 
-    let parsed = match value {
+    let normalized = normalize_enum_key(value);
+    let parsed = match normalized.as_str() {
         "high" => RiskLevel::High,
         "medium" => RiskLevel::Medium,
         "low" => RiskLevel::Low,
@@ -397,10 +407,11 @@ pub(super) fn parse_risk_opt(value: Option<&str>) -> Result<Option<RiskLevel>, W
 }
 
 pub(super) fn parse_dependency_type(value: &str) -> Result<DependencyType, WebApiError> {
-    let parsed = match value {
-        "blocks-by" | "blocks_by" | "blocksby" => DependencyType::BlocksBy,
-        "blocked-by" | "blocked_by" | "blockedby" => DependencyType::BlockedBy,
-        "related-to" | "related_to" | "relatedto" => DependencyType::RelatedTo,
+    let normalized = normalize_enum_key(value);
+    let parsed = match normalized.as_str() {
+        "blocks-by" | "blocksby" => DependencyType::BlocksBy,
+        "blocked-by" | "blockedby" => DependencyType::BlockedBy,
+        "related-to" | "relatedto" => DependencyType::RelatedTo,
         _ => {
             return Err(WebApiError::new(
                 "invalid_input",
@@ -462,4 +473,183 @@ pub(super) fn requirement_status_key(status: RequirementStatus) -> String {
         RequirementStatus::Deprecated => "deprecated",
     }
     .to_string()
+}
+
+fn parse_assignee_type_opt(value: Option<String>) -> Result<Option<String>, WebApiError> {
+    let Some(value) = normalize_optional_string(value) else {
+        return Ok(None);
+    };
+
+    let normalized = value.to_ascii_lowercase();
+    if matches!(normalized.as_str(), "agent" | "human" | "unassigned") {
+        return Ok(Some(normalized));
+    }
+
+    Err(WebApiError::new(
+        "invalid_input",
+        format!("invalid assignee_type: {value}"),
+        2,
+    ))
+}
+
+fn normalize_enum_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrator_core::{
+        DependencyType, Priority, ProjectType, RequirementStatus, RiskLevel, TaskStatus, TaskType,
+    };
+
+    #[test]
+    fn parse_task_status_accepts_case_and_separator_variants() {
+        assert!(matches!(
+            parse_task_status(" In_Progress "),
+            Ok(TaskStatus::InProgress)
+        ));
+        assert!(matches!(
+            parse_task_status("ON-HOLD"),
+            Ok(TaskStatus::OnHold)
+        ));
+        assert!(matches!(
+            parse_task_status(" Todo "),
+            Ok(TaskStatus::Backlog)
+        ));
+    }
+
+    #[test]
+    fn parse_task_type_priority_and_risk_are_trimmed_and_case_insensitive() {
+        assert!(matches!(
+            parse_task_type_opt(Some(" Feature ")),
+            Ok(Some(TaskType::Feature))
+        ));
+        assert!(matches!(
+            parse_priority_opt(Some(" HIGH ")),
+            Ok(Some(Priority::High))
+        ));
+        assert!(matches!(
+            parse_risk_opt(Some(" low ")),
+            Ok(Some(RiskLevel::Low))
+        ));
+    }
+
+    #[test]
+    fn parse_dependency_type_accepts_mixed_case_aliases() {
+        assert!(matches!(
+            parse_dependency_type(" Blocks_By "),
+            Ok(DependencyType::BlocksBy)
+        ));
+        assert!(matches!(
+            parse_dependency_type("BLOCKEDBY"),
+            Ok(DependencyType::BlockedBy)
+        ));
+        assert!(matches!(
+            parse_dependency_type("related-to"),
+            Ok(DependencyType::RelatedTo)
+        ));
+    }
+
+    #[test]
+    fn build_task_filter_normalizes_string_fields_and_tags() {
+        let filter = build_task_filter(
+            Some(" Feature ".to_string()),
+            Some(" IN_PROGRESS ".to_string()),
+            Some(" HIGH ".to_string()),
+            Some(" low ".to_string()),
+            Some(" Human ".to_string()),
+            vec![
+                "backend".to_string(),
+                " backend ".to_string(),
+                " api ".to_string(),
+                "".to_string(),
+            ],
+            Some(" REQ-1 ".to_string()),
+            Some(" entity-1 ".to_string()),
+            Some(" shipping blocker ".to_string()),
+        )
+        .expect("task filter should parse");
+
+        assert!(matches!(filter.task_type, Some(TaskType::Feature)));
+        assert!(matches!(filter.status, Some(TaskStatus::InProgress)));
+        assert!(matches!(filter.priority, Some(Priority::High)));
+        assert!(matches!(filter.risk, Some(RiskLevel::Low)));
+        assert_eq!(filter.assignee_type.as_deref(), Some("human"));
+        assert_eq!(
+            filter.tags,
+            Some(vec!["backend".to_string(), "api".to_string()])
+        );
+        assert_eq!(filter.linked_requirement.as_deref(), Some("REQ-1"));
+        assert_eq!(
+            filter.linked_architecture_entity.as_deref(),
+            Some("entity-1")
+        );
+        assert_eq!(filter.search_text.as_deref(), Some("shipping blocker"));
+    }
+
+    #[test]
+    fn build_task_filter_treats_whitespace_only_values_as_empty() {
+        let filter = build_task_filter(
+            None,
+            None,
+            None,
+            None,
+            Some("   ".to_string()),
+            vec![" ".to_string()],
+            Some(" ".to_string()),
+            Some("\t".to_string()),
+            Some("\n".to_string()),
+        )
+        .expect("task filter should parse");
+
+        assert!(is_empty_task_filter(&filter));
+    }
+
+    #[test]
+    fn build_task_filter_rejects_unknown_assignee_type() {
+        let error = build_task_filter(
+            None,
+            None,
+            None,
+            None,
+            Some("robot".to_string()),
+            Vec::new(),
+            None,
+            None,
+            None,
+        )
+        .expect_err("unknown assignee type should fail");
+
+        assert_eq!(error.code, "invalid_input");
+        assert!(error.message.contains("invalid assignee_type"));
+    }
+
+    #[test]
+    fn parse_requirement_status_accepts_case_and_underscore_variants() {
+        assert!(matches!(
+            parse_requirement_status(" In_Progress "),
+            Ok(RequirementStatus::InProgress)
+        ));
+        assert!(matches!(
+            parse_requirement_status("PO_REVIEW"),
+            Ok(RequirementStatus::PoReview)
+        ));
+    }
+
+    #[test]
+    fn parse_project_type_defaults_and_aliases_are_stable() {
+        assert!(matches!(
+            parse_project_type_opt(None),
+            Ok(Some(ProjectType::Other))
+        ));
+        assert!(matches!(
+            parse_project_type_opt(Some("full_stack")),
+            Ok(Some(ProjectType::FullStackPlatform))
+        ));
+        assert!(matches!(
+            parse_project_type_opt(Some("desktop_app")),
+            Ok(Some(ProjectType::DesktopApp))
+        ));
+    }
 }

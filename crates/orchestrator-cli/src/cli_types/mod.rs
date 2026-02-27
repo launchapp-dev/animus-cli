@@ -106,4 +106,77 @@ mod tests {
         let cli = Cli::try_parse_from(["ao", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
     }
+
+    #[test]
+    fn parses_task_list_filters_from_task_module() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "task",
+            "list",
+            "--task-type",
+            "feature",
+            "--status",
+            "in-progress",
+            "--priority",
+            "high",
+            "--assignee-type",
+            "human",
+            "--tag",
+            "api",
+            "--linked-requirement",
+            "REQ-123",
+            "--linked-architecture-entity",
+            "ARCH-42",
+            "--search",
+            "critical path",
+        ])
+        .expect("task list command should parse");
+
+        match cli.command {
+            Command::Task {
+                command: TaskCommand::List(args),
+            } => {
+                assert_eq!(args.task_type.as_deref(), Some("feature"));
+                assert_eq!(args.status.as_deref(), Some("in-progress"));
+                assert_eq!(args.priority.as_deref(), Some("high"));
+                assert_eq!(args.assignee_type.as_deref(), Some("human"));
+                assert_eq!(args.tag, vec!["api".to_string()]);
+                assert_eq!(args.linked_requirement.as_deref(), Some("REQ-123"));
+                assert_eq!(args.linked_architecture_entity.as_deref(), Some("ARCH-42"));
+                assert_eq!(args.search.as_deref(), Some("critical path"));
+            }
+            _ => panic!("expected task list command"),
+        }
+    }
+
+    #[test]
+    fn parses_workflow_phase_approve_from_workflow_module() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "phase",
+            "approve",
+            "--id",
+            "WF-001",
+            "--phase",
+            "testing",
+            "--note",
+            "gate approved",
+        ])
+        .expect("workflow phase approve should parse");
+
+        match cli.command {
+            Command::Workflow {
+                command:
+                    WorkflowCommand::Phase {
+                        command: WorkflowPhaseCommand::Approve(args),
+                    },
+            } => {
+                assert_eq!(args.id, "WF-001");
+                assert_eq!(args.phase, "testing");
+                assert_eq!(args.note, "gate approved");
+            }
+            _ => panic!("expected workflow phase approve command"),
+        }
+    }
 }
