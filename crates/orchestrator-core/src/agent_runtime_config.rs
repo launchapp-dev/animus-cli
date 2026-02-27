@@ -463,8 +463,7 @@ impl AgentRuntimeConfig {
     }
 
     pub fn phase_decision_contract(&self, phase_id: &str) -> Option<&PhaseDecisionContract> {
-        self.phases
-            .get(phase_id)
+        self.phase_execution(phase_id)
             .and_then(|def| def.decision_contract.as_ref())
     }
 
@@ -842,7 +841,12 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
-                    decision_contract: None,
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: Vec::new(),
+                        min_confidence: 0.6,
+                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                    }),
                     command: None,
                     manual: None,
                 },
@@ -930,7 +934,12 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         },
                         "additionalProperties": true
                     })),
-                    decision_contract: None,
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: vec![crate::types::PhaseEvidenceKind::FilesModified],
+                        min_confidence: 0.7,
+                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                    }),
                     command: None,
                     manual: None,
                 },
@@ -944,7 +953,12 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
-                    decision_contract: None,
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: vec![crate::types::PhaseEvidenceKind::CodeReviewClean],
+                        min_confidence: 0.7,
+                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                    }),
                     command: None,
                     manual: None,
                 },
@@ -958,7 +972,12 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     runtime: None,
                     output_contract: None,
                     output_json_schema: None,
-                    decision_contract: None,
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: vec![crate::types::PhaseEvidenceKind::TestsPassed],
+                        min_confidence: 0.8,
+                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                    }),
                     command: None,
                     manual: None,
                 },
@@ -1542,6 +1561,59 @@ mod tests {
     }
 
     #[test]
+    fn builtin_phase_prompts_resolve_to_expected_personas() {
+        let config = builtin_agent_runtime_config();
+        for (phase_id, agent_id) in [
+            ("requirements", "po"),
+            ("implementation", "swe"),
+            ("code-review", "swe"),
+            ("testing", "swe"),
+        ] {
+            let expected_prompt = config
+                .agent_profile(agent_id)
+                .expect("phase agent profile should exist")
+                .system_prompt
+                .trim()
+                .to_string();
+            assert_eq!(config.phase_agent_id(phase_id), Some(agent_id));
+            assert_eq!(
+                config.phase_system_prompt(phase_id),
+                Some(expected_prompt.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_phase_decision_contracts_match_expected_evidence_requirements() {
+        let config = builtin_agent_runtime_config();
+
+        assert_eq!(
+            config
+                .phase_decision_contract("requirements")
+                .map(|contract| contract.required_evidence.clone()),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            config
+                .phase_decision_contract("implementation")
+                .map(|contract| contract.required_evidence.clone()),
+            Some(vec![crate::types::PhaseEvidenceKind::FilesModified])
+        );
+        assert_eq!(
+            config
+                .phase_decision_contract("code-review")
+                .map(|contract| contract.required_evidence.clone()),
+            Some(vec![crate::types::PhaseEvidenceKind::CodeReviewClean])
+        );
+        assert_eq!(
+            config
+                .phase_decision_contract("testing")
+                .map(|contract| contract.required_evidence.clone()),
+            Some(vec![crate::types::PhaseEvidenceKind::TestsPassed])
+        );
+    }
+
+    #[test]
     fn builtin_defaults_include_em_po_and_swe_profiles() {
         let config = builtin_agent_runtime_config();
         for agent_id in ["em", "po", "swe"] {
@@ -1557,6 +1629,42 @@ mod tests {
     }
 
     #[test]
+    fn builtin_persona_capabilities_and_tool_patterns_are_role_specific() {
+        let config = builtin_agent_runtime_config();
+        let em = config.agent_profile("em").expect("em profile should exist");
+        let po = config.agent_profile("po").expect("po profile should exist");
+        let swe = config
+            .agent_profile("swe")
+            .expect("swe profile should exist");
+
+        assert_eq!(em.capabilities.get("queue_management"), Some(&true));
+        assert_eq!(em.capabilities.get("scheduling"), Some(&true));
+        assert_eq!(em.capabilities.get("implementation"), Some(&false));
+
+        assert_eq!(po.capabilities.get("requirements_authoring"), Some(&true));
+        assert_eq!(po.capabilities.get("acceptance_validation"), Some(&true));
+        assert_eq!(po.capabilities.get("implementation"), Some(&false));
+
+        assert_eq!(swe.capabilities.get("implementation"), Some(&true));
+        assert_eq!(swe.capabilities.get("testing"), Some(&true));
+        assert_eq!(swe.capabilities.get("code_review"), Some(&true));
+        assert_eq!(swe.capabilities.get("planning"), Some(&false));
+
+        let em_tools = em.mcp_servers.get("ao").expect("em should define ao tools");
+        let po_tools = po.mcp_servers.get("ao").expect("po should define ao tools");
+        let swe_tools = swe
+            .mcp_servers
+            .get("ao")
+            .expect("swe should define ao tools");
+
+        assert!(em_tools
+            .iter()
+            .any(|pattern| pattern == "task.prioritized*"));
+        assert!(po_tools.iter().any(|pattern| pattern == "requirements.*"));
+        assert!(swe_tools.iter().any(|pattern| pattern == "errors.*"));
+    }
+
+    #[test]
     fn builtin_json_and_fallback_match_persona_phase_defaults() {
         let from_json =
             serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
@@ -1568,6 +1676,20 @@ mod tests {
             assert_eq!(
                 from_json.phase_agent_id(phase_id),
                 fallback.phase_agent_id(phase_id)
+            );
+            assert_eq!(
+                from_json.phase_decision_contract(phase_id).map(|contract| (
+                    contract.required_evidence.clone(),
+                    contract.min_confidence,
+                    contract.max_risk.clone(),
+                    contract.allow_missing_decision
+                )),
+                fallback.phase_decision_contract(phase_id).map(|contract| (
+                    contract.required_evidence.clone(),
+                    contract.min_confidence,
+                    contract.max_risk.clone(),
+                    contract.allow_missing_decision
+                ))
             );
         }
 
@@ -1584,6 +1706,13 @@ mod tests {
             assert_eq!(json_profile.skills, fallback_profile.skills);
             assert_eq!(json_profile.capabilities, fallback_profile.capabilities);
         }
+    }
+
+    #[test]
+    fn phase_decision_contract_lookup_is_case_insensitive() {
+        let config = builtin_agent_runtime_config();
+        assert!(config.phase_decision_contract("code-review").is_some());
+        assert!(config.phase_decision_contract("CODE-REVIEW").is_some());
     }
 
     #[test]
