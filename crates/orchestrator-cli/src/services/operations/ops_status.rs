@@ -334,8 +334,10 @@ fn active_agent_assignments(
             .then_with(|| left.task_id.cmp(&right.task_id))
     });
 
+    let attributed_count = active_count.min(running.len());
     let mut assignments: Vec<ActiveAgentAssignment> = running
         .into_iter()
+        .take(attributed_count)
         .map(|workflow| ActiveAgentAssignment {
             task_id: workflow.task_id.clone(),
             task_title: task_titles
@@ -498,12 +500,15 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
     let failed_phase = workflow
         .phases
         .iter()
-        .filter(|phase| phase.status == WorkflowPhaseStatus::Failed)
+        .enumerate()
+        .filter(|(_, phase)| phase.status == WorkflowPhaseStatus::Failed)
         .max_by(|left, right| {
-            left.completed_at
-                .cmp(&right.completed_at)
-                .then_with(|| left.phase_id.cmp(&right.phase_id))
-        });
+            left.1
+                .completed_at
+                .cmp(&right.1.completed_at)
+                .then_with(|| left.0.cmp(&right.0))
+        })
+        .map(|(_, phase)| phase);
 
     let phase_id = failed_phase
         .map(|phase| phase.phase_id.clone())
@@ -519,7 +524,21 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
 }
 
 async fn collect_ci_status(project_root: &str) -> CiStatusSlice {
-    ci_status_from_lookup(lookup_ci_status(project_root))
+    let project_root = project_root.to_string();
+    match tokio::task::spawn_blocking(move || {
+        ci_status_from_lookup(lookup_ci_status(project_root.as_str()))
+    })
+    .await
+    {
+        Ok(status) => status,
+        Err(error) => CiStatusSlice {
+            provider: CI_PROVIDER_GITHUB,
+            available: false,
+            last_run: None,
+            reason: None,
+            error: Some(format!("failed to collect CI status: {error}")),
+        },
+    }
 }
 
 fn lookup_ci_status(project_root: &str) -> CiLookupOutcome {
@@ -1016,6 +1035,38 @@ mod tests {
     }
 
     #[test]
+    fn latest_failed_phase_uses_phase_order_when_timestamps_are_missing() {
+        let workflow = make_workflow(
+            "WF-100",
+            "TASK-100",
+            WorkflowStatus::Failed,
+            Some("implementation"),
+            parse_time("2026-02-20T00:00:00Z"),
+            Some(parse_time("2026-02-27T09:00:00Z")),
+            vec![
+                make_phase(
+                    "implementation",
+                    WorkflowPhaseStatus::Failed,
+                    None,
+                    Some("compile failed"),
+                ),
+                make_phase(
+                    "qa",
+                    WorkflowPhaseStatus::Failed,
+                    None,
+                    Some("tests failed"),
+                ),
+            ],
+            None,
+        );
+
+        let (phase_id, failed_at, failure_reason) = latest_failed_phase(&workflow);
+        assert_eq!(phase_id, "qa");
+        assert_eq!(failed_at, parse_time("2026-02-27T09:00:00Z"));
+        assert_eq!(failure_reason.as_deref(), Some("tests failed"));
+    }
+
+    #[test]
     fn active_agent_assignments_fill_unknown_slots() {
         let workflows = vec![make_workflow(
             "WF-001",
@@ -1048,6 +1099,70 @@ mod tests {
     }
 
     #[test]
+    fn active_agent_assignments_are_limited_to_daemon_count() {
+        let workflows = vec![
+            make_workflow(
+                "WF-001",
+                "TASK-001",
+                WorkflowStatus::Running,
+                Some("implementation"),
+                parse_time("2026-02-20T00:00:00Z"),
+                None,
+                vec![make_phase(
+                    "implementation",
+                    WorkflowPhaseStatus::Running,
+                    None,
+                    None,
+                )],
+                None,
+            ),
+            make_workflow(
+                "WF-002",
+                "TASK-002",
+                WorkflowStatus::Running,
+                Some("qa"),
+                parse_time("2026-02-20T00:00:00Z"),
+                None,
+                vec![make_phase("qa", WorkflowPhaseStatus::Running, None, None)],
+                None,
+            ),
+        ];
+        let tasks = vec![
+            make_task("TASK-001", "One", TaskStatus::InProgress, None),
+            make_task("TASK-002", "Two", TaskStatus::InProgress, None),
+        ];
+
+        let assignments = active_agent_assignments(1, &workflows, &tasks);
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].workflow_id, "WF-001");
+    }
+
+    #[test]
+    fn active_agent_assignment_uses_unknown_task_title_when_task_is_missing() {
+        let workflows = vec![make_workflow(
+            "WF-001",
+            "TASK-404",
+            WorkflowStatus::Running,
+            Some("implementation"),
+            parse_time("2026-02-20T00:00:00Z"),
+            None,
+            vec![make_phase(
+                "implementation",
+                WorkflowPhaseStatus::Running,
+                None,
+                None,
+            )],
+            None,
+        )];
+
+        let assignments = active_agent_assignments(1, &workflows, &[]);
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].task_id, "TASK-404");
+        assert_eq!(assignments[0].task_title, "Unknown task");
+        assert!(assignments[0].attributed);
+    }
+
+    #[test]
     fn task_summary_uses_done_status_from_by_status() {
         let mut by_status = HashMap::new();
         by_status.insert("done".to_string(), 2);
@@ -1071,6 +1186,26 @@ mod tests {
     }
 
     #[test]
+    fn task_summary_falls_back_to_task_scan_when_statistics_unavailable() {
+        let tasks = vec![
+            make_task("TASK-001", "Done", TaskStatus::Done, None),
+            make_task("TASK-002", "In Progress", TaskStatus::InProgress, None),
+            make_task("TASK-003", "Ready", TaskStatus::Ready, None),
+            make_task("TASK-004", "Blocked", TaskStatus::Blocked, None),
+            make_task("TASK-005", "On Hold", TaskStatus::OnHold, None),
+            make_task("TASK-006", "Backlog", TaskStatus::Backlog, None),
+        ];
+
+        let summary = build_task_summary_slice(None, Some(&tasks), None);
+        assert!(summary.available);
+        assert_eq!(summary.total, 6);
+        assert_eq!(summary.done, 1);
+        assert_eq!(summary.in_progress, 1);
+        assert_eq!(summary.ready, 1);
+        assert_eq!(summary.blocked, 2);
+    }
+
+    #[test]
     fn ci_status_marks_gh_unavailable_without_failing() {
         let status = ci_status_from_lookup(CiLookupOutcome::Unavailable(
             "gh CLI is not installed".to_string(),
@@ -1078,6 +1213,15 @@ mod tests {
         assert!(!status.available);
         assert!(status.error.is_none());
         assert_eq!(status.reason.as_deref(), Some("gh CLI is not installed"));
+    }
+
+    #[test]
+    fn ci_status_reports_when_no_workflow_runs_exist() {
+        let status = ci_status_from_lookup(CiLookupOutcome::Success(None));
+        assert!(status.available);
+        assert!(status.last_run.is_none());
+        assert_eq!(status.reason.as_deref(), Some("no workflow runs found"));
+        assert!(status.error.is_none());
     }
 
     #[test]
@@ -1106,6 +1250,24 @@ mod tests {
         assert_eq!(run.id, Some(42));
         assert_eq!(run.status, "completed");
         assert_eq!(run.conclusion.as_deref(), Some("success"));
+    }
+
+    #[test]
+    fn parse_gh_run_list_defaults_missing_status_to_unknown() {
+        let payload = r#"
+[
+  {
+    "databaseId": 43,
+    "displayTitle": "CI",
+    "workflowName": "ci"
+  }
+]
+"#;
+        let run = parse_gh_run_list(payload)
+            .expect("payload should parse")
+            .expect("payload should include one run");
+        assert_eq!(run.id, Some(43));
+        assert_eq!(run.status, "unknown");
     }
 
     #[test]
