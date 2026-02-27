@@ -193,6 +193,10 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         config["auto_commit_before_merge"] = serde_json::Value::Bool(enabled);
         updated = true;
     }
+    if let Some(enabled) = args.auto_prune_worktrees_after_merge {
+        config["auto_prune_worktrees_after_merge"] = serde_json::Value::Bool(enabled);
+        updated = true;
+    }
 
     if args.clear_notification_config {
         clear_notification_config(&mut config);
@@ -238,6 +242,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             "auto_merge_enabled": daemon_config_bool(&config, "auto_merge_enabled").unwrap_or(false),
             "auto_pr_enabled": daemon_config_bool(&config, "auto_pr_enabled").unwrap_or(false),
             "auto_commit_before_merge": daemon_config_bool(&config, "auto_commit_before_merge").unwrap_or(false),
+            "auto_prune_worktrees_after_merge": daemon_config_bool(&config, "auto_prune_worktrees_after_merge").unwrap_or(false),
             "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
             "notification_config": serialize_notification_config(&notification_config)?,
             "updated": updated
@@ -283,6 +288,11 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         command
             .arg("--auto-commit-before-merge")
             .arg(auto_commit_before_merge.to_string());
+    }
+    if let Some(auto_prune_worktrees_after_merge) = args.auto_prune_worktrees_after_merge {
+        command
+            .arg("--auto-prune-worktrees-after-merge")
+            .arg(auto_prune_worktrees_after_merge.to_string());
     }
     if let Some(timeout_secs) = args.phase_timeout_secs {
         command

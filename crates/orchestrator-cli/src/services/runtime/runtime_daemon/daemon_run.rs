@@ -189,6 +189,7 @@ pub(super) async fn handle_daemon_run(
     let auto_merge_override = args.auto_merge;
     let auto_pr_override = args.auto_pr;
     let auto_commit_before_merge_override = args.auto_commit_before_merge;
+    let auto_prune_worktrees_after_merge_override = args.auto_prune_worktrees_after_merge;
     let phase_timeout_override = args.phase_timeout_secs;
     let idle_timeout_override = args.idle_timeout_secs;
     let auto_merge_original = auto_merge_override
@@ -199,6 +200,9 @@ pub(super) async fn handle_daemon_run(
         .flatten();
     let auto_commit_before_merge_original = auto_commit_before_merge_override
         .map(|_| std::env::var("AO_AUTO_COMMIT_BEFORE_MERGE").ok())
+        .flatten();
+    let auto_prune_worktrees_after_merge_original = auto_prune_worktrees_after_merge_override
+        .map(|_| std::env::var("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE").ok())
         .flatten();
     let phase_timeout_original = phase_timeout_override
         .map(|_| std::env::var("AO_PHASE_TIMEOUT_SECS").ok())
@@ -216,6 +220,12 @@ pub(super) async fn handle_daemon_run(
     if let Some(enabled) = auto_commit_before_merge_override {
         std::env::set_var(
             "AO_AUTO_COMMIT_BEFORE_MERGE",
+            if enabled { "1" } else { "0" },
+        );
+    }
+    if let Some(enabled) = auto_prune_worktrees_after_merge_override {
+        std::env::set_var(
+            "AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE",
             if enabled { "1" } else { "0" },
         );
     }
@@ -484,6 +494,12 @@ pub(super) async fn handle_daemon_run(
             auto_commit_before_merge_original,
         );
     }
+    if auto_prune_worktrees_after_merge_override.is_some() {
+        restore_env_override(
+            "AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE",
+            auto_prune_worktrees_after_merge_original,
+        );
+    }
 
     run_result
 }
@@ -568,6 +584,7 @@ mod tests {
             auto_merge: None,
             auto_pr: None,
             auto_commit_before_merge: None,
+            auto_prune_worktrees_after_merge: None,
             startup_cleanup: true,
             resume_interrupted: false,
             reconcile_stale: false,
@@ -699,6 +716,7 @@ mod tests {
             auto_merge: None,
             auto_pr: None,
             auto_commit_before_merge: None,
+            auto_prune_worktrees_after_merge: None,
             startup_cleanup: false,
             resume_interrupted: false,
             reconcile_stale: true,
@@ -829,6 +847,7 @@ mod tests {
             auto_merge: None,
             auto_pr: None,
             auto_commit_before_merge: None,
+            auto_prune_worktrees_after_merge: None,
             startup_cleanup: true,
             resume_interrupted: false,
             reconcile_stale: false,
@@ -912,6 +931,7 @@ mod tests {
             auto_merge: None,
             auto_pr: None,
             auto_commit_before_merge: None,
+            auto_prune_worktrees_after_merge: None,
             startup_cleanup: false,
             resume_interrupted: false,
             reconcile_stale: false,

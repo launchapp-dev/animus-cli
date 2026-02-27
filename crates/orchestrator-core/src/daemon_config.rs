@@ -26,6 +26,8 @@ pub struct DaemonProjectConfig {
     pub auto_push_remote: String,
     #[serde(default = "default_auto_cleanup_worktree_enabled")]
     pub auto_cleanup_worktree_enabled: bool,
+    #[serde(default)]
+    pub auto_prune_worktrees_after_merge: bool,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -40,6 +42,7 @@ impl Default for DaemonProjectConfig {
             auto_merge_no_ff: default_auto_merge_no_ff(),
             auto_push_remote: default_auto_push_remote(),
             auto_cleanup_worktree_enabled: default_auto_cleanup_worktree_enabled(),
+            auto_prune_worktrees_after_merge: false,
             extra: BTreeMap::new(),
         }
     }

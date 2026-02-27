@@ -606,6 +606,12 @@ pub(crate) struct DaemonStartArgs {
     #[arg(
         long,
         action = ArgAction::Set,
+        help = "Override automatic pruning of completed task worktrees after successful merges."
+    )]
+    pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
         default_value_t = true,
         help = "Reconcile daemon/project registry entries before scheduling."
     )]
@@ -700,6 +706,12 @@ pub(crate) struct DaemonRunArgs {
     #[arg(
         long,
         action = ArgAction::Set,
+        help = "Override automatic pruning of completed task worktrees after successful merges."
+    )]
+    pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
         default_value_t = true,
         help = "Reconcile daemon/project registry entries before scheduling."
     )]
@@ -768,6 +780,12 @@ pub(crate) struct DaemonConfigArgs {
         help = "Persist auto-commit-before-merge daemon configuration."
     )]
     pub(crate) auto_commit_before_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Persist automatic pruning of completed task worktrees after successful merges."
+    )]
+    pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]
@@ -2191,6 +2209,8 @@ pub(crate) enum GitWorktreeCommand {
     Get(GitWorktreeGetArgs),
     /// Remove a worktree (confirmation required).
     Remove(GitWorktreeRemoveArgs),
+    /// Prune managed task worktrees for done/cancelled tasks.
+    Prune(GitWorktreePruneArgs),
     /// Pull updates in a worktree.
     Pull(GitWorktreePullArgs),
     /// Push updates from a worktree.
@@ -2253,6 +2273,31 @@ pub(crate) struct GitWorktreeRemoveArgs {
         long,
         default_value_t = false,
         help = "Preview command payload without changing repository state."
+    )]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GitWorktreePruneArgs {
+    #[arg(long, value_name = "REPO", help = "Repository name or path.")]
+    pub(crate) repo: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete remote branches for pruned worktrees when branch metadata is available."
+    )]
+    pub(crate) delete_remote_branch: bool,
+    #[arg(
+        long,
+        value_name = "REMOTE",
+        default_value = "origin",
+        help = "Git remote name used with --delete-remote-branch."
+    )]
+    pub(crate) remote: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview prune actions without changing repository state."
     )]
     pub(crate) dry_run: bool,
 }

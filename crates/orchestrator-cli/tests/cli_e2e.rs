@@ -267,6 +267,38 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
 }
 
 #[test]
+fn e2e_daemon_config_persists_auto_prune_worktrees_after_merge() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&[
+        "daemon",
+        "config",
+        "--auto-prune-worktrees-after-merge",
+        "true",
+    ])?;
+    assert_eq!(
+        configured
+            .pointer("/data/auto_prune_worktrees_after_merge")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let pm_config_path = harness.project_root().join(".ao").join("pm-config.json");
+    let pm_config_content =
+        std::fs::read_to_string(pm_config_path).context("pm-config should be readable")?;
+    let pm_config: Value =
+        serde_json::from_str(&pm_config_content).context("pm-config should parse as JSON")?;
+    assert_eq!(
+        pm_config
+            .get("auto_prune_worktrees_after_merge")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+#[test]
 fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
     let harness = CliHarness::new()?;
 
@@ -635,6 +667,147 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
     assert!(
         worktree_path.exists(),
         "dry-run should not remove worktree path"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    harness.run_json_ok(&["git", "repo", "init", "--name", "demo"])?;
+    let repo = harness.run_json_ok(&["git", "repo", "get", "--repo", "demo"])?;
+    let repo_path = repo
+        .pointer("/data/path")
+        .and_then(Value::as_str)
+        .context("git repo get should return data.path")?;
+
+    let seed_file = std::path::Path::new(repo_path).join("README.md");
+    std::fs::write(&seed_file, "seed\n").context("failed to seed git repo")?;
+
+    let git_add = Command::new("git")
+        .args(["-C", repo_path, "add", "."])
+        .output()
+        .context("failed to run git add")?;
+    assert!(
+        git_add.status.success(),
+        "git add failed: {}",
+        String::from_utf8_lossy(&git_add.stderr)
+    );
+
+    let git_commit = Command::new("git")
+        .args([
+            "-C",
+            repo_path,
+            "-c",
+            "user.name=AO Test",
+            "-c",
+            "user.email=ao@example.com",
+            "commit",
+            "-m",
+            "seed",
+        ])
+        .output()
+        .context("failed to run git commit")?;
+    assert!(
+        git_commit.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&git_commit.stderr)
+    );
+
+    let created_task = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Prune worktree candidate",
+        "--description",
+        "done task should be pruned",
+    ])?;
+    let task_id = created_task
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("task create should return data.id")?
+        .to_string();
+    harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "done"])?;
+
+    let task_token = task_id.to_ascii_lowercase();
+    let branch_name = format!("ao/{task_token}");
+    let worktree_name = format!("task-{task_token}");
+    let worktree_path = harness.project_root().join("managed").join(&worktree_name);
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent).context("failed to create worktree parent directory")?;
+    }
+    let worktree_path_string = worktree_path.to_string_lossy().to_string();
+    harness.run_json_ok(&[
+        "git",
+        "worktree",
+        "create",
+        "--repo",
+        "demo",
+        "--worktree-name",
+        &worktree_name,
+        "--worktree-path",
+        &worktree_path_string,
+        "--branch",
+        &branch_name,
+        "--create-branch",
+    ])?;
+
+    let preview = harness.run_json_ok(&[
+        "git",
+        "worktree",
+        "prune",
+        "--repo",
+        "demo",
+        "--delete-remote-branch",
+        "--dry-run",
+    ])?;
+    assert_eq!(
+        preview.pointer("/data/operation").and_then(Value::as_str),
+        Some("git.worktree.prune")
+    );
+    assert_eq!(
+        preview
+            .pointer("/data/candidate_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        preview
+            .pointer("/data/candidates/0/task_id")
+            .and_then(Value::as_str),
+        Some(task_id.as_str())
+    );
+    assert!(
+        worktree_path.exists(),
+        "dry-run should not remove candidate worktree path"
+    );
+
+    let pruned = harness.run_json_ok(&["git", "worktree", "prune", "--repo", "demo"])?;
+    assert_eq!(
+        pruned.pointer("/data/pruned_count").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        !worktree_path.exists(),
+        "prune should remove candidate worktree path"
+    );
+
+    let listed = harness.run_json_ok(&["git", "worktree", "list", "--repo", "demo"])?;
+    let entries = listed
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("git worktree list should return data array")?;
+    assert!(
+        !entries.iter().any(|entry| {
+            entry
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|path| path == worktree_path_string)
+                .unwrap_or(false)
+        }),
+        "pruned worktree should not appear in git worktree list"
     );
 
     Ok(())
