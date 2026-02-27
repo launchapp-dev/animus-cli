@@ -158,6 +158,8 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: RunnerCommand,
     },
+    /// Show a unified project status dashboard.
+    Status,
     /// Inspect run output and artifacts.
     Output {
         #[command(subcommand)]
@@ -2819,5 +2821,11 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("--limit"));
         assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
+    fn parses_top_level_status_command() {
+        let cli = Cli::try_parse_from(["ao", "status"]).expect("status command should parse");
+        assert!(matches!(cli.command, Command::Status));
     }
 }
