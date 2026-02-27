@@ -1,12 +1,14 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:40:09.751606Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "blocked_reason": "Blocked by status update",
+  "branch_name": "ao/task-080",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
@@ -22,12 +24,12 @@
     "completed_at": null,
     "created_at": "2026-02-27T16:06:05.747967Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T16:09:25.181485Z",
-    "updated_by": "ao-cli",
-    "version": 2
+    "started_at": "2026-02-27T18:24:49.453593Z",
+    "updated_at": "2026-02-27T18:40:09.751607Z",
+    "updated_by": "ao-daemon",
+    "version": 8
   },
-  "paused": false,
+  "paused": true,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -36,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "blocked",
   "tags": [],
   "title": "Add GraphQL API endpoint alongside REST",
   "type": "feature",
@@ -48,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-080"
 }

@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:41:35.961974Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "Blocked by status update",
   "branch_name": "ao/task-092",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:27:07.926140Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:03:27.407836Z",
-    "updated_at": "2026-02-27T17:13:42.908339Z",
+    "updated_at": "2026-02-27T18:41:35.961975Z",
     "updated_by": "ao-daemon",
-    "version": 8
+    "version": 17
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Extend agent profile schema with role, mcp_servers, skills, tool_policy, and capabilities",
   "type": "feature",

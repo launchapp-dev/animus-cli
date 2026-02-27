@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T17:44:33.720065Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "merge gate: auto-merge conflict recovery failed: merge conflict recovery output was not parseable JSON",
   "branch_name": "ao/task-107",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T17:06:26.093041Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:07:15.014465Z",
-    "updated_at": "2026-02-27T17:13:38.583222Z",
+    "updated_at": "2026-02-27T17:44:33.803078Z",
     "updated_by": "ao-daemon",
-    "version": 8
+    "version": 14
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Validate daemon subprocess survives startup in daemon start handler",
   "type": "feature",

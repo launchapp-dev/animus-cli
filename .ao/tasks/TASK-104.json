@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:40:34.826088Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "Blocked by status update",
   "branch_name": "ao/task-104",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T17:06:14.330547Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:07:12.713719Z",
-    "updated_at": "2026-02-27T17:13:40.961393Z",
+    "updated_at": "2026-02-27T18:40:34.826089Z",
     "updated_by": "ao-daemon",
-    "version": 7
+    "version": 16
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Fix daemon status to verify PID liveness instead of relying on stale state",
   "type": "feature",

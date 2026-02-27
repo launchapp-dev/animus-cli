@@ -1,27 +1,20 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:44:35.095040Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "blocked_reason": "Blocked by status update",
+  "branch_name": "ao/task-115",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-109",
-      "dependency_type": "blocked-by"
-    },
-    {
-      "task_id": "TASK-111",
-      "dependency_type": "blocked-by"
-    }
-  ],
-  "description": "Batch 4/5 \u2014 Lifecycle Management (1 of 2)\n\nWire the AgentPool drain capability into daemon stop and pause:\n\n- ao daemon stop: set pool to drain mode (no new spawns), wait up to --shutdown-timeout-secs for running agents to complete, then force-cancel remaining, exit. Uses pool.drain() from TASK-109.\n- ao daemon pause: set pool to drain mode, checkpoint running workflow states, stop housekeeping timer. Resume re-enables spawning and housekeeping.\n- SIGTERM handler: trigger graceful drain (same as stop with default timeout)\n- SIGINT (ctrl_c): already handled in coordinator loop, wire to drain\n\nThis replaces the current abrupt process kill on daemon stop. Ties into TASK-106 (graceful shutdown) but specifically focuses on the pool drain mechanics.",
+  "dependencies": [],
+  "description": "Batch 4/5 — Lifecycle Management (1 of 2)\n\nWire the AgentPool drain capability into daemon stop and pause:\n\n- ao daemon stop: set pool to drain mode (no new spawns), wait up to --shutdown-timeout-secs for running agents to complete, then force-cancel remaining, exit. Uses pool.drain() from TASK-109.\n- ao daemon pause: set pool to drain mode, checkpoint running workflow states, stop housekeeping timer. Resume re-enables spawning and housekeeping.\n- SIGTERM handler: trigger graceful drain (same as stop with default timeout)\n- SIGINT (ctrl_c): already handled in coordinator loop, wire to drain\n\nThis replaces the current abrupt process kill on daemon stop. Ties into TASK-106 (graceful shutdown) but specifically focuses on the pool drain mechanics.",
   "estimated_effort": null,
   "id": "TASK-115",
   "impact_area": [],
@@ -31,12 +24,12 @@
     "completed_at": null,
     "created_at": "2026-02-27T17:19:06.890095Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T17:19:06.890095Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-02-27T17:46:19.060877Z",
+    "updated_at": "2026-02-27T18:44:35.095041Z",
+    "updated_by": "ao-daemon",
+    "version": 11
   },
-  "paused": false,
+  "paused": true,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -45,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "blocked",
   "tags": [],
   "title": "Add graceful pool drain to daemon stop and pause commands",
   "type": "feature",
@@ -57,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-115"
 }

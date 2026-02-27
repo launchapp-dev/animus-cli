@@ -1,23 +1,20 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:43:02.351240Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "blocked_reason": "Blocked by status update",
+  "branch_name": "ao/task-114",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-111",
-      "dependency_type": "blocked-by"
-    }
-  ],
-  "description": "Batch 3/5 \u2014 Observability (2 of 2)\n\nEmit daemon events for individual agent lifecycle transitions:\n\n- agent-spawned: { task_id, workflow_id, phase_id, pool_active, pool_size }\n- agent-completed: { task_id, workflow_id, phase_id, duration_secs, outcome: advance/rework/fail, pool_active }\n- agent-failed: { task_id, workflow_id, phase_id, error, pool_active }\n- pool-backfill: { task_id, workflow_id, triggered_by: \"agent-completion\" | \"housekeeping\" }\n- pool-full: { queued_count, active_count, pool_size } (emitted when work is available but pool is at capacity)\n\nThese events flow through the existing emit_daemon_event infrastructure and are visible via ao daemon events. Also enables future SSE/WebSocket streaming for the web UI.",
+  "dependencies": [],
+  "description": "Batch 3/5 — Observability (2 of 2)\n\nEmit daemon events for individual agent lifecycle transitions:\n\n- agent-spawned: { task_id, workflow_id, phase_id, pool_active, pool_size }\n- agent-completed: { task_id, workflow_id, phase_id, duration_secs, outcome: advance/rework/fail, pool_active }\n- agent-failed: { task_id, workflow_id, phase_id, error, pool_active }\n- pool-backfill: { task_id, workflow_id, triggered_by: \"agent-completion\" | \"housekeeping\" }\n- pool-full: { queued_count, active_count, pool_size } (emitted when work is available but pool is at capacity)\n\nThese events flow through the existing emit_daemon_event infrastructure and are visible via ao daemon events. Also enables future SSE/WebSocket streaming for the web UI.",
   "estimated_effort": null,
   "id": "TASK-114",
   "impact_area": [],
@@ -27,12 +24,12 @@
     "completed_at": null,
     "created_at": "2026-02-27T17:18:57.830748Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T17:18:57.830748Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-02-27T17:46:20.390567Z",
+    "updated_at": "2026-02-27T18:43:02.351241Z",
+    "updated_by": "ao-daemon",
+    "version": 11
   },
-  "paused": false,
+  "paused": true,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -41,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "blocked",
   "tags": [],
   "title": "Emit real-time agent lifecycle events for pool visibility",
   "type": "feature",
@@ -53,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-114"
 }

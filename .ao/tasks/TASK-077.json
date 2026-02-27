@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-27T17:39:49.462736Z",
     "created_at": "2026-02-27T16:05:56.099957Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T16:26:17.665717Z",
-    "updated_at": "2026-02-27T17:13:39.061524Z",
+    "updated_at": "2026-02-27T17:39:49.462737Z",
     "updated_by": "ao-daemon",
-    "version": 11
+    "version": 17
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Add result size limits and pagination to MCP tool responses",
   "type": "bugfix",
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-077"
+  "worktree_path": null
 }

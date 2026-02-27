@@ -1,36 +1,33 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
   "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
   "blocked_reason": null,
-  "branch_name": null,
+  "branch_name": "ao/task-109",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
-  "dependencies": [
-    {
-      "task_id": "TASK-108",
-      "dependency_type": "blocked-by"
-    }
-  ],
-  "description": "Batch 1/5 \u2014 Core Pool Infrastructure (2 of 3)\n\nCreate AgentPool struct in a new daemon_agent_pool.rs module:\n\n- Pool owns a tokio::sync::Semaphore with N permits (pool_size from --max-agents / AO_MAX_AGENTS)\n- spawn_agent(slot: AgentSlot) acquires a permit, spawns the agent as a tokio task, releases permit on completion\n- Agent completion sends result through an mpsc channel back to the coordinator\n- Pool tracks: active count, total spawned, total completed, total failed\n- Pool exposes: try_spawn (non-blocking, returns false if full), drain (stop accepting, wait for running), active_count(), is_full()\n- AgentPool::new(pool_size: usize) -> Self\n\nThe pool does NOT decide what to run \u2014 it only manages concurrency bounds. The coordinator (next task) decides what to feed it. Depends on AgentSlot extraction task.",
+  "dependencies": [],
+  "description": "Batch 1/5 — Core Pool Infrastructure (2 of 3)\n\nCreate AgentPool struct in a new daemon_agent_pool.rs module:\n\n- Pool owns a tokio::sync::Semaphore with N permits (pool_size from --max-agents / AO_MAX_AGENTS)\n- spawn_agent(slot: AgentSlot) acquires a permit, spawns the agent as a tokio task, releases permit on completion\n- Agent completion sends result through an mpsc channel back to the coordinator\n- Pool tracks: active count, total spawned, total completed, total failed\n- Pool exposes: try_spawn (non-blocking, returns false if full), drain (stop accepting, wait for running), active_count(), is_full()\n- AgentPool::new(pool_size: usize) -> Self\n\nThe pool does NOT decide what to run — it only manages concurrency bounds. The coordinator (next task) decides what to feed it. Depends on AgentSlot extraction task.",
   "estimated_effort": null,
   "id": "TASK-109",
   "impact_area": [],
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-27T18:26:41.483190Z",
     "created_at": "2026-02-27T17:18:20.404848Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T17:18:20.404848Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-02-27T17:24:50.338016Z",
+    "updated_at": "2026-02-27T18:26:41.483191Z",
+    "updated_by": "ao-daemon",
+    "version": 15
   },
   "paused": false,
   "priority": "high",
@@ -41,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "done",
   "tags": [],
   "title": "Implement bounded agent pool with tokio semaphore",
   "type": "feature",

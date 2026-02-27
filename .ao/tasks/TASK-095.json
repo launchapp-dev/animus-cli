@@ -1,12 +1,14 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:41:25.797854Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "blocked_reason": "Blocked by status update",
+  "branch_name": "ao/task-095",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
@@ -22,12 +24,12 @@
     "completed_at": null,
     "created_at": "2026-02-27T16:27:17.780129Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T17:03:24.723162Z",
-    "updated_by": "ao-cli",
-    "version": 2
+    "started_at": "2026-02-27T17:58:38.807380Z",
+    "updated_at": "2026-02-27T18:41:25.797855Z",
+    "updated_by": "ao-daemon",
+    "version": 10
   },
-  "paused": false,
+  "paused": true,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -36,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "blocked",
   "tags": [],
   "title": "Add custom MCP server registration in project config (.ao/config.json)",
   "type": "feature",
@@ -48,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-095"
 }

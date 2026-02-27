@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:37:11.390126Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "Blocked by status update",
   "branch_name": "ao/task-091",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:18:05.956881Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T16:26:10.665282Z",
-    "updated_at": "2026-02-27T17:13:39.981066Z",
+    "updated_at": "2026-02-27T18:37:11.390127Z",
     "updated_by": "ao-daemon",
-    "version": 9
+    "version": 18
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Refine REQ-029 web app requirement — agent-first page structure and acceptance criteria",
   "type": "feature",

@@ -4,11 +4,11 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:41:51.168337Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "blocked_reason": "Blocked by status update",
+  "branch_name": "ao/task-087",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:10:09.198124Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T16:15:18.430705Z",
-    "updated_at": "2026-02-27T17:13:41.452236Z",
+    "updated_at": "2026-02-27T18:41:51.168338Z",
     "updated_by": "ao-daemon",
-    "version": 9
+    "version": 20
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Add pluggable storage backend trait abstracting over JSON-on-disk persistence",
   "type": "feature",
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-087"
 }

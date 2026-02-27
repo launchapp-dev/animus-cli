@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T18:39:09.024690Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "Blocked by status update",
   "branch_name": "ao/task-064",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:00:31.047775Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T16:03:23.226198Z",
-    "updated_at": "2026-02-27T17:13:47.257579Z",
+    "updated_at": "2026-02-27T18:39:09.024691Z",
     "updated_by": "ao-daemon",
-    "version": 12
+    "version": 21
   },
-  "paused": false,
+  "paused": true,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Remove project registry and scope daemon to single mounted repo",
   "type": "refactor",
