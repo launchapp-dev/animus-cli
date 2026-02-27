@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "gpt-5.3-codex",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-27T19:00:36.745400Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
-  "branch_name": null,
+  "branch_name": "ao/task-102",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
@@ -22,12 +23,12 @@
     "completed_at": null,
     "created_at": "2026-02-27T16:30:47.315346Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-02-27T17:03:25.181816Z",
-    "updated_by": "ao-cli",
-    "version": 2
+    "started_at": "2026-02-27T18:59:43.772322Z",
+    "updated_at": "2026-02-27T19:00:36.745400Z",
+    "updated_by": "ao-daemon",
+    "version": 6
   },
-  "paused": false,
+  "paused": true,
   "priority": "low",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -48,5 +49,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": null
+  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-102"
 }

@@ -445,8 +445,8 @@ mod tests {
 
         let (tool, model) =
             PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None);
-        assert_eq!(tool, "codex");
-        assert_eq!(model, "gpt-5.3-codex");
+        assert_eq!(tool, "claude");
+        assert_eq!(model, "claude-sonnet-4-6");
     }
 
     #[test]

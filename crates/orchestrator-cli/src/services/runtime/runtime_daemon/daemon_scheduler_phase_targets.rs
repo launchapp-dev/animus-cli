@@ -203,12 +203,12 @@ fn enforce_write_capable_phase_target(tool_id: String, model_id: String) -> (Str
             .ok()
             .map(|value| canonical_model_id(&value))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "gpt-5.3-codex".to_string());
+            .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
         let fallback_tool = std::env::var("AO_PHASE_TOOL_FILE_EDIT")
             .ok()
             .map(|value| normalize_tool_id(&value))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "codex".to_string());
+            .unwrap_or_else(|| "claude".to_string());
         return (fallback_tool, fallback_model);
     }
     (normalized_tool_id, model_id)

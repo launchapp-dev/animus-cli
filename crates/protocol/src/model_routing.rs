@@ -136,7 +136,7 @@ pub fn default_model_specs() -> Vec<(String, String)> {
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
         ("gemini-3-pro".to_string(), "gemini".to_string()),
-        ("gemini-3-pro-preview".to_string(), "gemini".to_string()),
+        ("gemini-3.1-pro-preview".to_string(), "gemini".to_string()),
         ("zai-coding-plan/glm-5".to_string(), "opencode".to_string()),
         ("minimax/MiniMax-M2.5".to_string(), "opencode".to_string()),
     ]
@@ -175,7 +175,7 @@ pub fn default_primary_model_for_phase(
     complexity: Option<ModelRoutingComplexity>,
 ) -> &'static str {
     if is_ui_ux_phase(phase_id) || is_research_phase(phase_id) {
-        return "gemini-2.5-pro";
+        return "gemini-3.1-pro-preview";
     }
 
     if is_review_phase(phase_id) {
@@ -185,7 +185,7 @@ pub fn default_primary_model_for_phase(
         };
     }
 
-    "gpt-5.3-codex"
+    "claude-sonnet-4-6"
 }
 
 pub fn default_fallback_models_for_phase(
@@ -195,9 +195,10 @@ pub fn default_fallback_models_for_phase(
     if is_ui_ux_phase(phase_id) || is_research_phase(phase_id) {
         return vec![
             "claude-sonnet-4-6",
-            "gpt-5.3-codex",
+            "gemini-2.5-pro",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.5",
+            "gpt-5.3-codex",
         ];
     }
 
@@ -205,16 +206,16 @@ pub fn default_fallback_models_for_phase(
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
             ModelRoutingComplexity::High => vec![
                 "claude-sonnet-4-6",
-                "gpt-5.3-codex",
-                "gemini-2.5-pro",
+                "gemini-3.1-pro-preview",
                 "zai-coding-plan/glm-5",
                 "minimax/MiniMax-M2.5",
+                "gpt-5.3-codex",
             ],
             ModelRoutingComplexity::Low | ModelRoutingComplexity::Medium => vec![
-                "gpt-5.3-codex",
-                "gemini-2.5-pro",
+                "gemini-3.1-pro-preview",
                 "zai-coding-plan/glm-5",
                 "minimax/MiniMax-M2.5",
+                "gpt-5.3-codex",
                 "claude-opus-4-6",
             ],
         };
@@ -224,21 +225,21 @@ pub fn default_fallback_models_for_phase(
         ModelRoutingComplexity::Low => vec![
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.5",
-            "claude-sonnet-4-6",
-            "gemini-2.5-pro",
+            "gemini-3.1-pro-preview",
+            "gpt-5.3-codex",
         ],
         ModelRoutingComplexity::Medium => vec![
-            "claude-sonnet-4-6",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.5",
-            "gemini-2.5-pro",
+            "gemini-3.1-pro-preview",
+            "gpt-5.3-codex",
         ],
         ModelRoutingComplexity::High => vec![
-            "claude-sonnet-4-6",
             "claude-opus-4-6",
-            "gemini-2.5-pro",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.5",
+            "gemini-3.1-pro-preview",
+            "gpt-5.3-codex",
         ],
     }
 }
