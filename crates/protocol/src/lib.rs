@@ -9,16 +9,20 @@ pub mod agent_runner;
 pub mod common;
 pub mod config;
 pub mod daemon;
+pub mod error_classification;
 pub mod errors;
 pub mod model_routing;
 pub mod output;
+pub mod repository_scope;
 
 pub use agent_runner::*;
 pub use common::*;
 pub use config::*;
 pub use daemon::*;
+pub use error_classification::*;
 pub use errors::*;
 pub use model_routing::*;
 pub use output::*;
+pub use repository_scope::*;
 
 pub const PROTOCOL_VERSION: &str = "1.0.0";

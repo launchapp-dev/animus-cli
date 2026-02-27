@@ -10,7 +10,6 @@ use protocol::{
     OutputStreamType, RunId,
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 
@@ -151,50 +150,11 @@ pub(crate) fn runner_config_dir(project_root: &Path) -> PathBuf {
     normalize_runner_config_dir(config_dir)
 }
 
-fn sanitize_identifier(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' => out.push(ch.to_ascii_lowercase()),
-            ' ' | '_' | '-' => out.push('-'),
-            _ => {}
-        }
-    }
-    while out.contains("--") {
-        out = out.replace("--", "-");
-    }
-    out = out.trim_matches('-').to_string();
-    if out.is_empty() {
-        "repo".to_string()
-    } else {
-        out
-    }
-}
-
-fn repository_scope_for_path(path: &Path) -> String {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let canonical_display = canonical.to_string_lossy();
-    let repo_name = canonical
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(sanitize_identifier)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "repo".to_string());
-    let mut hasher = Sha256::new();
-    hasher.update(canonical_display.as_bytes());
-    let digest = hasher.finalize();
-    let suffix = format!(
-        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
-    );
-    format!("{repo_name}-{suffix}")
-}
-
 fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     Some(
         home.join(".ao")
-            .join(repository_scope_for_path(project_root)),
+            .join(protocol::repository_scope_for_path(project_root)),
     )
 }
 

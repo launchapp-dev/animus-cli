@@ -23,7 +23,6 @@ mod tests {
     use anyhow::anyhow;
     use orchestrator_core::{DependencyType, TaskStatus};
     use protocol::RunId;
-    use sha2::{Digest, Sha256};
     use std::path::Path;
 
     fn make_agent_run_args() -> AgentRunArgs {
@@ -160,16 +159,7 @@ mod tests {
         let run_id = RunId("trace-run-010".to_string());
 
         let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
-        let canonical = project_root
-            .canonicalize()
-            .expect("project path should canonicalize");
-        let mut hasher = Sha256::new();
-        hasher.update(canonical.to_string_lossy().as_bytes());
-        let digest = hasher.finalize();
-        let scope = format!(
-            "project-root-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
-        );
+        let scope = protocol::repository_scope_for_path(&project_root);
         let expected = dirs::home_dir()
             .expect("home directory should resolve")
             .join(".ao")
@@ -182,6 +172,26 @@ mod tests {
             resolved,
             project_root.join(".ao").join("runs").join(&run_id.0)
         );
+    }
+
+    #[test]
+    fn run_dir_scopes_missing_project_paths_with_protocol_fallback() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let project_root = temp.path().join("Missing Repo 2026");
+        let run_id = RunId("trace-run-missing-project-root".to_string());
+
+        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
+        let scope = protocol::repository_scope_for_path(&project_root);
+        assert!(scope.starts_with("missing-repo-2026-"));
+
+        let expected = dirs::home_dir()
+            .expect("home directory should resolve")
+            .join(".ao")
+            .join(scope)
+            .join("runs")
+            .join(&run_id.0);
+
+        assert_eq!(resolved, expected);
     }
 
     #[test]
@@ -349,23 +359,7 @@ mod tests {
             .canonicalize()
             .expect("project path should canonicalize");
 
-        let repo_scope = {
-            use sha2::Digest;
-            let canonical_display = project_canonical.to_string_lossy();
-            let repo_name = project_canonical
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_ascii_lowercase())
-                .unwrap_or_else(|| "repo".to_string());
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(canonical_display.as_bytes());
-            let digest = hasher.finalize();
-            let suffix = format!(
-                "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
-            );
-            format!("{repo_name}-{suffix}")
-        };
+        let repo_scope = protocol::repository_scope_for_path(&project_canonical);
 
         let repo_ao_root = temp.path().join(".ao").join(repo_scope);
         let worktree = repo_ao_root.join("worktrees").join("task-task-011");
