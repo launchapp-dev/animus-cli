@@ -390,13 +390,34 @@ impl WorkflowServiceApi for FileServiceHub {
                 .config
                 .checkpoint_retention;
             if retention.auto_prune_on_completion {
-                let _ = manager.prune_checkpoints(
+                match manager.prune_checkpoints(
                     &workflow.id,
                     retention.keep_last_per_phase,
                     retention.max_age_hours,
                     false,
-                )?;
-                workflow = manager.load(id)?;
+                ) {
+                    Ok(_) => match manager.load(id) {
+                        Ok(reloaded) => {
+                            workflow = reloaded;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "orchestrator_core::workflow",
+                                workflow_id = %workflow.id,
+                                error = %err,
+                                "workflow completion succeeded but failed to reload pruned workflow state"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "orchestrator_core::workflow",
+                            workflow_id = %workflow.id,
+                            error = %err,
+                            "workflow completion succeeded but checkpoint auto-prune failed"
+                        );
+                    }
+                }
             }
         }
 

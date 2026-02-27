@@ -112,6 +112,25 @@ mod tests {
     }
 
     #[test]
+    fn workflow_checkpoints_prune_rejects_zero_keep_last_per_phase() {
+        let error = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "checkpoints",
+            "prune",
+            "--id",
+            "WF-1",
+            "--keep-last-per-phase",
+            "0",
+        ])
+        .expect_err("zero keep-last-per-phase should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        let message = error.to_string();
+        assert!(message.contains("--keep-last-per-phase"));
+        assert!(message.contains("greater than 0"));
+    }
+
+    #[test]
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["ao", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));

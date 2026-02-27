@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{CheckpointReason, OrchestratorWorkflow, WorkflowCheckpoint};
 
 pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 10;
+const UNKNOWN_CHECKPOINT_PHASE_BUCKET: &str = "unknown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowCheckpointPruneResult {
@@ -159,10 +160,17 @@ impl WorkflowStateManager {
         }
 
         let mut checkpoint_numbers_to_prune = BTreeSet::new();
+        let mut phase_by_checkpoint_number = BTreeMap::<usize, String>::new();
         let mut checkpoints_by_phase = BTreeMap::<String, Vec<WorkflowCheckpoint>>::new();
         for checkpoint in &checkpoints {
+            let phase_bucket = self.resolve_checkpoint_phase_bucket(
+                workflow_id,
+                checkpoint,
+                &mut phase_by_checkpoint_number,
+            );
+            phase_by_checkpoint_number.insert(checkpoint.number, phase_bucket.clone());
             checkpoints_by_phase
-                .entry(checkpoint_phase_bucket(checkpoint))
+                .entry(phase_bucket)
                 .or_default()
                 .push(checkpoint.clone());
         }
@@ -211,7 +219,10 @@ impl WorkflowStateManager {
             .filter(|checkpoint| {
                 if checkpoint_numbers_to_prune.contains(&checkpoint.number) {
                     pruned_checkpoint_numbers.push(checkpoint.number);
-                    let phase = checkpoint_phase_bucket(checkpoint);
+                    let phase = phase_by_checkpoint_number
+                        .get(&checkpoint.number)
+                        .cloned()
+                        .unwrap_or_else(|| UNKNOWN_CHECKPOINT_PHASE_BUCKET.to_string());
                     *pruned_by_phase.entry(phase).or_insert(0) += 1;
                     false
                 } else {
@@ -247,6 +258,29 @@ impl WorkflowStateManager {
             pruned_checkpoint_numbers,
             pruned_by_phase,
         })
+    }
+
+    fn resolve_checkpoint_phase_bucket(
+        &self,
+        workflow_id: &str,
+        checkpoint: &WorkflowCheckpoint,
+        phase_cache: &mut BTreeMap<usize, String>,
+    ) -> String {
+        if let Some(phase_id) = &checkpoint.phase_id {
+            return phase_id.clone();
+        }
+
+        if let Some(cached) = phase_cache.get(&checkpoint.number) {
+            return cached.clone();
+        }
+
+        let phase = self
+            .load_checkpoint(workflow_id, checkpoint.number)
+            .ok()
+            .and_then(|snapshot| checkpoint_phase_id(&snapshot))
+            .unwrap_or_else(|| UNKNOWN_CHECKPOINT_PHASE_BUCKET.to_string());
+        phase_cache.insert(checkpoint.number, phase.clone());
+        phase
     }
 
     pub fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<usize>> {
@@ -314,13 +348,6 @@ fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
             .get(workflow.current_phase_index)
             .map(|phase| phase.phase_id.clone())
     })
-}
-
-fn checkpoint_phase_bucket(checkpoint: &WorkflowCheckpoint) -> String {
-    checkpoint
-        .phase_id
-        .clone()
-        .unwrap_or_else(|| "unassigned".to_string())
 }
 
 fn write_atomic(path: &Path, contents: String) -> Result<()> {

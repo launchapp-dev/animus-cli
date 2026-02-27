@@ -1240,6 +1240,118 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
 }
 
 #[test]
+fn e2e_workflow_checkpoints_prune_dry_run_then_apply() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let created = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Workflow checkpoint prune target",
+        "--description",
+        "workflow checkpoint prune test",
+    ])?;
+    let task_id = created
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("task create should return data.id")?
+        .to_string();
+
+    let workflow = harness.run_json_ok(&["workflow", "run", "--task-id", &task_id])?;
+    let workflow_id = workflow
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("workflow run should return data.id")?
+        .to_string();
+
+    harness.run_json_ok(&[
+        "workflow",
+        "pause",
+        "--id",
+        &workflow_id,
+        "--confirm",
+        &workflow_id,
+    ])?;
+    harness.run_json_ok(&["workflow", "resume", "--id", &workflow_id])?;
+
+    let checkpoints_before =
+        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let before_numbers: Vec<u64> = checkpoints_before
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("checkpoints list should return /data array")?
+        .iter()
+        .filter_map(Value::as_u64)
+        .collect();
+    assert_eq!(before_numbers, vec![1, 2, 3]);
+
+    let dry_run = harness.run_json_ok(&[
+        "workflow",
+        "checkpoints",
+        "prune",
+        "--id",
+        &workflow_id,
+        "--keep-last-per-phase",
+        "1",
+        "--dry-run",
+    ])?;
+    assert_eq!(
+        dry_run
+            .pointer("/data/pruned_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        dry_run.pointer("/data/dry_run").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let checkpoints_after_dry_run =
+        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let dry_run_numbers: Vec<u64> = checkpoints_after_dry_run
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("checkpoints list should return /data array after dry-run")?
+        .iter()
+        .filter_map(Value::as_u64)
+        .collect();
+    assert_eq!(dry_run_numbers, vec![1, 2, 3]);
+
+    let applied = harness.run_json_ok(&[
+        "workflow",
+        "checkpoints",
+        "prune",
+        "--id",
+        &workflow_id,
+        "--keep-last-per-phase",
+        "1",
+    ])?;
+    assert_eq!(
+        applied
+            .pointer("/data/pruned_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        applied.pointer("/data/dry_run").and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let checkpoints_after_apply =
+        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let apply_numbers: Vec<u64> = checkpoints_after_apply
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("checkpoints list should return /data array after live prune")?
+        .iter()
+        .filter_map(Value::as_u64)
+        .collect();
+    assert_eq!(apply_numbers, vec![3]);
+
+    Ok(())
+}
+
+#[test]
 fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Result<()> {
     let harness = CliHarness::new()?;
 

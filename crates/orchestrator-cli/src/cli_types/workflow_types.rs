@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::{IdArgs, INPUT_JSON_PRECEDENCE_HELP};
+use super::{parse_positive_usize, IdArgs, INPUT_JSON_PRECEDENCE_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
@@ -141,6 +141,7 @@ pub(crate) struct WorkflowCheckpointPruneArgs {
     #[arg(
         long,
         value_name = "COUNT",
+        value_parser = parse_positive_usize,
         default_value_t = orchestrator_core::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
         help = "Retain at most this many checkpoints per phase."
     )]

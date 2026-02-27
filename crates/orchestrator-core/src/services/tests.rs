@@ -731,6 +731,44 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
 }
 
 #[tokio::test]
+async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    config.checkpoint_retention.keep_last_per_phase = 1;
+    config.checkpoint_retention.max_age_hours = Some(u64::MAX);
+    config.checkpoint_retention.auto_prune_on_completion = true;
+    crate::write_workflow_config(temp.path(), &config).expect("write workflow config");
+
+    let mut workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput {
+            task_id: "TASK-prune-error".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    )
+    .await
+    .expect("run workflow");
+
+    while workflow.status == WorkflowStatus::Running {
+        workflow = WorkflowServiceApi::complete_current_phase(&hub, &workflow.id)
+            .await
+            .expect("completion should remain successful even when auto-prune fails");
+    }
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+
+    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id)
+        .await
+        .expect("list checkpoints");
+    assert_eq!(
+        checkpoints.len(),
+        5,
+        "failed auto-prune should not remove checkpoints when completion succeeds"
+    );
+}
+
+#[tokio::test]
 async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     let temp = tempfile::tempdir().expect("tempdir");
     let state_dir = temp.path().join(".ao").join("state");
