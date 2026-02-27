@@ -95,6 +95,48 @@ pub struct AgentRuntimeOverrides {
     pub codex_config_overrides: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMcpServerSource {
+    Builtin,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolPolicyMode {
+    Allowlist,
+    Blocklist,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentToolPolicy {
+    #[serde(default)]
+    pub mode: Option<AgentToolPolicyMode>,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentMcpStdioConfig {
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentMcpServerConfig {
+    #[serde(default)]
+    pub source: Option<AgentMcpServerSource>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub stdio: Option<AgentMcpStdioConfig>,
+    #[serde(default)]
+    pub tool_policy: Option<AgentToolPolicy>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     #[serde(default)]
@@ -121,6 +163,8 @@ pub struct AgentProfile {
     pub extra_args: Vec<String>,
     #[serde(default)]
     pub codex_config_overrides: Vec<String>,
+    #[serde(default)]
+    pub mcp_servers: BTreeMap<String, AgentMcpServerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +327,15 @@ impl AgentRuntimeConfig {
     pub fn phase_agent_profile(&self, phase_id: &str) -> Option<&AgentProfile> {
         self.phase_agent_id(phase_id)
             .and_then(|agent_id| self.agent_profile(agent_id))
+    }
+
+    pub fn phase_agent_mcp_server(
+        &self,
+        phase_id: &str,
+        server_name: &str,
+    ) -> Option<&AgentMcpServerConfig> {
+        self.phase_agent_profile(phase_id)
+            .and_then(|profile| lookup_case_insensitive(&profile.mcp_servers, server_name))
     }
 
     pub fn phase_system_prompt(&self, phase_id: &str) -> Option<&str> {
@@ -576,6 +629,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_servers: BTreeMap::new(),
                 },
             ),
             (
@@ -593,6 +647,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_servers: BTreeMap::new(),
                 },
             ),
         ]),
@@ -1120,6 +1175,9 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         };
         !key.trim().is_empty() && !expr.trim().is_empty()
     }
+    fn is_valid_tool_policy_pattern(value: &str) -> bool {
+        !value.trim().is_empty()
+    }
 
     if config.schema.trim() != AGENT_RUNTIME_CONFIG_SCHEMA_ID {
         return Err(anyhow!(
@@ -1226,6 +1284,58 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
                 agent_id
             ));
         }
+
+        for (server_name, server) in &profile.mcp_servers {
+            if server_name.trim().is_empty() {
+                return Err(anyhow!(
+                    "agents['{}'].mcp_servers contains empty server id",
+                    agent_id
+                ));
+            }
+
+            if server
+                .endpoint
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(anyhow!(
+                    "agents['{}'].mcp_servers['{}'].endpoint must not be empty",
+                    agent_id,
+                    server_name
+                ));
+            }
+
+            if let Some(stdio) = server.stdio.as_ref() {
+                if stdio.command.trim().is_empty() {
+                    return Err(anyhow!(
+                        "agents['{}'].mcp_servers['{}'].stdio.command must not be empty",
+                        agent_id,
+                        server_name
+                    ));
+                }
+                if stdio.args.iter().any(|value| value.trim().is_empty()) {
+                    return Err(anyhow!(
+                        "agents['{}'].mcp_servers['{}'].stdio.args must not contain empty values",
+                        agent_id,
+                        server_name
+                    ));
+                }
+            }
+
+            if let Some(policy) = server.tool_policy.as_ref() {
+                if policy
+                    .patterns
+                    .iter()
+                    .any(|pattern| !is_valid_tool_policy_pattern(pattern))
+                {
+                    return Err(anyhow!(
+                        "agents['{}'].mcp_servers['{}'].tool_policy.patterns must not contain empty values",
+                        agent_id,
+                        server_name
+                    ));
+                }
+            }
+        }
     }
 
     if config.phases.is_empty() {
@@ -1304,5 +1414,64 @@ mod tests {
 
         assert!(config.is_structured_output_phase("custom-phase"));
         assert!(!config.is_structured_output_phase("   "));
+    }
+
+    #[test]
+    fn phase_agent_mcp_server_lookup_is_case_insensitive() {
+        let mut config = builtin_agent_runtime_config();
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists")
+            .mcp_servers
+            .insert(
+                "AO".to_string(),
+                AgentMcpServerConfig {
+                    source: Some(AgentMcpServerSource::Builtin),
+                    endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
+                    stdio: None,
+                    tool_policy: None,
+                },
+            );
+
+        let server = config
+            .phase_agent_mcp_server("implementation", "ao")
+            .expect("server should resolve by case-insensitive id");
+        assert_eq!(
+            server.endpoint.as_deref(),
+            Some("http://127.0.0.1:3101/mcp/ao")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_mcp_tool_policy_pattern() {
+        let mut config = builtin_agent_runtime_config();
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists")
+            .mcp_servers
+            .insert(
+                "ao".to_string(),
+                AgentMcpServerConfig {
+                    source: Some(AgentMcpServerSource::Builtin),
+                    endpoint: None,
+                    stdio: Some(AgentMcpStdioConfig {
+                        command: "ao".to_string(),
+                        args: vec!["mcp".to_string(), "serve".to_string()],
+                    }),
+                    tool_policy: Some(AgentToolPolicy {
+                        mode: Some(AgentToolPolicyMode::Allowlist),
+                        patterns: vec!["   ".to_string()],
+                    }),
+                },
+            );
+
+        let err = validate_agent_runtime_config(&config)
+            .expect_err("empty mcp tool policy patterns should fail validation");
+        assert!(
+            err.to_string().contains("tool_policy.patterns"),
+            "unexpected error: {err}"
+        );
     }
 }

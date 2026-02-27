@@ -28,6 +28,12 @@ struct McpStdioConfig {
     args: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpToolPolicyMode {
+    Allowlist,
+    Blocklist,
+}
+
 #[derive(Debug, Clone)]
 struct McpToolEnforcement {
     enabled: bool,
@@ -35,6 +41,8 @@ struct McpToolEnforcement {
     stdio: Option<McpStdioConfig>,
     agent_id: String,
     allowed_prefixes: Vec<String>,
+    blocked_prefixes: Vec<String>,
+    tool_policy_mode: Option<McpToolPolicyMode>,
 }
 
 #[derive(Debug, Default)]
@@ -77,6 +85,87 @@ fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
     prefixes
 }
 
+fn parse_tool_policy_mode(raw: Option<&str>) -> Option<McpToolPolicyMode> {
+    let value = raw
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())?
+        .to_ascii_lowercase();
+    match value.as_str() {
+        "allowlist" => Some(McpToolPolicyMode::Allowlist),
+        "blocklist" => Some(McpToolPolicyMode::Blocklist),
+        _ => None,
+    }
+}
+
+fn normalized_tool_prefixes(values: Option<&serde_json::Value>) -> Vec<String> {
+    values
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_policy_patterns_to_prefixes(values: Option<&serde_json::Value>) -> Vec<String> {
+    normalized_tool_prefixes(values)
+        .into_iter()
+        .filter_map(|pattern| {
+            if pattern.is_empty() {
+                return None;
+            }
+            let prefix = pattern
+                .split_once('*')
+                .map(|(head, _)| head)
+                .unwrap_or(pattern.as_str())
+                .trim()
+                .to_string();
+            if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            }
+        })
+        .collect()
+}
+
+fn normalize_server_prefixed_tool_name(server: &str, tool_name: &str) -> String {
+    let normalized_server = server.trim().to_ascii_lowercase();
+    let normalized_tool = tool_name.trim().to_ascii_lowercase();
+    let dotted_tool = normalized_tool.replace(['-', '_'], ".");
+    format!("{normalized_server}.{dotted_tool}")
+}
+
+fn tool_name_candidates(tool_name: &str, server: Option<&str>) -> Vec<String> {
+    let normalized = tool_name.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = vec![normalized.clone(), normalized.replace(['-', '_'], ".")];
+
+    if let Some(server) = server
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+    {
+        let server_prefixed = normalize_server_prefixed_tool_name(&server, &normalized);
+        let snake_tool = normalized.replace(['.', '-'], "_");
+        candidates.push(server_prefixed.clone());
+        candidates.push(format!("mcp.{server_prefixed}"));
+        candidates.push(format!("mcp__{server}__{snake_tool}"));
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
 fn resolve_mcp_tool_enforcement(
     runtime_contract: Option<&serde_json::Value>,
 ) -> McpToolEnforcement {
@@ -87,6 +176,8 @@ fn resolve_mcp_tool_enforcement(
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: Vec::new(),
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
     };
 
@@ -137,21 +228,27 @@ fn resolve_mcp_tool_enforcement(
         .and_then(serde_json::Value::as_bool);
     let enabled = explicit_enforce.unwrap_or((has_endpoint || has_stdio) && supports_mcp);
 
-    let mut allowed_prefixes = contract
-        .pointer("/mcp/allowed_tool_prefixes")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_ascii_lowercase())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let tool_policy_mode = parse_tool_policy_mode(
+        contract
+            .pointer("/mcp/tool_policy/mode")
+            .and_then(serde_json::Value::as_str),
+    );
+    let tool_policy_prefixes =
+        tool_policy_patterns_to_prefixes(contract.pointer("/mcp/tool_policy/patterns"));
+    let mut allowed_prefixes =
+        normalized_tool_prefixes(contract.pointer("/mcp/allowed_tool_prefixes"));
+    let mut blocked_prefixes =
+        normalized_tool_prefixes(contract.pointer("/mcp/blocked_tool_prefixes"));
 
-    if enabled && allowed_prefixes.is_empty() {
+    if matches!(tool_policy_mode, Some(McpToolPolicyMode::Allowlist)) {
+        allowed_prefixes = tool_policy_prefixes;
+    } else if matches!(tool_policy_mode, Some(McpToolPolicyMode::Blocklist))
+        && blocked_prefixes.is_empty()
+    {
+        blocked_prefixes = tool_policy_prefixes;
+    }
+
+    if enabled && allowed_prefixes.is_empty() && tool_policy_mode.is_none() {
         allowed_prefixes = default_allowed_tool_prefixes(&agent_id);
     }
 
@@ -161,6 +258,8 @@ fn resolve_mcp_tool_enforcement(
         stdio,
         agent_id,
         allowed_prefixes,
+        blocked_prefixes,
+        tool_policy_mode,
     }
 }
 
@@ -543,23 +642,21 @@ fn is_tool_call_allowed(
         "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
     );
 
-    // Codex stream-json MCP events include a plain tool name and a "server" field
-    // inside arguments. Allow calls explicitly targeting the locked agent_id.
     let target_server = parameters
         .get("server")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_lowercase);
-    if let Some(server) = target_server {
-        if server == enforcement.agent_id.to_ascii_lowercase() {
-            return true;
+
+    if let Some(server) = target_server.as_deref() {
+        if !server.eq_ignore_ascii_case(enforcement.agent_id.as_str()) {
+            // Codex emits MCP discovery helper calls on its own host server.
+            if server == "codex" && is_mcp_discovery_helper {
+                return true;
+            }
+            return false;
         }
-        // Codex emits MCP discovery helper calls on its own host server.
-        if server == "codex" && is_mcp_discovery_helper {
-            return true;
-        }
-        return false;
     }
 
     // These are MCP discovery helpers emitted by Codex itself; they do not map to a
@@ -568,10 +665,35 @@ fn is_tool_call_allowed(
         return true;
     }
 
-    enforcement
-        .allowed_prefixes
-        .iter()
-        .any(|prefix| normalized.starts_with(prefix))
+    let candidates = tool_name_candidates(tool_name, target_server.as_deref());
+    if candidates.is_empty() {
+        return false;
+    }
+
+    let blocked_match = enforcement.blocked_prefixes.iter().any(|prefix| {
+        candidates
+            .iter()
+            .any(|candidate| candidate.starts_with(prefix))
+    });
+    if blocked_match {
+        return false;
+    }
+
+    if enforcement.allowed_prefixes.is_empty() {
+        if matches!(
+            enforcement.tool_policy_mode,
+            Some(McpToolPolicyMode::Allowlist)
+        ) {
+            return false;
+        }
+        return target_server.is_some();
+    }
+
+    enforcement.allowed_prefixes.iter().any(|prefix| {
+        candidates
+            .iter()
+            .any(|candidate| candidate.starts_with(prefix))
+    })
 }
 
 // Keeping this explicit signature preserves current call sites across the
@@ -630,6 +752,8 @@ pub async fn spawn_cli_process(
             .map(|config| config.args.as_slice()),
         mcp_agent_id = %mcp_tool_enforcement.agent_id,
         mcp_allowed_prefixes = ?mcp_tool_enforcement.allowed_prefixes,
+        mcp_blocked_prefixes = ?mcp_tool_enforcement.blocked_prefixes,
+        mcp_tool_policy_mode = ?mcp_tool_enforcement.tool_policy_mode,
         "Spawning CLI process"
     );
     debug!(
@@ -1082,6 +1206,79 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tool_enforcement_applies_tool_policy_allowlist() {
+        let contract = json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {
+                "enforce_only": true,
+                "agent_id": "ao",
+                "stdio": {
+                    "command": "ao",
+                    "args": ["mcp", "serve"]
+                },
+                "tool_policy": {
+                    "mode": "allowlist",
+                    "patterns": ["ao.task.*"]
+                }
+            }
+        });
+        let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
+        assert_eq!(
+            enforcement.tool_policy_mode,
+            Some(McpToolPolicyMode::Allowlist)
+        );
+        assert_eq!(enforcement.allowed_prefixes, vec!["ao.task.".to_string()]);
+        assert!(is_tool_call_allowed(
+            "task-list",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+        assert!(!is_tool_call_allowed(
+            "workflow-run",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+    }
+
+    #[test]
+    fn mcp_tool_enforcement_applies_tool_policy_blocklist() {
+        let contract = json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {
+                "enforce_only": true,
+                "agent_id": "ao",
+                "stdio": {
+                    "command": "ao",
+                    "args": ["mcp", "serve"]
+                },
+                "tool_policy": {
+                    "mode": "blocklist",
+                    "patterns": ["ao.task.delete*"]
+                }
+            }
+        });
+        let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
+        assert_eq!(
+            enforcement.tool_policy_mode,
+            Some(McpToolPolicyMode::Blocklist)
+        );
+        assert_eq!(
+            enforcement.blocked_prefixes,
+            vec!["ao.task.delete".to_string()]
+        );
+        assert!(is_tool_call_allowed(
+            "task-list",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+        assert!(!is_tool_call_allowed(
+            "task-delete",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+    }
+
+    #[test]
     fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
         let mut invocation = super::super::process_builder::CliInvocation {
             command: "unknown-cli".to_string(),
@@ -1102,6 +1299,8 @@ mod tests {
             }),
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1132,6 +1331,8 @@ mod tests {
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1168,6 +1369,8 @@ mod tests {
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1199,6 +1402,8 @@ mod tests {
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1316,6 +1521,8 @@ mod tests {
             }),
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1362,6 +1569,8 @@ mod tests {
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
@@ -1420,6 +1629,8 @@ mod tests {
             }),
             agent_id: "ao".to_string(),
             allowed_prefixes: vec!["ao.".to_string()],
+            blocked_prefixes: Vec::new(),
+            tool_policy_mode: None,
         };
         let mut env = HashMap::new();
         let mut cleanup = TempPathCleanup::default();
