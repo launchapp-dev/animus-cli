@@ -77,7 +77,8 @@ pub use types::{
 };
 pub use workflow::{
     phase_plan_for_pipeline_id, resolve_phase_plan_for_pipeline, ResumabilityStatus, ResumeConfig,
-    WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
+    WorkflowCheckpointPruneResult, WorkflowLifecycleExecutor, WorkflowResumeManager,
+    WorkflowStateMachine, WorkflowStateManager, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
     STANDARD_PIPELINE_ID, UI_UX_PIPELINE_ID,
 };
 pub use workflow_config::{
@@ -85,9 +86,9 @@ pub use workflow_config::{
     load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata,
     resolve_pipeline_phase_plan, validate_workflow_and_runtime_configs, validate_workflow_config,
     workflow_config_hash, workflow_config_path, write_workflow_config, LoadedWorkflowConfig,
-    PhaseUiDefinition, PipelineDefinition, WorkflowConfig, WorkflowConfigMetadata,
-    WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
-    WORKFLOW_CONFIG_VERSION,
+    PhaseUiDefinition, PipelineDefinition, WorkflowCheckpointRetentionConfig, WorkflowConfig,
+    WorkflowConfigMetadata, WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME,
+    WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION,
 };
 
 #[cfg(test)]

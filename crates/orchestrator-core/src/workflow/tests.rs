@@ -106,6 +106,178 @@ fn state_manager_saves_checkpoints() {
 }
 
 #[test]
+fn state_manager_prunes_to_keep_last_per_phase() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    workflow.current_phase = Some("requirements".to_string());
+    workflow.current_phase_index = 0;
+    manager.save(&workflow).expect("save workflow");
+
+    for _ in 0..12 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save requirements checkpoint");
+    }
+
+    workflow.current_phase = Some("implementation".to_string());
+    workflow.current_phase_index = 1;
+    for _ in 0..3 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save implementation checkpoint");
+    }
+
+    let result = manager
+        .prune_checkpoints(&workflow.id, 10, None, false)
+        .expect("prune checkpoints");
+    assert_eq!(result.pruned_count, 2);
+    assert_eq!(result.pruned_checkpoint_numbers, vec![1, 2]);
+    assert_eq!(
+        result.pruned_by_phase.get("requirements"),
+        Some(&2),
+        "prune should remove oldest requirements checkpoints"
+    );
+
+    let checkpoints = manager
+        .list_checkpoints(&workflow.id)
+        .expect("list checkpoints");
+    assert_eq!(checkpoints, (3usize..=15usize).collect::<Vec<_>>());
+}
+
+#[test]
+fn state_manager_prunes_checkpoints_older_than_age() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    manager.save(&workflow).expect("save workflow");
+    for _ in 0..3 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save checkpoint");
+    }
+
+    workflow.checkpoint_metadata.checkpoints[0].timestamp =
+        Utc::now() - chrono::Duration::hours(72);
+    workflow.checkpoint_metadata.checkpoints[1].timestamp = Utc::now() - chrono::Duration::hours(2);
+    workflow.checkpoint_metadata.checkpoints[2].timestamp = Utc::now() - chrono::Duration::hours(1);
+    manager
+        .save(&workflow)
+        .expect("save workflow with adjusted ages");
+
+    let result = manager
+        .prune_checkpoints(&workflow.id, 10, Some(24), false)
+        .expect("prune checkpoints by age");
+    assert_eq!(result.pruned_count, 1);
+    assert_eq!(result.pruned_checkpoint_numbers, vec![1]);
+
+    let checkpoints = manager
+        .list_checkpoints(&workflow.id)
+        .expect("list checkpoints");
+    assert_eq!(checkpoints, vec![2, 3]);
+}
+
+#[test]
+fn state_manager_prunes_legacy_checkpoints_by_inferred_phase() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    workflow.current_phase = Some("requirements".to_string());
+    workflow.current_phase_index = 0;
+    manager.save(&workflow).expect("save workflow");
+
+    for _ in 0..2 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save requirements checkpoint");
+    }
+
+    workflow.current_phase = Some("implementation".to_string());
+    workflow.current_phase_index = 1;
+    for _ in 0..2 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save implementation checkpoint");
+    }
+
+    for checkpoint in &mut workflow.checkpoint_metadata.checkpoints {
+        checkpoint.phase_id = None;
+    }
+    manager
+        .save(&workflow)
+        .expect("save legacy checkpoint metadata");
+
+    let result = manager
+        .prune_checkpoints(&workflow.id, 1, None, false)
+        .expect("prune checkpoints");
+    assert_eq!(result.pruned_count, 2);
+    assert_eq!(result.pruned_checkpoint_numbers, vec![1, 3]);
+    assert_eq!(result.pruned_by_phase.get("requirements"), Some(&1));
+    assert_eq!(result.pruned_by_phase.get("implementation"), Some(&1));
+
+    let checkpoints = manager
+        .list_checkpoints(&workflow.id)
+        .expect("list checkpoints");
+    assert_eq!(checkpoints, vec![2, 4]);
+}
+
+#[test]
+fn state_manager_prune_dry_run_keeps_checkpoint_files_and_metadata() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    manager.save(&workflow).expect("save workflow");
+
+    for _ in 0..3 {
+        workflow = manager
+            .save_checkpoint(&workflow, CheckpointReason::StatusChange)
+            .expect("save checkpoint");
+    }
+
+    let result = manager
+        .prune_checkpoints(&workflow.id, 1, None, true)
+        .expect("dry-run prune checkpoints");
+    assert_eq!(result.pruned_count, 2);
+    assert_eq!(result.pruned_checkpoint_numbers, vec![1, 2]);
+
+    let checkpoints = manager
+        .list_checkpoints(&workflow.id)
+        .expect("list checkpoints");
+    assert_eq!(
+        checkpoints,
+        vec![1, 2, 3],
+        "dry-run should not delete files"
+    );
+
+    let loaded = manager.load(&workflow.id).expect("load workflow");
+    assert_eq!(
+        loaded.checkpoint_metadata.checkpoints.len(),
+        3,
+        "dry-run should not mutate checkpoint metadata"
+    );
+}
+
+#[test]
 fn resume_manager_detects_resumable_running_workflow() {
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());

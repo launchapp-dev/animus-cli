@@ -384,7 +384,42 @@ impl WorkflowServiceApi for FileServiceHub {
         )
         .mark_current_phase_success(&mut workflow);
         manager.save(&workflow)?;
-        let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+        let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+        if workflow.status == crate::types::WorkflowStatus::Completed {
+            let retention = crate::load_workflow_config_or_default(self.project_root.as_path())
+                .config
+                .checkpoint_retention;
+            if retention.auto_prune_on_completion {
+                match manager.prune_checkpoints(
+                    &workflow.id,
+                    retention.keep_last_per_phase,
+                    retention.max_age_hours,
+                    false,
+                ) {
+                    Ok(_) => match manager.load(id) {
+                        Ok(reloaded) => {
+                            workflow = reloaded;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "orchestrator_core::workflow",
+                                workflow_id = %workflow.id,
+                                error = %err,
+                                "workflow completion succeeded but failed to reload pruned workflow state"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "orchestrator_core::workflow",
+                            workflow_id = %workflow.id,
+                            error = %err,
+                            "workflow completion succeeded but checkpoint auto-prune failed"
+                        );
+                    }
+                }
+            }
+        }
 
         self.mutate_persistent_state(|state| {
             state.workflows.insert(id.to_string(), workflow.clone());
