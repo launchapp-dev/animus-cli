@@ -106,6 +106,41 @@ fn phase_ao_mcp_server_for(
         .cloned()
 }
 
+fn phase_ao_mcp_tool_policy_for(
+    project_root: &str,
+    phase_id: &str,
+) -> Option<orchestrator_core::agent_runtime_config::AgentToolPolicy> {
+    load_agent_runtime_config(project_root)
+        .phase_agent_mcp_tool_policy(phase_id, "ao")
+        .cloned()
+}
+
+fn normalize_tool_policy_prefixes(patterns: &[String]) -> Vec<String> {
+    let mut prefixes = patterns
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .filter_map(|pattern| {
+            let prefix = pattern
+                .split_once('*')
+                .map(|(head, _)| head)
+                .unwrap_or(pattern.as_str())
+                .trim()
+                .to_string();
+            if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            }
+        })
+        .collect::<Vec<_>>();
+    prefixes.sort();
+    prefixes.dedup();
+    prefixes
+}
+
 fn inject_phase_profile_mcp_contract(
     project_root: &str,
     phase_id: &str,
@@ -114,6 +149,10 @@ fn inject_phase_profile_mcp_contract(
     let Some(server) = phase_ao_mcp_server_for(project_root, phase_id) else {
         return;
     };
+    let supports_mcp = runtime_contract
+        .pointer("/cli/capabilities/supports_mcp")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let Some(mcp) = runtime_contract
         .get_mut("mcp")
@@ -123,6 +162,7 @@ fn inject_phase_profile_mcp_contract(
     };
 
     mcp.insert("agent_id".to_string(), serde_json::json!("ao"));
+    mcp.insert("enforce_only".to_string(), serde_json::json!(supports_mcp));
 
     if let Some(endpoint) = server
         .endpoint
@@ -174,13 +214,36 @@ fn inject_phase_profile_mcp_contract(
                 "args": args,
             }),
         );
+    } else {
+        mcp.remove("stdio");
     }
 
-    if let Some(policy) = server.tool_policy.as_ref() {
+    if let Some(policy) = phase_ao_mcp_tool_policy_for(project_root, phase_id) {
         let mode = policy.mode.as_ref().map(|mode| match mode {
             orchestrator_core::agent_runtime_config::AgentToolPolicyMode::Allowlist => "allowlist",
             orchestrator_core::agent_runtime_config::AgentToolPolicyMode::Blocklist => "blocklist",
         });
+        let normalized_prefixes = normalize_tool_policy_prefixes(&policy.patterns);
+        match policy.mode {
+            Some(orchestrator_core::agent_runtime_config::AgentToolPolicyMode::Allowlist) => {
+                mcp.insert(
+                    "allowed_tool_prefixes".to_string(),
+                    serde_json::json!(normalized_prefixes),
+                );
+                mcp.remove("blocked_tool_prefixes");
+            }
+            Some(orchestrator_core::agent_runtime_config::AgentToolPolicyMode::Blocklist) => {
+                mcp.insert(
+                    "blocked_tool_prefixes".to_string(),
+                    serde_json::json!(normalized_prefixes),
+                );
+                mcp.remove("allowed_tool_prefixes");
+            }
+            None => {
+                mcp.remove("allowed_tool_prefixes");
+                mcp.remove("blocked_tool_prefixes");
+            }
+        }
         mcp.insert(
             "tool_policy".to_string(),
             serde_json::json!({
@@ -188,6 +251,10 @@ fn inject_phase_profile_mcp_contract(
                 "patterns": policy.patterns.clone(),
             }),
         );
+    } else {
+        mcp.remove("tool_policy");
+        mcp.remove("allowed_tool_prefixes");
+        mcp.remove("blocked_tool_prefixes");
     }
 }
 
@@ -1509,7 +1576,7 @@ pub(super) async fn run_workflow_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     #[test]
     fn inject_phase_profile_mcp_contract_sets_builtin_ao_server_and_policy() {
@@ -1586,6 +1653,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("allowlist")
         );
+        assert_eq!(
+            runtime_contract
+                .pointer("/mcp/enforce_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         let patterns = runtime_contract
             .pointer("/mcp/tool_policy/patterns")
             .and_then(Value::as_array)
@@ -1596,5 +1669,178 @@ mod tests {
                 .any(|value| value.as_str() == Some("ao.task.*")),
             "expected tool policy pattern"
         );
+        let allowed_prefixes = runtime_contract
+            .pointer("/mcp/allowed_tool_prefixes")
+            .and_then(Value::as_array)
+            .expect("allowed prefixes should be set");
+        assert!(
+            allowed_prefixes
+                .iter()
+                .any(|value| value.as_str() == Some("ao.task.")),
+            "expected normalized allowlist prefix"
+        );
+    }
+
+    #[test]
+    fn inject_phase_profile_mcp_contract_enforces_stdio_only_builtin_server() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists")
+            .mcp_servers
+            .insert(
+                "ao".to_string(),
+                orchestrator_core::agent_runtime_config::AgentMcpServerConfig {
+                    source: Some(
+                        orchestrator_core::agent_runtime_config::AgentMcpServerSource::Builtin,
+                    ),
+                    endpoint: None,
+                    stdio: None,
+                    tool_policy: None,
+                },
+            );
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config).expect("write config");
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let mut runtime_contract = orchestrator_core::build_runtime_contract(
+            "codex",
+            "gpt-5.3-codex",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("runtime contract");
+        assert_eq!(
+            runtime_contract
+                .pointer("/mcp/enforce_only")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        inject_phase_profile_mcp_contract(&project_root, "implementation", &mut runtime_contract);
+
+        assert_eq!(
+            runtime_contract
+                .pointer("/mcp/enforce_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(runtime_contract
+            .pointer("/mcp/stdio/command")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty()));
+        assert!(runtime_contract.pointer("/mcp/endpoint").is_none());
+    }
+
+    #[test]
+    fn inject_phase_profile_mcp_contract_falls_back_to_profile_tool_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        let profile = config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists");
+        profile.tool_policy = Some(orchestrator_core::agent_runtime_config::AgentToolPolicy {
+            mode: Some(orchestrator_core::agent_runtime_config::AgentToolPolicyMode::Blocklist),
+            patterns: vec!["ao.task.delete*".to_string()],
+        });
+        profile.mcp_servers.insert(
+            "ao".to_string(),
+            orchestrator_core::agent_runtime_config::AgentMcpServerConfig {
+                source: Some(
+                    orchestrator_core::agent_runtime_config::AgentMcpServerSource::Builtin,
+                ),
+                endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
+                stdio: None,
+                tool_policy: None,
+            },
+        );
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config).expect("write config");
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let mut runtime_contract = orchestrator_core::build_runtime_contract(
+            "codex",
+            "gpt-5.3-codex",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("runtime contract");
+
+        inject_phase_profile_mcp_contract(&project_root, "implementation", &mut runtime_contract);
+
+        assert_eq!(
+            runtime_contract
+                .pointer("/mcp/tool_policy/mode")
+                .and_then(Value::as_str),
+            Some("blocklist")
+        );
+        let blocked_prefixes = runtime_contract
+            .pointer("/mcp/blocked_tool_prefixes")
+            .and_then(Value::as_array)
+            .expect("blocked prefixes should be set from profile policy");
+        assert!(
+            blocked_prefixes
+                .iter()
+                .any(|value| value.as_str() == Some("ao.task.delete")),
+            "expected normalized blocklist prefix"
+        );
+    }
+
+    #[test]
+    fn inject_phase_profile_mcp_contract_clears_stale_policy_fields_without_configured_policy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut config = orchestrator_core::builtin_agent_runtime_config();
+        config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists")
+            .mcp_servers
+            .insert(
+                "ao".to_string(),
+                orchestrator_core::agent_runtime_config::AgentMcpServerConfig {
+                    source: Some(
+                        orchestrator_core::agent_runtime_config::AgentMcpServerSource::Builtin,
+                    ),
+                    endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
+                    stdio: None,
+                    tool_policy: None,
+                },
+            );
+        orchestrator_core::write_agent_runtime_config(temp.path(), &config).expect("write config");
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let mut runtime_contract = orchestrator_core::build_runtime_contract(
+            "codex",
+            "gpt-5.3-codex",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("runtime contract");
+        let mcp = runtime_contract
+            .get_mut("mcp")
+            .and_then(Value::as_object_mut)
+            .expect("mcp object");
+        mcp.insert(
+            "tool_policy".to_string(),
+            json!({ "mode": "allowlist", "patterns": ["ao.task.*"] }),
+        );
+        mcp.insert("allowed_tool_prefixes".to_string(), json!(["ao.task."]));
+        mcp.insert("blocked_tool_prefixes".to_string(), json!(["ao.task.delete"]));
+
+        inject_phase_profile_mcp_contract(&project_root, "implementation", &mut runtime_contract);
+
+        assert!(runtime_contract.pointer("/mcp/tool_policy").is_none());
+        assert!(runtime_contract.pointer("/mcp/allowed_tool_prefixes").is_none());
+        assert!(runtime_contract.pointer("/mcp/blocked_tool_prefixes").is_none());
     }
 }

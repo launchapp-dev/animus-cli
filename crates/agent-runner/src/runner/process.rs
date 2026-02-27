@@ -1241,6 +1241,38 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tool_enforcement_allowlist_policy_overrides_allowed_prefixes() {
+        let contract = json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {
+                "enforce_only": true,
+                "agent_id": "ao",
+                "allowed_tool_prefixes": ["ao.workflow."],
+                "tool_policy": {
+                    "mode": "allowlist",
+                    "patterns": ["ao.task.*"]
+                }
+            }
+        });
+        let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
+        assert_eq!(
+            enforcement.tool_policy_mode,
+            Some(McpToolPolicyMode::Allowlist)
+        );
+        assert_eq!(enforcement.allowed_prefixes, vec!["ao.task.".to_string()]);
+        assert!(is_tool_call_allowed(
+            "task-list",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+        assert!(!is_tool_call_allowed(
+            "workflow-run",
+            &json!({ "server": "ao" }),
+            &enforcement
+        ));
+    }
+
+    #[test]
     fn mcp_tool_enforcement_applies_tool_policy_blocklist() {
         let contract = json!({
             "cli": { "capabilities": { "supports_mcp": true } },

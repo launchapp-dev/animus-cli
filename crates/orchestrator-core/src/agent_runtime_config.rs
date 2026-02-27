@@ -164,6 +164,8 @@ pub struct AgentProfile {
     #[serde(default)]
     pub codex_config_overrides: Vec<String>,
     #[serde(default)]
+    pub tool_policy: Option<AgentToolPolicy>,
+    #[serde(default)]
     pub mcp_servers: BTreeMap<String, AgentMcpServerConfig>,
 }
 
@@ -336,6 +338,19 @@ impl AgentRuntimeConfig {
     ) -> Option<&AgentMcpServerConfig> {
         self.phase_agent_profile(phase_id)
             .and_then(|profile| lookup_case_insensitive(&profile.mcp_servers, server_name))
+    }
+
+    pub fn phase_agent_mcp_tool_policy(
+        &self,
+        phase_id: &str,
+        server_name: &str,
+    ) -> Option<&AgentToolPolicy> {
+        self.phase_agent_mcp_server(phase_id, server_name)
+            .and_then(|server| server.tool_policy.as_ref())
+            .or_else(|| {
+                self.phase_agent_profile(phase_id)
+                    .and_then(|profile| profile.tool_policy.as_ref())
+            })
     }
 
     pub fn phase_system_prompt(&self, phase_id: &str) -> Option<&str> {
@@ -629,6 +644,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    tool_policy: None,
                     mcp_servers: BTreeMap::new(),
                 },
             ),
@@ -647,6 +663,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    tool_policy: None,
                     mcp_servers: BTreeMap::new(),
                 },
             ),
@@ -1285,6 +1302,19 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
             ));
         }
 
+        if let Some(policy) = profile.tool_policy.as_ref() {
+            if policy
+                .patterns
+                .iter()
+                .any(|pattern| !is_valid_tool_policy_pattern(pattern))
+            {
+                return Err(anyhow!(
+                    "agents['{}'].tool_policy.patterns must not contain empty values",
+                    agent_id
+                ));
+            }
+        }
+
         for (server_name, server) in &profile.mcp_servers {
             if server_name.trim().is_empty() {
                 return Err(anyhow!(
@@ -1444,6 +1474,40 @@ mod tests {
     }
 
     #[test]
+    fn phase_agent_mcp_tool_policy_prefers_server_policy_over_profile_policy() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists");
+        profile.tool_policy = Some(AgentToolPolicy {
+            mode: Some(AgentToolPolicyMode::Allowlist),
+            patterns: vec!["ao.task.*".to_string()],
+        });
+        profile.mcp_servers.insert(
+            "ao".to_string(),
+            AgentMcpServerConfig {
+                source: Some(AgentMcpServerSource::Builtin),
+                endpoint: None,
+                stdio: Some(AgentMcpStdioConfig {
+                    command: "ao".to_string(),
+                    args: vec!["mcp".to_string(), "serve".to_string()],
+                }),
+                tool_policy: Some(AgentToolPolicy {
+                    mode: Some(AgentToolPolicyMode::Blocklist),
+                    patterns: vec!["ao.task.delete*".to_string()],
+                }),
+            },
+        );
+
+        let policy = config
+            .phase_agent_mcp_tool_policy("implementation", "ao")
+            .expect("effective policy should be resolved");
+        assert_eq!(policy.mode, Some(AgentToolPolicyMode::Blocklist));
+        assert_eq!(policy.patterns, vec!["ao.task.delete*".to_string()]);
+    }
+
+    #[test]
     fn validate_rejects_empty_mcp_tool_policy_pattern() {
         let mut config = builtin_agent_runtime_config();
         config
@@ -1471,6 +1535,27 @@ mod tests {
             .expect_err("empty mcp tool policy patterns should fail validation");
         assert!(
             err.to_string().contains("tool_policy.patterns"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_profile_tool_policy_pattern() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config
+            .agents
+            .get_mut("implementation")
+            .expect("implementation profile exists");
+        profile.tool_policy = Some(AgentToolPolicy {
+            mode: Some(AgentToolPolicyMode::Allowlist),
+            patterns: vec!["   ".to_string()],
+        });
+
+        let err = validate_agent_runtime_config(&config)
+            .expect_err("empty profile tool policy patterns should fail validation");
+        assert!(
+            err.to_string()
+                .contains("agents['implementation'].tool_policy.patterns"),
             "unexpected error: {err}"
         );
     }

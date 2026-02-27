@@ -539,6 +539,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         max_attempts: profile.max_attempts,
                         extra_args: profile.extra_args.clone(),
                         codex_config_overrides: profile.codex_config_overrides.clone(),
+                        tool_policy: None,
                         mcp_servers: std::collections::BTreeMap::new(),
                     },
                 )
