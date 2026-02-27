@@ -384,7 +384,21 @@ impl WorkflowServiceApi for FileServiceHub {
         )
         .mark_current_phase_success(&mut workflow);
         manager.save(&workflow)?;
-        let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+        let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+        if workflow.status == crate::types::WorkflowStatus::Completed {
+            let retention = crate::load_workflow_config_or_default(self.project_root.as_path())
+                .config
+                .checkpoint_retention;
+            if retention.auto_prune_on_completion {
+                let _ = manager.prune_checkpoints(
+                    &workflow.id,
+                    retention.keep_last_per_phase,
+                    retention.max_age_hours,
+                    false,
+                )?;
+                workflow = manager.load(id)?;
+            }
+        }
 
         self.mutate_persistent_state(|state| {
             state.workflows.insert(id.to_string(), workflow.clone());

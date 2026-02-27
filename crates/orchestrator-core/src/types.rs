@@ -866,6 +866,8 @@ pub struct WorkflowCheckpoint {
     pub number: usize,
     pub timestamp: DateTime<Utc>,
     pub reason: CheckpointReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
     pub machine_state: WorkflowMachineState,
     pub status: WorkflowStatus,
 }

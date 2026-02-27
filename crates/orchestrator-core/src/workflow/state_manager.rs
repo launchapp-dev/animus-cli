@@ -1,11 +1,31 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{Duration, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::types::{CheckpointReason, OrchestratorWorkflow, WorkflowCheckpoint};
+
+pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowCheckpointPruneResult {
+    pub workflow_id: String,
+    pub dry_run: bool,
+    pub keep_last_per_phase: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_hours: Option<u64>,
+    pub checkpoint_count_before: usize,
+    pub checkpoint_count_after: usize,
+    pub pruned_count: usize,
+    #[serde(default)]
+    pub pruned_checkpoint_numbers: Vec<usize>,
+    #[serde(default)]
+    pub pruned_by_phase: BTreeMap<String, usize>,
+}
 
 #[derive(Clone)]
 pub struct WorkflowStateManager {
@@ -88,6 +108,7 @@ impl WorkflowStateManager {
             number: workflow.checkpoint_metadata.checkpoint_count,
             timestamp: Utc::now(),
             reason,
+            phase_id: checkpoint_phase_id(&workflow),
             machine_state: workflow.machine_state,
             status: workflow.status,
         };
@@ -106,6 +127,126 @@ impl WorkflowStateManager {
         self.save(&workflow)?;
 
         Ok(workflow)
+    }
+
+    pub fn prune_checkpoints(
+        &self,
+        workflow_id: &str,
+        keep_last_per_phase: usize,
+        max_age_hours: Option<u64>,
+        dry_run: bool,
+    ) -> Result<WorkflowCheckpointPruneResult> {
+        if keep_last_per_phase == 0 {
+            return Err(anyhow!("keep_last_per_phase must be greater than zero"));
+        }
+
+        let mut workflow = self.load(workflow_id)?;
+        let checkpoints = workflow.checkpoint_metadata.checkpoints.clone();
+        let checkpoint_count_before = checkpoints.len();
+
+        if checkpoints.is_empty() {
+            return Ok(WorkflowCheckpointPruneResult {
+                workflow_id: workflow_id.to_string(),
+                dry_run,
+                keep_last_per_phase,
+                max_age_hours,
+                checkpoint_count_before: 0,
+                checkpoint_count_after: 0,
+                pruned_count: 0,
+                pruned_checkpoint_numbers: Vec::new(),
+                pruned_by_phase: BTreeMap::new(),
+            });
+        }
+
+        let mut checkpoint_numbers_to_prune = BTreeSet::new();
+        let mut checkpoints_by_phase = BTreeMap::<String, Vec<WorkflowCheckpoint>>::new();
+        for checkpoint in &checkpoints {
+            checkpoints_by_phase
+                .entry(checkpoint_phase_bucket(checkpoint))
+                .or_default()
+                .push(checkpoint.clone());
+        }
+
+        for phase_checkpoints in checkpoints_by_phase.values_mut() {
+            phase_checkpoints.sort_by_key(|checkpoint| checkpoint.number);
+            if phase_checkpoints.len() > keep_last_per_phase {
+                for checkpoint in phase_checkpoints
+                    .iter()
+                    .take(phase_checkpoints.len() - keep_last_per_phase)
+                {
+                    checkpoint_numbers_to_prune.insert(checkpoint.number);
+                }
+            }
+        }
+
+        if let Some(hours) = max_age_hours {
+            let hours_i64 =
+                i64::try_from(hours).context("max_age_hours exceeds supported range")?;
+            let cutoff = Utc::now() - Duration::hours(hours_i64);
+            for checkpoint in &checkpoints {
+                if checkpoint.timestamp < cutoff {
+                    checkpoint_numbers_to_prune.insert(checkpoint.number);
+                }
+            }
+        }
+
+        if checkpoint_numbers_to_prune.is_empty() {
+            return Ok(WorkflowCheckpointPruneResult {
+                workflow_id: workflow_id.to_string(),
+                dry_run,
+                keep_last_per_phase,
+                max_age_hours,
+                checkpoint_count_before,
+                checkpoint_count_after: checkpoint_count_before,
+                pruned_count: 0,
+                pruned_checkpoint_numbers: Vec::new(),
+                pruned_by_phase: BTreeMap::new(),
+            });
+        }
+
+        let mut pruned_checkpoint_numbers = Vec::new();
+        let mut pruned_by_phase = BTreeMap::<String, usize>::new();
+        let retained_checkpoints: Vec<WorkflowCheckpoint> = checkpoints
+            .into_iter()
+            .filter(|checkpoint| {
+                if checkpoint_numbers_to_prune.contains(&checkpoint.number) {
+                    pruned_checkpoint_numbers.push(checkpoint.number);
+                    let phase = checkpoint_phase_bucket(checkpoint);
+                    *pruned_by_phase.entry(phase).or_insert(0) += 1;
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        let checkpoint_count_after = retained_checkpoints.len();
+
+        if !dry_run {
+            workflow.checkpoint_metadata.checkpoints = retained_checkpoints;
+            self.save(&workflow)?;
+
+            for checkpoint_num in &pruned_checkpoint_numbers {
+                let path = self.checkpoint_path(workflow_id, *checkpoint_num);
+                if path.exists() {
+                    fs::remove_file(&path).with_context(|| {
+                        format!("failed to remove checkpoint file {}", path.display())
+                    })?;
+                }
+            }
+        }
+
+        Ok(WorkflowCheckpointPruneResult {
+            workflow_id: workflow_id.to_string(),
+            dry_run,
+            keep_last_per_phase,
+            max_age_hours,
+            checkpoint_count_before,
+            checkpoint_count_after,
+            pruned_count: pruned_checkpoint_numbers.len(),
+            pruned_checkpoint_numbers,
+            pruned_by_phase,
+        })
     }
 
     pub fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<usize>> {
@@ -164,6 +305,22 @@ impl WorkflowStateManager {
         self.checkpoints_dir(workflow_id)
             .join(format!("checkpoint-{checkpoint_num:04}.json"))
     }
+}
+
+fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
+    workflow.current_phase.clone().or_else(|| {
+        workflow
+            .phases
+            .get(workflow.current_phase_index)
+            .map(|phase| phase.phase_id.clone())
+    })
+}
+
+fn checkpoint_phase_bucket(checkpoint: &WorkflowCheckpoint) -> String {
+    checkpoint
+        .phase_id
+        .clone()
+        .unwrap_or_else(|| "unassigned".to_string())
 }
 
 fn write_atomic(path: &Path, contents: String) -> Result<()> {

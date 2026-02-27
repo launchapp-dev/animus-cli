@@ -69,6 +69,26 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
         "workflow help should describe state-machine command"
     );
 
+    let workflow_checkpoints_prune_help = Command::new(&binary)
+        .args(["workflow", "checkpoints", "prune", "--help"])
+        .output()?;
+    assert!(
+        workflow_checkpoints_prune_help.status.success(),
+        "workflow checkpoints prune help should succeed"
+    );
+    let workflow_checkpoints_prune_stdout =
+        String::from_utf8(workflow_checkpoints_prune_help.stdout)?;
+    assert!(
+        workflow_checkpoints_prune_stdout
+            .contains("Retain at most this many checkpoints per phase."),
+        "workflow checkpoints prune help should explain keep-last retention"
+    );
+    assert!(
+        workflow_checkpoints_prune_stdout
+            .contains("Additionally prune checkpoints older than this age in hours."),
+        "workflow checkpoints prune help should explain age-based retention"
+    );
+
     let web_serve_help = Command::new(&binary)
         .args(["web", "serve", "--help"])
         .output()?;

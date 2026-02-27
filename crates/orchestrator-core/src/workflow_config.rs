@@ -43,6 +43,26 @@ pub struct PipelineDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowCheckpointRetentionConfig {
+    #[serde(default = "default_keep_last_per_phase")]
+    pub keep_last_per_phase: usize,
+    #[serde(default)]
+    pub max_age_hours: Option<u64>,
+    #[serde(default)]
+    pub auto_prune_on_completion: bool,
+}
+
+impl Default for WorkflowCheckpointRetentionConfig {
+    fn default() -> Self {
+        Self {
+            keep_last_per_phase: default_keep_last_per_phase(),
+            max_age_hours: None,
+            auto_prune_on_completion: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     pub schema: String,
     pub version: u32,
@@ -51,6 +71,8 @@ pub struct WorkflowConfig {
     pub phase_catalog: BTreeMap<String, PhaseUiDefinition>,
     #[serde(default)]
     pub pipelines: Vec<PipelineDefinition>,
+    #[serde(default)]
+    pub checkpoint_retention: WorkflowCheckpointRetentionConfig,
 }
 
 impl Default for WorkflowConfig {
@@ -96,6 +118,10 @@ fn default_visible() -> bool {
     true
 }
 
+fn default_keep_last_per_phase() -> usize {
+    crate::workflow::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE
+}
+
 fn phase_ui_definition(
     label: &str,
     description: &str,
@@ -120,6 +146,7 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
             schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
             version: WORKFLOW_CONFIG_VERSION,
             default_pipeline_id: "standard".to_string(),
+            checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
             phase_catalog: BTreeMap::from([
                 (
                     "requirements".to_string(),
@@ -454,6 +481,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         errors.push("default_pipeline_id must not be empty".to_string());
     }
 
+    if config.checkpoint_retention.keep_last_per_phase == 0 {
+        errors
+            .push("checkpoint_retention.keep_last_per_phase must be greater than zero".to_string());
+    }
+
     if config.phase_catalog.is_empty() {
         errors.push("phase_catalog must include at least one phase".to_string());
     }
@@ -567,5 +599,17 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("workflow config v2 file is missing"));
         assert!(message.contains("migrate-v2"));
+    }
+
+    #[test]
+    fn checkpoint_retention_requires_positive_keep_last_per_phase() {
+        let mut config = builtin_workflow_config();
+        config.checkpoint_retention.keep_last_per_phase = 0;
+        let err = validate_workflow_config(&config).expect_err("invalid retention should fail");
+        assert!(
+            err.to_string()
+                .contains("checkpoint_retention.keep_last_per_phase"),
+            "validation error should mention checkpoint retention"
+        );
     }
 }

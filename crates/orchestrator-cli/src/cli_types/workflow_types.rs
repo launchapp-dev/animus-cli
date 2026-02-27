@@ -122,6 +122,8 @@ pub(crate) enum WorkflowCheckpointCommand {
     List(IdArgs),
     /// Get a specific checkpoint for a workflow.
     Get(WorkflowCheckpointGetArgs),
+    /// Prune checkpoints using count and/or age retention.
+    Prune(WorkflowCheckpointPruneArgs),
 }
 
 #[derive(Debug, Args)]
@@ -130,6 +132,31 @@ pub(crate) struct WorkflowCheckpointGetArgs {
     pub(crate) id: String,
     #[arg(long, value_name = "INDEX", help = "Checkpoint index (zero-based).")]
     pub(crate) checkpoint: usize,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowCheckpointPruneArgs {
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = orchestrator_core::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
+        help = "Retain at most this many checkpoints per phase."
+    )]
+    pub(crate) keep_last_per_phase: usize,
+    #[arg(
+        long,
+        value_name = "HOURS",
+        help = "Additionally prune checkpoints older than this age in hours."
+    )]
+    pub(crate) max_age_hours: Option<u64>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview prune result without deleting checkpoint files."
+    )]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

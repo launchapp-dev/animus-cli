@@ -989,6 +989,16 @@ pub(crate) async fn handle_workflow(
                 workflows.get_checkpoint(&args.id, args.checkpoint).await?,
                 json,
             ),
+            WorkflowCheckpointCommand::Prune(args) => {
+                let manager = orchestrator_core::WorkflowStateManager::new(project_root);
+                let pruned = manager.prune_checkpoints(
+                    &args.id,
+                    args.keep_last_per_phase,
+                    args.max_age_hours,
+                    args.dry_run,
+                )?;
+                print_value(pruned, json)
+            }
         },
         WorkflowCommand::Run(args) => {
             let input = parse_input_json_or(args.input_json, || {
