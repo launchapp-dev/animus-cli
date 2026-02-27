@@ -191,6 +191,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
   - `task-030-runner-status-implementation-notes.md`
 - Daemon/human assignee automation planning artifact for TASK-052 lives in `crates/orchestrator-cli/docs/`:
   - `task-052-daemon-workflow-auto-assignee-requirements.md`
+- Daemon autonomous-start verification planning artifacts for TASK-107 live in `crates/orchestrator-cli/docs/`:
+  - `task-107-daemon-start-startup-survival-requirements.md`
+  - `task-107-daemon-start-startup-survival-implementation-notes.md`
 - Daemon notification connector planning artifacts for TASK-026 live in `crates/orchestrator-cli/docs/`:
   - `task-026-event-notification-connector-framework-requirements.md`
   - `task-026-event-notification-connector-framework-implementation-notes.md`

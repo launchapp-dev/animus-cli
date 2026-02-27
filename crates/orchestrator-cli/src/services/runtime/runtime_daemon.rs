@@ -1,6 +1,6 @@
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command as ProcessCommand, Stdio};
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,6 +31,15 @@ use daemon_run::handle_daemon_run;
 
 pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
 pub(crate) use daemon_registry::canonicalize_lossy;
+
+const AUTONOMOUS_STARTUP_PROBE_SECS: u64 = 3;
+const AUTONOMOUS_STARTUP_LOG_TAIL_LINES: usize = 40;
+const AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS: usize = 8_000;
+
+struct AutonomousDaemonSpawn {
+    child: Child,
+    log_path: PathBuf,
+}
 
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
@@ -133,6 +142,98 @@ fn pm_config_path(project_root: &str) -> PathBuf {
     PathBuf::from(canonicalize_lossy(project_root))
         .join(".ao")
         .join("pm-config.json")
+}
+
+fn autonomous_daemon_log_path(project_root: &str) -> PathBuf {
+    let canonical_root = PathBuf::from(canonicalize_lossy(project_root));
+    let scoped_runtime_root = dirs::home_dir().map(|home| {
+        home.join(".ao")
+            .join(protocol::repository_scope_for_path(&canonical_root))
+    });
+
+    scoped_runtime_root
+        .unwrap_or_else(|| canonical_root.join(".ao"))
+        .join("daemon")
+        .join("daemon.log")
+}
+
+async fn wait_for_autonomous_startup_probe(
+    child: &mut Child,
+    probe_window: Duration,
+) -> Result<Option<ExitStatus>> {
+    tokio::time::sleep(probe_window).await;
+    child
+        .try_wait()
+        .context("failed to check autonomous daemon process state")
+}
+
+fn read_autonomous_startup_log_tail(log_path: &Path, max_lines: usize) -> Result<Option<String>> {
+    if max_lines == 0 {
+        return Ok(None);
+    }
+
+    let content = match fs::read(log_path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut lines = content
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    if lines.len() > max_lines {
+        lines = lines.split_off(lines.len() - max_lines);
+    }
+
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(lines.join("\n")))
+}
+
+fn truncate_from_end(value: &str, max_chars: usize) -> String {
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value.to_string();
+    }
+
+    let suffix = value
+        .chars()
+        .skip(char_count.saturating_sub(max_chars))
+        .collect::<String>();
+    format!("...[truncated]\n{suffix}")
+}
+
+fn autonomous_startup_log_diagnostics(log_path: &Path) -> String {
+    match read_autonomous_startup_log_tail(log_path, AUTONOMOUS_STARTUP_LOG_TAIL_LINES) {
+        Ok(Some(tail)) => format!(
+            "startup log tail (last {} lines):\n{}",
+            AUTONOMOUS_STARTUP_LOG_TAIL_LINES,
+            truncate_from_end(&tail, AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS)
+        ),
+        Ok(None) => "startup log tail unavailable: log file is missing or empty".to_string(),
+        Err(err) => format!("startup log tail unavailable: failed to read log ({err})"),
+    }
+}
+
+fn autonomous_startup_failure_error(
+    daemon_pid: u32,
+    exit_status: Option<ExitStatus>,
+    log_path: &Path,
+) -> anyhow::Error {
+    let status_detail = exit_status
+        .map(|status| format!("process exited before startup probe completed ({status})"))
+        .unwrap_or_else(|| "process was not alive after startup probe completed".to_string());
+    let diagnostics = autonomous_startup_log_diagnostics(log_path);
+
+    anyhow!(
+        "autonomous daemon failed startup validation for pid {daemon_pid}: {status_detail}. startup log path: {}.\n{diagnostics}",
+        log_path.display()
+    )
 }
 
 fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
@@ -251,8 +352,37 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     )
 }
 
-fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {
+fn spawn_autonomous_daemon_run(
+    project_root: &str,
+    args: &DaemonStartArgs,
+) -> Result<AutonomousDaemonSpawn> {
     let current_exe = std::env::current_exe().context("failed to resolve current ao binary")?;
+    let log_path = autonomous_daemon_log_path(project_root);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create autonomous daemon log directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    let stdout_log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| {
+            format!(
+                "failed to open autonomous daemon log file {}",
+                log_path.display()
+            )
+        })?;
+    let stderr_log = stdout_log.try_clone().with_context(|| {
+        format!(
+            "failed to clone autonomous daemon log handle {}",
+            log_path.display()
+        )
+    })?;
+
     let mut command = ProcessCommand::new(current_exe);
     command
         .arg("--project-root")
@@ -277,8 +407,8 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .arg(args.stale_threshold_hours.to_string())
         .arg("--max-tasks-per-tick")
         .arg(args.max_tasks_per_tick.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
         .stdin(Stdio::null());
     if let Some(auto_merge) = args.auto_merge {
         command.arg("--auto-merge").arg(auto_merge.to_string());
@@ -320,9 +450,7 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
     let child = command
         .spawn()
         .context("failed to spawn autonomous daemon run")?;
-    let pid = child.id();
-    drop(child);
-    Ok(pid)
+    Ok(AutonomousDaemonSpawn { child, log_path })
 }
 
 pub(crate) async fn handle_daemon(
@@ -357,7 +485,23 @@ pub(crate) async fn handle_daemon(
             }
 
             if args.autonomous {
-                let daemon_pid = spawn_autonomous_daemon_run(project_root, &args)?;
+                let mut daemon_spawn = spawn_autonomous_daemon_run(project_root, &args)?;
+                let daemon_pid = daemon_spawn.child.id();
+                let startup_status = wait_for_autonomous_startup_probe(
+                    &mut daemon_spawn.child,
+                    Duration::from_secs(AUTONOMOUS_STARTUP_PROBE_SECS),
+                )
+                .await?;
+                if startup_status.is_some() || !is_process_alive(daemon_pid) {
+                    let _ = set_registry_daemon_pid(project_root, None);
+                    return Err(autonomous_startup_failure_error(
+                        daemon_pid,
+                        startup_status,
+                        daemon_spawn.log_path.as_path(),
+                    ));
+                }
+
+                drop(daemon_spawn.child);
                 let _ = set_registry_daemon_pid(project_root, Some(daemon_pid));
                 let _ = set_registry_runtime_paused(project_root, false);
                 return print_value(
@@ -455,4 +599,78 @@ pub(crate) async fn handle_daemon(
 
 async fn handle_daemon_events(args: DaemonEventsArgs, json: bool) -> Result<()> {
     handle_daemon_events_impl(args, json).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn read_autonomous_startup_log_tail_returns_last_nonempty_lines() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let log_path = temp.path().join("daemon.log");
+        fs::write(&log_path, "line-1\n\nline-2\nline-3\nline-4\n")
+            .expect("log file should be written");
+
+        let tail = read_autonomous_startup_log_tail(log_path.as_path(), 2)
+            .expect("log tail should be readable")
+            .expect("log tail should be present");
+        assert_eq!(tail, "line-3\nline-4");
+    }
+
+    #[test]
+    fn read_autonomous_startup_log_tail_returns_none_when_log_missing() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let log_path = temp.path().join("missing.log");
+        let tail = read_autonomous_startup_log_tail(log_path.as_path(), 10)
+            .expect("missing log should be handled");
+        assert!(tail.is_none());
+    }
+
+    #[test]
+    fn autonomous_startup_failure_error_includes_log_context() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let log_path = temp.path().join("daemon.log");
+        fs::write(&log_path, "first\nsecond\nthird\n").expect("log file should be written");
+
+        let error = autonomous_startup_failure_error(4242, None, log_path.as_path());
+        let message = error.to_string();
+        assert!(message.contains("pid 4242"));
+        assert!(message.contains(log_path.to_string_lossy().as_ref()));
+        assert!(message.contains("startup log tail"));
+        assert!(message.contains("third"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn autonomous_startup_probe_reports_running_process_as_alive() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 2"])
+            .spawn()
+            .expect("sleep process should spawn");
+
+        let status = wait_for_autonomous_startup_probe(&mut child, Duration::from_millis(50))
+            .await
+            .expect("probe should succeed");
+        assert!(status.is_none());
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn autonomous_startup_probe_reports_early_exit() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 9"])
+            .spawn()
+            .expect("shell process should spawn");
+
+        let status = wait_for_autonomous_startup_probe(&mut child, Duration::from_millis(50))
+            .await
+            .expect("probe should succeed");
+        let exit_status = status.expect("process should have exited");
+        assert_eq!(exit_status.code(), Some(9));
+    }
 }

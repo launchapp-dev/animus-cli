@@ -447,7 +447,9 @@ impl AoMcpServer {
                     })))
                 } else {
                     let mut payload = json!({ "tool": tool_name });
-                    if let Some(envelope) = result.stdout_json {
+                    if let Some(envelope) =
+                        result.stdout_json.as_ref().or(result.stderr_json.as_ref())
+                    {
                         if let Some(error) = envelope.get("error") {
                             payload["error"] = error.clone();
                         } else if let Some(data) = envelope.get("data") {
