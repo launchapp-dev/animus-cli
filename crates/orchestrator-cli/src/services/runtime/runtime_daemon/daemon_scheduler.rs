@@ -1264,6 +1264,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_ready_does_not_treat_merge_conflict_as_completed_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "merge-conflict-ready".to_string(),
+                description: "non-terminal merge conflict should not be auto-done".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let mut workflow_state = workflow;
+        for _ in 0..12 {
+            if workflow_state.status == WorkflowStatus::Completed {
+                break;
+            }
+            workflow_state = hub
+                .workflows()
+                .complete_current_phase(&workflow_state.id)
+                .await
+                .expect("phase completion should succeed");
+        }
+        assert_eq!(workflow_state.status, WorkflowStatus::Completed);
+        assert!(workflow_state.completed_at.is_some());
+
+        let conflicted = hub
+            .workflows()
+            .mark_merge_conflict(
+                &workflow_state.id,
+                "failed to merge source branch into target branch".to_string(),
+            )
+            .await
+            .expect("workflow should enter merge-conflict state");
+        assert_eq!(conflicted.status, WorkflowStatus::Completed);
+        assert_eq!(
+            conflicted.machine_state,
+            orchestrator_core::WorkflowMachineState::MergeConflict
+        );
+        assert!(conflicted.completed_at.is_none());
+
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::Ready)
+            .await
+            .expect("task should become ready");
+
+        let started = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            "/tmp/ao-test-ready-merge-conflict",
+            5,
+        )
+        .await
+        .expect("ready runner should succeed");
+        assert_eq!(started, 1);
+
+        let task_state = hub.tasks().get(&task.id).await.expect("task should load");
+        assert_eq!(task_state.status, TaskStatus::InProgress);
+
+        let workflows = hub
+            .workflows()
+            .list()
+            .await
+            .expect("workflow list should load");
+        assert_eq!(workflows.len(), 2);
+        assert!(workflows.iter().any(|workflow| workflow.id == conflicted.id));
+    }
+
+    #[tokio::test]
     async fn reconcile_stale_in_progress_marks_completed_tasks_done() {
         let hub = Arc::new(InMemoryServiceHub::new());
         let task = hub
@@ -1318,6 +1400,79 @@ mod tests {
 
         let task_state = hub.tasks().get(&task.id).await.expect("task should load");
         assert_eq!(task_state.status, TaskStatus::Done);
+    }
+
+    #[tokio::test]
+    async fn reconcile_stale_in_progress_does_not_mark_merge_conflict_done() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "merge-conflict-stale-in-progress".to_string(),
+                description: "should remain non-terminal while merge conflict is unresolved"
+                    .to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let mut workflow_state = workflow;
+        for _ in 0..12 {
+            if workflow_state.status == WorkflowStatus::Completed {
+                break;
+            }
+            workflow_state = hub
+                .workflows()
+                .complete_current_phase(&workflow_state.id)
+                .await
+                .expect("phase completion should succeed");
+        }
+        assert_eq!(workflow_state.status, WorkflowStatus::Completed);
+        assert!(workflow_state.completed_at.is_some());
+
+        let conflicted = hub
+            .workflows()
+            .mark_merge_conflict(
+                &workflow_state.id,
+                "failed to merge source branch into target branch".to_string(),
+            )
+            .await
+            .expect("workflow should enter merge-conflict state");
+        assert_eq!(
+            conflicted.machine_state,
+            orchestrator_core::WorkflowMachineState::MergeConflict
+        );
+        assert!(conflicted.completed_at.is_none());
+
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::InProgress)
+            .await
+            .expect("task should become in-progress");
+
+        let reconciled = reconcile_stale_in_progress_tasks_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            "/tmp/ao-test-stale-reconcile-merge-conflict",
+        )
+        .await
+        .expect("stale reconciliation should succeed");
+        assert_eq!(reconciled, 0);
+
+        let task_state = hub.tasks().get(&task.id).await.expect("task should load");
+        assert_eq!(task_state.status, TaskStatus::InProgress);
     }
 
     #[tokio::test]

@@ -107,6 +107,12 @@ fn normalize_optional_id(value: Option<&str>) -> Option<String> {
         .map(|candidate| candidate.to_string())
 }
 
+fn is_terminally_completed_workflow(workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {
+    workflow.status == WorkflowStatus::Completed
+        && workflow.machine_state == orchestrator_core::WorkflowMachineState::Completed
+        && workflow.completed_at.is_some()
+}
+
 fn collect_task_state_transitions(
     before: &[orchestrator_core::OrchestratorTask],
     after: &[orchestrator_core::OrchestratorTask],
@@ -525,7 +531,7 @@ pub(super) async fn reconcile_stale_in_progress_tasks_for_project(
         .collect();
     let completed_task_ids: HashSet<String> = workflows
         .iter()
-        .filter(|workflow| workflow.status == WorkflowStatus::Completed)
+        .filter(|workflow| is_terminally_completed_workflow(workflow))
         .map(|workflow| workflow.task_id.clone())
         .collect();
     let failed_task_ids: HashSet<String> = workflows
@@ -635,7 +641,7 @@ pub(super) async fn run_ready_task_workflows_for_project(
         .collect();
     let completed_task_ids: HashSet<String> = workflows
         .iter()
-        .filter(|workflow| workflow.status == WorkflowStatus::Completed)
+        .filter(|workflow| is_terminally_completed_workflow(workflow))
         .map(|workflow| workflow.task_id.clone())
         .collect();
 
@@ -1854,7 +1860,7 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         .count();
     let workflows_completed = workflows
         .iter()
-        .filter(|workflow| workflow.status == WorkflowStatus::Completed)
+        .filter(|workflow| is_terminally_completed_workflow(workflow))
         .count();
     let workflows_failed = workflows
         .iter()
