@@ -748,6 +748,8 @@ pub enum PhaseDecisionVerdict {
     Rework,
     Fail,
     Skip,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1332,6 +1334,24 @@ mod tests {
         assert!(parsed.evidence.is_empty());
         assert!(parsed.guardrail_violations.is_empty());
         assert!(parsed.commit_message.is_none());
+    }
+
+    #[test]
+    fn phase_decision_deserializes_unknown_verdict_with_fallback() {
+        let input = json!({
+            "kind": "phase_decision",
+            "phase_id": "code-review",
+            "verdict": "escalate",
+            "confidence": 0.51,
+            "risk": "medium"
+        });
+
+        let parsed: PhaseDecision =
+            serde_json::from_value(input).expect("unknown verdict should map to fallback variant");
+
+        assert_eq!(parsed.verdict, PhaseDecisionVerdict::Unknown);
+        assert_eq!(parsed.phase_id, "code-review");
+        assert_eq!(parsed.risk, WorkflowDecisionRisk::Medium);
     }
 
     #[test]
