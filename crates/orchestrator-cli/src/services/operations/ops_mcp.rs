@@ -50,6 +50,8 @@ struct TaskCreateInput {
     #[serde(default)]
     priority: Option<String>,
     #[serde(default)]
+    linked_requirement: Vec<String>,
+    #[serde(default)]
     project_root: Option<String>,
 }
 
@@ -494,16 +496,7 @@ impl AoMcpServer {
         params: Parameters<TaskCreateInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec![
-            "task".to_string(),
-            "create".to_string(),
-            "--title".to_string(),
-            input.title,
-            "--description".to_string(),
-            input.description.unwrap_or_default(),
-        ];
-        push_opt(&mut args, "--task-type", input.task_type);
-        push_opt(&mut args, "--priority", input.priority);
+        let args = build_task_create_args(&input);
         self.run_tool("ao.task.create", args, input.project_root)
             .await
     }
@@ -1522,6 +1515,24 @@ fn build_agent_run_args(input: &AgentRunInput) -> Vec<String> {
     args
 }
 
+fn build_task_create_args(input: &TaskCreateInput) -> Vec<String> {
+    let mut args = vec![
+        "task".to_string(),
+        "create".to_string(),
+        "--title".to_string(),
+        input.title.clone(),
+        "--description".to_string(),
+        input.description.clone().unwrap_or_default(),
+    ];
+    push_opt(&mut args, "--task-type", input.task_type.clone());
+    push_opt(&mut args, "--priority", input.priority.clone());
+    for requirement_id in &input.linked_requirement {
+        args.push("--linked-requirement".to_string());
+        args.push(requirement_id.clone());
+    }
+    args
+}
+
 fn build_task_get_args(id: String) -> Vec<String> {
     vec![
         "task".to_string(),
@@ -1683,6 +1694,60 @@ mod tests {
                 "get".to_string(),
                 "--id".to_string(),
                 "task-123".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn build_task_create_args_includes_linked_requirements() {
+        let args = build_task_create_args(&TaskCreateInput {
+            title: "Traceability task".to_string(),
+            description: Some("desc".to_string()),
+            task_type: Some("feature".to_string()),
+            priority: Some("high".to_string()),
+            linked_requirement: vec!["REQ-123".to_string(), "REQ-456".to_string()],
+            project_root: None,
+        });
+        assert_eq!(
+            args,
+            vec![
+                "task".to_string(),
+                "create".to_string(),
+                "--title".to_string(),
+                "Traceability task".to_string(),
+                "--description".to_string(),
+                "desc".to_string(),
+                "--task-type".to_string(),
+                "feature".to_string(),
+                "--priority".to_string(),
+                "high".to_string(),
+                "--linked-requirement".to_string(),
+                "REQ-123".to_string(),
+                "--linked-requirement".to_string(),
+                "REQ-456".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_task_create_args_uses_empty_description_when_omitted() {
+        let args = build_task_create_args(&TaskCreateInput {
+            title: "Task".to_string(),
+            description: None,
+            task_type: None,
+            priority: None,
+            linked_requirement: Vec::new(),
+            project_root: None,
+        });
+        assert_eq!(
+            args,
+            vec![
+                "task".to_string(),
+                "create".to_string(),
+                "--title".to_string(),
+                "Task".to_string(),
+                "--description".to_string(),
+                String::new(),
             ]
         );
     }

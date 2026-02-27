@@ -24,9 +24,16 @@ struct TaskStatsOutput {
 
 const UNLINKED_REQUIREMENTS_WARNING: &str = "warning: creating non-chore task without linked requirements; pass --linked-requirement <REQ_ID> to improve traceability";
 
+fn has_non_empty_linked_requirements(input: &TaskCreateInput) -> bool {
+    input
+        .linked_requirements
+        .iter()
+        .any(|requirement| !requirement.trim().is_empty())
+}
+
 fn should_warn_missing_linked_requirements(input: &TaskCreateInput) -> bool {
     input.task_type.unwrap_or(TaskType::Feature) != TaskType::Chore
-        && input.linked_requirements.is_empty()
+        && !has_non_empty_linked_requirements(input)
 }
 
 pub(crate) async fn handle_task(
@@ -286,6 +293,18 @@ mod tests {
     #[test]
     fn does_not_warn_when_linked_requirements_are_present() {
         let input = task_create_input(Some(TaskType::Feature), vec!["REQ-123"]);
+        assert!(!should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn warns_when_linked_requirements_are_blank() {
+        let input = task_create_input(Some(TaskType::Feature), vec!["", "   "]);
+        assert!(should_warn_missing_linked_requirements(&input));
+    }
+
+    #[test]
+    fn does_not_warn_when_at_least_one_linked_requirement_is_non_blank() {
+        let input = task_create_input(Some(TaskType::Feature), vec!["", "REQ-123", "   "]);
         assert!(!should_warn_missing_linked_requirements(&input));
     }
 }

@@ -240,6 +240,83 @@ fn e2e_task_create_does_not_warn_when_linked_requirement_is_provided() -> Result
 }
 
 #[test]
+fn e2e_task_create_warns_when_linked_requirements_are_blank() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let output = harness.run_json_output(&[
+        "task",
+        "create",
+        "--title",
+        "Blank linked requirements",
+        "--description",
+        "integration test",
+        "--linked-requirement",
+        "",
+        "--linked-requirement",
+        "   ",
+    ])?;
+
+    let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
+    let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
+    assert!(
+        output.status.success(),
+        "task create should succeed; stdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+
+    let payload: Value =
+        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
+    assert!(
+        stderr.contains("creating non-chore task without linked requirements"),
+        "blank linked requirements should still emit warning"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn e2e_task_create_does_not_warn_when_any_linked_requirement_is_non_blank() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let output = harness.run_json_output(&[
+        "task",
+        "create",
+        "--title",
+        "Mixed linked requirements",
+        "--description",
+        "integration test",
+        "--linked-requirement",
+        "",
+        "--linked-requirement",
+        "REQ-123",
+    ])?;
+
+    let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
+    let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
+    assert!(
+        output.status.success(),
+        "task create should succeed; stdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+
+    let payload: Value =
+        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(
+        payload
+            .pointer("/data/linked_requirements/1")
+            .and_then(Value::as_str),
+        Some("REQ-123")
+    );
+    assert!(
+        !stderr.contains("creating non-chore task without linked requirements"),
+        "warning should not be emitted when at least one linked requirement is non-blank"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn e2e_task_create_warning_uses_resolved_input_json_payload() -> Result<()> {
     let harness = CliHarness::new()?;
     let input_json = r#"{"title":"input-json task","description":"integration test","task_type":"feature","linked_requirements":[]}"#;
