@@ -1,5 +1,6 @@
 use crate::cli_types::DaemonRunArgs;
 use anyhow::Result;
+use chrono::Utc;
 use fs2::FileExt;
 use orchestrator_core::{FileServiceHub, ServiceHub};
 use std::collections::HashSet;
@@ -353,6 +354,16 @@ pub(super) async fn handle_daemon_run(
 
     let run_result = async {
         let _run_guard = acquire_daemon_run_guard(project_root)?;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "level": "info",
+                "event": "daemon_startup",
+                "timestamp": Utc::now().to_rfc3339(),
+                "pid": std::process::id(),
+                "project_root": project_root,
+            })
+        );
         let daemon = hub.daemon();
         let primary_root = canonicalize_lossy(project_root);
         let initial_status = daemon.status().await?;
@@ -605,6 +616,16 @@ pub(super) async fn handle_daemon_run(
             json,
             notification_runtime.as_mut(),
         )?;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "level": "info",
+                "event": "daemon_shutdown",
+                "timestamp": Utc::now().to_rfc3339(),
+                "pid": std::process::id(),
+                "project_root": project_root,
+            })
+        );
         Ok(())
     }
     .await;

@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
@@ -135,6 +135,26 @@ fn pm_config_path(project_root: &str) -> PathBuf {
         .join("pm-config.json")
 }
 
+pub(crate) fn daemon_log_path(project_root: &str) -> PathBuf {
+    PathBuf::from(canonicalize_lossy(project_root))
+        .join(".ao")
+        .join("daemon.log")
+}
+
+fn rotate_daemon_log_if_needed(log_path: &PathBuf) -> Result<()> {
+    const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
+    if log_path.exists() {
+        if let Ok(meta) = fs::metadata(log_path) {
+            if meta.len() >= MAX_LOG_BYTES {
+                let mut rotated = log_path.clone();
+                rotated.set_extension("log.1");
+                let _ = fs::rename(log_path, &rotated);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
     let path = pm_config_path(project_root);
     if !path.exists() {
@@ -252,6 +272,18 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
 }
 
 fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {
+    let log_path = daemon_log_path(project_root);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create daemon log directory {}", parent.display()))?;
+    }
+    rotate_daemon_log_if_needed(&log_path)?;
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open daemon log at {}", log_path.display()))?;
+
     let current_exe = std::env::current_exe().context("failed to resolve current ao binary")?;
     let mut command = ProcessCommand::new(current_exe);
     command
@@ -278,7 +310,7 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .arg("--max-tasks-per-tick")
         .arg(args.max_tasks_per_tick.to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(log_file))
         .stdin(Stdio::null());
     if let Some(auto_merge) = args.auto_merge {
         command.arg("--auto-merge").arg(auto_merge.to_string());
