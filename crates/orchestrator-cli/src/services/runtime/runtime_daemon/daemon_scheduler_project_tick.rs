@@ -1035,6 +1035,55 @@ async fn resume_interrupted_workflows_for_project(
     Ok((cleaned, resumed))
 }
 
+pub(super) async fn recover_orphaned_running_workflows(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> usize {
+    let workflows = match hub.workflows().list().await {
+        Ok(w) => w,
+        Err(_) => return 0,
+    };
+    let in_flight: std::collections::HashSet<String> =
+        with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.clone()
+        });
+
+    let mut recovered = 0usize;
+    for workflow in workflows {
+        if workflow.status != WorkflowStatus::Running {
+            continue;
+        }
+        if in_flight.contains(&workflow.id) {
+            continue;
+        }
+
+        eprintln!(
+            "ao-daemon: recovering orphaned running workflow {} (task {})",
+            workflow.id, workflow.task_id
+        );
+        let task_id = workflow.task_id.clone();
+        if let Ok(_updated) = hub.workflows().cancel(&workflow.id).await {
+            sync_task_status_for_workflow_result(
+                hub.clone(),
+                project_root,
+                &task_id,
+                WorkflowStatus::Cancelled,
+                Some(workflow.id.as_str()),
+            )
+            .await;
+        }
+        if hub
+            .tasks()
+            .set_status(&task_id, TaskStatus::Ready)
+            .await
+            .is_ok()
+        {
+            recovered = recovered.saturating_add(1);
+        }
+    }
+    recovered
+}
+
 pub(super) async fn run_ready_task_workflows_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
@@ -3255,6 +3304,9 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
         cleaned_stale_workflows = cleaned;
         resumed_workflows = resumed;
     }
+
+    let recovered_orphans =
+        recover_orphaned_running_workflows(hub.clone(), &root).await;
 
     let reconciled_stale_tasks = if args.reconcile_stale {
         reconcile_stale_in_progress_tasks_for_project(hub.clone(), &root).await?
