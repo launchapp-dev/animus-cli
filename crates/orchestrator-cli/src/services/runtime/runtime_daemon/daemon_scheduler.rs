@@ -262,6 +262,43 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::TempDir;
 
+    async fn bootstrap_from_vision_if_needed(
+        hub: Arc<dyn ServiceHub>,
+        include_codebase_scan: bool,
+        ai_task_generation: bool,
+    ) -> Result<()> {
+        project_tick_ops::bootstrap::bootstrap_from_vision_if_needed(
+            hub,
+            include_codebase_scan,
+            ai_task_generation,
+        )
+        .await
+    }
+
+    async fn reconcile_dependency_gate_tasks_for_project(
+        hub: Arc<dyn ServiceHub>,
+        project_root: &str,
+    ) -> Result<usize> {
+        project_tick_ops::reconciliation::reconcile_dependency_gate_tasks_for_project(hub, project_root).await
+    }
+
+    async fn reconcile_stale_in_progress_tasks_for_project(
+        hub: Arc<dyn ServiceHub>,
+        project_root: &str,
+    ) -> Result<usize> {
+        project_tick_ops::reconciliation::reconcile_stale_in_progress_tasks_for_project(hub, project_root).await
+    }
+
+    async fn run_ready_task_workflows_for_project(
+        hub: Arc<dyn ServiceHub>,
+        project_root: &str,
+        max_tasks_per_tick: usize,
+    ) -> Result<usize> {
+        project_tick_ops::task_dispatch::run_ready_task_workflows_for_project(hub, project_root, max_tasks_per_tick)
+            .await
+            .map(|summary| summary.started)
+    }
+
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -1956,61 +1993,20 @@ fn is_merge_gate_block(task: &orchestrator_core::OrchestratorTask) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
-async fn bootstrap_from_vision_if_needed(
-    hub: Arc<dyn ServiceHub>,
-    include_codebase_scan: bool,
-    ai_task_generation: bool,
-) -> Result<()> {
-    project_tick_ops::bootstrap_from_vision_if_needed(
-        hub,
-        include_codebase_scan,
-        ai_task_generation,
-    )
-    .await
-}
-
-#[cfg(test)]
-async fn reconcile_dependency_gate_tasks_for_project(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-) -> Result<usize> {
-    project_tick_ops::reconcile_dependency_gate_tasks_for_project(hub, project_root).await
-}
-
-#[cfg(test)]
-async fn reconcile_stale_in_progress_tasks_for_project(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-) -> Result<usize> {
-    project_tick_ops::reconcile_stale_in_progress_tasks_for_project(hub, project_root).await
-}
-
-#[cfg(test)]
-async fn run_ready_task_workflows_for_project(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    max_tasks_per_tick: usize,
-) -> Result<usize> {
-    project_tick_ops::run_ready_task_workflows_for_project(hub, project_root, max_tasks_per_tick)
-        .await
-        .map(|summary| summary.started)
-}
-
 pub(super) fn subscribe_phase_completion_wake() -> tokio::sync::broadcast::Receiver<String> {
-    project_tick_ops::subscribe_phase_completion_wake()
+    project_tick_ops::phase_pool::subscribe_phase_completion_wake()
 }
 
 pub(super) fn resume_running_workflow_phase_spawns(project_root: &str) {
-    project_tick_ops::resume_running_workflow_phase_spawns(project_root);
+    project_tick_ops::phase_pool::resume_running_workflow_phase_spawns(project_root);
 }
 
 pub(super) fn pause_running_workflow_phase_spawns(project_root: &str) {
-    project_tick_ops::pause_running_workflow_phase_spawns(project_root);
+    project_tick_ops::phase_pool::pause_running_workflow_phase_spawns(project_root);
 }
 
 pub(super) fn clear_running_workflow_phase_pool(project_root: &str) {
-    project_tick_ops::clear_running_workflow_phase_pool(project_root);
+    project_tick_ops::phase_pool::clear_running_workflow_phase_pool(project_root);
 }
 
 pub(super) async fn drain_running_workflow_phases_for_project(
@@ -2018,7 +2014,7 @@ pub(super) async fn drain_running_workflow_phases_for_project(
     project_root: &str,
     max_phases_per_tick: usize,
 ) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
-    project_tick_ops::drain_running_workflow_phases_for_project(
+    project_tick_ops::phase_pool::drain_running_workflow_phases_for_project(
         hub,
         project_root,
         max_phases_per_tick,
