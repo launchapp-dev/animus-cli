@@ -3,7 +3,6 @@ use anyhow::Result;
 use chrono::Utc;
 use fs2::FileExt;
 use orchestrator_core::{FileServiceHub, ServiceHub};
-use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,15 +12,12 @@ use tokio::time::sleep;
 
 use super::daemon_events::{emit_daemon_event, next_daemon_event};
 use super::daemon_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
-use super::daemon_registry::{
-    canonicalize_lossy, get_registry_daemon_pid, set_registry_daemon_pid,
-    set_registry_runtime_paused, sync_project_registry,
-};
 use super::daemon_scheduler::{
     clear_running_workflow_phase_pool, drain_running_workflow_phases_for_project,
     pause_running_workflow_phase_spawns, project_tick, resume_running_workflow_phase_spawns,
     subscribe_phase_completion_wake,
 };
+use super::{canonicalize_lossy, get_daemon_pid, set_daemon_pid, set_runtime_paused};
 
 struct DaemonRunGuard {
     project_root: String,
@@ -31,10 +27,10 @@ struct DaemonRunGuard {
 
 impl Drop for DaemonRunGuard {
     fn drop(&mut self) {
-        let _ = set_registry_runtime_paused(&self.project_root, true);
-        if let Ok(Some(existing_pid)) = get_registry_daemon_pid(&self.project_root) {
+        let _ = set_runtime_paused(&self.project_root, true);
+        if let Ok(Some(existing_pid)) = get_daemon_pid(&self.project_root) {
             if existing_pid == self.pid {
-                let _ = set_registry_daemon_pid(&self.project_root, None);
+                let _ = set_daemon_pid(&self.project_root, None);
             }
         }
     }
@@ -55,7 +51,7 @@ fn read_daemon_lock_pid(lock_path: &PathBuf) -> Option<u32> {
 fn acquire_daemon_run_guard(project_root: &str) -> Result<DaemonRunGuard> {
     let canonical_project_root = canonicalize_lossy(project_root);
     let current_pid = std::process::id();
-    if let Some(existing_pid) = get_registry_daemon_pid(&canonical_project_root)? {
+    if let Some(existing_pid) = get_daemon_pid(&canonical_project_root)? {
         if existing_pid != current_pid && super::is_process_alive(existing_pid) {
             anyhow::bail!(
                 "daemon already running for project {} (pid {})",
@@ -64,7 +60,7 @@ fn acquire_daemon_run_guard(project_root: &str) -> Result<DaemonRunGuard> {
             );
         }
         if existing_pid != current_pid {
-            let _ = set_registry_daemon_pid(&canonical_project_root, None);
+            let _ = set_daemon_pid(&canonical_project_root, None);
         }
     }
 
@@ -101,8 +97,8 @@ fn acquire_daemon_run_guard(project_root: &str) -> Result<DaemonRunGuard> {
         }
     }
 
-    set_registry_daemon_pid(&canonical_project_root, Some(current_pid))?;
-    set_registry_runtime_paused(&canonical_project_root, false)?;
+    set_daemon_pid(&canonical_project_root, Some(current_pid))?;
+    set_runtime_paused(&canonical_project_root, false)?;
 
     Ok(DaemonRunGuard {
         project_root: canonical_project_root,
@@ -367,15 +363,15 @@ pub(super) async fn handle_daemon_run(
         let daemon = hub.daemon();
         let primary_root = canonicalize_lossy(project_root);
         let initial_status = daemon.status().await?;
-        let mut started_daemon_roots: HashSet<String> = HashSet::new();
+        let mut stop_daemon_on_exit = false;
         if !matches!(
             initial_status,
             orchestrator_core::DaemonStatus::Running | orchestrator_core::DaemonStatus::Paused
         ) {
             daemon.start().await?;
-            started_daemon_roots.insert(primary_root.clone());
+            stop_daemon_on_exit = true;
         }
-        let _ = set_registry_runtime_paused(project_root, false);
+        let _ = set_runtime_paused(project_root, false);
 
         let mut seq = 0u64;
         let mut notification_startup_error = None;
@@ -406,14 +402,12 @@ pub(super) async fn handle_daemon_run(
         )?;
 
         if args.startup_cleanup {
-            let entries = sync_project_registry(project_root, args.include_registry)?;
             emit_daemon_event_with_notifications(
                 &mut seq,
                 "recovery",
-                None,
+                Some(primary_root.clone()),
                 serde_json::json!({
                     "startup_cleanup": true,
-                    "projects_discovered": entries.len(),
                 }),
                 json,
                 notification_runtime.as_mut(),
@@ -423,46 +417,31 @@ pub(super) async fn handle_daemon_run(
         let interval = Duration::from_secs(args.interval_secs.max(1));
         let mut completion_wake_rx = subscribe_phase_completion_wake();
         loop {
-            let entries = sync_project_registry(project_root, args.include_registry)?;
-            for entry in &entries {
-                if entry.runtime_paused {
+            resume_running_workflow_phase_spawns(project_root);
+            match project_tick(project_root, &args).await {
+                Ok(summary) => {
+                    if summary.started_daemon {
+                        stop_daemon_on_exit = true;
+                    }
+                    emit_project_tick_summary_events(
+                        &mut seq,
+                        &summary,
+                        json,
+                        &mut notification_runtime,
+                    )?;
+                }
+                Err(error) => {
                     emit_daemon_event_with_notifications(
                         &mut seq,
-                        "project",
-                        Some(canonicalize_lossy(&entry.path)),
-                        serde_json::json!({"paused": true}),
+                        "log",
+                        Some(primary_root.clone()),
+                        serde_json::json!({
+                            "level": "error",
+                            "message": error.to_string(),
+                        }),
                         json,
                         notification_runtime.as_mut(),
                     )?;
-                    continue;
-                }
-
-                resume_running_workflow_phase_spawns(&entry.path);
-                match project_tick(&entry.path, &args).await {
-                    Ok(summary) => {
-                        if summary.started_daemon {
-                            started_daemon_roots.insert(summary.project_root.clone());
-                        }
-                        emit_project_tick_summary_events(
-                            &mut seq,
-                            &summary,
-                            json,
-                            &mut notification_runtime,
-                        )?;
-                    }
-                    Err(error) => {
-                        emit_daemon_event_with_notifications(
-                            &mut seq,
-                            "log",
-                            Some(canonicalize_lossy(&entry.path)),
-                            serde_json::json!({
-                                "level": "error",
-                                "message": error.to_string(),
-                            }),
-                            json,
-                            notification_runtime.as_mut(),
-                        )?;
-                    }
                 }
             }
 
@@ -485,36 +464,39 @@ pub(super) async fn handle_daemon_run(
             }
 
             if args.once {
-                for entry in &entries {
-                    if entry.runtime_paused {
-                        clear_running_workflow_phase_pool(&entry.path);
-                        continue;
-                    }
-                    pause_running_workflow_phase_spawns(&entry.path);
-                    let project_hub: Arc<dyn ServiceHub> = match FileServiceHub::new(&entry.path) {
-                        Ok(hub) => Arc::new(hub),
-                        Err(error) => {
-                            emit_daemon_event_with_notifications(
-                                &mut seq,
-                                "log",
-                                Some(canonicalize_lossy(&entry.path)),
-                                serde_json::json!({
-                                    "level": "error",
-                                    "message": format!(
-                                        "failed to initialize project hub while draining phase pool: {}",
-                                        error
-                                    ),
-                                }),
-                                json,
-                                notification_runtime.as_mut(),
-                            )?;
-                            clear_running_workflow_phase_pool(&entry.path);
-                            continue;
-                        }
-                    };
+                pause_running_workflow_phase_spawns(project_root);
+                if let Err(error) = drain_running_workflow_phases_for_project(
+                    hub.clone(),
+                    project_root,
+                    args.max_tasks_per_tick,
+                )
+                .await
+                {
+                    emit_daemon_event_with_notifications(
+                        &mut seq,
+                        "log",
+                        Some(primary_root.clone()),
+                        serde_json::json!({
+                            "level": "error",
+                            "message": format!(
+                                "failed draining in-flight workflow phases during once execution: {}",
+                                error
+                            ),
+                        }),
+                        json,
+                        notification_runtime.as_mut(),
+                    )?;
+                }
+                clear_running_workflow_phase_pool(project_root);
+                break;
+            }
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    pause_running_workflow_phase_spawns(project_root);
                     if let Err(error) = drain_running_workflow_phases_for_project(
-                        project_hub,
-                        &entry.path,
+                        hub.clone(),
+                        project_root,
                         args.max_tasks_per_tick,
                     )
                     .await
@@ -522,11 +504,11 @@ pub(super) async fn handle_daemon_run(
                         emit_daemon_event_with_notifications(
                             &mut seq,
                             "log",
-                            Some(canonicalize_lossy(&entry.path)),
+                            Some(primary_root.clone()),
                             serde_json::json!({
                                 "level": "error",
                                 "message": format!(
-                                    "failed draining in-flight workflow phases during once execution: {}",
+                                    "failed draining in-flight workflow phases during shutdown: {}",
                                     error
                                 ),
                             }),
@@ -534,64 +516,7 @@ pub(super) async fn handle_daemon_run(
                             notification_runtime.as_mut(),
                         )?;
                     }
-                    clear_running_workflow_phase_pool(&entry.path);
-                }
-                break;
-            }
-
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    for entry in &entries {
-                        if entry.runtime_paused {
-                            clear_running_workflow_phase_pool(&entry.path);
-                            continue;
-                        }
-                        pause_running_workflow_phase_spawns(&entry.path);
-                        let project_hub: Arc<dyn ServiceHub> = match FileServiceHub::new(&entry.path) {
-                            Ok(hub) => Arc::new(hub),
-                            Err(error) => {
-                                emit_daemon_event_with_notifications(
-                                    &mut seq,
-                                    "log",
-                                    Some(canonicalize_lossy(&entry.path)),
-                                    serde_json::json!({
-                                        "level": "error",
-                                        "message": format!(
-                                            "failed to initialize project hub while draining phase pool: {}",
-                                            error
-                                        ),
-                                    }),
-                                    json,
-                                    notification_runtime.as_mut(),
-                                )?;
-                                clear_running_workflow_phase_pool(&entry.path);
-                                continue;
-                            }
-                        };
-                        if let Err(error) = drain_running_workflow_phases_for_project(
-                            project_hub,
-                            &entry.path,
-                            args.max_tasks_per_tick,
-                        )
-                        .await
-                        {
-                            emit_daemon_event_with_notifications(
-                                &mut seq,
-                                "log",
-                                Some(canonicalize_lossy(&entry.path)),
-                                serde_json::json!({
-                                    "level": "error",
-                                    "message": format!(
-                                        "failed draining in-flight workflow phases during shutdown: {}",
-                                        error
-                                    ),
-                                }),
-                                json,
-                                notification_runtime.as_mut(),
-                            )?;
-                        }
-                        clear_running_workflow_phase_pool(&entry.path);
-                    }
+                    clear_running_workflow_phase_pool(project_root);
                     break;
                 }
                 wake = completion_wake_rx.recv() => {
@@ -603,8 +528,8 @@ pub(super) async fn handle_daemon_run(
             }
         }
 
-        for root in &started_daemon_roots {
-            if let Ok(project_hub) = FileServiceHub::new(root) {
+        if stop_daemon_on_exit {
+            if let Ok(project_hub) = FileServiceHub::new(&primary_root) {
                 let _ = project_hub.daemon().stop().await;
             }
         }
@@ -662,7 +587,6 @@ pub(super) async fn handle_daemon_run(
 mod tests {
     use super::*;
     use crate::services::runtime::runtime_daemon::{daemon_events_log_path, DaemonEventRecord};
-    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::TempDir;
@@ -705,7 +629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_run_once_processes_registry_projects() {
+    async fn daemon_run_once_processes_current_project_root() {
         let _lock = lock_env();
 
         let config_root = TempDir::new().expect("config temp dir");
@@ -720,21 +644,14 @@ mod tests {
         let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
 
         let primary = TempDir::new().expect("primary project dir");
-        let secondary = TempDir::new().expect("secondary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
-        let secondary_root = secondary.path().to_string_lossy().to_string();
 
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
-        let _secondary_hub = Arc::new(FileServiceHub::new(&secondary_root).expect("secondary hub"));
-
-        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
-        set_registry_runtime_paused(&secondary_root, false).expect("secondary registry entry");
 
         let args = DaemonRunArgs {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: true,
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
@@ -767,14 +684,6 @@ mod tests {
             .filter(|line| !line.trim().is_empty())
             .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
             .collect();
-
-        let roots: HashSet<String> = events
-            .iter()
-            .filter(|event| event.event_type == "health" || event.event_type == "queue")
-            .filter_map(|event| event.project_root.clone())
-            .collect();
-        assert!(roots.contains(&canonicalize_lossy(&primary_root)));
-        assert!(roots.contains(&canonicalize_lossy(&secondary_root)));
 
         let queue_event = events
             .iter()
@@ -873,13 +782,10 @@ mod tests {
             .await
             .expect("task should be stale in-progress");
 
-        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
-
         let args = DaemonRunArgs {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: false,
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
@@ -987,13 +893,10 @@ mod tests {
             .await
             .expect("task should be ready");
 
-        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
-
         let args = DaemonRunArgs {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: false,
             ai_task_generation: false,
             auto_run_ready: true,
             auto_merge: None,
@@ -1074,7 +977,6 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
-        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
 
         let pm_config_path = PathBuf::from(&primary_root)
             .join(".ao")
@@ -1120,7 +1022,6 @@ mod tests {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: false,
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
@@ -1157,104 +1058,5 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.event_type == "notification-delivery-dead-lettered"));
-    }
-
-    #[tokio::test]
-    async fn daemon_run_emits_log_error_event_for_project_tick_failure() {
-        let _lock = lock_env();
-
-        let config_root = TempDir::new().expect("config temp dir");
-        let home_root = TempDir::new().expect("home temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
-        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
-
-        let primary = TempDir::new().expect("primary project dir");
-        let primary_root = primary.path().to_string_lossy().to_string();
-        let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
-        set_registry_runtime_paused(&primary_root, false).expect("primary registry entry");
-
-        let invalid_root = config_root.path().join("invalid-project-root");
-        std::fs::write(&invalid_root, "not a directory")
-            .expect("invalid registry root file should be created");
-        let registry_path = protocol::Config::global_config_dir().join("projects.json");
-        if let Some(parent) = registry_path.parent() {
-            std::fs::create_dir_all(parent).expect("registry directory should be created");
-        }
-        std::fs::write(
-            &registry_path,
-            serde_json::to_string_pretty(&serde_json::json!({
-                "entries": [
-                    {
-                        "name": "invalid-root",
-                        "path": invalid_root.to_string_lossy().to_string(),
-                        "runtime_paused": false,
-                        "archived": false,
-                        "pinned": false
-                    }
-                ]
-            }))
-            .expect("registry should serialize"),
-        )
-        .expect("registry should be written");
-
-        let args = DaemonRunArgs {
-            pool_size: None,
-            max_agents: None,
-            interval_secs: 1,
-            include_registry: true,
-            ai_task_generation: false,
-            auto_run_ready: false,
-            auto_merge: None,
-            auto_pr: None,
-            auto_commit_before_merge: None,
-            auto_prune_worktrees_after_merge: None,
-            startup_cleanup: false,
-            resume_interrupted: false,
-            reconcile_stale: false,
-            stale_threshold_hours: 24,
-            max_tasks_per_tick: 1,
-            phase_timeout_secs: None,
-            idle_timeout_secs: None,
-            once: true,
-        };
-        handle_daemon_run(
-            args,
-            primary_hub as Arc<dyn ServiceHub>,
-            &primary_root,
-            true,
-        )
-        .await
-        .expect("daemon run should succeed while recording tick errors");
-
-        let events_path = daemon_events_log_path();
-        let events_content =
-            std::fs::read_to_string(events_path).expect("daemon events log should exist");
-        let events: Vec<DaemonEventRecord> = events_content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
-            .collect();
-
-        let invalid_root_canonical = canonicalize_lossy(invalid_root.to_string_lossy().as_ref());
-        let error_event = events
-            .iter()
-            .find(|event| {
-                event.event_type == "log"
-                    && event.project_root.as_deref() == Some(invalid_root_canonical.as_str())
-                    && event.data.get("level").and_then(serde_json::Value::as_str) == Some("error")
-            })
-            .expect("tick failure should be emitted as queryable log error event");
-        assert!(error_event
-            .data
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .map(|message| !message.trim().is_empty())
-            .unwrap_or(false));
     }
 }

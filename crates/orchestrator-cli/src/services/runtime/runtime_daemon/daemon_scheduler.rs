@@ -1,4 +1,4 @@
-use super::daemon_registry::canonicalize_lossy;
+use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
 use crate::shared::{
     build_runtime_contract, collect_json_payload_lines, connect_runner,
@@ -1752,7 +1752,6 @@ mod tests {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: false,
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,
@@ -1840,7 +1839,6 @@ mod tests {
             pool_size: None,
             max_agents: None,
             interval_secs: 1,
-            include_registry: false,
             ai_task_generation: false,
             auto_run_ready: false,
             auto_merge: None,

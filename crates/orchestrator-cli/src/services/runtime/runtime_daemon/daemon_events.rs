@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use super::daemon_registry::canonicalize_lossy;
+use super::canonicalize_lossy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DaemonEventRecord {

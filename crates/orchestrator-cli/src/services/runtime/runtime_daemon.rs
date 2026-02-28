@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
@@ -15,7 +16,6 @@ use crate::{
 
 mod daemon_events;
 mod daemon_notifications;
-mod daemon_registry;
 mod daemon_run;
 mod daemon_scheduler;
 
@@ -25,13 +25,9 @@ use daemon_notifications::{
     read_notification_config_from_pm_config, serialize_notification_config,
     NOTIFICATION_CONFIG_SCHEMA,
 };
-use daemon_registry::{
-    get_registry_daemon_pid, set_registry_daemon_pid, set_registry_runtime_paused,
-};
 use daemon_run::handle_daemon_run;
 
 pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
-pub(crate) use daemon_registry::canonicalize_lossy;
 
 #[cfg(unix)]
 fn is_process_alive(pid: u32) -> bool {
@@ -128,6 +124,78 @@ fn runner_scope_value(scope: &RunnerScopeArg) -> &'static str {
         RunnerScopeArg::Project => "project",
         RunnerScopeArg::Global => "global",
     }
+}
+
+pub(crate) fn canonicalize_lossy(path: &str) -> String {
+    let candidate = PathBuf::from(path);
+    candidate
+        .canonicalize()
+        .unwrap_or(candidate)
+        .to_string_lossy()
+        .to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DaemonRuntimeState {
+    #[serde(default)]
+    runtime_paused: bool,
+    #[serde(default)]
+    daemon_pid: Option<u32>,
+}
+
+fn daemon_runtime_state_path(project_root: &str) -> PathBuf {
+    PathBuf::from(canonicalize_lossy(project_root))
+        .join(".ao")
+        .join("daemon-state.json")
+}
+
+fn load_daemon_runtime_state(project_root: &str) -> Result<DaemonRuntimeState> {
+    let path = daemon_runtime_state_path(project_root);
+    if !path.exists() {
+        return Ok(DaemonRuntimeState::default());
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read daemon runtime state at {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(DaemonRuntimeState::default());
+    }
+
+    serde_json::from_str(&content)
+        .with_context(|| format!("invalid daemon runtime state JSON at {}", path.display()))
+}
+
+fn save_daemon_runtime_state(project_root: &str, state: &DaemonRuntimeState) -> Result<()> {
+    let path = daemon_runtime_state_path(project_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create daemon runtime state directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    let content = serde_json::to_string_pretty(state)
+        .context("failed to serialize daemon runtime state JSON")?;
+    fs::write(&path, format!("{content}\n"))
+        .with_context(|| format!("failed to write daemon runtime state at {}", path.display()))?;
+    Ok(())
+}
+
+pub(super) fn get_daemon_pid(project_root: &str) -> Result<Option<u32>> {
+    Ok(load_daemon_runtime_state(project_root)?.daemon_pid)
+}
+
+pub(super) fn set_daemon_pid(project_root: &str, daemon_pid: Option<u32>) -> Result<()> {
+    let mut state = load_daemon_runtime_state(project_root)?;
+    state.daemon_pid = daemon_pid;
+    save_daemon_runtime_state(project_root, &state)
+}
+
+pub(super) fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()> {
+    let mut state = load_daemon_runtime_state(project_root)?;
+    state.runtime_paused = paused;
+    save_daemon_runtime_state(project_root, &state)
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
@@ -315,8 +383,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .arg("run")
         .arg("--interval-secs")
         .arg(args.interval_secs.to_string())
-        .arg("--include-registry")
-        .arg(args.include_registry.to_string())
         .arg("--ai-task-generation")
         .arg(args.ai_task_generation.to_string())
         .arg("--auto-run-ready")
@@ -396,10 +462,10 @@ pub(crate) async fn handle_daemon(
 
     match command {
         DaemonCommand::Start(args) => {
-            if let Some(existing_pid) = get_registry_daemon_pid(project_root)? {
+            if let Some(existing_pid) = get_daemon_pid(project_root)? {
                 if is_process_alive(existing_pid) {
                     if args.autonomous {
-                        let _ = set_registry_runtime_paused(project_root, false);
+                        let _ = set_runtime_paused(project_root, false);
                         return print_value(
                             serde_json::json!({
                                 "message": "daemon already running",
@@ -414,14 +480,14 @@ pub(crate) async fn handle_daemon(
                         existing_pid
                     ));
                 }
-                let _ = set_registry_daemon_pid(project_root, None);
+                let _ = set_daemon_pid(project_root, None);
             }
 
             if args.autonomous {
                 let daemon_pid = spawn_autonomous_daemon_run(project_root, &args)?;
-                let _ = set_registry_daemon_pid(project_root, Some(daemon_pid));
+                let _ = set_daemon_pid(project_root, Some(daemon_pid));
                 write_daemon_pid(project_root, daemon_pid);
-                let _ = set_registry_runtime_paused(project_root, false);
+                let _ = set_runtime_paused(project_root, false);
                 return print_value(
                     serde_json::json!({
                         "message": "daemon started",
@@ -459,36 +525,36 @@ pub(crate) async fn handle_daemon(
             std::env::remove_var("AO_SKIP_RUNNER_START");
             std::env::remove_var("AO_RUNNER_SCOPE");
             if result.is_ok() {
-                let _ = set_registry_daemon_pid(project_root, None);
-                let _ = set_registry_runtime_paused(project_root, false);
+                let _ = set_daemon_pid(project_root, None);
+                let _ = set_runtime_paused(project_root, false);
             }
             result.map(|_| print_ok("daemon started", json))
         }
         DaemonCommand::Run(args) => handle_daemon_run(args, hub, project_root, json).await,
         DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
         DaemonCommand::Stop => {
-            if let Some(existing_pid) = get_registry_daemon_pid(project_root)? {
+            if let Some(existing_pid) = get_daemon_pid(project_root)? {
                 let _ = terminate_process(existing_pid);
-                let _ = set_registry_daemon_pid(project_root, None);
+                let _ = set_daemon_pid(project_root, None);
             }
             remove_daemon_pid(project_root);
             let result = daemon.stop().await;
             if result.is_ok() {
-                let _ = set_registry_runtime_paused(project_root, true);
+                let _ = set_runtime_paused(project_root, true);
             }
             result.map(|_| print_ok("daemon stopped", json))
         }
         DaemonCommand::Pause => {
             let result = daemon.pause().await;
             if result.is_ok() {
-                let _ = set_registry_runtime_paused(project_root, true);
+                let _ = set_runtime_paused(project_root, true);
             }
             result.map(|_| print_ok("daemon paused", json))
         }
         DaemonCommand::Resume => {
             let result = daemon.resume().await;
             if result.is_ok() {
-                let _ = set_registry_runtime_paused(project_root, false);
+                let _ = set_runtime_paused(project_root, false);
             }
             result.map(|_| print_ok("daemon resumed", json))
         }
@@ -504,8 +570,7 @@ pub(crate) async fn handle_daemon(
         }
         DaemonCommand::Health => {
             let mut health = daemon.health().await?;
-            let pid = read_daemon_pid(project_root)
-                .or_else(|| get_registry_daemon_pid(project_root).ok().flatten());
+            let pid = read_daemon_pid(project_root);
             if let Some(pid) = pid {
                 let alive = is_process_alive(pid);
                 health.daemon_pid = Some(pid);

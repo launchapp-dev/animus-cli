@@ -1,5 +1,5 @@
+use super::canonicalize_lossy;
 use super::daemon_events::DaemonEventRecord;
-use super::daemon_registry::canonicalize_lossy;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};

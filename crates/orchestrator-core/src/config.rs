@@ -13,7 +13,6 @@ pub struct RuntimeConfig {
 pub enum ProjectRootSource {
     CliArg,
     EnvVar,
-    Registry,
     CurrentDir,
 }
 
@@ -34,32 +33,12 @@ pub fn resolve_project_root(config: &RuntimeConfig) -> (String, ProjectRootSourc
         }
     }
 
-    if let Some(root) = resolve_project_root_from_registry() {
-        return (root, ProjectRootSource::Registry);
-    }
-
     let cwd = std::env::current_dir()
         .expect("Failed to get current directory")
         .to_string_lossy()
         .to_string();
 
     (cwd, ProjectRootSource::CurrentDir)
-}
-
-// Mirrors existing precedence without importing external platform-specific runtimes.
-fn resolve_project_root_from_registry() -> Option<String> {
-    let home = dirs::home_dir()?;
-    let candidate = home
-        .join(".config")
-        .join("agent-orchestrator")
-        .join("last-project-root");
-    let content = std::fs::read_to_string(candidate).ok()?;
-    let root = content.trim();
-    if root.is_empty() {
-        None
-    } else {
-        Some(root.to_string())
-    }
 }
 
 #[cfg(test)]

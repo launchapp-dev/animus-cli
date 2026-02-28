@@ -76,13 +76,6 @@ pub(crate) struct DaemonStartArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Include projects from the global daemon registry."
-    )]
-    pub(crate) include_registry: bool,
-    #[arg(
-        long,
-        action = ArgAction::Set,
-        default_value_t = true,
         help = "Enable AI-generated task creation."
     )]
     pub(crate) ai_task_generation: bool,
@@ -121,7 +114,7 @@ pub(crate) struct DaemonStartArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Reconcile daemon/project registry entries before scheduling."
+        help = "Run startup cleanup before scheduling."
     )]
     pub(crate) startup_cleanup: bool,
     #[arg(
@@ -198,13 +191,6 @@ pub(crate) struct DaemonRunArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Include projects from the global daemon registry."
-    )]
-    pub(crate) include_registry: bool,
-    #[arg(
-        long,
-        action = ArgAction::Set,
-        default_value_t = true,
         help = "Enable AI-generated task creation."
     )]
     pub(crate) ai_task_generation: bool,
@@ -243,7 +229,7 @@ pub(crate) struct DaemonRunArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Reconcile daemon/project registry entries before scheduling."
+        help = "Run startup cleanup before scheduling."
     )]
     pub(crate) startup_cleanup: bool,
     #[arg(

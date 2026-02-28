@@ -156,8 +156,6 @@ struct DaemonStartInput {
     #[serde(default)]
     autonomous: Option<bool>,
     #[serde(default)]
-    include_registry: Option<bool>,
-    #[serde(default)]
     ai_task_generation: Option<bool>,
     #[serde(default)]
     auto_run_ready: Option<bool>,
@@ -744,29 +742,6 @@ impl AoMcpServer {
 
 #[tool_router(router = tool_router)]
 impl AoMcpServer {
-    #[tool(
-        name = "ao.project.list",
-        description = "List all known AO projects. Purpose: Discover available projects managed by AO. Prerequisites: None. Example: {\"limit\": 10} or {\"search\": \"my-project\"}. Sequencing: Use with ao.project.get to get details of a specific project.",
-        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
-    )]
-    async fn ao_project_list(
-        &self,
-        params: Parameters<PaginatedProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        self.run_list_tool(
-            "ao.project.list",
-            vec!["project".to_string(), "list".to_string()],
-            input.project_root,
-            ListGuardInput {
-                limit: input.limit,
-                offset: input.offset,
-                max_tokens: input.max_tokens,
-            },
-        )
-        .await
-    }
-
     #[tool(
         name = "ao.task.list",
         description = "List tasks with optional filters (status, priority, type, assignee, tags, linked requirements). Purpose: Find tasks matching criteria for work planning. Prerequisites: None. Example: {\"status\": \"in-progress\"} or {\"priority\": \"high\", \"tag\": [\"frontend\"]}. Sequencing: Filter results, then use ao.task.get for details or ao.task.status to update.",
@@ -1834,17 +1809,6 @@ fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObj
     std::sync::Arc::new(object)
 }
 
-const PROJECT_SUMMARY_FIELDS: &[&str] = &[
-    "id",
-    "name",
-    "project_root",
-    "status",
-    "active",
-    "archived",
-    "created_at",
-    "updated_at",
-];
-
 const TASK_SUMMARY_FIELDS: &[&str] = &[
     "id",
     "title",
@@ -1901,12 +1865,6 @@ const WORKFLOW_CHECKPOINT_SUMMARY_FIELDS: &[&str] = &[
     "created_at",
 ];
 
-const PROJECT_LIST_PROFILE: ListToolProfile = ListToolProfile {
-    summary_fields: PROJECT_SUMMARY_FIELDS,
-    digest_id_fields: &["id", "name", "project_root"],
-    digest_status_fields: &["status"],
-};
-
 const TASK_LIST_PROFILE: ListToolProfile = ListToolProfile {
     summary_fields: TASK_SUMMARY_FIELDS,
     digest_id_fields: &["id", "title"],
@@ -1939,7 +1897,6 @@ const WORKFLOW_CHECKPOINT_LIST_PROFILE: ListToolProfile = ListToolProfile {
 
 fn list_tool_profile(tool_name: &str) -> Option<ListToolProfile> {
     match tool_name {
-        "ao.project.list" => Some(PROJECT_LIST_PROFILE),
         "ao.task.list" | "ao.task.prioritized" => Some(TASK_LIST_PROFILE),
         "ao.requirements.list" => Some(REQUIREMENT_LIST_PROFILE),
         "ao.workflow.list" => Some(WORKFLOW_LIST_PROFILE),
@@ -2274,7 +2231,6 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
     push_bool_flag(&mut args, "--skip-runner", input.skip_runner);
     push_bool_flag(&mut args, "--autonomous", input.autonomous);
-    push_bool_set(&mut args, "--include-registry", input.include_registry);
     push_bool_set(&mut args, "--ai-task-generation", input.ai_task_generation);
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_bool_set(&mut args, "--auto-merge", input.auto_merge);
@@ -3999,7 +3955,6 @@ mod tests {
         let input = DaemonStartInput {
             max_agents: Some(4),
             skip_runner: Some(true),
-            include_registry: Some(false),
             auto_run_ready: Some(true),
             runner_scope: Some("project".to_string()),
             ..Default::default()
@@ -4013,8 +3968,6 @@ mod tests {
                 "--max-agents".to_string(),
                 "4".to_string(),
                 "--skip-runner".to_string(),
-                "--include-registry".to_string(),
-                "false".to_string(),
                 "--auto-run-ready".to_string(),
                 "true".to_string(),
                 "--runner-scope".to_string(),
