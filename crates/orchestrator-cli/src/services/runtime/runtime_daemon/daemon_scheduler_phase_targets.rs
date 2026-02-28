@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use protocol::{
-    canonical_model_id, default_fallback_models_for_phase, default_primary_model_for_phase,
-    normalize_tool_id, tool_for_model_id, tool_supports_repository_writes, ModelRoutingComplexity,
+    canonical_model_id, default_fallback_models_for_phase, default_model_specs,
+    default_primary_model_for_phase, normalize_tool_id, tool_for_model_id,
+    tool_supports_repository_writes, ModelRoutingComplexity,
 };
 
 pub(crate) struct PhaseTargetPlanner;
@@ -202,14 +203,24 @@ fn enforce_write_capable_phase_target(tool_id: String, model_id: String) -> (Str
         let fallback_model = std::env::var("AO_PHASE_MODEL_FILE_EDIT")
             .ok()
             .map(|value| canonical_model_id(&value))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+            .filter(|value| !value.is_empty());
         let fallback_tool = std::env::var("AO_PHASE_TOOL_FILE_EDIT")
             .ok()
             .map(|value| normalize_tool_id(&value))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "claude".to_string());
-        return (fallback_tool, fallback_model);
+            .filter(|value| !value.is_empty());
+        if let (Some(m), Some(t)) = (&fallback_model, &fallback_tool) {
+            return (t.clone(), m.clone());
+        }
+        if let Some((m, t)) = default_model_specs()
+            .into_iter()
+            .find(|(_, t)| tool_supports_repository_writes(t))
+        {
+            return (
+                fallback_tool.unwrap_or(t),
+                fallback_model.unwrap_or(m),
+            );
+        }
+        return (normalized_tool_id, model_id);
     }
     (normalized_tool_id, model_id)
 }
