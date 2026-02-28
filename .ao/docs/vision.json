@@ -1,0 +1,44 @@
+{
+  "id": "771e92c1-2a79-4c10-bee5-28f3f66f7802",
+  "project_root": ".",
+  "markdown": "# Product Vision\n\n## Project\n- Name: ao-cli\n\n## Problem\nManual orchestration of AI agents and CLI workflows is fragmented and unsafe, inconsistent, and hard to observe.\n\nRefinement context: Manual AI-agent and CLI orchestration in software teams lacks a single deterministic control plane, causing unsafe operations, inconsistent execution outcomes, and limited end-to-end observability for planning, execution, QA, and audit.\n\n## Target Users\n- developers and automation operators using AO\n- Platform/DevEx engineers standardizing internal AI-assisted delivery workflows\n- SRE/operations teams requiring auditable, policy-enforced automation in CI and local environments\n- Engineering managers and technical leads who need traceable execution evidence for governance and incident review\n\n## Goals\n- Provide a deterministic, local-first Rust AO CLI that unifies project planning, execution, review/QA, and audit trails under one control plane\n- Increase operator confidence through explicit safety gates, reproducible run artifacts, and auditable state transitions\n- Make AO fully machine-operable via structured JSON outputs for automation and policy enforcement\n- Define measurable reliability targets (e.g., run reproducibility rate, failed destructive-action prevention rate, audit trace completeness)\n- Prioritize phased delivery: core deterministic execution + state integrity first, then safety/policy controls, then advanced workflow ergonomics\n- Establish interoperability goals for machine consumers (stable JSON schemas, backward-compatibility policy, and validation tooling)\n\n## Constraints\n- Keep the project Rust-only with no desktop-wrapper (Tauri) dependency\n- Do not replace existing AO state files with non-machine-readable outputs\n- Deliver command safety through confirmations for destructive operations and controlled destructive flows\n- Ensure all runtime artifacts and history are traceable through `.ao/` state, run events, and task outputs\n- Maintain backward compatibility for existing `.ao` state and JSON envelopes across minor releases\n- Enforce deterministic behavior under partial failure and recovery paths (daemon restarts, orphan cleanup, interrupted runs)\n- Bound AI-assisted behavior with explicit policy hooks and human-approval checkpoints for high-risk actions\n- Require objective observability baselines (event completeness, error taxonomy coverage, and replayability) before expanding feature surface\n\n## Value Proposition\nAO provides a deterministic, inspectable, machine-friendly CLI control plane for orchestrating agent work from vision and requirements through execution and QA with auditable outcomes. AO is the trusted Rust-native control plane for AI-enabled software operations: deterministic by default, policy-aware for safety, and fully machine-consumable with auditable evidence from intent through delivery.\n\n## Complexity\n- Tier: complex\n- Confidence: 0.76\n- Recommended requirement range: 14-20\n- Task density: high\n- Rationale: Scope spans multi-surface orchestration (planning, runtime, QA, audit), strict determinism, safety-critical flows, schema stability, and AI-in-the-loop controls. Cross-cutting requirements for recoverability, observability, and policy enforcement increase coupling and validation load beyond medium complexity.\n\n",
+  "problem_statement": "Manual orchestration of AI agents and CLI workflows is fragmented and unsafe, inconsistent, and hard to observe.\n\nRefinement context: Manual AI-agent and CLI orchestration in software teams lacks a single deterministic control plane, causing unsafe operations, inconsistent execution outcomes, and limited end-to-end observability for planning, execution, QA, and audit.",
+  "target_users": [
+    "developers and automation operators using AO",
+    "Platform/DevEx engineers standardizing internal AI-assisted delivery workflows",
+    "SRE/operations teams requiring auditable, policy-enforced automation in CI and local environments",
+    "Engineering managers and technical leads who need traceable execution evidence for governance and incident review"
+  ],
+  "goals": [
+    "Provide a deterministic, local-first Rust AO CLI that unifies project planning, execution, review/QA, and audit trails under one control plane",
+    "Increase operator confidence through explicit safety gates, reproducible run artifacts, and auditable state transitions",
+    "Make AO fully machine-operable via structured JSON outputs for automation and policy enforcement",
+    "Define measurable reliability targets (e.g., run reproducibility rate, failed destructive-action prevention rate, audit trace completeness)",
+    "Prioritize phased delivery: core deterministic execution + state integrity first, then safety/policy controls, then advanced workflow ergonomics",
+    "Establish interoperability goals for machine consumers (stable JSON schemas, backward-compatibility policy, and validation tooling)"
+  ],
+  "constraints": [
+    "Keep the project Rust-only with no desktop-wrapper (Tauri) dependency",
+    "Do not replace existing AO state files with non-machine-readable outputs",
+    "Deliver command safety through confirmations for destructive operations and controlled destructive flows",
+    "Ensure all runtime artifacts and history are traceable through `.ao/` state, run events, and task outputs",
+    "Maintain backward compatibility for existing `.ao` state and JSON envelopes across minor releases",
+    "Enforce deterministic behavior under partial failure and recovery paths (daemon restarts, orphan cleanup, interrupted runs)",
+    "Bound AI-assisted behavior with explicit policy hooks and human-approval checkpoints for high-risk actions",
+    "Require objective observability baselines (event completeness, error taxonomy coverage, and replayability) before expanding feature surface"
+  ],
+  "value_proposition": "AO provides a deterministic, inspectable, machine-friendly CLI control plane for orchestrating agent work from vision and requirements through execution and QA with auditable outcomes. AO is the trusted Rust-native control plane for AI-enabled software operations: deterministic by default, policy-aware for safety, and fully machine-consumable with auditable evidence from intent through delivery.",
+  "complexity_assessment": {
+    "tier": "complex",
+    "confidence": 0.76,
+    "rationale": "Scope spans multi-surface orchestration (planning, runtime, QA, audit), strict determinism, safety-critical flows, schema stability, and AI-in-the-loop controls. Cross-cutting requirements for recoverability, observability, and policy enforcement increase coupling and validation load beyond medium complexity.",
+    "recommended_requirement_range": {
+      "min": 14,
+      "max": 20
+    },
+    "task_density": "high",
+    "source": "ai-vision-refine"
+  },
+  "created_at": "2026-02-24T19:43:32.735543Z",
+  "updated_at": "2026-02-24T19:43:32.735543Z"
+}

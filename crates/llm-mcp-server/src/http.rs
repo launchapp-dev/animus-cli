@@ -46,7 +46,9 @@ impl AgentRegistry {
 
     /// List all registered agents
     pub async fn list_agents(&self) -> Vec<String> {
-        self.agents.read().await.keys().cloned().collect()
+        let mut agents: Vec<String> = self.agents.read().await.keys().cloned().collect();
+        agents.sort_unstable();
+        agents
     }
 }
 
@@ -172,7 +174,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use tempfile::TempDir;
     use tower::ServiceExt;
 
@@ -242,6 +244,36 @@ mod tests {
         assert_eq!(payload["registered"], true);
         assert_eq!(payload["status"], "registered");
         assert_eq!(payload["initialized"], false);
+    }
+
+    #[tokio::test]
+    async fn get_agents_returns_sorted_agent_ids() {
+        let registry = Arc::new(AgentRegistry::new());
+        let temp = TempDir::new().unwrap();
+        for agent_id in ["review", "pm", "em"] {
+            let server = Arc::new(McpServer::new(
+                format!("{agent_id}-agent"),
+                "0.1.0".to_string(),
+                temp.path().to_path_buf(),
+            ));
+            registry.register_agent(agent_id.to_string(), server).await;
+        }
+
+        let router = build_test_router(registry);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/agents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json(response).await;
+        assert_eq!(payload["agents"], json!(["em", "pm", "review"]));
+        assert_eq!(payload["count"], 3);
     }
 
     #[test]

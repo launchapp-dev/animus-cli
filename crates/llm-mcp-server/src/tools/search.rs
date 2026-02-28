@@ -86,7 +86,7 @@ impl SearchTool {
 
         Tool {
             name: "search".to_string(),
-            description: "Search for files and code content in the project. Supports glob patterns, regex, and respects .gitignore.".to_string(),
+            description: "Search for files and code content in the project. Purpose: Find files matching patterns or search code content. Prerequisites: None. Example: {\"query\": \"CliInterface\", \"file_pattern\": \"*.rs\"} or {\"query\": \"fn.*main\", \"regex\": true}. Supports glob patterns, regex, case-insensitive search, and respects .gitignore. Sequencing: Use file_pattern to narrow down file types first, then query for content search.".to_string(),
             input_schema: ToolInputSchema {
                 schema_type: "object".to_string(),
                 properties,

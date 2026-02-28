@@ -850,7 +850,7 @@ mod tests {
             .flatten()
             .filter(|p| p.exists());
 
-        let binary = if let Some(path) = test_binary_path {
+        let _binary = if let Some(path) = test_binary_path {
             path
         } else if let Ok(path) = find_agent_runner_binary() {
             path
@@ -858,8 +858,6 @@ mod tests {
             eprintln!("SKIP: agent-runner binary not found, build with cargo build -p agent-runner");
             return;
         };
-
-        eprintln!("DEBUG: using binary at {:?}", binary);
 
         let temp_project = TempDir::new().expect("tempdir for project");
         let temp_runner_config = TempDir::new().expect("tempdir for runner config");
@@ -934,13 +932,18 @@ mod tests {
         let original_runner_config_dir2 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
         let original_skip_runner2 = std::env::var("AO_SKIP_RUNNER_START").ok();
         let original_token_override2 = std::env::var("AGENT_RUNNER_TOKEN").ok();
+        let original_cwd2 = std::env::current_dir().ok();
 
         std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
         std::env::remove_var("AO_SKIP_RUNNER_START");
         std::env::remove_var("AGENT_RUNNER_TOKEN");
+        std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
 
         let second_startup_result = ensure_agent_runner_running(&project_root).await;
-        second_startup_result.expect("second startup should succeed");
+
+        if let Some(cwd) = original_cwd2 {
+            let _ = std::env::set_current_dir(cwd);
+        }
 
         if let Some(val) = original_runner_config_dir2 {
             std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
@@ -957,6 +960,8 @@ mod tests {
         } else {
             std::env::remove_var("AGENT_RUNNER_TOKEN");
         }
+
+        second_startup_result.expect("second startup should succeed");
 
         let config_after_second = protocol::Config::load_from_dir(&runner_config_dir)
             .expect("load config after second startup");

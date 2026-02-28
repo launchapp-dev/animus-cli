@@ -168,6 +168,9 @@ Initial requirements/tasks were created to bootstrap self-hosted development:
 - CLI help/error-message planning artifacts for TASK-002 live in `crates/orchestrator-cli/docs/`:
   - `task-002-cli-help-error-requirements.md`
   - `task-002-cli-help-error-implementation-notes.md`
+- Wrapper/MCP integration hardening artifacts for TASK-004 live in `crates/orchestrator-cli/docs/`:
+  - `task-004-wrapper-mcp-contract-requirements.md`
+  - `task-004-wrapper-mcp-contract-implementation-notes.md`
 - Rust workspace CI coverage planning artifacts for TASK-005 live in `crates/orchestrator-cli/docs/`:
   - `task-005-rust-workspace-ci-requirements.md`
   - `task-005-rust-workspace-ci-implementation-notes.md`
