@@ -2352,6 +2352,7 @@ fn run_cargo_check(cwd: &str) -> Result<()> {
 mod tests {
     use super::*;
     use orchestrator_core::Priority;
+    use orchestrator_core::ServiceHub;
     use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
 
@@ -3277,6 +3278,479 @@ thinking...
             parse_merge_conflict_recovery_response(transcript).is_none(),
             "status placeholders should not be treated as valid recovery responses"
         );
+    }
+
+    #[test]
+    fn pool_concurrency_limits_to_max_phases_per_tick() {
+        let project_root = "test-pool-concurrency-limits";
+        let pool_size = 3;
+        clear_running_workflow_phase_pool(project_root);
+
+        for i in 0..pool_size {
+            with_reactive_phase_pool_state_mut(project_root, |state| {
+                state
+                    .in_flight_workflow_ids
+                    .insert(format!("concurrency-wf-{}", i));
+            });
+        }
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        assert_eq!(
+            active_count, pool_size,
+            "pool should track exactly pool_size in-flight workflows"
+        );
+        assert!(
+            active_count <= pool_size,
+            "in_flight count must never exceed max_phases_per_tick"
+        );
+        assert!(
+            has_running_workflow_phase_pool_activity(project_root),
+            "pool should report activity when workflows are in-flight"
+        );
+
+        clear_running_workflow_phase_pool(project_root);
+    }
+
+    #[tokio::test]
+    async fn pool_blocks_spawn_when_full() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+        let pool_size = 2;
+
+        for i in 0..pool_size {
+            let task = hub
+                .tasks()
+                .create(TaskCreateInput {
+                    title: format!("full-pool-task-{}", i),
+                    description: "test task".to_string(),
+                    task_type: Some(TaskType::Feature),
+                    priority: Some(Priority::Medium),
+                    created_by: Some("test".to_string()),
+                    tags: Vec::new(),
+                    linked_requirements: Vec::new(),
+                    linked_architecture_entities: Vec::new(),
+                })
+                .await
+                .expect("task should be created");
+            let workflow = hub
+                .workflows()
+                .run(WorkflowRunInput {
+                    task_id: task.id.clone(),
+                    pipeline_id: None,
+                })
+                .await
+                .expect("workflow should start");
+
+            with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+                state.in_flight_workflow_ids.insert(workflow.id.clone());
+            });
+        }
+
+        let extra_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "extra-task-should-wait".to_string(),
+                description: "should not spawn when pool full".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let _extra_workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: extra_task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let (executed, failed, _) = execute_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            pool_size,
+        )
+        .await
+        .expect("execution should succeed");
+
+        assert_eq!(executed, 0, "should not spawn when full");
+        assert_eq!(failed, 0, "should have no failures");
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn immediate_backfill_on_completion() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+        let pool_size = 2;
+
+        let task1 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-1".to_string(),
+                description: "first task".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow1 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task1.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let task2 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-2".to_string(),
+                description: "second task".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow2 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task2.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let task3 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-3".to_string(),
+                description: "third task - should backfill".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow3 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task3.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.in_flight_workflow_ids.insert(workflow1.id.clone());
+            state.in_flight_workflow_ids.insert(workflow2.id.clone());
+        });
+
+        let phase_id = workflow1
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            let _ = state.completion_tx.send(ReactivePhaseCompletion {
+                workflow: workflow1.clone(),
+                task: task1.clone(),
+                phase_id: phase_id.clone(),
+                run_result: Ok(PhaseExecutionRunResult {
+                    outcome: PhaseExecutionOutcome::Completed {
+                        commit_message: None,
+                        phase_decision: None,
+                    },
+                    metadata: PhaseExecutionMetadata {
+                        phase_id: phase_id.clone(),
+                        phase_mode: "agent".to_string(),
+                        phase_definition_hash: "test".to_string(),
+                        agent_runtime_config_hash: "test".to_string(),
+                        agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+                        agent_runtime_version: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                        agent_runtime_source: "test".to_string(),
+                        agent_id: None,
+                        agent_profile_hash: None,
+                        selected_tool: None,
+                        selected_model: None,
+                    },
+                    signals: Vec::new(),
+                }),
+            });
+        });
+
+        let (executed, failed, _) = execute_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            pool_size,
+        )
+        .await
+        .expect("execution should succeed");
+
+        assert!(
+            executed >= 1,
+            "should spawn new workflow after completion (got {})",
+            executed
+        );
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn priority_ordering_high_first() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let low_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "low-priority-task".to_string(),
+                description: "low priority".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Low),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&low_task.id, TaskStatus::Ready)
+            .await
+            .expect("task should be ready");
+
+        let high_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "high-priority-task".to_string(),
+                description: "high priority".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&high_task.id, TaskStatus::Ready)
+            .await
+            .expect("task should be ready");
+
+        let summary = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            2,
+        )
+        .await
+        .expect("ready runner should succeed");
+
+        assert_eq!(summary.started, 2, "should start both tasks");
+        assert_eq!(
+            summary.started_workflows[0].task_id, high_task.id,
+            "high priority should start first"
+        );
+    }
+
+    #[tokio::test]
+    async fn graceful_drain_prevents_new_spawns() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "drain-test-task".to_string(),
+                description: "task for drain test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let _workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        pause_running_workflow_phase_spawns(&project_root_str);
+
+        let allow_spawns = with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.allow_spawns
+        });
+        assert!(
+            !allow_spawns,
+            "spawns should be blocked after pause"
+        );
+
+        resume_running_workflow_phase_spawns(&project_root_str);
+
+        let allow_spawns = with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.allow_spawns
+        });
+        assert!(allow_spawns, "spawns should be allowed after resume");
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn graceful_drain_completes_running() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "drain-running-task".to_string(),
+                description: "running task for drain".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.in_flight_workflow_ids.insert(workflow.id.clone());
+        });
+
+        let has_before = has_running_workflow_phase_pool_activity(&project_root_str);
+        assert!(has_before, "should have running activity before drain");
+
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            let _ = state.completion_tx.send(ReactivePhaseCompletion {
+                workflow: workflow.clone(),
+                task: task.clone(),
+                phase_id: phase_id.clone(),
+                run_result: Ok(PhaseExecutionRunResult {
+                    outcome: PhaseExecutionOutcome::Completed {
+                        commit_message: None,
+                        phase_decision: None,
+                    },
+                    metadata: PhaseExecutionMetadata {
+                        phase_id,
+                        phase_mode: "agent".to_string(),
+                        phase_definition_hash: "test".to_string(),
+                        agent_runtime_config_hash: "test".to_string(),
+                        agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+                        agent_runtime_version: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                        agent_runtime_source: "test".to_string(),
+                        agent_id: None,
+                        agent_profile_hash: None,
+                        selected_tool: None,
+                        selected_model: None,
+                    },
+                    signals: Vec::new(),
+                }),
+            });
+        });
+
+        drain_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            5,
+        )
+        .await
+        .expect("drain should succeed");
+
+        let has_after = has_running_workflow_phase_pool_activity(&project_root_str);
+        assert!(
+            !has_after,
+            "should have no running activity after drain completes"
+        );
+    }
+
+    #[test]
+    fn pool_metrics_active_count() {
+        let project_root = "test-metrics-project";
+        clear_running_workflow_phase_pool(project_root);
+
+        with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.insert("wf-1".to_string());
+            state.in_flight_workflow_ids.insert("wf-2".to_string());
+            state.in_flight_workflow_ids.insert("wf-3".to_string());
+        });
+
+        let has_activity = has_running_workflow_phase_pool_activity(project_root);
+        assert!(has_activity, "should detect active workflows");
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        assert_eq!(active_count, 3, "should track 3 in-flight workflows");
+
+        clear_running_workflow_phase_pool(project_root);
+    }
+
+    #[test]
+    fn pool_metrics_utilization() {
+        let project_root = "test-utilization-project";
+        let pool_size = 5;
+        clear_running_workflow_phase_pool(project_root);
+
+        with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.insert("wf-1".to_string());
+            state.in_flight_workflow_ids.insert("wf-2".to_string());
+            state.in_flight_workflow_ids.insert("wf-3".to_string());
+        });
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        let utilization = active_count as f64 / pool_size as f64;
+        assert!(
+            (utilization - 0.6).abs() < 0.01,
+            "utilization should be 0.6 (3/5)"
+        );
+
+        clear_running_workflow_phase_pool(project_root);
     }
 }
 
