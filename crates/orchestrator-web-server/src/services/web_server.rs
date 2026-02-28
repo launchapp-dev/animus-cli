@@ -180,13 +180,15 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-#[derive(Clone, Debug)]
-struct ApiVersion(String);
-
 async fn api_version_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let path = request.uri().path();
+    if !path.starts_with("/api/") && path != "/api" {
+        return next.run(request).await;
+    }
+
     let requested_version = request
         .headers()
         .get(HEADER_API_VERSION)
@@ -205,13 +207,10 @@ async fn api_version_middleware(
                 "API version '{}' is not supported. Supported versions: v1",
                 requested_version
             ),
-            3,
+            2,
         );
-        return (StatusCode::NOT_FOUND, Json(envelope)).into_response();
+        return (StatusCode::BAD_REQUEST, Json(envelope)).into_response();
     };
-
-    let mut request = request;
-    request.extensions_mut().insert(ApiVersion(version.clone()));
 
     let mut response = next.run(request).await;
     response.headers_mut().insert(
@@ -2694,7 +2693,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accept_version_header_unsupported_returns_not_found() {
+    async fn accept_version_header_unsupported_returns_bad_request() {
         let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
         let app = build_test_app(hub, true, 50, 200);
 
@@ -2712,8 +2711,8 @@ mod tests {
 
         assert_eq!(
             response.status(),
-            axum::http::StatusCode::NOT_FOUND,
-            "unsupported Accept-Version should be rejected"
+            axum::http::StatusCode::BAD_REQUEST,
+            "unsupported Accept-Version should be rejected with 400 Bad Request"
         );
 
         let body = to_bytes(response.into_body(), usize::MAX)
