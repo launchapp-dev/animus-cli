@@ -26,13 +26,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-28T19:21:05.793646Z",
     "created_at": "2026-02-28T17:23:24.188512Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-28T17:23:37.173250Z",
-    "updated_at": "2026-02-28T17:58:46.732388Z",
+    "updated_at": "2026-02-28T19:21:05.793648Z",
     "updated_by": "ao-daemon",
-    "version": 52
+    "version": 199
   },
   "paused": false,
   "priority": "critical",
@@ -43,7 +43,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Extract Layer 2 - Workflow Runner",
   "type": "refactor",

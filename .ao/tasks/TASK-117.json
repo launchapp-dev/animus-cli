@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-28T18:13:16.817187Z",
     "created_at": "2026-02-27T17:19:24.526318Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:24:53.375704Z",
-    "updated_at": "2026-02-28T17:50:13.930699Z",
+    "updated_at": "2026-02-28T18:13:16.817188Z",
     "updated_by": "ao-daemon",
-    "version": 222
+    "version": 227
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Add integration tests for reactive pool scheduler",
   "type": "feature",
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-117"
+  "worktree_path": null
 }

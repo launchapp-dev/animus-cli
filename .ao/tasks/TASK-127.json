@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-02-28T17:58:35.500229Z",
+  "blocked_at": "2026-02-28T18:08:31.891073Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "dependency gate: dependency TASK-126 is ready",
+  "blocked_reason": "dependency gate: dependency TASK-126 is blocked",
   "branch_name": null,
   "cancelled": false,
   "checklist": [],
@@ -28,9 +28,9 @@
     "created_at": "2026-02-28T17:23:25.590719Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-02-28T17:58:35.650729Z",
+    "updated_at": "2026-02-28T18:08:32.048834Z",
     "updated_by": "ao-daemon",
-    "version": 7
+    "version": 9
   },
   "paused": true,
   "priority": "high",
