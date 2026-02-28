@@ -32,6 +32,9 @@ const HEADER_PAGE_SIZE: &str = "x-ao-page-size";
 const HEADER_NEXT_CURSOR: &str = "x-ao-next-cursor";
 const HEADER_HAS_MORE: &str = "x-ao-has-more";
 const HEADER_TOTAL_COUNT: &str = "x-ao-total-count";
+const HEADER_API_VERSION: &str = "accept-version";
+const DEFAULT_API_VERSION: &str = "v1";
+const CURRENT_API_VERSION: &str = "v1";
 
 #[derive(Clone)]
 struct AppState {
@@ -167,11 +170,65 @@ fn build_router(state: AppState) -> Router {
         .route("/reviews/handoff", post(reviews_handoff_handler));
 
     Router::new()
-        .nest("/api/v1", api_router)
+        .nest("/api/v1", api_router.clone())
+        .nest("/api", api_router)
+        .route("/api", get(api_version_handler))
         .route("/", get(root_handler))
         .route("/{*path}", get(static_handler))
         .layer(CompressionLayer::new())
+        .layer(axum::middleware::from_fn(api_version_middleware))
         .with_state(state)
+}
+
+#[derive(Clone, Debug)]
+struct ApiVersion(String);
+
+async fn api_version_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let requested_version = request
+        .headers()
+        .get(HEADER_API_VERSION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .unwrap_or_else(|| DEFAULT_API_VERSION.to_string());
+
+    let version = if requested_version.is_empty() || requested_version == "*" {
+        CURRENT_API_VERSION.to_string()
+    } else if requested_version == "v1" || requested_version == "1" {
+        "v1".to_string()
+    } else {
+        let envelope = CliEnvelopeService::error(
+            "version_not_supported",
+            format!(
+                "API version '{}' is not supported. Supported versions: v1",
+                requested_version
+            ),
+            3,
+        );
+        return (StatusCode::NOT_FOUND, Json(envelope)).into_response();
+    };
+
+    let mut request = request;
+    request.extensions_mut().insert(ApiVersion(version.clone()));
+
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        HEADER_API_VERSION,
+        HeaderValue::from_str(&version).unwrap_or_else(|_| HeaderValue::from_static("v1")),
+    );
+
+    response
+}
+
+async fn api_version_handler() -> Response {
+    let envelope = CliEnvelopeService::ok(json!({
+        "version": CURRENT_API_VERSION,
+        "supported_versions": ["v1"],
+        "default_version": DEFAULT_API_VERSION,
+    }));
+    (StatusCode::OK, Json(envelope)).into_response()
 }
 
 async fn system_info_handler(State(state): State<AppState>) -> Response {
@@ -2545,6 +2602,128 @@ mod tests {
                 .get(CONTENT_ENCODING)
                 .and_then(|value| value.to_str().ok()),
             Some("br")
+        );
+    }
+
+    #[tokio::test]
+    async fn api_version_endpoint_returns_version_info() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        assert_eq!(
+            payload["data"]["version"].as_str(),
+            Some("v1"),
+            "version info should include current version"
+        );
+        assert!(
+            payload["data"]["supported_versions"]
+                .as_array()
+                .map(|arr| arr.iter().any(|v| v.as_str() == Some("v1")))
+                .unwrap_or(false),
+            "supported_versions should include v1"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_backward_compat_routes_work_without_v1_prefix() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/system/info")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "/api/system/info should work as backward-compat alias for /api/v1/system/info"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_version_header_v1_is_accepted_and_echoed() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/system/info")
+                    .header("accept-version", "v1")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("accept-version")
+                .and_then(|v| v.to_str().ok()),
+            Some("v1"),
+            "response should echo accepted version in accept-version header"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_version_header_unsupported_returns_not_found() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/system/info")
+                    .header("accept-version", "v99")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "unsupported Accept-Version should be rejected"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(false)));
+        assert_eq!(
+            payload["error"]["code"].as_str(),
+            Some("version_not_supported")
         );
     }
 }
