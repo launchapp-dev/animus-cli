@@ -1301,6 +1301,8 @@ mod tests {
                     active_agents: 1,
                     max_agents: Some(5),
                     project_root: Some("/tmp/project".to_string()),
+                    daemon_pid: None,
+                    process_alive: None,
                 }),
                 None,
             ),

@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-28T16:44:47.857281Z",
     "created_at": "2026-02-27T17:06:18.892379Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:07:14.316508Z",
-    "updated_at": "2026-02-28T04:25:02.500455Z",
+    "updated_at": "2026-02-28T16:44:47.857283Z",
     "updated_by": "ao-daemon",
-    "version": 37
+    "version": 38
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Add startup detection of orphaned running workflows and automatic recovery",
   "type": "feature",

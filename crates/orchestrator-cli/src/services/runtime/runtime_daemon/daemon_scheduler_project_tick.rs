@@ -476,6 +476,7 @@ fn daemon_agent_assignee_for_workflow_start(
         runtime_config.phase_tool_override(&phase_id),
         fallback_models.as_slice(),
         routing_complexity_for_task(task),
+        Some(project_root),
     );
     let model = execution_targets.first().map(|(_, model)| model.clone());
     (role, model)
@@ -3103,6 +3104,8 @@ mod tests {
             active_agents: 1,
             max_agents: None,
             project_root: None,
+            daemon_pid: None,
+            process_alive: None,
         };
         assert_eq!(ready_task_dispatch_limit(4, &uncapped), 4);
 
@@ -3114,6 +3117,8 @@ mod tests {
             active_agents: 3,
             max_agents: Some(5),
             project_root: None,
+            daemon_pid: None,
+            process_alive: None,
         };
         assert_eq!(ready_task_dispatch_limit(10, &capped), 2);
         assert_eq!(ready_task_dispatch_limit(1, &capped), 1);
@@ -3126,6 +3131,8 @@ mod tests {
             active_agents: 5,
             max_agents: Some(5),
             project_root: None,
+            daemon_pid: None,
+            process_alive: None,
         };
         assert_eq!(ready_task_dispatch_limit(3, &saturated), 0);
     }

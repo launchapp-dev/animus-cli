@@ -665,6 +665,7 @@ pub(super) async fn run_workflow_phase_with_agent(
             .or_else(|| phase_runtime_settings.and_then(|settings| settings.tool.as_deref())),
         configured_fallback_models.as_slice(),
         routing_complexity,
+        Some(project_root),
     );
     let parse_research_signal = phase_id != "research";
     let prompt = build_phase_prompt(
@@ -776,6 +777,26 @@ pub(super) async fn run_workflow_phase_with_agent(
                             *commit_message = Some(resolved_commit_message);
                         }
                     }
+                    let verdict = match &outcome {
+                        PhaseExecutionOutcome::Completed { phase_decision, .. } => {
+                            phase_decision
+                                .as_ref()
+                                .map(|d| d.verdict)
+                                .unwrap_or(orchestrator_core::PhaseDecisionVerdict::Advance)
+                        }
+                        PhaseExecutionOutcome::NeedsResearch { .. } => {
+                            orchestrator_core::PhaseDecisionVerdict::Rework
+                        }
+                        PhaseExecutionOutcome::ManualPending { .. } => {
+                            orchestrator_core::PhaseDecisionVerdict::Advance
+                        }
+                    };
+                    orchestrator_core::record_model_phase_outcome(
+                        std::path::Path::new(project_root),
+                        target_model_id,
+                        phase_id,
+                        verdict,
+                    );
                     return Ok(outcome);
                 }
                 Err(error) => {
@@ -796,8 +817,20 @@ pub(super) async fn run_workflow_phase_with_agent(
                             "target {}:{} failed: {}",
                             target_tool_id, target_model_id, message
                         ));
+                        orchestrator_core::record_model_phase_outcome(
+                            std::path::Path::new(project_root),
+                            target_model_id,
+                            phase_id,
+                            orchestrator_core::PhaseDecisionVerdict::Fail,
+                        );
                         break;
                     }
+                    orchestrator_core::record_model_phase_outcome(
+                        std::path::Path::new(project_root),
+                        target_model_id,
+                        phase_id,
+                        orchestrator_core::PhaseDecisionVerdict::Fail,
+                    );
                     return Err(error);
                 }
             }
@@ -1239,6 +1272,7 @@ pub(super) async fn run_workflow_phase(
                     .phase_fallback_models(phase_id)
                     .as_slice(),
                 routing_complexity,
+                Some(project_root),
             );
             if let Some((tool, model)) = execution_targets.first() {
                 metadata.selected_tool = Some(tool.clone());

@@ -602,6 +602,7 @@ mod tests {
             None,
             &[],
             None,
+            None,
         );
         let models: Vec<_> = targets
             .iter()

@@ -164,7 +164,12 @@ fn build_router(state: AppState) -> Router {
         .route("/workflows/{id}/resume", post(workflows_resume_handler))
         .route("/workflows/{id}/pause", post(workflows_pause_handler))
         .route("/workflows/{id}/cancel", post(workflows_cancel_handler))
-        .route("/reviews/handoff", post(reviews_handoff_handler));
+        .route("/reviews/handoff", post(reviews_handoff_handler))
+        .route("/queue", get(queue_list_handler))
+        .route("/queue/stats", get(queue_stats_handler))
+        .route("/queue/reorder", post(queue_reorder_handler))
+        .route("/queue/hold/{id}", post(queue_hold_handler))
+        .route("/queue/release/{id}", post(queue_release_handler));
 
     Router::new()
         .nest("/api/v1", api_router)
@@ -776,6 +781,52 @@ async fn reviews_handoff_handler(
     Json(body): Json<Value>,
 ) -> Response {
     match state.api.reviews_handoff(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_list_handler(State(state): State<AppState>) -> Response {
+    match state.api.queue_list().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_stats_handler(State(state): State<AppState>) -> Response {
+    match state.api.queue_stats().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_reorder_handler(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.queue_reorder(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_hold_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.queue_hold(&id, body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_release_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.queue_release(&id, body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
@@ -2546,5 +2597,159 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("br")
         );
+    }
+
+    #[tokio::test]
+    async fn queue_list_endpoint_returns_empty_queue_when_no_state() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/queue")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        let data = payload.get("data").expect("data should exist");
+        assert_eq!(data.get("entries").and_then(Value::as_array).map(Vec::len), Some(0));
+        let stats = data.get("stats").expect("stats should exist");
+        assert_eq!(stats.get("total").and_then(Value::as_u64), Some(0));
+    }
+
+    #[tokio::test]
+    async fn queue_stats_endpoint_returns_zeros_when_no_state() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/queue/stats")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        let data = payload.get("data").expect("data should exist");
+        assert_eq!(data.get("depth").and_then(Value::as_u64), Some(0));
+        assert_eq!(data.get("pending").and_then(Value::as_u64), Some(0));
+        assert_eq!(data.get("throughput_last_hour").and_then(Value::as_u64), Some(0));
+    }
+
+    #[tokio::test]
+    async fn queue_reorder_endpoint_accepts_valid_request() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/queue/reorder")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "task_ids": ["TASK-001", "TASK-002"]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        let data = payload.get("data").expect("data should exist");
+        assert_eq!(data.get("reordered").and_then(Value::as_bool), Some(false));
+    }
+
+    #[tokio::test]
+    async fn queue_hold_endpoint_accepts_valid_request() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/queue/hold/TASK-001")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        let data = payload.get("data").expect("data should exist");
+        assert_eq!(data.get("held").and_then(Value::as_bool), Some(false));
+        assert_eq!(data.get("task_id").and_then(Value::as_str), Some("TASK-001"));
+    }
+
+    #[tokio::test]
+    async fn queue_release_endpoint_accepts_valid_request() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/queue/release/TASK-001")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+
+        assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
+        let data = payload.get("data").expect("data should exist");
+        assert_eq!(data.get("released").and_then(Value::as_bool), Some(false));
+        assert_eq!(data.get("task_id").and_then(Value::as_str), Some("TASK-001"));
     }
 }

@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": null,
+  "blocked_at": "2026-02-28T16:18:24.760883Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": null,
+  "blocked_reason": "Blocked by status update",
   "branch_name": "ao/task-055",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T02:51:09.477020Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T03:22:51.930677Z",
-    "updated_at": "2026-02-28T15:12:37.921468Z",
+    "updated_at": "2026-02-28T16:18:24.760884Z",
     "updated_by": "ao-daemon",
-    "version": 33
+    "version": 34
   },
-  "paused": false,
+  "paused": true,
   "priority": "low",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "blocked",
   "tags": [],
   "title": "Audit and remove or expose unused OrchestratorTask fields",
   "type": "refactor",

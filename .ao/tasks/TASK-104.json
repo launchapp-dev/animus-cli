@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-28T16:44:46.460832Z",
     "created_at": "2026-02-27T17:06:14.330547Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:07:12.713719Z",
-    "updated_at": "2026-02-28T08:10:13.197905Z",
+    "updated_at": "2026-02-28T16:44:46.460833Z",
     "updated_by": "ao-daemon",
-    "version": 35
+    "version": 36
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Fix daemon status to verify PID liveness instead of relying on stale state",
   "type": "feature",

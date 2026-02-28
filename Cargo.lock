@@ -2113,11 +2113,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dirs",
  "orchestrator-core",
  "orchestrator-web-contracts",
  "protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

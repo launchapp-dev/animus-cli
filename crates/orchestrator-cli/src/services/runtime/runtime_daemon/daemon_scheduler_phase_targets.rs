@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::path::Path;
 
+use orchestrator_core;
 use protocol::{
     canonical_model_id, default_fallback_models_for_phase, default_model_specs,
     default_primary_model_for_phase, normalize_tool_id, tool_for_model_id,
@@ -37,6 +39,7 @@ impl PhaseTargetPlanner {
         tool_override: Option<&str>,
         configured_fallback_models: &[String],
         complexity: Option<ModelRoutingComplexity>,
+        project_root: Option<&str>,
     ) -> Vec<(String, String)> {
         let resolved_complexity = complexity.or_else(|| phase_complexity_from_env(phase_id));
         let (primary_tool, primary_model) = Self::resolve_phase_execution_target(
@@ -69,6 +72,16 @@ impl PhaseTargetPlanner {
             let model_key = candidate_model.to_ascii_lowercase();
             if !seen_models.insert(model_key) {
                 continue;
+            }
+
+            if let Some(root) = project_root {
+                if orchestrator_core::is_model_suppressed_for_phase(
+                    Path::new(root),
+                    &candidate_model,
+                    phase_id,
+                ) {
+                    continue;
+                }
             }
 
             let (tool_id, model_id) = if candidate_model.eq_ignore_ascii_case(&primary_model) {

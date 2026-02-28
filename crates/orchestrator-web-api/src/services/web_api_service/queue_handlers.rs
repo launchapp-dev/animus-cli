@@ -415,3 +415,82 @@ impl WebApiService {
         Ok(serde_json::json!({ "released": updated, "task_id": task_id }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn em_work_queue_entry_status_deserializes_snake_case() {
+        let pending: EmWorkQueueEntryStatus = serde_json::from_str("\"pending\"").unwrap();
+        assert_eq!(pending, EmWorkQueueEntryStatus::Pending);
+
+        let assigned: EmWorkQueueEntryStatus = serde_json::from_str("\"assigned\"").unwrap();
+        assert_eq!(assigned, EmWorkQueueEntryStatus::Assigned);
+
+        let held: EmWorkQueueEntryStatus = serde_json::from_str("\"held\"").unwrap();
+        assert_eq!(held, EmWorkQueueEntryStatus::Held);
+    }
+
+    #[test]
+    fn em_work_queue_entry_status_defaults_to_unknown_for_invalid() {
+        let unknown: EmWorkQueueEntryStatus = serde_json::from_str("\"invalid_status\"").unwrap();
+        assert_eq!(unknown, EmWorkQueueEntryStatus::Unknown);
+    }
+
+    #[test]
+    fn em_work_queue_entry_default_status_is_pending() {
+        let entry: EmWorkQueueEntry = serde_json::from_str("{\"task_id\": \"TASK-001\"}").unwrap();
+        assert_eq!(entry.status, EmWorkQueueEntryStatus::Pending);
+        assert_eq!(entry.task_id, "TASK-001");
+    }
+
+    #[test]
+    fn em_work_queue_state_deserializes_entries_wrapped() {
+        let json = r#"{"entries": [
+            {"task_id": "TASK-001", "status": "pending"},
+            {"task_id": "TASK-002", "status": "assigned"}
+        ]}"#;
+        let state: EmWorkQueueState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.entries.len(), 2);
+        assert_eq!(state.entries[0].task_id, "TASK-001");
+        assert_eq!(state.entries[1].task_id, "TASK-002");
+    }
+
+    #[test]
+    fn em_work_queue_state_serializes_and_deserializes_roundtrip() {
+        let original = EmWorkQueueState {
+            entries: vec![EmWorkQueueEntry {
+                task_id: "TASK-001".to_string(),
+                status: EmWorkQueueEntryStatus::Pending,
+                workflow_id: Some("WF-001".to_string()),
+                assigned_at: Some("2025-01-01T00:00:00Z".to_string()),
+                held_at: None,
+            }],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: EmWorkQueueState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.entries.len(), 1);
+        assert_eq!(restored.entries[0].task_id, "TASK-001");
+        assert_eq!(restored.entries[0].status, EmWorkQueueEntryStatus::Pending);
+        assert_eq!(restored.entries[0].workflow_id, Some("WF-001".to_string()));
+    }
+
+    #[test]
+    fn em_work_queue_state_default_is_empty() {
+        let state = EmWorkQueueState::default();
+        assert!(state.entries.is_empty());
+    }
+
+    impl Default for EmWorkQueueEntry {
+        fn default() -> Self {
+            Self {
+                task_id: String::new(),
+                status: EmWorkQueueEntryStatus::Pending,
+                workflow_id: None,
+                assigned_at: None,
+                held_at: None,
+            }
+        }
+    }
+}

@@ -5,6 +5,7 @@ pub mod daemon_config;
 pub mod doctor;
 pub mod domain_state;
 pub mod events;
+pub mod model_quality;
 pub mod runtime;
 pub mod runtime_contract;
 pub mod services;
@@ -91,6 +92,11 @@ pub use workflow_config::{
     PhaseUiDefinition, PipelineDefinition, WorkflowCheckpointRetentionConfig, WorkflowConfig,
     WorkflowConfigMetadata, WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME,
     WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION,
+};
+pub use model_quality::{
+    is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path,
+    record_model_phase_outcome, ModelQualityLedger, ModelQualityRecord,
+    MODEL_QUALITY_LEDGER_FILE_NAME,
 };
 
 #[cfg(test)]

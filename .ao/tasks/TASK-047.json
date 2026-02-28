@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-02-28T16:44:43.386130Z",
     "created_at": "2026-02-27T02:50:50.351552Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T02:53:52.761713Z",
-    "updated_at": "2026-02-28T02:39:38.170919Z",
+    "updated_at": "2026-02-28T16:44:43.386131Z",
     "updated_by": "ao-daemon",
-    "version": 32
+    "version": 33
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Add status transition validation to task state changes",
   "type": "feature",
