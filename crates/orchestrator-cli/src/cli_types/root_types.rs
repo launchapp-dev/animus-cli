@@ -143,6 +143,8 @@ pub(crate) enum Command {
     Setup(SetupArgs),
     /// Launch the terminal UI.
     Tui(TuiArgs),
+    /// Live workflow phase monitor with agent output streaming.
+    WorkflowMonitor(WorkflowMonitorArgs),
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
 }
