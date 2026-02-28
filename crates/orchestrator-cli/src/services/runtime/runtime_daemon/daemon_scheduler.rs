@@ -1,9 +1,7 @@
 use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
 use crate::shared::{
-    build_runtime_contract, collect_json_payload_lines, connect_runner,
-    ensure_ai_generated_tasks_for_requirements, event_matches_run, requirement_has_active_tasks,
-    run_prompt_against_runner, runner_config_dir, write_json_line,
+    ensure_ai_generated_tasks_for_requirements, requirement_has_active_tasks,
 };
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
@@ -11,10 +9,6 @@ use orchestrator_core::{
     services::ServiceHub, DependencyType, FileServiceHub, RequirementItem, RequirementStatus,
     RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput,
     TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
-};
-use protocol::{
-    default_primary_model_for_phase, tool_for_model_id, AgentRunEvent, AgentRunRequest, ModelId,
-    RunId, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -43,6 +36,7 @@ pub(crate) mod phase_targets;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
+pub(crate) use git_ops::MergeConflictContext;
 use phase_exec::{
     PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionRunResult, PhaseExecutionSignal,
 };
@@ -86,17 +80,7 @@ pub(super) struct ProjectTickSummary {
     pub(super) task_state_transitions: Vec<TaskStateTransition>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct PhaseExecutionEvent {
-    pub(super) event_type: String,
-    pub(super) project_root: String,
-    pub(super) workflow_id: String,
-    pub(super) task_id: String,
-    pub(super) phase_id: String,
-    pub(super) phase_mode: String,
-    pub(super) metadata: PhaseExecutionMetadata,
-    pub(super) payload: Value,
-}
+use crate::services::runtime::workflow_executor::workflow_runner::PhaseExecutionEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RequirementLifecycleTransition {
@@ -269,6 +253,7 @@ async fn run_workflow_phase_with_agent_legacy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::build_runtime_contract;
     use orchestrator_core::{
         InMemoryServiceHub, Priority, RequirementItem, RequirementPriority, RequirementStatus,
         TaskCreateInput, TaskType, VisionDraftInput,
@@ -1889,54 +1874,9 @@ fn pipeline_for_task(task: &orchestrator_core::OrchestratorTask) -> String {
     }
 }
 
-fn task_requires_research(task: &orchestrator_core::OrchestratorTask) -> bool {
-    if task.workflow_metadata.requires_architecture {
-        return true;
-    }
-
-    if task.tags.iter().any(|tag| {
-        matches!(
-            tag.trim().to_ascii_lowercase().as_str(),
-            "needs-research" | "research" | "discovery" | "investigation" | "spike"
-        )
-    }) {
-        return true;
-    }
-
-    let haystack = format!("{} {}", task.title, task.description).to_ascii_lowercase();
-    [
-        "research",
-        "investigate",
-        "evaluate",
-        "compare",
-        "benchmark",
-        "unknown",
-        "spike",
-        "decision record",
-        "validate approach",
-    ]
-    .iter()
-    .any(|needle| haystack.contains(needle))
-}
-
-fn workflow_has_completed_research(workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {
-    workflow.phases.iter().any(|phase| {
-        phase.phase_id == "research"
-            && phase.status == orchestrator_core::WorkflowPhaseStatus::Success
-    })
-}
-
-fn workflow_has_active_research(workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {
-    workflow.phases.iter().any(|phase| {
-        phase.phase_id == "research"
-            && matches!(
-                phase.status,
-                orchestrator_core::WorkflowPhaseStatus::Pending
-                    | orchestrator_core::WorkflowPhaseStatus::Ready
-                    | orchestrator_core::WorkflowPhaseStatus::Running
-            )
-    })
-}
+use crate::services::runtime::workflow_executor::workflow_runner::{
+    task_requires_research, workflow_has_active_research, workflow_has_completed_research,
+};
 
 const DEPENDENCY_GATE_PREFIX: &str = "dependency gate:";
 const MERGE_GATE_PREFIX: &str = "merge gate:";

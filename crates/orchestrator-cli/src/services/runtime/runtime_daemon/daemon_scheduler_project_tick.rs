@@ -1693,19 +1693,12 @@ fn phase_execution_events_from_signals(
     metadata: &PhaseExecutionMetadata,
     signals: &[PhaseExecutionSignal],
 ) -> Vec<PhaseExecutionEvent> {
-    signals
-        .iter()
-        .map(|signal| PhaseExecutionEvent {
-            event_type: signal.event_type.clone(),
-            project_root: project_root.to_string(),
-            workflow_id: workflow.id.clone(),
-            task_id: workflow.task_id.clone(),
-            phase_id: metadata.phase_id.clone(),
-            phase_mode: metadata.phase_mode.clone(),
-            metadata: metadata.clone(),
-            payload: signal.payload.clone(),
-        })
-        .collect()
+    crate::services::runtime::workflow_executor::workflow_runner::phase_execution_events_from_signals(
+        project_root,
+        workflow,
+        metadata,
+        signals,
+    )
 }
 
 fn phase_execution_metadata_artifact_path(project_root: &str, run_id: &str) -> PathBuf {
@@ -1983,33 +1976,9 @@ async fn retry_failed_task_workflows(hub: Arc<dyn ServiceHub>) -> Result<usize> 
     Ok(retried)
 }
 
-const AI_RECOVERY_TIMEOUT_SECS: u64 = 120;
-const AI_RECOVERY_MARKER: &str = "ai-failure-recovery";
-const MAX_DECOMPOSE_SUBTASKS: usize = 3;
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct AiRecoveryResponse {
-    action: String,
-    #[serde(default)]
-    reason: String,
-    #[serde(default)]
-    subtasks: Vec<AiRecoverySubtask>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AiRecoverySubtask {
-    title: String,
-    #[serde(default)]
-    description: String,
-}
-
-enum AiRecoveryAction {
-    Retry,
-    Decompose(Vec<AiRecoverySubtask>),
-    SkipPhase,
-    Fail,
-}
+use crate::services::runtime::workflow_executor::workflow_runner::{
+    AiRecoveryAction, AI_RECOVERY_MARKER,
+};
 
 async fn attempt_ai_failure_recovery(
     project_root: &str,
@@ -2018,340 +1987,38 @@ async fn attempt_ai_failure_recovery(
     error_message: &str,
     decision_history: &[orchestrator_core::WorkflowDecisionRecord],
 ) -> AiRecoveryAction {
-    let already_attempted = decision_history
-        .iter()
-        .any(|record| record.phase_id == phase_id && record.reason.contains(AI_RECOVERY_MARKER));
-    if already_attempted {
-        return AiRecoveryAction::Fail;
-    }
-
-    let model = default_primary_model_for_phase("implementation", None).to_string();
-    let tool = tool_for_model_id(&model).to_string();
-
-    let prompt = format!(
-        r#"A workflow phase has failed. Analyze the error and recommend a recovery action.
-
-## Task
-- Title: {title}
-- Description: {description}
-
-## Failed Phase
-- Phase ID: {phase_id}
-- Error: {error}
-
-## Instructions
-Return exactly one JSON object with your recommendation:
-{{
-  "action": "retry|decompose|skip_phase|fail",
-  "reason": "Brief explanation of your recommendation",
-  "subtasks": [
-    {{"title": "Subtask title", "description": "Subtask description"}}
-  ]
-}}
-
-Rules:
-- "retry" — the error is transient or environmental, retrying might succeed
-- "decompose" — the task is too complex, break it into smaller subtasks (max 3)
-- "skip_phase" — the phase is non-critical and can be skipped safely
-- "fail" — the error is fundamental and cannot be recovered
-- Only include "subtasks" if action is "decompose"
-- Output valid JSON only, no markdown fences"#,
-        title = task.title,
-        description = task.description.chars().take(1000).collect::<String>(),
-        phase_id = phase_id,
-        error = error_message.chars().take(500).collect::<String>(),
-    );
-
-    let result = run_prompt_against_runner(
+    crate::services::runtime::workflow_executor::workflow_runner::attempt_ai_failure_recovery(
         project_root,
-        &prompt,
-        &model,
-        &tool,
-        AI_RECOVERY_TIMEOUT_SECS,
+        task,
+        phase_id,
+        error_message,
+        decision_history,
     )
-    .await;
-
-    let Ok(transcript) = result else {
-        return AiRecoveryAction::Fail;
-    };
-
-    let parsed = parse_ai_recovery_response(&transcript);
-    let Some(response) = parsed else {
-        return AiRecoveryAction::Fail;
-    };
-
-    match response.action.trim().to_ascii_lowercase().as_str() {
-        "retry" => AiRecoveryAction::Retry,
-        "decompose" if !response.subtasks.is_empty() => {
-            let subtasks: Vec<_> = response
-                .subtasks
-                .into_iter()
-                .filter(|s| !s.title.trim().is_empty())
-                .take(MAX_DECOMPOSE_SUBTASKS)
-                .collect();
-            if subtasks.is_empty() {
-                AiRecoveryAction::Fail
-            } else {
-                AiRecoveryAction::Decompose(subtasks)
-            }
-        }
-        "skip_phase" => AiRecoveryAction::SkipPhase,
-        _ => AiRecoveryAction::Fail,
-    }
+    .await
 }
 
-fn parse_ai_recovery_response(text: &str) -> Option<AiRecoveryResponse> {
-    for (_raw, payload) in collect_json_payload_lines(text) {
-        if let Ok(response) = serde_json::from_value::<AiRecoveryResponse>(payload) {
-            if !response.action.is_empty() {
-                return Some(response);
-            }
-        }
-    }
-    if let Ok(response) = serde_json::from_str::<AiRecoveryResponse>(text.trim()) {
-        if !response.action.is_empty() {
-            return Some(response);
-        }
-    }
-    None
-}
-
-const MERGE_CONFLICT_RECOVERY_TIMEOUT_SECS: u64 = 300;
-const MERGE_CONFLICT_RECOVERY_RESULT_KIND: &str = "merge_conflict_resolution_result";
-const MERGE_CONFLICT_RECOVERY_PROMPT_TEMPLATE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/runtime/merge_conflict_recovery.prompt"
-));
-
-#[derive(Debug, Clone, Deserialize)]
-struct MergeConflictRecoveryResponse {
-    kind: String,
-    status: String,
-    #[serde(default)]
-    commit_message: String,
-    #[serde(default)]
-    reason: String,
-}
-
-fn build_merge_conflict_recovery_prompt(
-    task: &orchestrator_core::OrchestratorTask,
-    context: &git_ops::MergeConflictContext,
-) -> String {
-    let conflicted_files = if context.conflicted_files.is_empty() {
-        "- (none detected by git)".to_string()
-    } else {
-        context
-            .conflicted_files
-            .iter()
-            .map(|path| format!("- {}", path))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    MERGE_CONFLICT_RECOVERY_PROMPT_TEMPLATE
-        .replace("__TASK_TITLE__", task.title.trim())
-        .replace(
-            "__TASK_DESCRIPTION__",
-            task.description
-                .chars()
-                .take(2000)
-                .collect::<String>()
-                .as_str(),
-        )
-        .replace("__SOURCE_BRANCH__", context.source_branch.as_str())
-        .replace("__TARGET_BRANCH__", context.target_branch.as_str())
-        .replace(
-            "__MERGE_WORKTREE_PATH__",
-            context.merge_worktree_path.as_str(),
-        )
-        .replace("__CONFLICTED_FILES__", conflicted_files.as_str())
-}
-
-async fn run_merge_conflict_recovery_prompt_against_runner(
-    project_root: &str,
-    execution_cwd: &str,
-    prompt: &str,
-    model: &str,
-    tool: &str,
-    timeout_secs: u64,
-) -> Result<String> {
-    let run_id = RunId(format!("merge-conflict-recovery-{}", Uuid::new_v4()));
-    let mut context = serde_json::json!({
-        "tool": tool,
-        "prompt": prompt,
-        "cwd": execution_cwd,
-        "project_root": project_root,
-        "planning_stage": "merge-conflict-recovery",
-        "allowed_tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
-        "timeout_secs": timeout_secs,
-    });
-    if let Some(runtime_contract) = build_runtime_contract(tool, model, prompt) {
-        context["runtime_contract"] = runtime_contract;
-    }
-
-    let request = AgentRunRequest {
-        protocol_version: PROTOCOL_VERSION.to_string(),
-        run_id: run_id.clone(),
-        model: ModelId(model.to_string()),
-        context,
-        timeout_secs: Some(timeout_secs),
-    };
-
-    let config_dir = runner_config_dir(Path::new(project_root));
-    let stream = connect_runner(&config_dir).await?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    write_json_line(&mut write_half, &request).await?;
-
-    let mut lines = BufReader::new(read_half).lines();
-    let mut transcript = String::new();
-    let mut finished_successfully = false;
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
-            continue;
-        };
-        if !event_matches_run(&event, &run_id) {
-            continue;
-        }
-
-        match event {
-            AgentRunEvent::OutputChunk { text, .. } => {
-                transcript.push_str(&text);
-                transcript.push('\n');
-            }
-            AgentRunEvent::Thinking { content, .. } => {
-                transcript.push_str(&content);
-                transcript.push('\n');
-            }
-            AgentRunEvent::Error { error, .. } => {
-                anyhow::bail!("merge conflict recovery run failed: {error}");
-            }
-            AgentRunEvent::Finished { exit_code, .. } => {
-                if exit_code.unwrap_or_default() != 0 {
-                    anyhow::bail!(
-                        "merge conflict recovery run exited with non-zero code: {:?}",
-                        exit_code
-                    );
-                }
-                finished_successfully = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    if !finished_successfully {
-        anyhow::bail!("runner disconnected before merge conflict recovery completed");
-    }
-
-    if transcript.trim().is_empty() {
-        anyhow::bail!("merge conflict recovery run produced empty output");
-    }
-
-    Ok(transcript)
-}
+use crate::services::runtime::workflow_executor::workflow_merge_recovery;
 
 async fn attempt_ai_merge_conflict_recovery(
     project_root: &str,
     task: &orchestrator_core::OrchestratorTask,
     context: &git_ops::MergeConflictContext,
 ) -> Result<()> {
-    let model = default_primary_model_for_phase("implementation", None).to_string();
-    let tool = tool_for_model_id(&model).to_string();
-    let prompt = build_merge_conflict_recovery_prompt(task, context);
-    let transcript = run_merge_conflict_recovery_prompt_against_runner(
-        project_root,
-        context.merge_worktree_path.as_str(),
-        &prompt,
-        &model,
-        &tool,
-        MERGE_CONFLICT_RECOVERY_TIMEOUT_SECS,
-    )
-    .await?;
-
-    let response = parse_merge_conflict_recovery_response(&transcript)
-        .ok_or_else(|| anyhow!("merge conflict recovery output was not parseable JSON"))?;
-
-    let status = merge_conflict_recovery_status(response.status.as_str())
-        .ok_or_else(|| anyhow!("merge conflict recovery output has invalid status"))?;
-
-    match status {
-        "resolved" => {
-            if response.commit_message.trim().is_empty() {
-                anyhow::bail!("merge conflict recovery output is missing non-empty commit_message");
-            }
-            run_cargo_check(context.merge_worktree_path.as_str())?;
-            Ok(())
-        }
-        "failed" => {
-            let reason = response.reason.trim();
-            if reason.is_empty() {
-                anyhow::bail!("merge conflict recovery agent reported failure");
-            }
-            anyhow::bail!("merge conflict recovery agent reported failure: {reason}");
-        }
-        _ => anyhow::bail!("merge conflict recovery output has invalid status"),
-    }
+    workflow_merge_recovery::attempt_ai_merge_conflict_recovery(project_root, task, context).await
 }
 
-fn merge_conflict_recovery_status(status: &str) -> Option<&'static str> {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "resolved" => Some("resolved"),
-        "failed" => Some("failed"),
-        _ => None,
-    }
-}
-
-fn is_valid_merge_conflict_recovery_response(response: &MergeConflictRecoveryResponse) -> bool {
-    response
-        .kind
-        .trim()
-        .eq_ignore_ascii_case(MERGE_CONFLICT_RECOVERY_RESULT_KIND)
-        && merge_conflict_recovery_status(response.status.as_str()).is_some()
-}
-
-fn parse_merge_conflict_recovery_response(text: &str) -> Option<MergeConflictRecoveryResponse> {
-    let mut parsed_response = None;
-    for (_raw, payload) in collect_json_payload_lines(text) {
-        if let Ok(response) = serde_json::from_value::<MergeConflictRecoveryResponse>(payload) {
-            if is_valid_merge_conflict_recovery_response(&response) {
-                parsed_response = Some(response);
-            }
-        }
-    }
-    if parsed_response.is_some() {
-        return parsed_response;
-    }
-
-    if let Ok(response) = serde_json::from_str::<MergeConflictRecoveryResponse>(text.trim()) {
-        if is_valid_merge_conflict_recovery_response(&response) {
-            return Some(response);
-        }
-    }
-    None
-}
-
-fn run_cargo_check(cwd: &str) -> Result<()> {
-    let status = ProcessCommand::new("cargo")
-        .current_dir(cwd)
-        .arg("check")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to run cargo check in {}", cwd))?;
-    if !status.success() {
-        anyhow::bail!("cargo check failed in {}", cwd);
-    }
-    Ok(())
+#[cfg(test)]
+fn parse_merge_conflict_recovery_response(
+    text: &str,
+) -> Option<workflow_merge_recovery::MergeConflictRecoveryResponse> {
+    workflow_merge_recovery::parse_merge_conflict_recovery_response(text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use orchestrator_core::Priority;
+    use orchestrator_core::ServiceHub;
     use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
 
@@ -3277,6 +2944,475 @@ thinking...
             parse_merge_conflict_recovery_response(transcript).is_none(),
             "status placeholders should not be treated as valid recovery responses"
         );
+    }
+
+    #[test]
+    fn pool_concurrency_limits_to_max_phases_per_tick() {
+        let project_root = "test-pool-concurrency-limits";
+        let pool_size = 3;
+        clear_running_workflow_phase_pool(project_root);
+
+        for i in 0..pool_size {
+            with_reactive_phase_pool_state_mut(project_root, |state| {
+                state
+                    .in_flight_workflow_ids
+                    .insert(format!("concurrency-wf-{}", i));
+            });
+        }
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        assert_eq!(
+            active_count, pool_size,
+            "pool should track exactly pool_size in-flight workflows"
+        );
+        assert!(
+            has_running_workflow_phase_pool_activity(project_root),
+            "pool should report activity when workflows are in-flight"
+        );
+
+        clear_running_workflow_phase_pool(project_root);
+    }
+
+    #[tokio::test]
+    async fn pool_blocks_spawn_when_full() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+        let pool_size = 2;
+
+        for i in 0..pool_size {
+            let task = hub
+                .tasks()
+                .create(TaskCreateInput {
+                    title: format!("full-pool-task-{}", i),
+                    description: "test task".to_string(),
+                    task_type: Some(TaskType::Feature),
+                    priority: Some(Priority::Medium),
+                    created_by: Some("test".to_string()),
+                    tags: Vec::new(),
+                    linked_requirements: Vec::new(),
+                    linked_architecture_entities: Vec::new(),
+                })
+                .await
+                .expect("task should be created");
+            let workflow = hub
+                .workflows()
+                .run(WorkflowRunInput {
+                    task_id: task.id.clone(),
+                    pipeline_id: None,
+                })
+                .await
+                .expect("workflow should start");
+
+            with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+                state.in_flight_workflow_ids.insert(workflow.id.clone());
+            });
+        }
+
+        let extra_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "extra-task-should-wait".to_string(),
+                description: "should not spawn when pool full".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let _extra_workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: extra_task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let (executed, failed, _) = execute_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            pool_size,
+        )
+        .await
+        .expect("execution should succeed");
+
+        assert_eq!(executed, 0, "should not spawn when full");
+        assert_eq!(failed, 0, "should have no failures");
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn immediate_backfill_on_completion() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+        let pool_size = 2;
+
+        let task1 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-1".to_string(),
+                description: "first task".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow1 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task1.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let task2 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-2".to_string(),
+                description: "second task".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow2 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task2.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        let task3 = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "backfill-task-3".to_string(),
+                description: "third task - should backfill".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let _workflow3 = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task3.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.in_flight_workflow_ids.insert(workflow1.id.clone());
+            state.in_flight_workflow_ids.insert(workflow2.id.clone());
+        });
+
+        let phase_id = workflow1
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            let _ = state.completion_tx.send(ReactivePhaseCompletion {
+                workflow: workflow1.clone(),
+                task: task1.clone(),
+                phase_id: phase_id.clone(),
+                run_result: Ok(PhaseExecutionRunResult {
+                    outcome: PhaseExecutionOutcome::Completed {
+                        commit_message: None,
+                        phase_decision: None,
+                    },
+                    metadata: PhaseExecutionMetadata {
+                        phase_id: phase_id.clone(),
+                        phase_mode: "agent".to_string(),
+                        phase_definition_hash: "test".to_string(),
+                        agent_runtime_config_hash: "test".to_string(),
+                        agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+                        agent_runtime_version: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                        agent_runtime_source: "test".to_string(),
+                        agent_id: None,
+                        agent_profile_hash: None,
+                        selected_tool: None,
+                        selected_model: None,
+                    },
+                    signals: Vec::new(),
+                }),
+            });
+        });
+
+        let (executed, _failed, _) = execute_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            pool_size,
+        )
+        .await
+        .expect("execution should succeed");
+
+        assert!(
+            executed >= 1,
+            "should process completion and backfill pool slot (got {} processed completions)",
+            executed
+        );
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn priority_ordering_high_first() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let low_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "low-priority-task".to_string(),
+                description: "low priority".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Low),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&low_task.id, TaskStatus::Ready)
+            .await
+            .expect("task should be ready");
+
+        let high_task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "high-priority-task".to_string(),
+                description: "high priority".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&high_task.id, TaskStatus::Ready)
+            .await
+            .expect("task should be ready");
+
+        let summary = run_ready_task_workflows_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            2,
+        )
+        .await
+        .expect("ready runner should succeed");
+
+        assert_eq!(summary.started, 2, "should start both tasks");
+        assert_eq!(
+            summary.started_workflows[0].task_id, high_task.id,
+            "high priority should start first"
+        );
+    }
+
+    #[tokio::test]
+    async fn graceful_drain_prevents_new_spawns() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "drain-test-task".to_string(),
+                description: "task for drain test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let _workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        pause_running_workflow_phase_spawns(&project_root_str);
+
+        let allow_spawns = with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.allow_spawns
+        });
+        assert!(
+            !allow_spawns,
+            "spawns should be blocked after pause"
+        );
+
+        resume_running_workflow_phase_spawns(&project_root_str);
+
+        let allow_spawns = with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.allow_spawns
+        });
+        assert!(allow_spawns, "spawns should be allowed after resume");
+
+        clear_running_workflow_phase_pool(&project_root_str);
+    }
+
+    #[tokio::test]
+    async fn graceful_drain_completes_running() {
+        let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let project_root = TempDir::new().expect("project temp dir");
+        let project_root_str = project_root.path().to_string_lossy().to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "drain-running-task".to_string(),
+                description: "running task for drain".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput {
+                task_id: task.id.clone(),
+                pipeline_id: None,
+            })
+            .await
+            .expect("workflow should start");
+
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            state.in_flight_workflow_ids.insert(workflow.id.clone());
+        });
+
+        let has_before = has_running_workflow_phase_pool_activity(&project_root_str);
+        assert!(has_before, "should have running activity before drain");
+
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        with_reactive_phase_pool_state_mut(&project_root_str, |state| {
+            let _ = state.completion_tx.send(ReactivePhaseCompletion {
+                workflow: workflow.clone(),
+                task: task.clone(),
+                phase_id: phase_id.clone(),
+                run_result: Ok(PhaseExecutionRunResult {
+                    outcome: PhaseExecutionOutcome::Completed {
+                        commit_message: None,
+                        phase_decision: None,
+                    },
+                    metadata: PhaseExecutionMetadata {
+                        phase_id,
+                        phase_mode: "agent".to_string(),
+                        phase_definition_hash: "test".to_string(),
+                        agent_runtime_config_hash: "test".to_string(),
+                        agent_runtime_schema: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+                        agent_runtime_version: orchestrator_core::agent_runtime_config::AGENT_RUNTIME_CONFIG_VERSION,
+                        agent_runtime_source: "test".to_string(),
+                        agent_id: None,
+                        agent_profile_hash: None,
+                        selected_tool: None,
+                        selected_model: None,
+                    },
+                    signals: Vec::new(),
+                }),
+            });
+        });
+
+        drain_running_workflow_phases_for_project(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root_str,
+            5,
+        )
+        .await
+        .expect("drain should succeed");
+
+        let has_after = has_running_workflow_phase_pool_activity(&project_root_str);
+        assert!(
+            !has_after,
+            "should have no running activity after drain completes"
+        );
+    }
+
+    #[test]
+    fn pool_metrics_active_count() {
+        let project_root = "test-metrics-project";
+        clear_running_workflow_phase_pool(project_root);
+
+        with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.insert("wf-1".to_string());
+            state.in_flight_workflow_ids.insert("wf-2".to_string());
+            state.in_flight_workflow_ids.insert("wf-3".to_string());
+        });
+
+        let has_activity = has_running_workflow_phase_pool_activity(project_root);
+        assert!(has_activity, "should detect active workflows");
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        assert_eq!(active_count, 3, "should track 3 in-flight workflows");
+
+        clear_running_workflow_phase_pool(project_root);
+    }
+
+    #[test]
+    fn pool_metrics_utilization() {
+        let project_root = "test-utilization-project";
+        let pool_size = 5;
+        clear_running_workflow_phase_pool(project_root);
+
+        with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.insert("wf-1".to_string());
+            state.in_flight_workflow_ids.insert("wf-2".to_string());
+            state.in_flight_workflow_ids.insert("wf-3".to_string());
+        });
+
+        let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
+            state.in_flight_workflow_ids.len()
+        });
+        let utilization = active_count as f64 / pool_size as f64;
+        assert!(
+            (utilization - 0.6).abs() < 0.01,
+            "utilization should be 0.6 (3/5)"
+        );
+
+        clear_running_workflow_phase_pool(project_root);
     }
 }
 

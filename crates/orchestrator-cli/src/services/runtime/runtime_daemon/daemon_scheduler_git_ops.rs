@@ -1127,13 +1127,13 @@ fn pull_request_body(task: &orchestrator_core::OrchestratorTask) -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct MergeConflictContext {
-    pub(super) source_branch: String,
-    pub(super) target_branch: String,
-    pub(super) merge_worktree_path: String,
-    pub(super) conflicted_files: Vec<String>,
-    pub(super) merge_queue_branch: String,
-    pub(super) push_remote: String,
+pub(crate) struct MergeConflictContext {
+    pub(crate) source_branch: String,
+    pub(crate) target_branch: String,
+    pub(crate) merge_worktree_path: String,
+    pub(crate) conflicted_files: Vec<String>,
+    pub(crate) merge_queue_branch: String,
+    pub(crate) push_remote: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
