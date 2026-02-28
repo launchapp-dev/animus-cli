@@ -3,9 +3,15 @@ name = "orchestrator-web-server"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+graphql = ["async-graphql", "async-graphql-axum"]
+
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
+async-graphql = { workspace = true, optional = true }
+async-graphql-axum = { workspace = true, optional = true }
 axum = { workspace = true, features = ["macros"] }
 include_dir = "0.7"
 mime_guess = "2"

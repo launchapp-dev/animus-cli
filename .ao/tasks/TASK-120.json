@@ -8,29 +8,29 @@
   "blocked_by": null,
   "blocked_phase": null,
   "blocked_reason": null,
-  "branch_name": "ao/task-085",
+  "branch_name": null,
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Expose the EM work queue through REST endpoints. GET /api/queue for ordered work items. POST /api/queue/reorder for manual reprioritization. GET /api/queue/stats for queue depth, throughput, and wait time metrics. POST /api/queue/hold/:task_id and POST /api/queue/release/:task_id for manual holds. These endpoints power both the web UI dashboard and external integrations.",
+  "description": "Each phase agent emits a structured PhaseDecision JSON. The engine validates it and uses the agent's verdict, confidence, and evidence to decide whether to advance, rework, or fail — making EvaluateGates do real work instead of rubber-stamping. Currently gates always pass unconditionally (lifecycle_executor.rs:205-207). Full implementation plan at .claude/plans/twinkling-nibbling-mountain.md covering: core types, decision contract config, parsing from agent output, gate evaluation in lifecycle executor, service layer wiring, daemon scheduler integration, prompt template updates, default config, and tests.",
   "estimated_effort": null,
-  "id": "TASK-085",
+  "id": "TASK-120",
   "impact_area": [],
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
     "completed_at": null,
-    "created_at": "2026-02-27T16:09:03.130351Z",
+    "created_at": "2026-02-28T15:37:05.272282Z",
     "created_by": "ao-cli",
-    "started_at": "2026-02-27T18:24:46.790328Z",
-    "updated_at": "2026-02-28T16:02:18.235222Z",
+    "started_at": "2026-02-28T15:37:09.904541Z",
+    "updated_at": "2026-02-28T15:37:09.904542Z",
     "updated_by": "ao-daemon",
-    "version": 27
+    "version": 4
   },
   "paused": false,
-  "priority": "medium",
+  "priority": "critical",
   "resource_requirements": {
     "max_cpu_percent": null,
     "max_memory_mb": null,
@@ -40,7 +40,7 @@
   "scope": "medium",
   "status": "in-progress",
   "tags": [],
-  "title": "Add queue management and work queue REST API endpoints",
+  "title": "Implement structured phase decision contracts for workflow engine",
   "type": "feature",
   "workflow_metadata": {
     "requires_architecture": false,
@@ -50,5 +50,5 @@
     "requires_staging_deploy": false,
     "workflow_id": null
   },
-  "worktree_path": "/Users/samishukri/.ao/ao-cli-1222ef9c4f94/worktrees/task-task-085"
+  "worktree_path": null
 }

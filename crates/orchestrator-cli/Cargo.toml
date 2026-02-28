@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-web-api = { path = "../orchestrator-web-api" }
-orchestrator-web-server = { path = "../orchestrator-web-server" }
+orchestrator-web-server = { path = "../orchestrator-web-server", features = ["graphql"] }
 protocol = { path = "../protocol" }
 dirs = "5.0"
 uuid = { version = "1", features = ["v4"] }
