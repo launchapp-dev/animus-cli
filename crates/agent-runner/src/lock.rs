@@ -88,6 +88,20 @@ fn get_ipc_address() -> String {
 }
 
 #[cfg(unix)]
+fn is_zombie_process(pid: i32) -> bool {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output();
+    match output {
+        Ok(out) => {
+            let state = String::from_utf8_lossy(&out.stdout);
+            state.trim().starts_with('Z')
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(unix)]
 fn process_exists(pid: i32) -> bool {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
@@ -96,7 +110,11 @@ fn process_exists(pid: i32) -> bool {
         return false;
     }
 
-    kill(Pid::from_raw(pid), None).is_ok()
+    if kill(Pid::from_raw(pid), None).is_ok() {
+        !is_zombie_process(pid)
+    } else {
+        false
+    }
 }
 
 #[cfg(windows)]
