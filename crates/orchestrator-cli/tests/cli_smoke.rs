@@ -409,3 +409,42 @@ fn invalid_arguments_include_usage_and_help_hint() -> Result<(), Box<dyn std::er
 
     Ok(())
 }
+
+#[test]
+fn help_includes_workflow_monitor_command() -> Result<(), Box<dyn std::error::Error>> {
+    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let output = Command::new(&binary).arg("--help").output()?;
+    assert!(output.status.success(), "help command should succeed");
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains("workflow-monitor"),
+        "help output should include workflow-monitor command"
+    );
+    assert!(
+        stdout.contains("Live workflow phase monitor"),
+        "help output should describe workflow-monitor command"
+    );
+
+    let monitor_help = Command::new(&binary)
+        .args(["workflow-monitor", "--help"])
+        .output()?;
+    assert!(
+        monitor_help.status.success(),
+        "workflow-monitor help should succeed"
+    );
+    let monitor_stdout = String::from_utf8(monitor_help.stdout)?;
+    assert!(
+        monitor_stdout.contains("--refresh-interval"),
+        "workflow-monitor help should explain --refresh-interval"
+    );
+    assert!(
+        monitor_stdout.contains("--buffer-lines"),
+        "workflow-monitor help should explain --buffer-lines"
+    );
+    assert!(
+        monitor_stdout.contains("--workflow-id"),
+        "workflow-monitor help should explain --workflow-id"
+    );
+
+    Ok(())
+}
