@@ -14,7 +14,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::services::tui::app_event::AppEvent;
-use crate::services::tui::app_state::{AppState, FocusPane, ModalState};
+use crate::services::tui::app_state::{AppState, CreateTaskField, FocusPane, ModalState};
 use crate::services::tui::mcp_bridge::AoCliMcpBridge;
 use crate::services::tui::render::render;
 use crate::services::tui::run_agent::run_agent_session;
@@ -158,8 +158,7 @@ async fn run_headless_mode(
             AppEvent::TasksRefreshed(_) | AppEvent::TaskOpError(_) => {}
         }
     }
-
-    Err(anyhow!("headless run ended unexpectedly"))
+    Ok(())
 }
 
 async fn run_event_loop(
@@ -202,6 +201,10 @@ async fn run_event_loop(
             }
             ModalState::CreateTask { .. } => {
                 handle_key_create_task(app, hub, key.code).await;
+                false
+            }
+            ModalState::DeleteTask { .. } => {
+                handle_key_delete_task(app, hub, key.code).await;
                 false
             }
         };
@@ -264,7 +267,14 @@ async fn handle_key_normal(
         KeyCode::Char('c') if app.focus == FocusPane::Tasks => {
             app.modal = ModalState::CreateTask {
                 title_input: String::new(),
+                description_input: String::new(),
+                focused_field: CreateTaskField::Title,
             };
+        }
+        KeyCode::Char('d') if app.focus == FocusPane::Tasks => {
+            if app.selected_task().is_some() {
+                app.modal = ModalState::DeleteTask { confirm: false };
+            }
         }
         KeyCode::Backspace if app.focus == FocusPane::Models => app.pop_prompt_char(),
         KeyCode::Esc if app.focus == FocusPane::Models => app.clear_prompt(),
@@ -420,8 +430,12 @@ async fn handle_key_create_task(
     hub: &Arc<dyn ServiceHub>,
     key_code: KeyCode,
 ) {
-    let title_input = match &app.modal {
-        ModalState::CreateTask { title_input } => title_input.clone(),
+    let (title_input, description_input, focused_field) = match &app.modal {
+        ModalState::CreateTask {
+            title_input,
+            description_input,
+            focused_field,
+        } => (title_input.clone(), description_input.clone(), focused_field.clone()),
         _ => return,
     };
 
@@ -429,15 +443,42 @@ async fn handle_key_create_task(
         KeyCode::Esc => {
             app.modal = ModalState::None;
         }
-        KeyCode::Backspace => {
-            let mut new_title = title_input;
-            new_title.pop();
-            app.modal = ModalState::CreateTask {
-                title_input: new_title,
+        KeyCode::Tab => {
+            let next_field = match focused_field {
+                CreateTaskField::Title => CreateTaskField::Description,
+                CreateTaskField::Description => CreateTaskField::Title,
             };
+            app.modal = ModalState::CreateTask {
+                title_input,
+                description_input,
+                focused_field: next_field,
+            };
+        }
+        KeyCode::Backspace => {
+            match focused_field {
+                CreateTaskField::Title => {
+                    let mut new_title = title_input;
+                    new_title.pop();
+                    app.modal = ModalState::CreateTask {
+                        title_input: new_title,
+                        description_input,
+                        focused_field: CreateTaskField::Title,
+                    };
+                }
+                CreateTaskField::Description => {
+                    let mut new_desc = description_input;
+                    new_desc.pop();
+                    app.modal = ModalState::CreateTask {
+                        title_input,
+                        description_input: new_desc,
+                        focused_field: CreateTaskField::Description,
+                    };
+                }
+            }
         }
         KeyCode::Enter => {
             let title = title_input.trim().to_string();
+            let description = description_input.trim().to_string();
             app.modal = ModalState::None;
             if title.is_empty() {
                 app.status_line = "create cancelled (empty title)".to_string();
@@ -449,7 +490,7 @@ async fn handle_key_create_task(
             tokio::spawn(async move {
                 let input = TaskCreateInput {
                     title,
-                    description: String::new(),
+                    description,
                     task_type: None,
                     priority: None,
                     created_by: None,
@@ -479,12 +520,77 @@ async fn handle_key_create_task(
         }
         KeyCode::Char(ch) => {
             if !ch.is_control() {
-                let mut new_title = title_input;
-                new_title.push(ch);
-                app.modal = ModalState::CreateTask {
-                    title_input: new_title,
-                };
+                match focused_field {
+                    CreateTaskField::Title => {
+                        app.modal = ModalState::CreateTask {
+                            title_input: format!("{}{}", title_input, ch),
+                            description_input,
+                            focused_field: CreateTaskField::Title,
+                        };
+                    }
+                    CreateTaskField::Description => {
+                        app.modal = ModalState::CreateTask {
+                            title_input,
+                            description_input: format!("{}{}", description_input, ch),
+                            focused_field: CreateTaskField::Description,
+                        };
+                    }
+                }
             }
+        }
+        _ => {}
+    }
+}
+
+async fn handle_key_delete_task(
+    app: &mut AppState,
+    hub: &Arc<dyn ServiceHub>,
+    key_code: KeyCode,
+) {
+    let confirm = match &app.modal {
+        ModalState::DeleteTask { confirm } => *confirm,
+        _ => false,
+    };
+
+    match key_code {
+        KeyCode::Esc => {
+            app.modal = ModalState::None;
+        }
+        KeyCode::Char('y') | KeyCode::Enter if !confirm => {
+            app.modal = ModalState::DeleteTask { confirm: true };
+        }
+        KeyCode::Char('y') | KeyCode::Enter if confirm => {
+            if let Some(task) = app.selected_task().cloned() {
+                app.modal = ModalState::None;
+                app.status_line = format!("deleting {}...", task.id);
+                let task_svc = hub.tasks();
+                let tx = app.event_tx.clone();
+                tokio::spawn(async move {
+                    match task_svc.delete(&task.id).await {
+                        Ok(_) => match task_svc.list_prioritized().await {
+                            Ok(tasks) => {
+                                let snapshots: Vec<TaskSnapshot> = tasks
+                                    .into_iter()
+                                    .take(24)
+                                    .map(TaskSnapshot::from_task)
+                                    .collect();
+                                let _ = tx.send(AppEvent::TasksRefreshed(snapshots));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::TaskOpError(e.to_string()));
+                            }
+                        },
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::TaskOpError(e.to_string()));
+                        }
+                    }
+                });
+            } else {
+                app.modal = ModalState::None;
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('q') => {
+            app.modal = ModalState::None;
         }
         _ => {}
     }

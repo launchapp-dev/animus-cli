@@ -5,7 +5,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::services::tui::app_state::{AppState, FocusPane, ModalState};
+use crate::services::tui::app_state::{AppState, CreateTaskField, FocusPane, ModalState};
 use crate::services::tui::task_snapshot::{status_label, STATUS_CYCLE};
 
 pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
@@ -90,7 +90,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
         .map(|task| ListItem::new(task.label()))
         .collect();
     let tasks_title = if tasks_focused {
-        "Tasks [FOCUS] (j/k s=status a=assign c=create Enter=detail)"
+        "Tasks [FOCUS] (j/k s=status a=assign c=create d=delete Enter=detail)"
     } else {
         "Tasks (Tab to focus)"
     };
@@ -118,7 +118,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
 
     let footer_text = if app.focus == FocusPane::Tasks {
         format!(
-            "Status: {}\nMode: {}\nPrompt: {}\nTab=switch  j/k=nav  Enter=detail  s=status  a=assign  c=create  r=refresh  Ctrl+L=clear  q=quit",
+            "Status: {}\nMode: {}\nPrompt: {}\nTab=switch  j/k=nav  Enter=detail  s=status  a=assign  c=create  d=delete  r=refresh  Ctrl+L=clear  q=quit",
             app.status_line,
             if app.print_mode { "print/raw" } else { "summary" },
             app.prompt
@@ -262,17 +262,49 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
             }
         }
 
-        ModalState::CreateTask { title_input } => {
-            let area = centered_rect(60, 5, frame.area());
+        ModalState::CreateTask {
+            title_input,
+            description_input,
+            focused_field,
+        } => {
+            let area = centered_rect(60, 7, frame.area());
             frame.render_widget(Clear, area);
-            let modal = Paragraph::new(format!("Title: {title_input}_"))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Create New Task ")
-                        .border_style(Style::default().fg(Color::Magenta)),
-                )
-                .wrap(Wrap { trim: false });
+            let title_cursor = if *focused_field == CreateTaskField::Title {
+                "_"
+            } else {
+                ""
+            };
+            let desc_cursor = if *focused_field == CreateTaskField::Description {
+                "_"
+            } else {
+                ""
+            };
+            let title_focus_marker = if *focused_field == CreateTaskField::Title {
+                " [*]"
+            } else {
+                ""
+            };
+            let desc_focus_marker = if *focused_field == CreateTaskField::Description {
+                " [*]"
+            } else {
+                ""
+            };
+            let modal = Paragraph::new(format!(
+                "Title{}:       {}{}\nDescription{}: {}{}",
+                title_focus_marker,
+                title_input,
+                title_cursor,
+                desc_focus_marker,
+                description_input,
+                desc_cursor,
+            ))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Create New Task ")
+                    .border_style(Style::default().fg(Color::Magenta)),
+            )
+            .wrap(Wrap { trim: false });
             frame.render_widget(modal, area);
             let hint_area = Rect {
                 x: area.x + 1,
@@ -281,10 +313,54 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                 height: 1,
             };
             frame.render_widget(
-                Paragraph::new(" Enter=create  Esc=cancel ")
+                Paragraph::new(" Tab=switch field  Enter=create  Esc=cancel ")
                     .style(Style::default().fg(Color::DarkGray)),
                 hint_area,
             );
+        }
+
+        ModalState::DeleteTask { confirm } => {
+            if let Some(task) = app.selected_task() {
+                let area = centered_rect(50, 5, frame.area());
+                frame.render_widget(Clear, area);
+                let (text, border_color) = if *confirm {
+                    (
+                        format!(
+                            "Delete task {}?\nPress y/Enter to confirm, n/q to cancel",
+                            task.id
+                        ),
+                        Color::Red,
+                    )
+                } else {
+                    (
+                        format!(
+                            "Delete task {}?\nPress y/Enter to confirm, n/q to cancel",
+                            task.id
+                        ),
+                        Color::Yellow,
+                    )
+                };
+                let modal = Paragraph::new(text)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!(" Delete {} ", task.id))
+                            .border_style(Style::default().fg(border_color)),
+                    )
+                    .wrap(Wrap { trim: false });
+                frame.render_widget(modal, area);
+                let hint_area = Rect {
+                    x: area.x + 1,
+                    y: area.y + area.height.saturating_sub(1),
+                    width: area.width.saturating_sub(2),
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(" y/Enter=confirm  n/q=cancel ")
+                        .style(Style::default().fg(Color::DarkGray)),
+                    hint_area,
+                );
+            }
         }
     }
 }

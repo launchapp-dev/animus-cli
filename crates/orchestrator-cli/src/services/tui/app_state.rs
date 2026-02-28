@@ -17,12 +17,29 @@ pub(crate) enum FocusPane {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CreateTaskField {
+    Title,
+    Description,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModalState {
     None,
     TaskDetail,
-    StatusPicker { selected: usize },
-    AssignInput { input: String },
-    CreateTask { title_input: String },
+    StatusPicker {
+        selected: usize,
+    },
+    AssignInput {
+        input: String,
+    },
+    CreateTask {
+        title_input: String,
+        description_input: String,
+        focused_field: CreateTaskField,
+    },
+    DeleteTask {
+        confirm: bool,
+    },
 }
 
 pub(crate) struct AppState {
@@ -70,8 +87,9 @@ impl AppState {
             profiles: Vec::new(),
             selected_profile_idx: 0,
             prompt: String::new(),
-            status_line: "Tab=switch pane  Enter=detail/run  s=status  a=assign  c=create  q=quit"
-                .to_string(),
+            status_line:
+                "Tab=switch pane  Enter=detail/run  s=status  a=assign  c=create  d=delete  q=quit"
+                    .to_string(),
             history: VecDeque::new(),
             run_in_flight: false,
             print_mode: true,
