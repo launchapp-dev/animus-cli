@@ -331,6 +331,41 @@ export type WorkflowRunInput = {
   pipeline_id?: string;
 };
 
+export type AgentSessionStatus =
+  | "running"
+  | "starting"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "unknown";
+
+export type AgentSession = JsonRecord & {
+  workflow_id: string;
+  task_id: string;
+  task_title: string;
+  phase: string | null;
+  phase_index: number;
+  status: AgentSessionStatus;
+  started_at: string;
+};
+
+export type DaemonAgentsPayload = JsonRecord & {
+  active_agents: number;
+  agents: AgentSession[];
+};
+
+export type AgentOutputEventData = {
+  agent_id: string;
+  stream_type: "stdout" | "stderr" | "system";
+  text: string;
+};
+
+export type AgentStatusChangedEventData = {
+  agent_id: string;
+  status: AgentSessionStatus;
+  elapsed_ms: number;
+};
+
 export type PlanningRequirementsDraftInput = {
   include_codebase_scan?: boolean;
   append_only?: boolean;

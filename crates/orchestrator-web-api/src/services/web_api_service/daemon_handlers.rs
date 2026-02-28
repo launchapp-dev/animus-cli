@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use orchestrator_core::types::WorkflowStatus;
 use serde_json::{json, Value};
 
 use super::{WebApiError, WebApiService};
@@ -50,6 +53,40 @@ impl WebApiService {
 
     pub async fn daemon_agents(&self) -> Result<Value, WebApiError> {
         let active_agents = self.context.hub.daemon().active_agents().await?;
-        Ok(json!({ "active_agents": active_agents }))
+        let workflows = self.context.hub.workflows().list().await.unwrap_or_default();
+        let tasks = self.context.hub.tasks().list().await.unwrap_or_default();
+
+        let task_titles: HashMap<&str, &str> = tasks
+            .iter()
+            .map(|t| (t.id.as_str(), t.title.as_str()))
+            .collect();
+
+        let mut running: Vec<_> = workflows
+            .iter()
+            .filter(|w| w.status == WorkflowStatus::Running)
+            .collect();
+        running.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.task_id.cmp(&b.task_id)));
+
+        let attributed = active_agents.min(running.len());
+        let agents: Vec<Value> = running
+            .into_iter()
+            .take(attributed)
+            .map(|w| {
+                json!({
+                    "workflow_id": w.id,
+                    "task_id": w.task_id,
+                    "task_title": task_titles.get(w.task_id.as_str()).copied().unwrap_or("Unknown task"),
+                    "phase": w.current_phase,
+                    "phase_index": w.current_phase_index,
+                    "status": "running",
+                    "started_at": w.started_at.to_rfc3339(),
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "active_agents": active_agents,
+            "agents": agents,
+        }))
     }
 }
