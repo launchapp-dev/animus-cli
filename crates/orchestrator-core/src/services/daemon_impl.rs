@@ -128,6 +128,8 @@ impl DaemonServiceApi for InMemoryServiceHub {
             active_agents: 0,
             max_agents: lock.daemon_max_agents,
             project_root: None,
+            daemon_pid: None,
+            process_alive: None,
         })
     }
 
@@ -313,6 +315,8 @@ impl DaemonServiceApi for FileServiceHub {
             active_agents,
             max_agents: lock.daemon_max_agents,
             project_root: Some(self.project_root.display().to_string()),
+            daemon_pid: None,
+            process_alive: None,
         })
     }
 

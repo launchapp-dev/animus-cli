@@ -29,6 +29,10 @@ pub struct DaemonHealth {
     pub max_agents: Option<usize>,
     #[serde(default)]
     pub project_root: Option<String>,
+    #[serde(default)]
+    pub daemon_pid: Option<u32>,
+    #[serde(default)]
+    pub process_alive: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

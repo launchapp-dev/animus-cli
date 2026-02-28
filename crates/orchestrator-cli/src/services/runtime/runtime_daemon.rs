@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
+use orchestrator_core::DaemonStatus;
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
@@ -139,6 +140,27 @@ pub(crate) fn daemon_log_path(project_root: &str) -> PathBuf {
     PathBuf::from(canonicalize_lossy(project_root))
         .join(".ao")
         .join("daemon.log")
+}
+
+fn daemon_pid_path(project_root: &str) -> PathBuf {
+    PathBuf::from(canonicalize_lossy(project_root))
+        .join(".ao")
+        .join("daemon.pid")
+}
+
+fn write_daemon_pid(project_root: &str, pid: u32) {
+    let path = daemon_pid_path(project_root);
+    let _ = fs::write(&path, pid.to_string());
+}
+
+fn remove_daemon_pid(project_root: &str) {
+    let _ = fs::remove_file(daemon_pid_path(project_root));
+}
+
+fn read_daemon_pid(project_root: &str) -> Option<u32> {
+    fs::read_to_string(daemon_pid_path(project_root))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }
 
 fn rotate_daemon_log_if_needed(log_path: &PathBuf) -> Result<()> {
@@ -398,6 +420,7 @@ pub(crate) async fn handle_daemon(
             if args.autonomous {
                 let daemon_pid = spawn_autonomous_daemon_run(project_root, &args)?;
                 let _ = set_registry_daemon_pid(project_root, Some(daemon_pid));
+                write_daemon_pid(project_root, daemon_pid);
                 let _ = set_registry_runtime_paused(project_root, false);
                 return print_value(
                     serde_json::json!({
@@ -448,6 +471,7 @@ pub(crate) async fn handle_daemon(
                 let _ = terminate_process(existing_pid);
                 let _ = set_registry_daemon_pid(project_root, None);
             }
+            remove_daemon_pid(project_root);
             let result = daemon.stop().await;
             if result.is_ok() {
                 let _ = set_registry_runtime_paused(project_root, true);
@@ -469,11 +493,28 @@ pub(crate) async fn handle_daemon(
             result.map(|_| print_ok("daemon resumed", json))
         }
         DaemonCommand::Status => {
-            let status = daemon.status().await?;
+            let mut status = daemon.status().await?;
+            if let Some(pid) = read_daemon_pid(project_root) {
+                let alive = is_process_alive(pid);
+                if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+                    status = DaemonStatus::Crashed;
+                }
+            }
             print_value(status, json)
         }
         DaemonCommand::Health => {
-            let health = daemon.health().await?;
+            let mut health = daemon.health().await?;
+            let pid = read_daemon_pid(project_root)
+                .or_else(|| get_registry_daemon_pid(project_root).ok().flatten());
+            if let Some(pid) = pid {
+                let alive = is_process_alive(pid);
+                health.daemon_pid = Some(pid);
+                health.process_alive = Some(alive);
+                if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
+                    health.status = DaemonStatus::Crashed;
+                    health.healthy = false;
+                }
+            }
             print_value(health, json)
         }
         DaemonCommand::Logs(args) => {
