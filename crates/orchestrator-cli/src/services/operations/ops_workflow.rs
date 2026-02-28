@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     ensure_destructive_confirmation, not_found_error, parse_input_json_or, print_value,
     WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand,
-    WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPipelinesCommand,
+    WorkflowExecuteArgs, WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPipelinesCommand,
     WorkflowStateMachineCommand,
 };
 
@@ -1016,6 +1016,10 @@ pub(crate) async fn handle_workflow(
             })?;
             print_value(workflows.run(input).await?, json)
         }
+        WorkflowCommand::Execute(args) => {
+            handle_workflow_execute(args, hub, project_root, json).await?;
+            Ok(())
+        }
         WorkflowCommand::Resume(args) => print_value(workflows.resume(&args.id).await?, json),
         WorkflowCommand::ResumeStatus(args) => {
             let workflow = workflows.get(&args.id).await?;
@@ -1198,6 +1202,110 @@ pub(crate) async fn handle_workflow(
             print_value(upsert_pipeline(project_root, pipeline)?, json)
         }
     }
+}
+
+async fn handle_workflow_execute(
+    args: WorkflowExecuteArgs,
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let tasks = hub.tasks();
+    let workflows = hub.workflows();
+
+    let task = tasks
+        .get(&args.task_id)
+        .await
+        .with_context(|| format!("task '{}' not found", args.task_id))?;
+
+    let input = WorkflowRunInput {
+        task_id: args.task_id.clone(),
+        pipeline_id: args.pipeline_id,
+    };
+    let workflow = workflows.run(input).await.or_else(|_| {
+        let all = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(workflows.list())
+        })?;
+        all.into_iter()
+            .find(|w| w.task_id == args.task_id)
+            .ok_or_else(|| anyhow!("no workflow found for task '{}'", args.task_id))
+    })?;
+
+    let execution_cwd = task
+        .worktree_path
+        .as_deref()
+        .filter(|p| !p.is_empty() && Path::new(p).exists())
+        .unwrap_or(project_root)
+        .to_string();
+
+    let phases_to_run: Vec<String> = if let Some(ref phase_id) = args.phase {
+        vec![phase_id.clone()]
+    } else {
+        workflow
+            .phases
+            .iter()
+            .map(|p| p.phase_id.clone())
+            .collect()
+    };
+
+    if phases_to_run.is_empty() {
+        return Err(anyhow!("workflow has no phases to execute"));
+    }
+
+    let task_complexity = Some(task.complexity);
+    let mut results = Vec::new();
+
+    for phase_id in &phases_to_run {
+        let phase_attempt = workflow
+            .phases
+            .iter()
+            .find(|p| &p.phase_id == phase_id)
+            .map(|p| p.attempt)
+            .unwrap_or(0);
+
+        let run_result = crate::services::runtime::run_workflow_phase(
+            project_root,
+            &execution_cwd,
+            &workflow.id,
+            &task.id,
+            &task.title,
+            &task.description,
+            task_complexity,
+            phase_id,
+            phase_attempt,
+        )
+        .await;
+
+        match run_result {
+            Ok(result) => {
+                results.push(serde_json::json!({
+                    "phase_id": phase_id,
+                    "status": "completed",
+                    "outcome": result.outcome,
+                    "metadata": result.metadata,
+                }));
+            }
+            Err(err) => {
+                results.push(serde_json::json!({
+                    "phase_id": phase_id,
+                    "status": "failed",
+                    "error": err.to_string(),
+                }));
+                break;
+            }
+        }
+    }
+
+    print_value(
+        serde_json::json!({
+            "workflow_id": workflow.id,
+            "task_id": task.id,
+            "execution_cwd": execution_cwd,
+            "phases_requested": phases_to_run,
+            "results": results,
+        }),
+        json,
+    )
 }
 
 #[cfg(test)]

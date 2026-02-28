@@ -55,6 +55,8 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowAgentRuntimeCommand,
     },
+    /// Execute a workflow synchronously (no daemon required).
+    Execute(WorkflowExecuteArgs),
     /// Update a pipeline by id.
     UpdatePipeline(WorkflowPipelineUpdateArgs),
 }
@@ -175,6 +177,24 @@ pub(crate) struct WorkflowRunArgs {
     )]
     pub(crate) pipeline_id: Option<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
+    pub(crate) input_json: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowExecuteArgs {
+    #[arg(long, value_name = "TASK_ID", help = "Task id to execute the workflow for.")]
+    pub(crate) task_id: String,
+    #[arg(long, value_name = "PIPELINE_ID", help = "Optional pipeline id override.")]
+    pub(crate) pipeline_id: Option<String>,
+    #[arg(long, value_name = "PHASE_ID", help = "Run only this specific phase instead of the full workflow.")]
+    pub(crate) phase: Option<String>,
+    #[arg(long, value_name = "MODEL_ID", help = "Override the model for phase execution.")]
+    pub(crate) model: Option<String>,
+    #[arg(long, value_name = "TOOL_ID", help = "Override the tool/CLI for phase execution (claude, codex, gemini).")]
+    pub(crate) tool: Option<String>,
+    #[arg(long, value_name = "SECS", help = "Override phase timeout in seconds.")]
+    pub(crate) phase_timeout_secs: Option<u64>,
+    #[arg(long, value_name = "JSON", help = "JSON payload for additional config overrides.")]
     pub(crate) input_json: Option<String>,
 }
 
