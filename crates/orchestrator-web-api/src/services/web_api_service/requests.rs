@@ -222,3 +222,21 @@ pub(super) struct ReviewHandoffRequest {
     #[serde(default)]
     pub(super) context: Value,
 }
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QueueReorderRequest {
+    pub(super) task_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QueueHoldRequest {
+    #[serde(default)]
+    pub(super) reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QueueReleaseRequest {
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(super) reason: Option<String>,
+}

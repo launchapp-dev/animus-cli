@@ -164,7 +164,12 @@ fn build_router(state: AppState) -> Router {
         .route("/workflows/{id}/resume", post(workflows_resume_handler))
         .route("/workflows/{id}/pause", post(workflows_pause_handler))
         .route("/workflows/{id}/cancel", post(workflows_cancel_handler))
-        .route("/reviews/handoff", post(reviews_handoff_handler));
+        .route("/reviews/handoff", post(reviews_handoff_handler))
+        .route("/queue", get(queue_list_handler))
+        .route("/queue/stats", get(queue_stats_handler))
+        .route("/queue/reorder", post(queue_reorder_handler))
+        .route("/queue/hold/{task_id}", post(queue_hold_handler))
+        .route("/queue/release/{task_id}", post(queue_release_handler));
 
     Router::new()
         .nest("/api/v1", api_router)
@@ -776,6 +781,49 @@ async fn reviews_handoff_handler(
     Json(body): Json<Value>,
 ) -> Response {
     match state.api.reviews_handoff(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_list_handler(State(state): State<AppState>) -> Response {
+    match state.api.queue_list().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_stats_handler(State(state): State<AppState>) -> Response {
+    match state.api.queue_stats().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_reorder_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    match state.api.queue_reorder(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_hold_handler(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.queue_hold(&task_id, body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn queue_release_handler(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.queue_release(&task_id, body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }

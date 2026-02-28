@@ -41,6 +41,9 @@
     },
     {
       "name": "Reviews"
+    },
+    {
+      "name": "Queue"
     }
   ],
   "paths": {
@@ -1805,6 +1808,180 @@
             "$ref": "#/components/responses/CliSuccessEnvelope"
           },
           "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/queue": {
+      "get": {
+        "tags": [
+          "Queue"
+        ],
+        "summary": "List work queue entries",
+        "description": "Returns ordered work items from the EM work queue.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/queue/stats": {
+      "get": {
+        "tags": [
+          "Queue"
+        ],
+        "summary": "Get queue statistics",
+        "description": "Returns queue depth, pending, assigned, and held counts.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/queue/reorder": {
+      "post": {
+        "tags": [
+          "Queue"
+        ],
+        "summary": "Reorder work queue",
+        "description": "Manually reprioritize the queue by specifying task IDs in the desired order.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "task_ids"
+                ],
+                "properties": {
+                  "task_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Task IDs in desired priority order"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/queue/hold/{task_id}": {
+      "post": {
+        "tags": [
+          "Queue"
+        ],
+        "summary": "Hold a task in the queue",
+        "description": "Places a pending queue entry on hold, preventing it from being assigned.",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason for the hold"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "409": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "default": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/api/v1/queue/release/{task_id}": {
+      "post": {
+        "tags": [
+          "Queue"
+        ],
+        "summary": "Release a held task in the queue",
+        "description": "Releases a held queue entry back to pending state.",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason for the release"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CliSuccessEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/CliErrorEnvelope"
+          },
+          "409": {
             "$ref": "#/components/responses/CliErrorEnvelope"
           },
           "default": {

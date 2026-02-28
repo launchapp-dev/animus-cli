@@ -135,6 +135,7 @@ pub(super) fn has_running_workflow_phase_pool_activity(project_root: &str) -> bo
 enum EmWorkQueueEntryStatus {
     Pending,
     Assigned,
+    Held,
     #[serde(other)]
     Unknown,
 }

@@ -2,6 +2,7 @@ mod daemon_handlers;
 mod event_stream;
 mod parsing;
 mod projects_handlers;
+mod queue_handlers;
 mod requests;
 mod requirements_handlers;
 mod reviews_handlers;

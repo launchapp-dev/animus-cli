@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-085 Queue Management &amp; Work Queue REST API — Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-085: Queue Management &amp; Work Queue REST API</h1>
+      <p>
+        Wireframes for the EM work queue dashboard: queue list, drag-to-reorder, hold / release
+        flows, queue stats, and live telemetry. Endpoints:
+        <code>GET /api/v1/queue</code> · <code>GET /api/v1/queue/stats</code> ·
+        <code>POST /api/v1/queue/reorder</code> · <code>POST /api/v1/queue/hold/:id</code> ·
+        <code>POST /api/v1/queue/release/:id</code>.
+      </p>
+    </header>
+
+    <main class="board-grid">
+
+      <!-- ══════════════════════════════════════════════════════════
+           BOARD 1 — Queue Dashboard: Stats + Ordered Queue List
+           ══════════════════════════════════════════════════════════ -->
+      <section class="board" aria-labelledby="board1-title">
+        <h2 class="board-title" id="board1-title">
+          Desktop Dashboard — Queue Stats &amp; Ordered Work List
+          (<code>GET /api/v1/queue/stats</code> + <code>GET /api/v1/queue</code>)
+        </h2>
+
+        <div class="control-shell">
+          <header class="shell-header">
+            <p class="breadcrumbs">/api/v1/queue · project: /Users/samishukri/ao-cli</p>
+            <div class="state-strip" aria-label="Queue runtime state">
+              <span class="state-chip running">queue: live</span>
+              <span class="state-chip info">9 entries</span>
+              <span class="state-chip warning">2 held</span>
+              <span class="state-chip">daemon: autonomous</span>
+            </div>
+          </header>
+
+          <!-- Stats strip -->
+          <div class="stats-grid" role="region" aria-label="Queue statistics">
+            <div class="stat-card">
+              <p class="stat-label">Depth</p>
+              <p class="stat-value">9</p>
+              <p class="stat-sub">total entries</p>
+            </div>
+            <div class="stat-card">
+              <p class="stat-label">Pending</p>
+              <p class="stat-value">5</p>
+              <p class="stat-sub">ready to assign</p>
+            </div>
+            <div class="stat-card">
+              <p class="stat-label">Assigned</p>
+              <p class="stat-value">2</p>
+              <p class="stat-sub">agent running</p>
+            </div>
+            <div class="stat-card">
+              <p class="stat-label">Held</p>
+              <p class="stat-value held-color">2</p>
+              <p class="stat-sub">manually paused</p>
+            </div>
+            <div class="stat-card">
+              <p class="stat-label">Ready</p>
+              <p class="stat-value">5</p>
+              <p class="stat-sub">= pending</p>
+            </div>
+            <div class="stat-card" aria-label="Throughput: not yet available">
+              <p class="stat-label">Throughput</p>
+              <p class="stat-value muted" aria-hidden="true">—</p>
+              <p class="stat-sub">tasks/hr · requires queued_at</p>
+            </div>
+            <div class="stat-card" aria-label="Average wait time: not yet available">
+              <p class="stat-label">Avg Wait</p>
+              <p class="stat-value muted" aria-hidden="true">—</p>
+              <p class="stat-sub">requires queued_at</p>
+            </div>
+          </div>
+
+          <!-- Toolbar -->
+          <div class="toolbar-row" role="group" aria-label="Queue controls">
+            <label class="field-inline" for="q-status-filter">
+              Status
+              <select id="q-status-filter">
+                <option>all</option>
+                <option>pending</option>
+                <option selected>pending + held</option>
+                <option>assigned</option>
+                <option>held</option>
+              </select>
+            </label>
+            <label class="field-inline search" for="q-search">
+              Search
+              <input id="q-search" type="search" placeholder="TASK-0…" />
+            </label>
+            <button type="button">Refresh</button>
+            <button type="button">Reorder mode</button>
+          </div>
+          <p class="muted">
+            Queue order = EM scheduler priority. Reorder mode activates drag-to-sort (see Board 2).
+            Held tasks stay visible but are skipped by the scheduler.
+          </p>
+
+          <!-- Queue table (GET /api/v1/queue) -->
+          <div class="table-wrap" role="region" aria-label="Work queue entries">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pos</th>
+                  <th>Task</th>
+                  <th>Queue status</th>
+                  <th>Time in queue</th>
+                  <th>Workflow</th>
+                  <th>Assigned at</th>
+                  <th>Held at / reason</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>1</code></td>
+                  <td>
+                    <p class="task-title">TASK-041</p>
+                    <p class="task-meta">Modularize web-api-service &amp; cli-types</p>
+                  </td>
+                  <td><span class="pill pending">pending</span></td>
+                  <td class="task-meta">2h 28m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="hold-btn">Hold</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>2</code></td>
+                  <td>
+                    <p class="task-title">TASK-082</p>
+                    <p class="task-meta">Daemon event stream pagination</p>
+                  </td>
+                  <td><span class="pill assigned">assigned</span></td>
+                  <td class="task-meta">2h 4m</td>
+                  <td><code class="task-meta">wf-run-0441…</code></td>
+                  <td class="task-meta">2026-02-28 09:14 UTC</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" disabled aria-describedby="hold-assigned-note">
+                        Hold
+                      </button>
+                    </div>
+                    <p id="hold-assigned-note" class="rationale">
+                      Cannot hold: task is already assigned to a running workflow.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>3</code></td>
+                  <td>
+                    <p class="task-title">TASK-085</p>
+                    <p class="task-meta">Queue management REST API endpoints</p>
+                  </td>
+                  <td><span class="pill assigned">assigned</span></td>
+                  <td class="task-meta">2h 2m</td>
+                  <td><code class="task-meta">wf-run-0462…</code></td>
+                  <td class="task-meta">2026-02-28 09:22 UTC</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" disabled>Hold</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>4</code></td>
+                  <td>
+                    <p class="task-title">TASK-091</p>
+                    <p class="task-meta">Agent pool lifecycle integration</p>
+                  </td>
+                  <td><span class="pill pending">pending</span></td>
+                  <td class="task-meta">1h 58m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="hold-btn">Hold</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>5</code></td>
+                  <td>
+                    <p class="task-title">TASK-095</p>
+                    <p class="task-meta">Priority MoSCoW unification</p>
+                  </td>
+                  <td><span class="pill held">held</span></td>
+                  <td class="task-meta">1h 48m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <p class="task-meta">2026-02-28 08:02 UTC</p>
+                    <p class="hold-reason-meta">Blocked externally — waiting for TASK-041.</p>
+                  </td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="success">Release</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>6</code></td>
+                  <td>
+                    <p class="task-title">TASK-097</p>
+                    <p class="task-meta">Sanitize_identifier deduplication</p>
+                  </td>
+                  <td><span class="pill pending">pending</span></td>
+                  <td class="task-meta">1h 38m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="hold-btn">Hold</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>7</code></td>
+                  <td>
+                    <p class="task-title">TASK-099</p>
+                    <p class="task-meta">Web UI dark-mode token pass</p>
+                  </td>
+                  <td><span class="pill held">held</span></td>
+                  <td class="task-meta">1h 58m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <p class="task-meta">2026-02-28 07:45 UTC</p>
+                    <p class="hold-reason-meta">Defer until design review complete.</p>
+                  </td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="success">Release</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>8</code></td>
+                  <td>
+                    <p class="task-title">TASK-102</p>
+                    <p class="task-meta">Axum version migration 0.7 → 0.8</p>
+                  </td>
+                  <td><span class="pill pending">pending</span></td>
+                  <td class="task-meta">1h 28m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="hold-btn">Hold</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td><code>9</code></td>
+                  <td>
+                    <p class="task-title">TASK-107</p>
+                    <p class="task-meta">Classify_error string-match refactor</p>
+                  </td>
+                  <td><span class="pill pending">pending</span></td>
+                  <td class="task-meta">1h 18m</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td class="muted">—</td>
+                  <td>
+                    <div class="action-stack">
+                      <button type="button" class="hold-btn">Hold</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════
+           BOARD 2 — Reorder Mode (POST /api/v1/queue/reorder)
+           ══════════════════════════════════════════════════════════ -->
+      <section class="board" aria-labelledby="board2-title">
+        <h2 class="board-title" id="board2-title">
+          Reorder Mode — Drag-to-Sort + Before / After Diff
+          (<code>POST /api/v1/queue/reorder</code>)
+        </h2>
+
+        <div class="board-columns">
+          <article class="panel" aria-labelledby="reorder-panel-title">
+            <div class="panel-head">
+              <h3 id="reorder-panel-title">Drag to reprioritize</h3>
+              <p class="muted">Held tasks are locked in this UI view.</p>
+            </div>
+
+            <p class="muted">
+              Drag items to set a new order. In this UI, only <code>pending</code> entries are
+              shown as draggable. <strong>Note:</strong> the API (<code>POST /api/v1/queue/reorder</code>)
+              accepts held task IDs in <code>task_ids</code> and repositions them while preserving
+              their held status — UI locking is a simplification for this drag interface.
+              On save, the full ordered <code>task_ids</code> array (pending-only) is sent.
+            </p>
+
+            <ul class="drag-list" aria-label="Reorderable queue items" role="listbox">
+              <li class="drag-item dragging" draggable="true" aria-selected="true" role="option">
+                <span class="drag-handle" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">1</span>
+                <div>
+                  <p class="drag-task-id">TASK-041</p>
+                  <p class="drag-task-meta">pending · Modularize web-api-service</p>
+                </div>
+              </li>
+
+              <li class="drag-item drop-target" role="option" aria-selected="false">
+                <span class="drag-handle" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">2</span>
+                <div>
+                  <p class="drag-task-id">TASK-091</p>
+                  <p class="drag-task-meta">pending · Agent pool lifecycle</p>
+                </div>
+              </li>
+
+              <li class="drag-item" draggable="true" role="option">
+                <span class="drag-handle" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">3</span>
+                <div>
+                  <p class="drag-task-id">TASK-097</p>
+                  <p class="drag-task-meta">pending · sanitize_identifier dedup</p>
+                </div>
+              </li>
+
+              <li class="drag-item" draggable="true" role="option">
+                <span class="drag-handle" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">4</span>
+                <div>
+                  <p class="drag-task-id">TASK-102</p>
+                  <p class="drag-task-meta">pending · Axum version migration</p>
+                </div>
+              </li>
+
+              <li class="drag-item" draggable="true" role="option">
+                <span class="drag-handle" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">5</span>
+                <div>
+                  <p class="drag-task-id">TASK-107</p>
+                  <p class="drag-task-meta">pending · classify_error refactor</p>
+                </div>
+              </li>
+
+              <li
+                class="drag-item"
+                aria-disabled="true"
+                aria-describedby="held-note-095"
+                style="opacity: 0.6; cursor: not-allowed"
+              >
+                <span class="drag-handle" aria-hidden="true" style="opacity: 0.3">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">—</span>
+                <div>
+                  <p class="drag-task-id">TASK-095 <span class="pill held">held</span></p>
+                  <p class="drag-task-meta">Priority MoSCoW unification · locked</p>
+                </div>
+              </li>
+              <p id="held-note-095" class="rationale">Held tasks are excluded from reordering.</p>
+
+              <li
+                class="drag-item"
+                aria-disabled="true"
+                style="opacity: 0.6; cursor: not-allowed"
+              >
+                <span class="drag-handle" aria-hidden="true" style="opacity: 0.3">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="drag-pos">—</span>
+                <div>
+                  <p class="drag-task-id">TASK-099 <span class="pill held">held</span></p>
+                  <p class="drag-task-meta">Web UI dark-mode · locked</p>
+                </div>
+              </li>
+            </ul>
+
+            <div class="toolbar-row" style="margin-top: 12px">
+              <button type="button" class="success">Save order</button>
+              <button type="button">Discard</button>
+            </div>
+          </article>
+
+          <article class="panel" aria-labelledby="diff-title">
+            <div class="panel-head">
+              <h3 id="diff-title">Order diff preview</h3>
+              <p class="muted">Before → After for pending items</p>
+            </div>
+
+            <p class="muted">
+              Preview before committing. The request body will be:
+              <code>{ "task_ids": ["TASK-041","TASK-091","TASK-097","TASK-102","TASK-107"] }</code>
+            </p>
+
+            <div class="reorder-diff" role="region" aria-label="Queue reorder diff">
+              <div class="diff-col">
+                <p class="diff-col-label">Before</p>
+                <div class="diff-row"><span>1</span><span>TASK-041</span></div>
+                <div class="diff-row moved"><span>2</span><span>TASK-082 <em>(assigned)</em></span></div>
+                <div class="diff-row"><span>3</span><span>TASK-085 <em>(assigned)</em></span></div>
+                <div class="diff-row"><span>4</span><span>TASK-091</span></div>
+                <div class="diff-row"><span>5</span><span>TASK-097</span></div>
+              </div>
+              <div class="diff-col">
+                <p class="diff-col-label">After (pending only)</p>
+                <div class="diff-row moved">
+                  <span class="diff-arrow">↑</span><span>1</span><span>TASK-041</span>
+                </div>
+                <div class="diff-row moved">
+                  <span class="diff-arrow">↑</span><span>2</span><span>TASK-091</span>
+                </div>
+                <div class="diff-row"><span>3</span><span>TASK-097</span></div>
+                <div class="diff-row"><span>4</span><span>TASK-102</span></div>
+                <div class="diff-row"><span>5</span><span>TASK-107</span></div>
+              </div>
+            </div>
+
+            <div class="status-card" style="margin-top: 12px">
+              <dl>
+                <div><dt>Endpoint</dt><dd><code>POST /api/v1/queue/reorder</code></dd></div>
+                <div><dt>Payload</dt><dd><code>{ "task_ids": ["TASK-041", …] }</code></dd></div>
+                <div><dt>Event emitted</dt><dd><code>queue-reorder</code> on SSE stream</dd></div>
+                <div><dt>Error: unknown task_id</dt><dd>silently skipped, appended to tail</dd></div>
+              </dl>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════
+           BOARD 3 — Hold &amp; Release Flows
+           ══════════════════════════════════════════════════════════ -->
+      <section class="board" aria-labelledby="board3-title">
+        <h2 class="board-title" id="board3-title">
+          Hold &amp; Release Flows
+          (<code>POST /api/v1/queue/hold/:task_id</code> + <code>POST /api/v1/queue/release/:task_id</code>)
+        </h2>
+
+        <div class="board-columns">
+
+          <!-- Hold form -->
+          <article class="panel" aria-labelledby="hold-form-title">
+            <div class="panel-head">
+              <h3 id="hold-form-title">Place task on hold</h3>
+              <p class="muted"><code>POST /api/v1/queue/hold/TASK-041</code></p>
+            </div>
+
+            <div class="status-card">
+              <dl>
+                <div><dt>Task</dt><dd><strong>TASK-041</strong> · Modularize web-api-service</dd></div>
+                <div><dt>Current queue status</dt><dd><span class="pill pending">pending</span></dd></div>
+                <div><dt>Allowed?</dt><dd>Yes — only <code>pending</code> entries can be held.</dd></div>
+              </dl>
+            </div>
+
+            <div class="hold-form-card" role="form" aria-labelledby="hold-form-title">
+              <label class="field-inline" for="hold-reason">
+                Hold reason (optional)
+                <textarea id="hold-reason" rows="3" placeholder="e.g. Waiting for upstream API spec…">Blocking dependency on TASK-097 — hold until dedup is resolved.</textarea>
+              </label>
+              <div class="toolbar-row">
+                <button type="button" class="hold-btn">Confirm hold</button>
+                <button type="button">Cancel</button>
+              </div>
+              <p class="muted">
+                Request: <code>POST /api/v1/queue/hold/TASK-041</code><br />
+                Body: <code>{ "reason": "Blocking dependency on TASK-097 …" }</code><br />
+                Event: <code>queue-hold</code> on SSE stream.<br />
+                Conflict guard: if status is not <code>pending</code>, returns HTTP 409.
+              </p>
+            </div>
+
+            <div class="telemetry success" style="margin-top: 12px" role="status" aria-live="polite">
+              <p><strong>success</strong> <code>queue.hold</code></p>
+              <p>
+                <code>POST /api/v1/queue/hold/TASK-041</code> → HTTP 200<br />
+                <code>{ "message": "task held successfully", "task_id": "TASK-041" }</code>
+              </p>
+            </div>
+
+            <div class="telemetry error" role="alert" aria-live="assertive">
+              <p><strong>conflict</strong> <code>queue.hold</code></p>
+              <p>
+                Task TASK-082 is not in pending state (status: <code>assigned</code>).<br />
+                HTTP 409. Refresh row and retry on a pending entry.
+              </p>
+            </div>
+          </article>
+
+          <!-- Release form -->
+          <article class="panel" aria-labelledby="release-form-title">
+            <div class="panel-head">
+              <h3 id="release-form-title">Release a held task</h3>
+              <p class="muted"><code>POST /api/v1/queue/release/TASK-095</code></p>
+            </div>
+
+            <div class="status-card">
+              <dl>
+                <div><dt>Task</dt><dd><strong>TASK-095</strong> · Priority MoSCoW unification</dd></div>
+                <div><dt>Current queue status</dt><dd><span class="pill held">held</span></dd></div>
+                <div><dt>Hold reason</dt><dd>Blocked externally — waiting for TASK-041.</dd></div>
+                <div><dt>Held since</dt><dd>2026-02-28 08:02 UTC</dd></div>
+              </dl>
+            </div>
+
+            <div class="hold-form-card" role="region" aria-labelledby="release-form-title">
+              <p class="muted">
+                Release is an immediate, reversible action — no confirmation required.
+              </p>
+              <div class="toolbar-row">
+                <button type="button" class="success" aria-label="Release TASK-095">Release now</button>
+              </div>
+              <p class="muted">
+                Request: <code>POST /api/v1/queue/release/TASK-095</code><br />
+                Body: <code>{}</code><br />
+                Effect: sets status back to <code>pending</code>, clears <code>held_at</code> and
+                <code>hold_reason</code>.<br />
+                Conflict guard: if status is not <code>held</code>, returns HTTP 409.
+              </p>
+            </div>
+
+            <div class="status-card" style="margin-top: 12px">
+              <h4>State machine</h4>
+              <p class="muted">Valid queue status transitions:</p>
+              <ul>
+                <li><code>pending</code> → <strong>hold</strong> → <code>held</code></li>
+                <li><code>held</code> → <strong>release</strong> → <code>pending</code></li>
+                <li><code>pending</code> → <em>daemon assigns</em> → <code>assigned</code></li>
+                <li><code>assigned</code> → <em>workflow completes</em> → <em>removed from queue</em></li>
+              </ul>
+              <p class="muted" style="margin-top: 8px">
+                The queue status is independent from task status in
+                <code>.ao/state/tasks.json</code>. A task can be <code>held</code> in the queue
+                while its task record is still <code>ready</code>.
+              </p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════
+           BOARD 4 — Live Telemetry / SSE Feed
+           ══════════════════════════════════════════════════════════ -->
+      <section class="board" aria-labelledby="board4-title">
+        <h2 class="board-title" id="board4-title">
+          Live Event Feed — Queue SSE Telemetry
+        </h2>
+
+        <div class="board-columns">
+          <article class="panel" aria-labelledby="telemetry-title">
+            <div class="panel-head">
+              <h3 id="telemetry-title">SSE stream events (queue operations)</h3>
+              <p class="muted">
+                Subscribed via <code>GET /api/events</code>. Filtered to
+                <code>queue-*</code> event types.
+              </p>
+            </div>
+            <p class="muted" aria-live="polite">Latest: <code>queue-release</code> at 2026-02-28 09:30:01 UTC</p>
+
+            <ol class="telemetry-list" aria-label="Queue event stream" aria-live="polite">
+              <li class="telemetry success">
+                <p><strong>queue-release</strong> seq=0142</p>
+                <p>
+                  <code>task_id: TASK-099</code> → status: <code>pending</code><br />
+                  2026-02-28 09:30:01 UTC
+                </p>
+              </li>
+              <li class="telemetry">
+                <p><strong>queue-reorder</strong> seq=0141</p>
+                <p>
+                  New order (pending): TASK-041, TASK-091, TASK-097, TASK-102, TASK-107<br />
+                  2026-02-28 09:28:47 UTC
+                </p>
+              </li>
+              <li class="telemetry warning">
+                <p><strong>queue-hold</strong> seq=0140</p>
+                <p>
+                  <code>task_id: TASK-099</code> · reason: Defer until design review complete.<br />
+                  2026-02-28 07:45:33 UTC
+                </p>
+              </li>
+              <li class="telemetry warning">
+                <p><strong>queue-hold</strong> seq=0139</p>
+                <p>
+                  <code>task_id: TASK-095</code> · reason: Blocked externally — waiting for TASK-041.<br />
+                  2026-02-28 08:02:12 UTC
+                </p>
+              </li>
+              <li class="telemetry success">
+                <p><strong>queue-release</strong> seq=0138</p>
+                <p>
+                  <code>task_id: TASK-085</code> → assigned to wf-run-0462<br />
+                  2026-02-28 09:22:04 UTC
+                </p>
+              </li>
+            </ol>
+          </article>
+
+          <article class="panel" aria-labelledby="api-ref-title">
+            <div class="panel-head">
+              <h3 id="api-ref-title">API reference summary</h3>
+              <p class="muted">Contract overview for external integrations</p>
+            </div>
+
+            <div class="detail-card">
+              <h4><code>GET /api/v1/queue</code></h4>
+              <p class="muted">Returns ordered work item list.</p>
+              <pre>
+{
+  "entries": [
+    {
+      "task_id": "TASK-041",
+      "status": "pending",
+      "workflow_id": null,
+      "queued_at": "2026-02-28T07:00:00Z", // ISO 8601 — null on legacy entries
+      "assigned_at": null,
+      "held_at": null,
+      "hold_reason": null
+    }
+  ],
+  "total": 9
+}</pre>
+            </div>
+
+            <div class="detail-card" style="margin-top: 10px">
+              <h4><code>GET /api/v1/queue/stats</code></h4>
+              <pre>
+{
+  "depth": 9,
+  "pending": 5,
+  "assigned": 2,
+  "held": 2,
+  "ready": 5,
+  "throughput": null,           // optional: tasks/hr (null until queued_at added)
+  "avg_wait_time_seconds": null // optional: avg wait (null until queued_at added)
+}</pre>
+            </div>
+
+            <div class="detail-card" style="margin-top: 10px">
+              <h4><code>POST /api/v1/queue/reorder</code></h4>
+              <pre>
+// request
+{ "task_ids": ["TASK-041", "TASK-091", "TASK-097"] }
+
+// response
+{ "message": "queue reordered successfully" }</pre>
+            </div>
+
+            <div class="detail-card" style="margin-top: 10px">
+              <h4><code>POST /api/v1/queue/hold/:task_id</code></h4>
+              <pre>
+// request (reason optional)
+{ "reason": "Waiting for TASK-041" }
+
+// success
+{ "message": "task held successfully", "task_id": "TASK-041" }
+
+// 409 conflict
+{ "error": "task TASK-082 is not in pending state" }</pre>
+            </div>
+
+            <div class="detail-card" style="margin-top: 10px">
+              <h4><code>POST /api/v1/queue/release/:task_id</code></h4>
+              <pre>
+// request body (empty — no confirmation needed)
+{}
+
+// success
+{ "message": "task released successfully", "task_id": "TASK-095" }
+
+// 409 conflict
+{ "error": "task TASK-041 is not in held state" }</pre>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════
+           BOARD 5 — Mobile 320px Queue View
+           ══════════════════════════════════════════════════════════ -->
+      <section class="board" aria-labelledby="board5-title">
+        <h2 class="board-title" id="board5-title">
+          Mobile Queue Dashboard (320px)
+        </h2>
+
+        <div class="mobile-frame" role="region" aria-label="Mobile queue wireframe">
+          <header class="mobile-header">
+            <p class="breadcrumbs">/api/v1/queue · ao-cli</p>
+            <h3>Work Queue</h3>
+            <p class="muted">daemon: autonomous · 9 entries</p>
+          </header>
+
+          <!-- Mobile stats -->
+          <section class="mobile-panel">
+            <h4>Stats</h4>
+            <div class="mobile-stats-row" style="grid-template-columns: repeat(4, 1fr)">
+              <div class="mobile-stat">
+                <p class="mobile-stat-value">9</p>
+                <p class="mobile-stat-label">depth</p>
+              </div>
+              <div class="mobile-stat">
+                <p class="mobile-stat-value">5</p>
+                <p class="mobile-stat-label">pending</p>
+              </div>
+              <div class="mobile-stat">
+                <p class="mobile-stat-value">2</p>
+                <p class="mobile-stat-label">assigned</p>
+              </div>
+              <div class="mobile-stat">
+                <p class="mobile-stat-value" style="color: var(--held)">2</p>
+                <p class="mobile-stat-label">held</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- Mobile queue items -->
+          <section class="mobile-panel">
+            <h4>Queue</h4>
+            <div class="mobile-queue-item">
+              <div style="display: flex; justify-content: space-between; align-items: center">
+                <p class="task-title">TASK-041</p>
+                <span class="pill pending">pending</span>
+              </div>
+              <p class="task-meta">Modularize web-api-service</p>
+              <button type="button" class="hold-btn" style="width: 100%">Hold</button>
+            </div>
+
+            <div class="mobile-queue-item">
+              <div style="display: flex; justify-content: space-between; align-items: center">
+                <p class="task-title">TASK-082</p>
+                <span class="pill assigned">assigned</span>
+              </div>
+              <p class="task-meta">Daemon event stream pagination</p>
+              <p class="rationale">Running wf-run-0441 — cannot hold.</p>
+            </div>
+
+            <div class="mobile-queue-item held">
+              <div style="display: flex; justify-content: space-between; align-items: center">
+                <p class="task-title">TASK-095</p>
+                <span class="pill held">held</span>
+              </div>
+              <p class="task-meta">Waiting for TASK-041</p>
+              <button type="button" class="success" style="width: 100%">Release</button>
+            </div>
+          </section>
+
+          <!-- Mobile actions -->
+          <section class="mobile-panel">
+            <h4>Actions</h4>
+            <button type="button" style="width: 100%; margin-bottom: 6px">Refresh queue</button>
+            <button type="button" style="width: 100%">Reorder (drag)</button>
+            <p class="rationale" style="margin-top: 6px">
+              Drag-to-reorder is available in landscape or desktop view.
+            </p>
+          </section>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>
