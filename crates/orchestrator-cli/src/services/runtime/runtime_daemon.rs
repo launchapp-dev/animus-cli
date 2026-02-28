@@ -602,6 +602,9 @@ fn spawn_autonomous_daemon_run(
         command.env("AO_RUNNER_SCOPE", runner_scope_value(scope));
     }
 
+    command.env_remove("CLAUDECODE");
+    command.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
     let child = command
         .spawn()
         .context("failed to spawn autonomous daemon run")?;

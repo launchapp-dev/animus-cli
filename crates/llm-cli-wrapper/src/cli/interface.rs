@@ -171,6 +171,9 @@ pub trait CliInterface: Send + Sync {
             cmd.env(key, value);
         }
 
+        cmd.env_remove("CLAUDECODE");
+        cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
         debug!("About to spawn command...");
         let child = cmd.spawn()?;
         debug!("Spawn successful!");

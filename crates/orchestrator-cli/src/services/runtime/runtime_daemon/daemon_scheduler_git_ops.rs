@@ -1982,6 +1982,34 @@ pub(super) async fn ensure_task_execution_cwd(
     Ok(worktree_path_str)
 }
 
+pub(super) fn rebase_worktree_on_main(project_root: &str, worktree_cwd: &str) {
+    if worktree_cwd == project_root {
+        return;
+    }
+
+    let merge_base = "origin/main";
+    let status = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(worktree_cwd)
+        .args(["rebase", merge_base])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        _ => {
+            let _ = ProcessCommand::new("git")
+                .arg("-C")
+                .arg(worktree_cwd)
+                .args(["rebase", "--abort"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
 fn is_git_repo(project_root: &str) -> bool {
     ProcessCommand::new("git")
         .arg("-C")
