@@ -1,19 +1,20 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "claude-sonnet-4-6",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:38:45.354587Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-105",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "On daemon startup (daemon run entry point), detect workflows in 'running' status whose phase agents are not actually running. For each orphaned workflow: check if the agent-runner has an active agent for that workflow's run ID. If not, either reset the workflow phase to allow re-execution, or cancel the workflow and reset the task to 'ready'. This handles the scenario where the daemon crashes mid-execution and restarts \u2014 currently these workflows get stuck in 'running' forever with no agent. The reconcile_stale flag partially addresses this but doesn't check agent process liveness.",
+  "description": "On daemon startup (daemon run entry point), detect workflows in 'running' status whose phase agents are not actually running. For each orphaned workflow: check if the agent-runner has an active agent for that workflow's run ID. If not, either reset the workflow phase to allow re-execution, or cancel the workflow and reset the task to 'ready'. This handles the scenario where the daemon crashes mid-execution and restarts — currently these workflows get stuck in 'running' forever with no agent. The reconcile_stale flag partially addresses this but doesn't check agent process liveness.",
   "estimated_effort": null,
   "id": "TASK-105",
   "impact_area": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T17:06:18.892379Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:07:14.316508Z",
-    "updated_at": "2026-02-27T18:38:45.354588Z",
+    "updated_at": "2026-02-28T04:25:02.500455Z",
     "updated_by": "ao-daemon",
-    "version": 16
+    "version": 37
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add startup detection of orphaned running workflows and automatic recovery",
   "type": "feature",

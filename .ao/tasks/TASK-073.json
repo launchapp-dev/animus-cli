@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "minimax/MiniMax-M2.1",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:37:05.984159Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-073",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:05:38.594366Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T18:31:45.552849Z",
-    "updated_at": "2026-02-27T18:37:05.984160Z",
+    "updated_at": "2026-02-28T08:10:54.850019Z",
     "updated_by": "ao-daemon",
-    "version": 7
+    "version": 19
   },
-  "paused": true,
+  "paused": false,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add command palette and vim-style navigation to TUI",
   "type": "feature",

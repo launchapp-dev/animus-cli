@@ -18,8 +18,8 @@
     "default": {
       "description": "Default workflow phase agent profile.",
       "system_prompt": "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
-      "tool": "codex",
-      "model": "gpt-5.3-codex",
+      "tool": null,
+      "model": null,
       "fallback_models": [],
       "reasoning_effort": null,
       "web_search": null,
@@ -36,8 +36,8 @@
     "implementation": {
       "description": "Implementation-focused coding agent profile.",
       "system_prompt": "You are the implementation agent. Make minimal production-ready code changes and emit machine-readable completion payloads required by policy.",
-      "tool": "codex",
-      "model": "gpt-5.3-codex",
+      "tool": null,
+      "model": null,
       "fallback_models": [],
       "reasoning_effort": null,
       "web_search": null,

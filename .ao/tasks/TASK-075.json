@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "claude-sonnet-4-6",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:40:14.490740Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-075",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:05:49.682620Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:13:49.344564Z",
-    "updated_at": "2026-02-27T18:40:14.490741Z",
+    "updated_at": "2026-02-28T02:44:31.789536Z",
     "updated_by": "ao-daemon",
-    "version": 14
+    "version": 29
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add MCP resources for project state context injection",
   "type": "feature",

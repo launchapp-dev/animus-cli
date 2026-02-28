@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "claude-sonnet-4-6",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T19:00:36.745400Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-102",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:30:47.315346Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T18:59:43.772322Z",
-    "updated_at": "2026-02-27T19:00:36.745400Z",
+    "updated_at": "2026-02-28T02:46:55.788944Z",
     "updated_by": "ao-daemon",
-    "version": 6
+    "version": 14
   },
-  "paused": true,
+  "paused": false,
   "priority": "low",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add ao.files.scope MCP tool for task-relevant file discovery",
   "type": "feature",

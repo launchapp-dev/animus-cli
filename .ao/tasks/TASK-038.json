@@ -1,17 +1,20 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "minimax/MiniMax-M2.1",
+    "role": "default",
+    "type": "agent"
   },
-  "blocked_at": "2026-02-27T02:50:21.790532Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-038",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "The token auto-provisioning code was added manually to Config::ensure_token_exists in protocol/src/config.rs and called from runner_helpers.rs. However, there's no test that exercises the full daemon\u2192runner startup path end-to-end with token generation. Add an integration test that starts from a fresh config dir with no token set, calls ensure_agent_runner_running, and verifies the runner starts successfully with a generated token. Also consider whether the token should rotate periodically for security.",
+  "description": "The token auto-provisioning code was added manually to Config::ensure_token_exists in protocol/src/config.rs and called from runner_helpers.rs. However, there's no test that exercises the full daemon→runner startup path end-to-end with token generation. Add an integration test that starts from a fresh config dir with no token set, calls ensure_agent_runner_running, and verifies the runner starts successfully with a generated token. Also consider whether the token should rotate periodically for security.",
   "estimated_effort": null,
   "id": "TASK-038",
   "impact_area": [],
@@ -22,11 +25,11 @@
     "created_at": "2026-02-27T01:26:38.334067Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T01:26:46.781964Z",
-    "updated_at": "2026-02-27T02:50:21.845761Z",
+    "updated_at": "2026-02-28T07:50:29.232361Z",
     "updated_by": "ao-daemon",
-    "version": 19
+    "version": 44
   },
-  "paused": true,
+  "paused": false,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -35,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Auto-provision IPC auth token in ensure_agent_runner_running",
   "type": "test",

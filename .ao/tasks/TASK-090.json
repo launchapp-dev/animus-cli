@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "minimax/MiniMax-M2.1",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:44:27.269651Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-090",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:10:21.125905Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T18:09:53.534226Z",
-    "updated_at": "2026-02-27T18:44:27.269652Z",
+    "updated_at": "2026-02-28T07:49:48.516328Z",
     "updated_by": "ao-daemon",
-    "version": 9
+    "version": 25
   },
-  "paused": true,
+  "paused": false,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add storage backend selection and configuration to CLI and daemon",
   "type": "feature",

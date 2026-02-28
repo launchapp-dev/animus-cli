@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "minimax/MiniMax-M2.1",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:41:30.890904Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-065",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:05:12.945608Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:46:18.030316Z",
-    "updated_at": "2026-02-27T18:41:30.890905Z",
+    "updated_at": "2026-02-28T08:09:43.919905Z",
     "updated_by": "ao-daemon",
-    "version": 11
+    "version": 35
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add real-time dashboard with live daemon metrics and SSE integration",
   "type": "feature",

@@ -1,12 +1,13 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "minimax/MiniMax-M2.1",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T19:00:42.402807Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-084",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T16:09:00.061145Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T18:59:45.716987Z",
-    "updated_at": "2026-02-27T19:00:42.402808Z",
+    "updated_at": "2026-02-28T08:09:17.690233Z",
     "updated_by": "ao-daemon",
-    "version": 6
+    "version": 18
   },
-  "paused": true,
+  "paused": false,
   "priority": "low",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add API versioning framework to web API",
   "type": "feature",

@@ -1,19 +1,20 @@
 {
   "assignee": {
-    "model": "gpt-5.3-codex",
+    "model": "minimax/MiniMax-M2.1",
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-02-27T18:43:15.230440Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
+  "blocked_reason": null,
   "branch_name": "ao/task-063",
   "cancelled": false,
   "checklist": [],
   "complexity": "medium",
   "deadline": null,
   "dependencies": [],
-  "description": "Add `ao queue` command group:\n- `ao queue list` \u2014 show ordered queue, running workflows, and deferred tasks\n- `ao queue push TASK-XXX` \u2014 manually add to queue\n- `ao queue remove TASK-XXX` \u2014 remove from queue\n- `ao queue explain` \u2014 show the EM's last reasoning for the current ordering\n\nSupport --json output following the ao.cli.v1 envelope contract.",
+  "description": "Add `ao queue` command group:\n- `ao queue list` — show ordered queue, running workflows, and deferred tasks\n- `ao queue push TASK-XXX` — manually add to queue\n- `ao queue remove TASK-XXX` — remove from queue\n- `ao queue explain` — show the EM's last reasoning for the current ordering\n\nSupport --json output following the ao.cli.v1 envelope contract.",
   "estimated_effort": null,
   "id": "TASK-063",
   "impact_area": [],
@@ -24,11 +25,11 @@
     "created_at": "2026-02-27T15:58:32.576818Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T16:03:24.472817Z",
-    "updated_at": "2026-02-27T18:43:15.230441Z",
+    "updated_at": "2026-02-28T08:09:46.050038Z",
     "updated_by": "ao-daemon",
-    "version": 14
+    "version": 26
   },
-  "paused": true,
+  "paused": false,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "in-progress",
   "tags": [],
   "title": "Add ao queue CLI command for queue visibility",
   "type": "feature",
