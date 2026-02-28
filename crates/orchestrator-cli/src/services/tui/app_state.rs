@@ -185,7 +185,9 @@ impl AppState {
     pub(crate) fn set_tasks(&mut self, tasks: Vec<TaskSnapshot>) {
         let len = tasks.len();
         self.tasks = tasks;
-        if self.task_selected_idx >= len && len > 0 {
+        if len == 0 {
+            self.task_selected_idx = 0;
+        } else if self.task_selected_idx >= len {
             self.task_selected_idx = len - 1;
         }
     }
@@ -228,7 +230,9 @@ impl AppState {
                 Ok(AppEvent::TasksRefreshed(tasks)) => {
                     let len = tasks.len();
                     self.tasks = tasks;
-                    if self.task_selected_idx >= len && len > 0 {
+                    if len == 0 {
+                        self.task_selected_idx = 0;
+                    } else if self.task_selected_idx >= len {
                         self.task_selected_idx = len - 1;
                     }
                     self.status_line = format!("tasks refreshed ({len})");
@@ -389,7 +393,7 @@ fn profile_sort_rank(profile: &ModelProfile) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::ordered_default_model_specs;
+    use super::*;
 
     #[test]
     fn ordered_defaults_start_with_tool_default_model() {
@@ -410,5 +414,258 @@ mod tests {
         let defaults = ordered_default_model_specs();
         let unique: std::collections::HashSet<_> = defaults.iter().cloned().collect();
         assert_eq!(unique.len(), defaults.len());
+    }
+
+    #[test]
+    fn focus_pane_cycle_toggles_between_models_and_tasks() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            vec![],
+            tx,
+            rx,
+        );
+        assert_eq!(state.focus, FocusPane::Models);
+        state.cycle_focus();
+        assert_eq!(state.focus, FocusPane::Tasks);
+        state.cycle_focus();
+        assert_eq!(state.focus, FocusPane::Models);
+    }
+
+    #[test]
+    fn task_navigation_moves_selection() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = vec![
+            TaskSnapshot {
+                id: "TASK-001".to_string(),
+                status: orchestrator_core::TaskStatus::Ready,
+                title: "First".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+            TaskSnapshot {
+                id: "TASK-002".to_string(),
+                status: orchestrator_core::TaskStatus::InProgress,
+                title: "Second".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+        ];
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            tasks,
+            tx,
+            rx,
+        );
+        assert_eq!(state.task_selected_idx, 0);
+        state.task_move_down();
+        assert_eq!(state.task_selected_idx, 1);
+        state.task_move_down();
+        assert_eq!(state.task_selected_idx, 1);
+        state.task_move_up();
+        assert_eq!(state.task_selected_idx, 0);
+        state.task_move_up();
+        assert_eq!(state.task_selected_idx, 0);
+    }
+
+    #[test]
+    fn selected_task_returns_current_selection() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = vec![
+            TaskSnapshot {
+                id: "TASK-001".to_string(),
+                status: orchestrator_core::TaskStatus::Ready,
+                title: "First".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+            TaskSnapshot {
+                id: "TASK-002".to_string(),
+                status: orchestrator_core::TaskStatus::InProgress,
+                title: "Second".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+        ];
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            tasks,
+            tx,
+            rx,
+        );
+        assert_eq!(
+            state.selected_task().map(|t| t.id.as_str()),
+            Some("TASK-001")
+        );
+        state.task_move_down();
+        assert_eq!(
+            state.selected_task().map(|t| t.id.as_str()),
+            Some("TASK-002")
+        );
+    }
+
+    #[test]
+    fn set_tasks_clamps_selection_to_valid_range() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            vec![],
+            tx,
+            rx,
+        );
+        state.task_selected_idx = 5;
+        state.set_tasks(vec![]);
+        assert_eq!(state.task_selected_idx, 0);
+        let tasks = vec![TaskSnapshot {
+            id: "TASK-001".to_string(),
+            status: orchestrator_core::TaskStatus::Ready,
+            title: "Only".to_string(),
+            description: String::new(),
+            assignee_label: String::new(),
+        }];
+        state.set_tasks(tasks);
+        assert_eq!(state.task_selected_idx, 0);
+    }
+
+    #[test]
+    fn set_tasks_adjusts_selection_when_exceeds_length() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = vec![
+            TaskSnapshot {
+                id: "TASK-001".to_string(),
+                status: orchestrator_core::TaskStatus::Ready,
+                title: "First".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+            TaskSnapshot {
+                id: "TASK-002".to_string(),
+                status: orchestrator_core::TaskStatus::Ready,
+                title: "Second".to_string(),
+                description: String::new(),
+                assignee_label: String::new(),
+            },
+        ];
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            tasks,
+            tx,
+            rx,
+        );
+        state.task_selected_idx = 1;
+        state.set_tasks(vec![TaskSnapshot {
+            id: "TASK-003".to_string(),
+            status: orchestrator_core::TaskStatus::Ready,
+            title: "Single".to_string(),
+            description: String::new(),
+            assignee_label: String::new(),
+        }]);
+        assert_eq!(state.task_selected_idx, 0);
+    }
+
+    #[test]
+    fn modal_state_task_detail_displays_selected_task() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = vec![TaskSnapshot {
+            id: "TASK-001".to_string(),
+            status: orchestrator_core::TaskStatus::Ready,
+            title: "Test Task".to_string(),
+            description: "A description".to_string(),
+            assignee_label: "agent:dev".to_string(),
+        }];
+        let mut state = AppState::new(
+            "endpoint".to_string(),
+            "agent".to_string(),
+            None,
+            None,
+            tasks,
+            tx,
+            rx,
+        );
+        state.modal = ModalState::TaskDetail;
+        assert!(matches!(state.modal, ModalState::TaskDetail));
+        assert_eq!(state.selected_task().unwrap().id, "TASK-001");
+    }
+
+    #[test]
+    fn modal_state_status_picker_tracks_selection() {
+        let modal = ModalState::StatusPicker { selected: 2 };
+        if let ModalState::StatusPicker { selected } = modal {
+            assert_eq!(selected, 2);
+        } else {
+            panic!("Expected StatusPicker modal");
+        }
+    }
+
+    #[test]
+    fn modal_state_assign_input_stores_input() {
+        let modal = ModalState::AssignInput {
+            input: "agent:reviewer".to_string(),
+        };
+        if let ModalState::AssignInput { input } = modal {
+            assert_eq!(input, "agent:reviewer");
+        } else {
+            panic!("Expected AssignInput modal");
+        }
+    }
+
+    #[test]
+    fn modal_state_create_task_has_focused_field() {
+        let modal = ModalState::CreateTask {
+            title_input: "New task".to_string(),
+            description_input: "Description".to_string(),
+            focused_field: CreateTaskField::Description,
+        };
+        if let ModalState::CreateTask {
+            title_input,
+            description_input,
+            focused_field,
+        } = modal
+        {
+            assert_eq!(title_input, "New task");
+            assert_eq!(description_input, "Description");
+            assert_eq!(focused_field, CreateTaskField::Description);
+        } else {
+            panic!("Expected CreateTask modal");
+        }
+    }
+
+    #[test]
+    fn modal_state_delete_task_tracks_confirm() {
+        let modal = ModalState::DeleteTask { confirm: true };
+        if let ModalState::DeleteTask { confirm } = modal {
+            assert!(confirm);
+        } else {
+            panic!("Expected DeleteTask modal");
+        }
+    }
+
+    #[test]
+    fn create_task_field_tab_order() {
+        assert_eq!(CreateTaskField::Title, CreateTaskField::Title);
+        assert_eq!(CreateTaskField::Description, CreateTaskField::Description);
+        assert_ne!(CreateTaskField::Title, CreateTaskField::Description);
+    }
+
+    #[test]
+    fn focus_pane_equality() {
+        assert_eq!(FocusPane::Models, FocusPane::Models);
+        assert_eq!(FocusPane::Tasks, FocusPane::Tasks);
+        assert_ne!(FocusPane::Models, FocusPane::Tasks);
     }
 }
