@@ -18,7 +18,7 @@ use protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
@@ -37,9 +37,9 @@ mod git_ops;
 #[path = "daemon_scheduler_phase_exec.rs"]
 mod phase_exec;
 #[path = "daemon_scheduler_failover.rs"]
-mod phase_failover;
+pub(crate) mod phase_failover;
 #[path = "daemon_scheduler_phase_targets.rs"]
-mod phase_targets;
+pub(crate) mod phase_targets;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
@@ -50,8 +50,9 @@ use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
 #[path = "daemon_scheduler_runtime_support.rs"]
-mod runtime_support;
+pub(crate) mod runtime_support;
 
+#[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]
 use runtime_support::WorkflowPipelineRuntimeRecord;
@@ -136,10 +137,7 @@ fn resolve_phase_runtime_settings(
     runtime_support::resolve_phase_runtime_settings(config, pipeline_id, phase_id)
 }
 
-fn phase_timeout_secs() -> Option<u64> {
-    runtime_support::phase_timeout_secs()
-}
-
+#[cfg(test)]
 fn phase_runner_attempts() -> usize {
     runtime_support::phase_runner_attempts()
 }
@@ -179,6 +177,7 @@ fn inject_codex_network_access(
     runtime_support::inject_codex_network_access(runtime_contract, tool_id, network_access_override)
 }
 
+#[cfg(test)]
 fn inject_cli_launch_overrides(
     runtime_contract: &mut Value,
     tool_id: &str,
@@ -1941,10 +1940,6 @@ fn workflow_has_active_research(workflow: &orchestrator_core::OrchestratorWorkfl
 
 const DEPENDENCY_GATE_PREFIX: &str = "dependency gate:";
 const MERGE_GATE_PREFIX: &str = "merge gate:";
-
-fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<()> {
-    git_ops::commit_implementation_changes(cwd, commit_message)
-}
 
 async fn post_success_merge_push_and_cleanup(
     hub: Arc<dyn ServiceHub>,

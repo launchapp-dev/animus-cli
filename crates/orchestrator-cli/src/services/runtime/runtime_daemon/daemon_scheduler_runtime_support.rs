@@ -1,27 +1,27 @@
 use super::*;
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub(super) struct WorkflowPhaseRuntimeSettings {
+pub(crate) struct WorkflowPhaseRuntimeSettings {
     #[serde(default)]
-    pub(super) tool: Option<String>,
+    pub(crate) tool: Option<String>,
     #[serde(default)]
-    pub(super) model: Option<String>,
+    pub(crate) model: Option<String>,
     #[serde(default)]
-    pub(super) fallback_models: Vec<String>,
+    pub(crate) fallback_models: Vec<String>,
     #[serde(default)]
-    pub(super) reasoning_effort: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
     #[serde(default)]
-    pub(super) web_search: Option<bool>,
+    pub(crate) web_search: Option<bool>,
     #[serde(default)]
-    pub(super) network_access: Option<bool>,
+    pub(crate) network_access: Option<bool>,
     #[serde(default)]
-    pub(super) timeout_secs: Option<u64>,
+    pub(crate) timeout_secs: Option<u64>,
     #[serde(default)]
-    pub(super) max_attempts: Option<usize>,
+    pub(crate) max_attempts: Option<usize>,
     #[serde(default)]
-    pub(super) extra_args: Vec<String>,
+    pub(crate) extra_args: Vec<String>,
     #[serde(default)]
-    pub(super) codex_config_overrides: Vec<String>,
+    pub(crate) codex_config_overrides: Vec<String>,
 }
 
 #[cfg(test)]
@@ -103,7 +103,7 @@ pub(super) fn resolve_phase_runtime_settings(
         .map(|(_, settings)| settings.clone())
 }
 
-pub(super) fn phase_timeout_secs() -> Option<u64> {
+pub(crate) fn phase_timeout_secs() -> Option<u64> {
     if std::env::var("AO_PHASE_WAIT_FOR_COMPLETION")
         .ok()
         .map(|value| value.trim().to_ascii_lowercase())
@@ -139,7 +139,7 @@ fn parse_env_flag_enabled(key: &str, default_value: bool) -> bool {
         .unwrap_or(default_value)
 }
 
-pub(super) fn phase_runner_attempts() -> usize {
+pub(crate) fn phase_runner_attempts() -> usize {
     parse_env_usize("AO_PHASE_RUN_ATTEMPTS")
         .unwrap_or(3)
         .clamp(1, 10)
@@ -523,7 +523,7 @@ pub(super) fn inject_claude_permission_mode(runtime_contract: &mut Value, tool_i
     }
 }
 
-pub(super) fn inject_cli_launch_overrides(
+pub(crate) fn inject_cli_launch_overrides(
     runtime_contract: &mut Value,
     tool_id: &str,
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
