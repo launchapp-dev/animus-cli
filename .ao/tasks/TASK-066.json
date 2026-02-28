@@ -25,9 +25,9 @@
     "created_at": "2026-02-27T16:05:15.157634Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:37:28.139998Z",
-    "updated_at": "2026-02-28T17:30:33.054673Z",
+    "updated_at": "2026-02-28T17:58:13.231112Z",
     "updated_by": "ao-daemon",
-    "version": 139
+    "version": 473
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "ready",
   "tags": [],
   "title": "Add workflow phase timeline visualization in web UI",
   "type": "feature",

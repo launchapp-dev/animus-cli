@@ -25,9 +25,9 @@
     "created_at": "2026-02-28T15:37:05.272282Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-28T15:37:09.904541Z",
-    "updated_at": "2026-02-28T17:30:29.571379Z",
+    "updated_at": "2026-02-28T17:58:23.205789Z",
     "updated_by": "ao-daemon",
-    "version": 571
+    "version": 947
   },
   "paused": false,
   "priority": "critical",
