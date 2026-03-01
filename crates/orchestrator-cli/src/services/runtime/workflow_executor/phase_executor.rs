@@ -200,14 +200,14 @@ pub(crate) fn build_phase_prompt(
     phase_id: &str,
 ) -> String {
     let is_write_phase =
-        matches!(phase_id, "implementation" | "code-review" | "testing" | "wireframe" | "design");
+        matches!(phase_id, "implementation" | "wireframe" | "design");
     let phase_action_rule = if is_write_phase {
         "Requirements:\n- Make concrete file changes in this repository."
     } else {
         "Requirements:\n- This is a READ-ONLY phase. Do NOT create, edit, or write any files. Do NOT run commands that modify the repository.\n- Read and analyze the codebase to assess the task. Your only output should be your assessment and phase decision."
     };
     let enforce_product_file_changes =
-        matches!(phase_id, "implementation" | "code-review" | "testing");
+        matches!(phase_id, "implementation");
     let phase_contract = phase_output_contract_for(project_root, phase_id);
     let require_commit_message = phase_requires_commit_message_with_config(project_root, phase_id);
     let product_change_rule = if enforce_product_file_changes {
@@ -795,7 +795,7 @@ pub(crate) async fn run_workflow_phase_with_agent(
             if let Some(schema) = phase_output_schema.as_ref() {
                 inject_response_schema_into_launch_args(&mut runtime_contract, schema);
             }
-            if !matches!(phase_id, "implementation" | "code-review" | "testing" | "wireframe" | "design") {
+            if !matches!(phase_id, "implementation" | "wireframe" | "design") {
                 inject_read_only_flag(&mut runtime_contract);
             }
             inject_cli_launch_overrides(
