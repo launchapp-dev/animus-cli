@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use cli_wrapper::{ensure_codex_config_override, ensure_flag, ensure_flag_value, LaunchInvocation};
 use protocol::{AgentRunEvent, OutputStreamType, RunId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -147,15 +148,9 @@ fn resolve_mcp_tool_enforcement(
     }
 }
 
-use cli_wrapper::{ensure_codex_config_override, ensure_flag, ensure_flag_value, LaunchInvocation};
-use std::collections::HashMap;
-use std::path::Path;
-
-use anyhow::{bail, Result};
-
 fn canonical_cli_name(command: &str) -> String {
     let trimmed = command.trim();
-    Path::new(trimmed)
+    std::path::Path::new(trimmed)
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(trimmed)
