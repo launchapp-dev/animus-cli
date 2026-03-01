@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Phase categories (ui_ux, research, write, review, testing, requirements) are hardcoded as string match arms in 3 separate files with inconsistent member sets:\n- `protocol/src/model_routing.rs` (is_ui_ux_phase, is_research_phase, is_review_phase, is_requirements_phase, is_testing_phase)\n- `daemon_scheduler_phase_targets.rs` (is_ui_ux_phase, is_research_phase — different UI/UX set)\n- `phase_executor.rs` (write-phase set hardcoded 3 times in same file)\n\nSolution: Define phase capabilities as data in the workflow/agent-runtime config. Each phase definition should declare capabilities like `can_write`, `needs_commit`, `model_group`, `parse_research_signal`, `safety_rules_template`. The daemon reads these from config instead of branching on string matches. This is the single highest-impact DRY fix — it touches model routing, phase execution, and phase target planning.",
+  "estimated_effort": null,
+  "id": "TASK-147",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:10:46.542654Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:10:46.542654Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "critical",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Extract phase category membership into config-driven phase capabilities",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

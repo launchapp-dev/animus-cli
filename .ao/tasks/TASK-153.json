@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Minor but easy DRY fixes:\n\n1. `ao.cli.v1` is defined as a const in two crates (shared/output.rs and orchestrator-web-contracts) plus appears as raw string literal in 8+ test/MCP files. Move to protocol crate as single pub const.\n\n2. `MAX_UNIX_SOCKET_PATH_LEN = 100` is independently defined in orchestrator-core/services/runner_helpers.rs and orchestrator-cli/shared/runner.rs. Move to protocol or orchestrator-core as single pub const.\n\n3. `Duration::from_millis(900)` appears 3x in runner_helpers.rs with no named constant. Extract as `const RUNNER_IPC_TIMEOUT: Duration`.\n\n4. `parse_cli_type` is duplicated between llm-cli-wrapper/main.rs and cli/launch.rs. Delete the main.rs copy and call launch::parse_cli_type.",
+  "estimated_effort": null,
+  "id": "TASK-153",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:11:19.111623Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:11:19.111623Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "medium",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Centralize `ao.cli.v1` schema string and `MAX_UNIX_SOCKET_PATH_LEN` constant",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Three independent systems gate whether a phase/tool can write files, and they contradict each other:\n\n1. `tool_supports_repository_writes()` in model_routing.rs — excludes gemini\n2. `cli_capabilities_for_tool()` in runtime_contract.rs — gives gemini `supports_file_editing: true`\n3. `is_write_phase` matches in phase_executor.rs — gates by phase name string, not tool\n\nThis means gemini is both capable and incapable of file editing depending on which code path checks. Unify into a single source of truth — either a tool capability struct or config-driven phase capabilities that declare write permission.",
+  "estimated_effort": null,
+  "id": "TASK-149",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:10:56.079532Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:10:56.079532Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Resolve contradictory write-capability systems (tool vs phase vs capabilities)",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

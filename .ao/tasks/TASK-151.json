@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "The model string \"gpt-5.3-codex\" is hardcoded in 9 non-routing locations:\n- cli_types/vision_types.rs (2x, clap default_value)\n- cli_types/requirements_types.rs (2x, clap default_value)\n- ops_planning/types.rs (3x, Default impls)\n- shared.rs (1x, Default impl)\n- review_impl.rs (1x, unwrap_or fallback)\n\nThese should all reference `protocol::default_model_for_tool(\"codex\")` or a shared const. Changing the default model currently requires editing 9+ files.",
+  "estimated_effort": null,
+  "id": "TASK-151",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:11:05.380957Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:11:05.380957Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Replace hardcoded `\"gpt-5.3-codex\"` literals with `default_model_for_tool()` calls",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

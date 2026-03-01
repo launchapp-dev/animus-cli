@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "The same TaskStatus → string match block is copy-pasted in 4 files:\n- orchestrator-core/src/services/planning_shared.rs:492\n- orchestrator-cli/src/services/operations/ops_git/worktree.rs:35\n- orchestrator-cli/src/services/runtime/runtime_daemon/daemon_git_helpers.rs:175\n- orchestrator-cli/src/services/tui/task_snapshot.rs:43\n\nAnd parse_task_status (string → TaskStatus with alias handling for \"todo\", \"in_progress\", \"on_hold\") is duplicated between CLI parsing.rs and web_api_service/parsing.rs.\n\nSame pattern for RequirementStatus → string (3 copies).\n\nSolution: Add `impl Display for TaskStatus` and `impl FromStr for TaskStatus` on the protocol type (or orchestrator-core if that's where TaskStatus lives). Same for RequirementStatus. Delete all private copies.",
+  "estimated_effort": null,
+  "id": "TASK-148",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:10:52.526899Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:10:52.526899Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Implement `Display`/`FromStr` for `TaskStatus` and `RequirementStatus` to eliminate 4x duplication",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}
