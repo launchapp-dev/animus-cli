@@ -56,7 +56,29 @@
       "Bash(opencode:*)",
       "Bash(gtimeout 30:*)",
       "Bash(pip3 install:*)",
-      "Bash(brew install:*)"
+      "Bash(brew install:*)",
+      "Bash(ao task:*)",
+      "Bash(export:*)",
+      "Bash(PATH=\"/Users/samishukri/ao-cli/target/debug:$PATH\" ao:*)",
+      "Bash(ao:*)",
+      "Bash(/Users/samishukri/ao-cli/target/debug/ao-oai-runner:*)",
+      "Bash(do echo:*)",
+      "Bash(cargo fix:*)",
+      "Bash(xargs:*)",
+      "WebFetch(domain:platform.minimax.io)",
+      "Bash(ao-oai-runner run:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(cargo doc:*)",
+      "Bash(./target/debug/ao-oai-runner run:*)",
+      "Bash(./target/debug/agent-runner:*)",
+      "Bash(/dev/null:*)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "ao"
+  ]
 }

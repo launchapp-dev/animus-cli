@@ -1252,6 +1252,10 @@ async fn handle_workflow_execute(
         return Err(anyhow!("workflow has no phases to execute"));
     }
 
+    if let Err(err) = hub.daemon().start().await {
+        eprintln!("warning: failed to auto-start runner for workflow execute: {err}");
+    }
+
     let task_complexity = Some(task.complexity);
     let mut results = Vec::new();
 
