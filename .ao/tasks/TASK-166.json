@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Two smaller duplications found:\n\n1. DaemonEventRecord duplicated:\n- orchestrator-cli/src/services/runtime/runtime_daemon/daemon_events.rs:15-23\n- orchestrator-web-contracts/src/models/daemon_event_record.rs:4-13\nBoth define identical fields (schema, id, seq, timestamp, event_type, project_root, data). Should be defined once in web-contracts and imported by CLI.\n\n2. default_allowed_tool_prefixes duplicated:\n- agent-runner/src/runner/process.rs:61-81\n- orchestrator-core/src/runtime_contract.rs:36-58\nBoth construct the same MCP tool prefix whitelist (ao., mcp__ao__, etc.). Should be in protocol since it's a policy constant.\n\n3. CLI tracker path logic duplicated:\n- agent-runner/src/cleanup.rs:15-19 (get_tracker_path)\n- orchestrator-cli/src/services/operations/ops_runner.rs:34-36 (cli_tracker_path_cli)\nBoth resolve to protocol::Config::global_config_dir().join(\"cli-tracker.json\").",
+  "estimated_effort": null,
+  "id": "TASK-166",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:27:42.383496Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:27:42.383496Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "low",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Deduplicate DaemonEventRecord type and MCP tool prefix resolution",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

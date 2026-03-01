@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Logic for checking if a process is alive and terminating it is duplicated with OS-specific handlers across 4 locations:\n\n- agent-runner/src/cleanup.rs:105-175 (process_exists, kill_process)\n- agent-runner/src/lock.rs:105-145 (process_exists with additional is_zombie_process check on Unix)\n- orchestrator-cli/src/services/runtime/runtime_daemon.rs:45-110 (is_process_alive, terminate_process)\n- orchestrator-cli/src/services/operations/ops_runner.rs:46-95 (process_exists_cli, kill_process_cli)\n\nSome use nix, some use std::process::Command, some use tasklist/taskkill on Windows. Solution: Consolidate into a single process management module in orchestrator-core or protocol with platform-specific implementations.",
+  "estimated_effort": null,
+  "id": "TASK-165",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-01T21:27:39.323970Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-01T21:27:39.323970Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "medium",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Consolidate process liveness and termination logic (4 implementations)",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}
