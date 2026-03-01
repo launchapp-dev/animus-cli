@@ -1,6 +1,7 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "type": "human",
+    "user_id": "samishukri"
   },
   "blocked_at": null,
   "blocked_by": null,
@@ -22,10 +23,10 @@
     "completed_at": null,
     "created_at": "2026-03-01T21:19:46.795139Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-03-01T21:19:46.795139Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-03-01T21:50:27.717145Z",
+    "updated_at": "2026-03-01T21:50:28.130953Z",
+    "updated_by": "samishukri",
+    "version": 3
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +37,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "in-progress",
   "tags": [],
   "title": "Consolidate atomic write pattern (10+ copies across crates)",
   "type": "feature",

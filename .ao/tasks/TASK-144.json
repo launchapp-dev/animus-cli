@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:04:46.732282Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:04:46.732282Z",
+    "updated_at": "2026-03-01T21:50:58.866191Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "low",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Consolidate `task assign` / `assign-agent` / `assign-human` into single command",
   "type": "feature",

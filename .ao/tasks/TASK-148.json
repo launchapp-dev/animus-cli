@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:10:52.526899Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:10:52.526899Z",
+    "updated_at": "2026-03-01T21:50:53.515737Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Implement `Display`/`FromStr` for `TaskStatus` and `RequirementStatus` to eliminate 4x duplication",
   "type": "feature",

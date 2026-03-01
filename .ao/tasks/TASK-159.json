@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:19:39.768768Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:19:39.768768Z",
+    "updated_at": "2026-03-01T21:50:56.606566Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Extract shared test utilities (EnvVarGuard copied 6+ times across crates)",
   "type": "feature",

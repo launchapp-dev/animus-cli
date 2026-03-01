@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
 pub const DAEMON_PROJECT_CONFIG_FILE_NAME: &str = "pm-config.json";
 
@@ -98,37 +96,7 @@ pub fn write_daemon_project_config(
     config: &DaemonProjectConfig,
 ) -> Result<()> {
     let path = daemon_project_config_path(project_root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
-
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(DAEMON_PROJECT_CONFIG_FILE_NAME);
-    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", Uuid::new_v4()));
-    let payload =
-        serde_json::to_string_pretty(config).context("failed to serialize daemon config JSON")?;
-    {
-        let mut file = fs::File::create(&tmp_path)
-            .with_context(|| format!("failed to create temp config {}", tmp_path.display()))?;
-        file.write_all(payload.as_bytes())
-            .with_context(|| format!("failed to write temp config {}", tmp_path.display()))?;
-        file.write_all(b"\n")
-            .with_context(|| format!("failed to finalize temp config {}", tmp_path.display()))?;
-        file.flush()
-            .with_context(|| format!("failed to flush temp config {}", tmp_path.display()))?;
-    }
-
-    fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "failed to atomically move {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-    Ok(())
+    crate::domain_state::write_json_pretty(&path, config)
 }
 
 pub fn update_daemon_project_config(

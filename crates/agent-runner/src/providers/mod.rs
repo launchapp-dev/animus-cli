@@ -3,7 +3,6 @@ use protocol::{
     ModelAvailability, ModelId, ModelStatus, ModelStatusRequest, ModelStatusResponse,
 };
 use std::env;
-use std::process::Command;
 
 pub async fn check_model_status(req: ModelStatusRequest) -> ModelStatusResponse {
     let models_to_check = if req.models.is_empty() {
@@ -36,7 +35,7 @@ fn check_single_model(model: ModelId) -> ModelStatus {
     let cli_name = tool_for_model_id(&canonical);
     let api_key_envs = required_api_keys_for_tool(cli_name);
 
-    if !is_cli_available(cli_name) {
+    if !cli_wrapper::is_binary_on_path(cli_name) {
         return ModelStatus {
             model,
             availability: ModelAvailability::MissingCli,
@@ -66,12 +65,4 @@ fn check_single_model(model: ModelId) -> ModelStatus {
         availability: ModelAvailability::Available,
         details: None,
     }
-}
-
-fn is_cli_available(cli_name: &str) -> bool {
-    Command::new("which")
-        .arg(cli_name)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
 }

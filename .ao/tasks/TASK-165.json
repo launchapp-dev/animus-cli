@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:27:39.323970Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:27:39.323970Z",
+    "updated_at": "2026-03-01T21:50:52.354336Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Consolidate process liveness and termination logic (4 implementations)",
   "type": "feature",

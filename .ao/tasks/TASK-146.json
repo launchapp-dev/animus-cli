@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:04:51.746326Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:04:51.746326Z",
+    "updated_at": "2026-03-01T21:50:58.099728Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "low",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Evaluate `requirements mockups` and `requirements recommendations` for removal or simplification",
   "type": "feature",

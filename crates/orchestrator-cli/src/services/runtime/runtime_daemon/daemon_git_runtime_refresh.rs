@@ -94,19 +94,7 @@ fn save_runtime_binary_refresh_state(
     state: &RuntimeBinaryRefreshState,
 ) -> Result<()> {
     let path = runtime_binary_refresh_state_path(project_root)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(RUNTIME_BINARY_REFRESH_STATE_FILE);
-    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", Uuid::new_v4()));
-    let payload = serde_json::to_string_pretty(state)?;
-    fs::write(&tmp_path, format!("{payload}\n"))?;
-    fs::rename(&tmp_path, &path)?;
-    Ok(())
+    orchestrator_core::write_json_pretty(&path, state)
 }
 
 pub fn resolve_main_head_commit(project_root: &str) -> Option<String> {

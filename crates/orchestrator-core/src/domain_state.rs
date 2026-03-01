@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 pub fn project_state_dir(project_root: &str) -> PathBuf {
     Path::new(project_root).join(".ao").join("state")
@@ -21,13 +22,47 @@ where
     Ok(parsed)
 }
 
+/// Atomically write JSON to a file using the temp file + rename pattern.
+/// This ensures that readers never see partially-written JSON.
 pub fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let serialized = serde_json::to_string_pretty(value)?;
-    std::fs::write(path, serialized)?;
-    Ok(())
+
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("state.json");
+    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", Uuid::new_v4()));
+    let payload = serde_json::to_string_pretty(value)?;
+
+    std::fs::write(&tmp_path, payload)?;
+    match std::fs::rename(&tmp_path, path) {
+        Ok(()) => Ok(()),
+        Err(original_error) => {
+            if path.exists() {
+                std::fs::remove_file(path).with_context(|| {
+                    format!("failed to replace {} after rename failure", path.display())
+                })?;
+                std::fs::rename(&tmp_path, path).with_context(|| {
+                    format!(
+                        "failed to atomically move temp file {} to {}",
+                        tmp_path.display(),
+                        path.display()
+                    )
+                })?;
+                Ok(())
+            } else {
+                Err(original_error).with_context(|| {
+                    format!(
+                        "failed to atomically move temp file {} to {}",
+                        tmp_path.display(),
+                        path.display()
+                    )
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

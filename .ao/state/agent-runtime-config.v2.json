@@ -56,7 +56,7 @@
     "code-review": {
       "mode": "agent",
       "agent_id": "default",
-      "directive": "Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.",
+      "directive": "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is.",
       "runtime": {
         "tool": "claude",
         "model": "claude-sonnet-4-6",
@@ -203,7 +203,7 @@
     "testing": {
       "mode": "agent",
       "agent_id": "default",
-      "directive": "Add or update tests and validate behavior. Ensure failures are addressed before finishing.",
+      "directive": "Validate the implementation by reading tests and running the test suite. Do NOT write or modify code yourself. If tests fail or coverage gaps exist, set verdict to rework and provide an exact spec of what tests must be added or fixed. Only advance if all tests pass and coverage is adequate.",
       "runtime": {
         "tool": "claude",
         "model": "claude-sonnet-4-6",

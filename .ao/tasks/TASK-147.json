@@ -1,6 +1,8 @@
 {
   "assignee": {
-    "type": "unassigned"
+    "model": "minimax/MiniMax-M2.5",
+    "role": "default",
+    "type": "agent"
   },
   "blocked_at": null,
   "blocked_by": null,
@@ -22,10 +24,10 @@
     "completed_at": null,
     "created_at": "2026-03-01T21:10:46.542654Z",
     "created_by": "ao-cli",
-    "started_at": null,
-    "updated_at": "2026-03-01T21:10:46.542654Z",
-    "updated_by": "ao-cli",
-    "version": 1
+    "started_at": "2026-03-01T21:51:02.438246Z",
+    "updated_at": "2026-03-01T21:54:59.298251Z",
+    "updated_by": "ao-daemon",
+    "version": 52
   },
   "paused": false,
   "priority": "critical",
@@ -36,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "in-progress",
   "tags": [],
   "title": "Extract phase category membership into config-driven phase capabilities",
   "type": "feature",

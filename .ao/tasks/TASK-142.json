@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:04:41.866291Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:04:41.866291Z",
+    "updated_at": "2026-03-01T21:50:55.067839Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Remove redundant `agent runner-status` and `agent model-status` commands",
   "type": "feature",

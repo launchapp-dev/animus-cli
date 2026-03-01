@@ -145,23 +145,6 @@ fn legacy_agent_runtime_path(project_root: &str) -> PathBuf {
     ))
 }
 
-fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let payload = serde_json::to_string_pretty(value)?;
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("state"),
-        Uuid::new_v4()
-    ));
-    std::fs::write(&tmp_path, payload)?;
-    std::fs::rename(&tmp_path, path)?;
-    Ok(())
-}
-
 fn emit_daemon_event(project_root: &str, event_type: &str, data: Value) -> Result<()> {
     let path = protocol::Config::global_config_dir().join("daemon-events.jsonl");
     if let Some(parent) = path.parent() {
@@ -702,8 +685,7 @@ fn read_manual_approvals(project_root: &str) -> Result<ManualApprovalsStore> {
 }
 
 fn write_manual_approvals(project_root: &str, store: &ManualApprovalsStore) -> Result<()> {
-    let value = serde_json::to_value(store)?;
-    write_json_atomic(&manual_approvals_path(project_root), &value)
+    orchestrator_core::write_json_pretty(&manual_approvals_path(project_root), store)
 }
 
 fn upsert_phase_definition(

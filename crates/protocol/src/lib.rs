@@ -18,7 +18,10 @@ pub mod repository_scope;
 
 pub use agent_runner::*;
 pub use common::*;
-pub use config::*;
+// Explicit re-exports for config helpers used across crates
+pub use config::{
+    cli_tracker_path, daemon_events_log_path, default_allowed_mcp_tool_prefixes, Config,
+};
 pub use daemon::*;
 pub use error_classification::*;
 pub use errors::*;

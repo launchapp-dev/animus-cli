@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:27:42.383496Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:27:42.383496Z",
+    "updated_at": "2026-03-01T21:50:53.908088Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "low",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Deduplicate DaemonEventRecord type and MCP tool prefix resolution",
   "type": "feature",

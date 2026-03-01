@@ -20,13 +20,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-01T21:40:13.482286Z",
     "created_at": "2026-03-01T20:49:17.859082Z",
     "created_by": "ao-cli",
     "started_at": "2026-03-01T20:49:30.723063Z",
-    "updated_at": "2026-03-01T20:57:23.002587Z",
+    "updated_at": "2026-03-01T21:50:46.150598Z",
     "updated_by": "samishukri",
-    "version": 8
+    "version": 15
   },
   "paused": false,
   "priority": "medium",
@@ -37,7 +37,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "ready",
   "tags": [],
   "title": "Add --version flag with git hash to ao-oai-runner",
   "type": "feature",

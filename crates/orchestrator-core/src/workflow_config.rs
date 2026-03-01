@@ -345,37 +345,8 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
 
 pub fn write_workflow_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
     validate_workflow_config(config)?;
-
     let path = workflow_config_path(project_root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-
-    let payload = serde_json::to_string_pretty(config)?;
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("workflow-config"),
-        Uuid::new_v4()
-    ));
-
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(payload.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "failed to atomically move {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    crate::domain_state::write_json_pretty(&path, config)
 }
 
 pub fn workflow_config_hash(config: &WorkflowConfig) -> String {

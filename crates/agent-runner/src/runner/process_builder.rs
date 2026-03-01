@@ -2,13 +2,6 @@ use anyhow::{bail, Result};
 use cli_wrapper::{is_ai_cli_tool, parse_launch_from_runtime_contract, LaunchInvocation};
 use tracing::{debug, warn};
 
-#[derive(Debug)]
-pub(super) struct CliInvocation {
-    pub command: String,
-    pub args: Vec<String>,
-    pub prompt_via_stdin: bool,
-}
-
 pub(super) fn resolve_idle_timeout_secs(
     tool: &str,
     hard_timeout_secs: Option<u64>,
@@ -50,11 +43,7 @@ fn parse_prompt_as_args(prompt: &str) -> Vec<String> {
 }
 
 fn is_command_on_path(command: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(command)
-        .output()
-        .map(|output| output.status.success() && !output.stdout.is_empty())
-        .unwrap_or(false)
+    cli_wrapper::is_binary_on_path(command)
 }
 
 pub(super) async fn build_cli_invocation(
@@ -62,11 +51,10 @@ pub(super) async fn build_cli_invocation(
     model: &str,
     prompt: &str,
     runtime_contract: Option<&serde_json::Value>,
-) -> Result<CliInvocation> {
+) -> Result<LaunchInvocation> {
     if let Some(invocation) = parse_contract_launch(runtime_contract)? {
         debug!(
             tool,
-            model,
             model,
             command = %invocation.command,
             args = ?invocation.args,
@@ -103,7 +91,7 @@ pub(super) async fn build_cli_invocation(
         }
     };
 
-    let invocation = CliInvocation {
+    let invocation = LaunchInvocation {
         command: tool.to_string(),
         args,
         prompt_via_stdin: false,
@@ -120,21 +108,17 @@ pub(super) async fn build_cli_invocation(
 
 fn parse_contract_launch(
     runtime_contract: Option<&serde_json::Value>,
-) -> Result<Option<CliInvocation>> {
-    let parsed = parse_launch_from_runtime_contract(runtime_contract)?;
-    Ok(parsed.map(|invocation: LaunchInvocation| {
+) -> Result<Option<LaunchInvocation>> {
+    let invocation = parse_launch_from_runtime_contract(runtime_contract)?;
+    if let Some(ref inv) = invocation {
         debug!(
-            command = %invocation.command,
-            args = ?invocation.args,
-            prompt_via_stdin = invocation.prompt_via_stdin,
+            command = %inv.command,
+            args = ?inv.args,
+            prompt_via_stdin = inv.prompt_via_stdin,
             "Parsed runtime contract launch block via cli-wrapper"
         );
-        CliInvocation {
-            command: invocation.command,
-            args: invocation.args,
-            prompt_via_stdin: invocation.prompt_via_stdin,
-        }
-    }))
+    }
+    Ok(invocation)
 }
 
 #[cfg(test)]

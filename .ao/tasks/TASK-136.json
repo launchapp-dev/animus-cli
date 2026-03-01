@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-03-01T20:53:03.838782Z",
+  "blocked_at": "2026-03-01T21:54:40.485647Z",
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "dependency gate: dependency TASK-132 is in-progress",
+  "blocked_reason": "dependency gate: dependency TASK-132 is ready",
   "branch_name": null,
   "cancelled": false,
   "checklist": [],
@@ -28,9 +28,9 @@
     "created_at": "2026-02-28T23:47:39.345260Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T20:53:04.000897Z",
+    "updated_at": "2026-03-01T21:54:40.655247Z",
     "updated_by": "ao-daemon",
-    "version": 11
+    "version": 21
   },
   "paused": true,
   "priority": "critical",

@@ -57,24 +57,7 @@ impl Drop for TempPathCleanup {
 }
 
 fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
-    let normalized = agent_id.trim().to_ascii_lowercase();
-    let mut prefixes = vec![
-        "ao.".to_string(),
-        "mcp__ao__".to_string(),
-        "mcp.ao.".to_string(),
-        format!("{normalized}."),
-        format!("mcp__{normalized}__"),
-        format!("mcp.{normalized}."),
-    ];
-
-    let snake = normalized.replace('-', "_");
-    prefixes.push(format!("{snake}."));
-    prefixes.push(format!("mcp__{snake}__"));
-    prefixes.push(format!("mcp.{snake}."));
-
-    prefixes.sort();
-    prefixes.dedup();
-    prefixes
+    protocol::default_allowed_mcp_tool_prefixes(agent_id)
 }
 
 fn resolve_mcp_tool_enforcement(
@@ -164,6 +147,12 @@ fn resolve_mcp_tool_enforcement(
     }
 }
 
+use cli_wrapper::{ensure_codex_config_override, ensure_flag, ensure_flag_value, LaunchInvocation};
+use std::collections::HashMap;
+use std::path::Path;
+
+use anyhow::{bail, Result};
+
 fn canonical_cli_name(command: &str) -> String {
     let trimmed = command.trim();
     Path::new(trimmed)
@@ -173,55 +162,9 @@ fn canonical_cli_name(command: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn ensure_flag(args: &mut Vec<String>, flag: &str, insert_at: usize) {
-    if args.iter().any(|value| value == flag) {
-        return;
-    }
-    args.insert(insert_at.min(args.len()), flag.to_string());
-}
-
-fn ensure_flag_value(args: &mut Vec<String>, flag: &str, value: &str, insert_at: usize) {
-    if let Some(index) = args.iter().position(|entry| entry == flag) {
-        if index + 1 < args.len() {
-            args[index + 1] = value.to_string();
-        } else {
-            args.push(value.to_string());
-        }
-        return;
-    }
-
-    let insert_at = insert_at.min(args.len());
-    args.insert(insert_at, flag.to_string());
-    args.insert((insert_at + 1).min(args.len()), value.to_string());
-}
-
 fn toml_string(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
-}
-
-fn ensure_codex_config_override(args: &mut Vec<String>, key: &str, value_expr: &str) {
-    let key_prefix = format!("{key}=");
-    let target = format!("{key}={value_expr}");
-
-    let mut index = 0usize;
-    while index + 1 < args.len() {
-        let flag = args[index].as_str();
-        if flag == "-c" || flag == "--config" {
-            if args[index + 1].starts_with(&key_prefix) {
-                args[index + 1] = target;
-                return;
-            }
-            index += 2;
-            continue;
-        }
-        index += 1;
-    }
-
-    // Keep prompt payload as the final argv token when present.
-    let insert_at = args.len().saturating_sub(1);
-    args.insert(insert_at, "-c".to_string());
-    args.insert(insert_at + 1, target);
 }
 
 fn is_safe_codex_server_name(name: &str) -> bool {
@@ -490,7 +433,7 @@ fn apply_oai_runner_native_mcp_lockdown(
 }
 
 fn apply_native_mcp_policy(
-    invocation: &mut super::process_builder::CliInvocation,
+    invocation: &mut LaunchInvocation,
     enforcement: &McpToolEnforcement,
     env: &mut HashMap<String, String>,
     run_id: &RunId,
@@ -1099,7 +1042,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "unknown-cli".to_string(),
             args: vec!["hello".to_string()],
             prompt_via_stdin: false,
@@ -1137,7 +1080,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_requires_transport_when_enforced() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "claude".to_string(),
             args: vec!["--print".to_string(), "hello".to_string()],
             prompt_via_stdin: false,
@@ -1169,7 +1112,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_adds_codex_mcp_server_override() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "codex".to_string(),
             args: vec![
                 "exec".to_string(),
@@ -1204,7 +1147,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_configures_claude_permission_mode() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "claude".to_string(),
             args: vec!["--print".to_string(), "hello".to_string()],
             prompt_via_stdin: false,
@@ -1313,7 +1256,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_sets_gemini_system_settings_path_for_stdio_transport() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "gemini".to_string(),
             args: vec!["--output-format".to_string(), "json".to_string()],
             prompt_via_stdin: false,
@@ -1367,7 +1310,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_sets_gemini_http_settings_without_schema_override() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "gemini".to_string(),
             args: vec!["--output-format".to_string(), "json".to_string()],
             prompt_via_stdin: false,
@@ -1413,7 +1356,7 @@ mod tests {
 
     #[test]
     fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
-        let mut invocation = super::super::process_builder::CliInvocation {
+        let mut invocation = LaunchInvocation {
             command: "opencode".to_string(),
             args: vec![
                 "run".to_string(),

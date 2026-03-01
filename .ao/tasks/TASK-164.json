@@ -23,9 +23,9 @@
     "created_at": "2026-03-01T21:20:17.681267Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:20:17.681267Z",
+    "updated_at": "2026-03-01T21:50:54.306714Z",
     "updated_by": "ao-cli",
-    "version": 1
+    "version": 2
   },
   "paused": false,
   "priority": "low",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "backlog",
+  "status": "ready",
   "tags": [],
   "title": "Deduplicate frontend-related keyword sets and ComplexityTier value maps",
   "type": "feature",

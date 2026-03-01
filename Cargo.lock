@@ -2185,6 +2185,7 @@ dependencies = [
  "fs2",
  "orchestrator-core",
  "orchestrator-web-api",
+ "orchestrator-web-contracts",
  "orchestrator-web-server",
  "protocol",
  "ratatui",

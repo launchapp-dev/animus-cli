@@ -12,16 +12,8 @@ use uuid::Uuid;
 
 use super::canonicalize_lossy;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DaemonEventRecord {
-    pub(crate) schema: String,
-    pub(crate) id: String,
-    pub(crate) seq: u64,
-    pub(crate) timestamp: String,
-    pub(crate) event_type: String,
-    pub(crate) project_root: Option<String>,
-    pub(crate) data: Value,
-}
+// Re-export DaemonEventRecord from web-contracts for internal use
+pub(crate) use orchestrator_web_contracts::DaemonEventRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DaemonEventsPollResponse {
@@ -32,7 +24,7 @@ pub(crate) struct DaemonEventsPollResponse {
 }
 
 pub(crate) fn daemon_events_log_path() -> PathBuf {
-    protocol::Config::global_config_dir().join("daemon-events.jsonl")
+    protocol::daemon_events_log_path()
 }
 
 fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {

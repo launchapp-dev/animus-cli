@@ -34,28 +34,8 @@ fn normalized_tool(tool: &str) -> String {
     tool.trim().to_ascii_lowercase()
 }
 
-fn default_allowed_tool_prefixes(agent_id: Option<&str>) -> Vec<String> {
-    let mut prefixes = vec![
-        "ao.".to_string(),
-        "mcp__ao__".to_string(),
-        "mcp.ao.".to_string(),
-    ];
-
-    if let Some(agent_id) = agent_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
-    {
-        for base in [agent_id.clone(), agent_id.replace('-', "_")] {
-            prefixes.push(format!("{base}."));
-            prefixes.push(format!("mcp__{base}__"));
-            prefixes.push(format!("mcp.{base}."));
-        }
-    }
-
-    prefixes.sort();
-    prefixes.dedup();
-    prefixes
+pub fn default_allowed_tool_prefixes(agent_id: Option<&str>) -> Vec<String> {
+    protocol::default_allowed_mcp_tool_prefixes(agent_id.unwrap_or("ao"))
 }
 
 pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {

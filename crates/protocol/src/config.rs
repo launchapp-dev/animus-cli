@@ -134,3 +134,43 @@ fn config_dir_override() -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
+
+/// Returns the path to the CLI process tracker file.
+/// This is used for orphan process detection and cleanup.
+pub fn cli_tracker_path() -> PathBuf {
+    Config::global_config_dir().join("cli-tracker.json")
+}
+
+/// Returns the path to the daemon events log file.
+pub fn daemon_events_log_path() -> PathBuf {
+    Config::global_config_dir().join("daemon-events.jsonl")
+}
+
+/// Returns the default allowed MCP tool prefixes for the given agent ID.
+///
+/// This constructs the canonical MCP tool prefix whitelist for enforcing
+/// MCP-only policy on agent runs. The prefixes cover both direct tool names
+/// and MCP-prefixed variants.
+pub fn default_allowed_mcp_tool_prefixes(agent_id: &str) -> Vec<String> {
+    let normalized = agent_id.trim().to_ascii_lowercase();
+    let mut prefixes = vec![
+        "ao.".to_string(),
+        "mcp__ao__".to_string(),
+        "mcp.ao.".to_string(),
+    ];
+
+    if !normalized.is_empty() {
+        prefixes.push(format!("{normalized}."));
+        prefixes.push(format!("mcp__{normalized}__"));
+        prefixes.push(format!("mcp.{normalized}."));
+
+        let snake = normalized.replace('-', "_");
+        prefixes.push(format!("{snake}."));
+        prefixes.push(format!("mcp__{snake}__"));
+        prefixes.push(format!("mcp.{snake}."));
+    }
+
+    prefixes.sort();
+    prefixes.dedup();
+    prefixes
+}

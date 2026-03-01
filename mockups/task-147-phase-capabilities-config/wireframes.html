@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TASK-147 Phase Capabilities Config Wireframes</title>
+    <link rel="stylesheet" href="./wireframes.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <h1>TASK-147: Phase Capabilities Config</h1>
+      <p>
+        Wireframes for replacing three diverging hardcoded phase category match
+        arms (<code>is_ui_ux_phase</code>, <code>is_research_phase</code>,
+        <code>is_write_phase</code>, …) across
+        <code>protocol/model_routing.rs</code>,
+        <code>daemon_scheduler_phase_targets.rs</code>, and
+        <code>phase_executor.rs</code> with a single
+        <code>phase_capabilities</code> block per phase in
+        <code>agent-runtime-config.v2.json</code>.
+      </p>
+    </header>
+
+    <main class="board-grid">
+
+      <!-- S1: Inconsistency Scanner -->
+      <section class="board" aria-labelledby="s1-title">
+        <h2 class="board-title" id="s1-title">S1 Phase Membership Drift (Before)</h2>
+        <div class="surface">
+          <p>
+            Each column maps to a single hardcoded match arm in a different file.
+            Cells marked <span class="drift-mark drift" style="display:inline-flex">✗</span>
+            show where the same phase is classified differently between files.
+            This silent drift is the primary motivation for the config-first refactor.
+          </p>
+
+          <div style="overflow-x:auto">
+            <table class="drift-table" aria-label="drift between three hardcoded phase category sets">
+              <thead>
+                <tr>
+                  <th scope="col">phase_id</th>
+                  <th scope="col"
+                      title="protocol/src/model_routing.rs: is_ui_ux_phase()">
+                    model_routing<br>is_ui_ux
+                  </th>
+                  <th scope="col"
+                      title="daemon_scheduler_phase_targets.rs: is_ui_ux_phase()">
+                    phase_targets<br>is_ui_ux
+                  </th>
+                  <th scope="col"
+                      title="phase_executor.rs line 202-203">
+                    executor<br>is_write
+                  </th>
+                  <th scope="col" title="model_routing.rs: is_review_phase()">
+                    routing<br>is_review
+                  </th>
+                  <th scope="col" title="model_routing.rs: is_testing_phase()">
+                    routing<br>is_testing
+                  </th>
+                  <th scope="col" title="model_routing.rs: is_requirements_phase()">
+                    routing<br>is_req.
+                  </th>
+                  <th scope="col" title="both files: is_research_phase()">
+                    routing<br>is_research
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- drift: ui-design missing from phase_targets -->
+                <tr>
+                  <td>wireframe</td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>design</td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>ux-research</td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>mockup-review</td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <!-- DRIFT: ui-design in model_routing but NOT phase_targets -->
+                <tr aria-label="drift detected">
+                  <td>ui-design</td>
+                  <td><span class="drift-mark drift" title="present in model_routing, absent in phase_targets — DRIFT">✗</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                </tr>
+                <!-- DRIFT: ux-design in model_routing but NOT phase_targets -->
+                <tr aria-label="drift detected">
+                  <td>ux-design</td>
+                  <td><span class="drift-mark drift" title="present in model_routing, absent in phase_targets — DRIFT">✗</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                </tr>
+                <!-- DRIFT: design-review in phase_targets but not in model_routing ui_ux (it IS in is_review_phase) -->
+                <tr aria-label="drift detected">
+                  <td>design-review</td>
+                  <td><span class="drift-mark no"    title="absent from model_routing is_ui_ux">–</span></td>
+                  <td><span class="drift-mark drift" title="present in phase_targets is_ui_ux, but absent from model_routing is_ui_ux — DRIFT">✗</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark yes"   title="present in is_review_phase">✓</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                  <td><span class="drift-mark no"    title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>code-review</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>review</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>architecture</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>testing</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>test</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>qa</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>requirements</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+                <tr>
+                  <td>research</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present — consistent">✓</span></td>
+                </tr>
+                <tr>
+                  <td>implementation</td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark yes" title="present — is_write_phase">✓</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                  <td><span class="drift-mark no"  title="absent">–</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="drift-legend" aria-label="legend">
+            <span class="drift-mark yes">✓</span> present &nbsp;
+            <span class="drift-mark no">–</span> absent &nbsp;
+            <span class="drift-mark drift">✗</span> drift — same phase classified differently across files.
+            Concrete cases: <strong>ui-design / ux-design</strong> in
+            <code>model_routing.rs</code> is_ui_ux but absent from
+            <code>phase_targets.rs</code> is_ui_ux; <strong>design-review</strong>
+            in <code>phase_targets.rs</code> is_ui_ux but absent from
+            <code>model_routing.rs</code> is_ui_ux (placed under is_review instead).
+          </div>
+        </div>
+      </section>
+
+      <!-- S2: Capability Field Definitions -->
+      <section class="board" aria-labelledby="s2-title">
+        <h2 class="board-title" id="s2-title">S2 Capability Field Definitions</h2>
+        <div class="surface">
+          <p>
+            Five capability fields replace all existing boolean category
+            functions. Each field maps one-to-one to a decision axis currently
+            scattered across multiple Rust files.
+          </p>
+          <div class="cap-grid">
+            <div class="cap-card">
+              <p class="cap-name">can_write</p>
+              <p class="cap-type">bool</p>
+              <p class="cap-desc">
+                Controls write action rule injected into phase prompt. Replaces
+                <code>is_write_phase()</code> in <code>phase_executor.rs</code>
+                line 202.
+              </p>
+            </div>
+            <div class="cap-card">
+              <p class="cap-name">needs_commit</p>
+              <p class="cap-type">bool</p>
+              <p class="cap-desc">
+                Requests <code>commit_message</code> in output contract. Replaces
+                <code>phase_requires_commit_message()</code> in
+                <code>phase_executor.rs</code> line 289.
+              </p>
+            </div>
+            <div class="cap-card">
+              <p class="cap-name">model_group</p>
+              <p class="cap-type">"ui_ux" | "research" | "review" | "requirements" | "testing" | "default"</p>
+              <p class="cap-desc">
+                Drives primary model selection. Replaces the five
+                <code>is_*_phase()</code> branches in
+                <code>model_routing.rs</code> and the two in
+                <code>phase_targets.rs</code>.
+              </p>
+            </div>
+            <div class="cap-card">
+              <p class="cap-name">parse_research_signal</p>
+              <p class="cap-type">bool</p>
+              <p class="cap-desc">
+                Whether to scan stdout for
+                <code>{"{"}"kind":"research_required"{"}"}</code> during execution.
+                Currently implicit for the <em>research</em> group.
+              </p>
+            </div>
+            <div class="cap-card">
+              <p class="cap-name">safety_rules_template</p>
+              <p class="cap-type">string | null</p>
+              <p class="cap-desc">
+                Named safety rule block injected into prompt. <code>"research"</code>
+                emits the greenfield/targeted-discovery paragraph currently
+                hardcoded in <code>phase_safety_rules()</code> line 265.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- S3: Config Schema -->
+      <section class="board" aria-labelledby="s3-title">
+        <h2 class="board-title" id="s3-title">S3 Config Schema Authoring</h2>
+        <div class="surface">
+          <div class="split">
+            <article class="card" aria-labelledby="s3-schema-title">
+              <h3 id="s3-schema-title">phase_capabilities in agent-runtime-config.v2.json</h3>
+              <p>
+                The <code>phase_capabilities</code> key is added to each phase
+                entry alongside the existing <code>mode</code>,
+                <code>directive</code>, and <code>runtime</code> fields. Omitting
+                it falls back to compiled defaults, preserving backward
+                compatibility during migration.
+              </p>
+              <pre class="json-block" aria-label="proposed schema for wireframe phase">
+<span class="comment">// agent-runtime-config.v2.json (proposed)</span>
+{
+  <span class="key">"phases"</span>: {
+    <span class="key">"wireframe"</span>: {
+      <span class="key">"mode"</span>: <span class="val-s">"agent"</span>,
+      <span class="key">"agent_id"</span>: <span class="val-s">"default"</span>,
+      <span class="key">"directive"</span>: <span class="val-s">"Create UI mockups..."</span>,
+      <span class="comment">// NEW — replaces 5 Rust match arms</span>
+      <span class="key">"phase_capabilities"</span>: {
+        <span class="key">"can_write"</span>: <span class="val-t">true</span>,
+        <span class="key">"needs_commit"</span>: <span class="val-f">false</span>,
+        <span class="key">"model_group"</span>: <span class="val-s">"ui_ux"</span>,
+        <span class="key">"parse_research_signal"</span>: <span class="val-f">false</span>,
+        <span class="key">"safety_rules_template"</span>: <span class="val-n">null</span>
+      },
+      <span class="key">"runtime"</span>: <span class="val-n">null</span>,
+      <span class="key">"output_contract"</span>: <span class="val-n">null</span>
+    }
+  }
+}</pre>
+            </article>
+
+            <article class="card" aria-labelledby="s3-compare-title">
+              <h3 id="s3-compare-title">Rust Code Before → After</h3>
+              <p>
+                Concrete code change: the three separate boolean functions
+                collapse into a single config read.
+              </p>
+              <pre class="json-block" style="background:#16202a" aria-label="before and after rust code">
+<span class="comment">// BEFORE — phase_executor.rs (line 202)</span>
+<span class="val-f">let</span> is_write_phase = matches!(
+    phase_id,
+    <span class="val-s">"implementation"</span> | <span class="val-s">"wireframe"</span> | <span class="val-s">"design"</span>
+);
+
+<span class="comment">// BEFORE — model_routing.rs (line 169)</span>
+<span class="val-f">fn</span> <span class="val-t">is_ui_ux_phase</span>(phase_id: &amp;str) -&gt; bool {
+    matches!(phase_id,
+        <span class="val-s">"ux-research"</span> | <span class="val-s">"wireframe"</span> | <span class="val-s">"mockup-review"</span>
+        | <span class="val-s">"design"</span> | <span class="val-s">"ui-design"</span> | <span class="val-s">"ux-design"</span>
+    )
+}
+
+<span class="comment">// AFTER — both callers</span>
+<span class="val-f">let</span> caps = config.phase_capabilities(phase_id);
+<span class="val-f">let</span> is_write_phase = caps.can_write;
+<span class="val-f">let</span> model_group   = caps.model_group; <span class="comment">// "ui_ux"</span></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- S4: Proposed Capabilities Table -->
+      <section class="board" aria-labelledby="s4-title">
+        <h2 class="board-title" id="s4-title">S4 Proposed Phase Capabilities (After)</h2>
+        <div class="surface">
+          <p>
+            Single source of truth per phase. No branching on
+            <code>phase_id</code> strings in routing, execution, or target
+            planning code.
+          </p>
+          <div style="overflow-x:auto">
+            <table class="drift-table" aria-label="proposed capabilities per phase">
+              <thead>
+                <tr>
+                  <th scope="col">phase_id</th>
+                  <th scope="col">can_write</th>
+                  <th scope="col">needs_commit</th>
+                  <th scope="col">model_group</th>
+                  <th scope="col">parse_research_signal</th>
+                  <th scope="col">safety_rules_template</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>wireframe</td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>design</td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>ux-research</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>mockup-review</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>ui-design</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>ux-design</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-ui_ux">ui_ux</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>research</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-research">research</span></td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#1a3a4e">"research"</code></td>
+                </tr>
+                <tr>
+                  <td>code-review</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-review">review</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>design-review</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-review">review</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>testing</td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-testing">testing</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>requirements</td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><span class="model-group mg-requirements">requirements</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+                <tr>
+                  <td>implementation</td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><code style="color:#0f6a47">true</code></td>
+                  <td><span class="model-group mg-default">default</span></td>
+                  <td><code style="color:#7a8fa0">false</code></td>
+                  <td><code style="color:#7a8fa0">null</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- S5: Routing Flow -->
+      <section class="board" aria-labelledby="s5-title">
+        <h2 class="board-title" id="s5-title">S5 Config-Driven Routing Flow (After)</h2>
+        <div class="surface">
+          <p>
+            Instead of branching on <code>phase_id</code> strings in three Rust
+            files, the daemon reads <code>phase_capabilities</code> from config
+            at startup. Each decision axis becomes a single field lookup.
+          </p>
+
+          <div class="flow" role="list" aria-label="routing steps">
+            <div class="flow-step" role="listitem">
+              <p class="step-label">1. Phase starts</p>
+              <p class="step-value">phase_id = "wireframe"</p>
+            </div>
+            <div class="flow-step" role="listitem">
+              <p class="step-label">2. Load config</p>
+              <p class="step-value">agent-runtime-config.v2.json<br>phases["wireframe"]</p>
+            </div>
+            <div class="flow-step highlight" role="listitem">
+              <p class="step-label">3. Read capabilities</p>
+              <p class="step-value">
+                model_group = "ui_ux"<br>
+                can_write = true<br>
+                needs_commit = false
+              </p>
+            </div>
+            <div class="flow-step" role="listitem">
+              <p class="step-label">4. Route model</p>
+              <p class="step-value">primary = "gemini-3.1-pro-preview"<br>(via model_group)</p>
+            </div>
+            <div class="flow-step" role="listitem">
+              <p class="step-label">5. Set prompt rule</p>
+              <p class="step-value">can_write → write action rule<br>needs_commit → false</p>
+            </div>
+          </div>
+
+          <p class="inline-note">
+            <strong>Before:</strong> 3 separate match arms in 3 files —
+            <code>is_ui_ux_phase()</code> (6 ids), <code>is_ui_ux_phase()</code>
+            (5 ids — different set!), <code>is_write_phase()</code> (3 ids).
+            <strong>After:</strong> one config read, one field lookup per
+            decision axis. Adding a new phase group requires only a config edit.
+          </p>
+        </div>
+      </section>
+
+      <!-- S6: Acceptance Criteria -->
+      <section class="board" aria-labelledby="s6-title">
+        <h2 class="board-title" id="s6-title">S6 Acceptance Criteria Traceability</h2>
+        <div class="surface">
+          <ul class="ac-list">
+            <li>
+              <span class="ac-id">AC-01</span>
+              <span><code>phase_capabilities</code> block present in <code>agent-runtime-config.v2.json</code> for all standard phases (wireframe, design, ux-research, mockup-review, ui-design, ux-design, research, code-review, design-review, testing, requirements, implementation).</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-02</span>
+              <span><code>model_routing.rs</code> <code>is_*_phase()</code> functions removed; primary model selection driven by <code>model_group</code> from config.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-03</span>
+              <span><code>daemon_scheduler_phase_targets.rs</code> <code>is_ui_ux_phase()</code> and <code>is_research_phase()</code> removed; <code>ui_ux</code>/<code>research</code> group resolved from config.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-04</span>
+              <span><code>phase_executor.rs</code> <code>is_write_phase</code> and <code>enforce_product_file_changes</code> replaced by <code>can_write</code> capability field.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-05</span>
+              <span><code>phase_requires_commit_message()</code> replaced by <code>needs_commit</code> capability field.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-06</span>
+              <span><code>safety_rules_template</code> drives <code>phase_safety_rules()</code>; the <code>"research"</code> template matches the current hardcoded string in <code>phase_executor.rs</code> line 265.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-07</span>
+              <span>Adding a new phase requires only a config entry; no Rust code change needed for standard classification.</span>
+            </li>
+            <li>
+              <span class="ac-id">AC-08</span>
+              <span>All existing model routing tests pass; routing decisions for standard phases produce identical model/tool outputs before and after refactor.</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>

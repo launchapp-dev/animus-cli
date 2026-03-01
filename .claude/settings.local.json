@@ -74,7 +74,11 @@
       "Bash(cargo doc:*)",
       "Bash(./target/debug/ao-oai-runner run:*)",
       "Bash(./target/debug/agent-runner:*)",
-      "Bash(/dev/null:*)"
+      "Bash(/dev/null:*)",
+      "Bash(wc:*)",
+      "Bash(gemini:*)",
+      "Bash(jq:*)",
+      "Bash(do python3:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

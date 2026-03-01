@@ -1,10 +1,8 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 mod engine;
 pub mod schema;
@@ -210,35 +208,7 @@ fn fallback_loaded(path: PathBuf, code: &str, message: &str) -> Result<LoadedSta
 }
 
 fn write_document_at_path(path: &Path, document: &StateMachinesDocument) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-
-    let payload = serde_json::to_string_pretty(document)?;
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("state"),
-        Uuid::new_v4()
-    ));
-
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(payload.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!(
-            "failed to atomically move {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    crate::domain_state::write_json_pretty(path, document)
 }
 
 #[cfg(test)]

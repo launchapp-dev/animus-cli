@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -8,7 +7,6 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
@@ -1062,37 +1060,8 @@ pub fn load_agent_runtime_config_or_default(project_root: &Path) -> AgentRuntime
 
 pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConfig) -> Result<()> {
     validate_agent_runtime_config(config)?;
-
     let path = agent_runtime_config_path(project_root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-
-    let payload = serde_json::to_string_pretty(config)?;
-    let tmp_path = path.with_file_name(format!(
-        "{}.{}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("agent-runtime-config"),
-        Uuid::new_v4()
-    ));
-
-    {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(payload.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&tmp_path, &path).with_context(|| {
-        format!(
-            "failed to atomically move {} to {}",
-            tmp_path.display(),
-            path.display()
-        )
-    })?;
-
-    Ok(())
+    crate::domain_state::write_json_pretty(&path, config)
 }
 
 pub fn agent_runtime_config_hash(config: &AgentRuntimeConfig) -> String {

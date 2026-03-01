@@ -16,9 +16,7 @@ static JOB_HANDLES: Lazy<Mutex<HashMap<u32, windows::Win32::Foundation::HANDLE>>
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn get_tracker_path() -> PathBuf {
-    let app_dir = config::app_config_dir();
-    std::fs::create_dir_all(&app_dir).ok();
-    app_dir.join("cli-tracker.json")
+    protocol::cli_tracker_path()
 }
 
 pub fn cleanup_orphaned_clis() -> Result<()> {

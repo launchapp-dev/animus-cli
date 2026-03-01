@@ -32,7 +32,7 @@ struct RunnerOrphanDetectionCli {
 }
 
 fn cli_tracker_path_cli() -> PathBuf {
-    protocol::Config::global_config_dir().join("cli-tracker.json")
+    protocol::cli_tracker_path()
 }
 
 fn load_cli_tracker() -> Result<CliTrackerStateCli> {
