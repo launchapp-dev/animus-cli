@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-pub fn sanitize_identifier(value: &str) -> String {
+pub fn sanitize_identifier(value: &str, fallback: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut trailing_separator = false;
 
@@ -26,7 +26,7 @@ pub fn sanitize_identifier(value: &str) -> String {
     }
 
     if out.is_empty() {
-        "repo".to_string()
+        fallback.to_string()
     } else {
         out
     }
@@ -38,7 +38,7 @@ pub fn repository_scope_for_path(path: &Path) -> String {
     let repo_name = canonical
         .file_name()
         .and_then(|value| value.to_str())
-        .map(sanitize_identifier)
+        .map(|s| sanitize_identifier(s, "repo"))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "repo".to_string());
 
@@ -58,14 +58,15 @@ mod tests {
 
     #[test]
     fn sanitize_identifier_normalizes_expected_shapes() {
-        assert_eq!(sanitize_identifier("Repo Name"), "repo-name");
-        assert_eq!(sanitize_identifier("___"), "repo");
-        assert_eq!(sanitize_identifier("A__B--C"), "a-b-c");
+        assert_eq!(sanitize_identifier("Repo Name", "repo"), "repo-name");
+        assert_eq!(sanitize_identifier("___", "repo"), "repo");
+        assert_eq!(sanitize_identifier("A__B--C", "repo"), "a-b-c");
         assert_eq!(
-            sanitize_identifier("  __My Repo!! -- 2026__  "),
+            sanitize_identifier("  __My Repo!! -- 2026__  ", "repo"),
             "my-repo-2026"
         );
-        assert_eq!(sanitize_identifier("日本語"), "repo");
+        assert_eq!(sanitize_identifier("日本語", "repo"), "repo");
+        assert_eq!(sanitize_identifier("日本語", "task"), "task");
     }
 
     #[test]

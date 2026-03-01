@@ -1203,50 +1203,7 @@ fn ao_root_dir() -> Result<PathBuf> {
 }
 
 fn repo_scope(project_root: &str) -> String {
-    let canonical = Path::new(project_root)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(project_root));
-    let canonical_display = canonical.to_string_lossy();
-
-    let repo_name = canonical
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(sanitize_identifier_for_path)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "repo".to_string());
-
-    let mut hasher = Sha256::new();
-    hasher.update(canonical_display.as_bytes());
-    let digest = hasher.finalize();
-    let suffix = format!(
-        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
-    );
-
-    format!("{repo_name}-{suffix}")
-}
-
-fn sanitize_identifier_for_path(value: &str) -> String {
-    let mut sanitized = String::new();
-    let mut previous_dash = false;
-
-    for ch in value.chars() {
-        let normalized = ch.to_ascii_lowercase();
-        if normalized.is_ascii_alphanumeric() {
-            sanitized.push(normalized);
-            previous_dash = false;
-        } else if !previous_dash {
-            sanitized.push('-');
-            previous_dash = true;
-        }
-    }
-
-    sanitized = sanitized.trim_matches('-').to_string();
-    if sanitized.is_empty() {
-        "repo".to_string()
-    } else {
-        sanitized
-    }
+    protocol::repository_scope_for_path(Path::new(project_root))
 }
 
 fn hex_from_digest(digest: impl AsRef<[u8]>) -> String {
