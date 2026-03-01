@@ -810,7 +810,7 @@ async fn repair_candidates_until_quality_passes(
 fn requirement_draft_model_candidates(primary_model: &str) -> Vec<String> {
     let mut models = vec![primary_model.to_string()];
     models.extend(
-        default_fallback_models_for_phase("requirements", None)
+        default_fallback_models_for_phase(None, &protocol::PhaseCapabilities::defaults_for_phase("requirements"))
             .into_iter()
             .map(|model| model.to_string()),
     );

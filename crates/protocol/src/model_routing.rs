@@ -166,48 +166,103 @@ pub fn default_model_for_tool(tool_id: &str) -> Option<&'static str> {
     }
 }
 
-fn is_ui_ux_phase(phase_id: &str) -> bool {
-    matches!(
-        phase_id,
-        "ux-research" | "wireframe" | "mockup-review" | "design" | "ui-design" | "ux-design"
-    )
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PhaseCapabilities {
+    #[serde(default)]
+    pub writes_files: bool,
+    #[serde(default)]
+    pub requires_commit: bool,
+    #[serde(default)]
+    pub enforce_product_changes: bool,
+    #[serde(default)]
+    pub is_research: bool,
+    #[serde(default)]
+    pub is_ui_ux: bool,
+    #[serde(default)]
+    pub is_review: bool,
+    #[serde(default)]
+    pub is_testing: bool,
+    #[serde(default)]
+    pub is_requirements: bool,
 }
 
-fn is_research_phase(phase_id: &str) -> bool {
-    phase_id == "research"
-}
+impl PhaseCapabilities {
+    pub fn defaults_for_phase(phase_id: &str) -> Self {
+        match phase_id {
+            "implementation" => Self {
+                writes_files: true,
+                requires_commit: true,
+                enforce_product_changes: true,
+                ..Default::default()
+            },
+            "wireframe" | "design" => Self {
+                writes_files: true,
+                is_ui_ux: true,
+                ..Default::default()
+            },
+            "ux-research" | "mockup-review" | "ui-design" | "ux-design" => Self {
+                is_ui_ux: true,
+                ..Default::default()
+            },
+            "design-review" => Self {
+                is_ui_ux: true,
+                is_review: true,
+                ..Default::default()
+            },
+            "research" => Self {
+                is_research: true,
+                ..Default::default()
+            },
+            "code-review" | "review" | "architecture" => Self {
+                is_review: true,
+                ..Default::default()
+            },
+            "requirements" => Self {
+                is_requirements: true,
+                ..Default::default()
+            },
+            "testing" | "test" | "qa" => Self {
+                is_testing: true,
+                ..Default::default()
+            },
+            _ => Self::default(),
+        }
+    }
 
-fn is_review_phase(phase_id: &str) -> bool {
-    matches!(
-        phase_id,
-        "code-review" | "review" | "architecture" | "design-review"
-    )
-}
-
-fn is_requirements_phase(phase_id: &str) -> bool {
-    phase_id == "requirements"
-}
-
-fn is_testing_phase(phase_id: &str) -> bool {
-    matches!(phase_id, "testing" | "test" | "qa")
+    pub fn merge_with_defaults(self, phase_id: &str) -> Self {
+        let defaults = Self::defaults_for_phase(phase_id);
+        Self {
+            writes_files: self.writes_files || defaults.writes_files,
+            requires_commit: self.requires_commit || defaults.requires_commit,
+            enforce_product_changes: self.enforce_product_changes
+                || defaults.enforce_product_changes,
+            is_research: self.is_research || defaults.is_research,
+            is_ui_ux: self.is_ui_ux || defaults.is_ui_ux,
+            is_review: self.is_review || defaults.is_review,
+            is_testing: self.is_testing || defaults.is_testing,
+            is_requirements: self.is_requirements || defaults.is_requirements,
+        }
+    }
 }
 
 pub fn default_primary_model_for_phase(
-    phase_id: &str,
     complexity: Option<ModelRoutingComplexity>,
+    caps: &PhaseCapabilities,
 ) -> &'static str {
-    if is_ui_ux_phase(phase_id) || is_research_phase(phase_id) {
+    if caps.is_ui_ux || caps.is_research {
         return "gemini-3.1-pro-preview";
     }
 
-    if is_review_phase(phase_id) {
+    if caps.is_review {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
             ModelRoutingComplexity::High => "claude-opus-4-6",
             ModelRoutingComplexity::Low | ModelRoutingComplexity::Medium => "claude-sonnet-4-6",
         };
     }
 
-    if is_requirements_phase(phase_id) {
+    if caps.is_requirements {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
             ModelRoutingComplexity::Low => "zai-coding-plan/glm-5",
             ModelRoutingComplexity::Medium => "minimax/MiniMax-M2.5",
@@ -215,7 +270,7 @@ pub fn default_primary_model_for_phase(
         };
     }
 
-    if is_testing_phase(phase_id) {
+    if caps.is_testing {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
             ModelRoutingComplexity::Low => "minimax/MiniMax-M2.5",
             ModelRoutingComplexity::Medium => "zai-coding-plan/glm-5",
@@ -230,10 +285,10 @@ pub fn default_primary_model_for_phase(
 }
 
 pub fn default_fallback_models_for_phase(
-    phase_id: &str,
     complexity: Option<ModelRoutingComplexity>,
+    caps: &PhaseCapabilities,
 ) -> Vec<&'static str> {
-    if is_ui_ux_phase(phase_id) || is_research_phase(phase_id) {
+    if caps.is_ui_ux || caps.is_research {
         return vec![
             "claude-sonnet-4-6",
             "gemini-2.5-pro",
@@ -243,7 +298,7 @@ pub fn default_fallback_models_for_phase(
         ];
     }
 
-    if is_review_phase(phase_id) {
+    if caps.is_review {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
             ModelRoutingComplexity::High => vec![
                 "claude-sonnet-4-6",
@@ -325,46 +380,89 @@ mod tests {
 
     #[test]
     fn complexity_policy_uses_opus_for_high_complexity_review() {
+        let caps = PhaseCapabilities::defaults_for_phase("code-review");
         assert_eq!(
-            default_primary_model_for_phase("code-review", Some(ModelRoutingComplexity::High)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::High), &caps),
             "claude-opus-4-6"
         );
         assert_eq!(
-            default_primary_model_for_phase("code-review", Some(ModelRoutingComplexity::Medium)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &caps),
             "claude-sonnet-4-6"
         );
     }
 
     #[test]
     fn low_complexity_routes_to_glm_and_minimax() {
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         assert_eq!(
-            default_primary_model_for_phase("implementation", Some(ModelRoutingComplexity::Low)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &impl_caps),
             "zai-coding-plan/glm-5"
         );
+        let req_caps = PhaseCapabilities::defaults_for_phase("requirements");
         assert_eq!(
-            default_primary_model_for_phase("requirements", Some(ModelRoutingComplexity::Low)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &req_caps),
             "zai-coding-plan/glm-5"
         );
+        let test_caps = PhaseCapabilities::defaults_for_phase("testing");
         assert_eq!(
-            default_primary_model_for_phase("testing", Some(ModelRoutingComplexity::Low)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &test_caps),
             "minimax/MiniMax-M2.5"
         );
     }
 
     #[test]
     fn medium_complexity_uses_cheaper_models_for_lightweight_phases() {
+        let req_caps = PhaseCapabilities::defaults_for_phase("requirements");
         assert_eq!(
-            default_primary_model_for_phase("requirements", Some(ModelRoutingComplexity::Medium)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &req_caps),
             "minimax/MiniMax-M2.5"
         );
+        let test_caps = PhaseCapabilities::defaults_for_phase("testing");
         assert_eq!(
-            default_primary_model_for_phase("testing", Some(ModelRoutingComplexity::Medium)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &test_caps),
             "zai-coding-plan/glm-5"
         );
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         assert_eq!(
-            default_primary_model_for_phase("implementation", Some(ModelRoutingComplexity::Medium)),
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &impl_caps),
             "claude-sonnet-4-6"
         );
+    }
+
+    #[test]
+    fn phase_capabilities_defaults_are_correct() {
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
+        assert!(impl_caps.writes_files);
+        assert!(impl_caps.requires_commit);
+        assert!(impl_caps.enforce_product_changes);
+        assert!(!impl_caps.is_research);
+
+        let research_caps = PhaseCapabilities::defaults_for_phase("research");
+        assert!(research_caps.is_research);
+        assert!(!research_caps.writes_files);
+
+        let design_caps = PhaseCapabilities::defaults_for_phase("design");
+        assert!(design_caps.writes_files);
+        assert!(design_caps.is_ui_ux);
+        assert!(!design_caps.requires_commit);
+
+        let design_review_caps = PhaseCapabilities::defaults_for_phase("design-review");
+        assert!(design_review_caps.is_ui_ux);
+        assert!(design_review_caps.is_review);
+
+        let unknown_caps = PhaseCapabilities::defaults_for_phase("custom-phase");
+        assert_eq!(unknown_caps, PhaseCapabilities::default());
+    }
+
+    #[test]
+    fn merge_with_defaults_ors_config_with_phase_defaults() {
+        let custom = PhaseCapabilities {
+            writes_files: true,
+            ..Default::default()
+        };
+        let merged = custom.merge_with_defaults("research");
+        assert!(merged.writes_files);
+        assert!(merged.is_research);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use orchestrator_core;
 use protocol::{
     canonical_model_id, default_fallback_models_for_phase, default_model_specs,
     default_primary_model_for_phase, normalize_tool_id, tool_for_model_id,
-    tool_supports_repository_writes, ModelRoutingComplexity,
+    tool_supports_repository_writes, ModelRoutingComplexity, PhaseCapabilities,
 };
 
 pub(crate) struct PhaseTargetPlanner;
@@ -20,17 +20,18 @@ impl PhaseTargetPlanner {
         model_override: Option<&str>,
         tool_override: Option<&str>,
         complexity: Option<ModelRoutingComplexity>,
+        caps: &PhaseCapabilities,
     ) -> (String, String) {
         let resolved_complexity = complexity.or_else(|| phase_complexity_from_env(phase_id));
         let model_id = model_override
             .map(canonical_model_id)
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| phase_model_id(phase_id, resolved_complexity));
+            .unwrap_or_else(|| phase_model_id(phase_id, resolved_complexity, caps));
         let tool_id = tool_override
             .map(normalize_tool_id)
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| phase_tool_id(phase_id, &model_id));
-        enforce_write_capable_phase_target(tool_id, model_id)
+            .unwrap_or_else(|| phase_tool_id(phase_id, &model_id, caps));
+        enforce_write_capable_phase_target(tool_id, model_id, caps.writes_files)
     }
 
     pub(crate) fn build_phase_execution_targets(
@@ -40,6 +41,7 @@ impl PhaseTargetPlanner {
         configured_fallback_models: &[String],
         complexity: Option<ModelRoutingComplexity>,
         project_root: Option<&str>,
+        caps: &PhaseCapabilities,
     ) -> Vec<(String, String)> {
         let resolved_complexity = complexity.or_else(|| phase_complexity_from_env(phase_id));
         let (primary_tool, primary_model) = Self::resolve_phase_execution_target(
@@ -47,6 +49,7 @@ impl PhaseTargetPlanner {
             model_override,
             tool_override,
             resolved_complexity,
+            caps,
         );
 
         let mut candidate_models = Vec::new();
@@ -58,9 +61,9 @@ impl PhaseTargetPlanner {
                 .map(canonical_model_id)
                 .filter(|value| !value.is_empty()),
         );
-        candidate_models.extend(phase_fallback_models_from_env(phase_id));
+        candidate_models.extend(phase_fallback_models_from_env(phase_id, caps));
         candidate_models.extend(
-            default_fallback_models_for_phase(phase_id, resolved_complexity)
+            default_fallback_models_for_phase(resolved_complexity, caps)
                 .into_iter()
                 .map(canonical_model_id)
                 .filter(|value| !value.is_empty()),
@@ -90,6 +93,7 @@ impl PhaseTargetPlanner {
                 enforce_write_capable_phase_target(
                     Self::tool_for_model_id(&candidate_model).to_string(),
                     candidate_model,
+                    caps.writes_files,
                 )
             };
             targets.push((tool_id, model_id));
@@ -103,18 +107,11 @@ impl PhaseTargetPlanner {
     }
 }
 
-fn is_ui_ux_phase(phase_id: &str) -> bool {
-    matches!(
-        phase_id,
-        "ux-research" | "wireframe" | "mockup-review" | "design" | "design-review"
-    )
-}
-
-fn is_research_phase(phase_id: &str) -> bool {
-    phase_id == "research"
-}
-
-fn phase_model_id(phase_id: &str, complexity: Option<ModelRoutingComplexity>) -> String {
+fn phase_model_id(
+    phase_id: &str,
+    complexity: Option<ModelRoutingComplexity>,
+    caps: &PhaseCapabilities,
+) -> String {
     let phase_key = phase_id
         .trim()
         .to_ascii_uppercase()
@@ -129,7 +126,7 @@ fn phase_model_id(phase_id: &str, complexity: Option<ModelRoutingComplexity>) ->
         }
     }
 
-    if is_ui_ux_phase(phase_id) {
+    if caps.is_ui_ux {
         if let Ok(value) = std::env::var("AO_PHASE_MODEL_UI_UX") {
             let model = canonical_model_id(&value);
             if !model.is_empty() {
@@ -138,7 +135,7 @@ fn phase_model_id(phase_id: &str, complexity: Option<ModelRoutingComplexity>) ->
         }
     }
 
-    if is_research_phase(phase_id) {
+    if caps.is_research {
         if let Ok(value) = std::env::var("AO_PHASE_MODEL_RESEARCH") {
             let model = canonical_model_id(&value);
             if !model.is_empty() {
@@ -154,10 +151,10 @@ fn phase_model_id(phase_id: &str, complexity: Option<ModelRoutingComplexity>) ->
         }
     }
 
-    default_primary_model_for_phase(phase_id, complexity).to_string()
+    default_primary_model_for_phase(complexity, caps).to_string()
 }
 
-fn phase_tool_id(phase_id: &str, model_id: &str) -> String {
+fn phase_tool_id(phase_id: &str, model_id: &str, caps: &PhaseCapabilities) -> String {
     let phase_key = phase_id
         .trim()
         .to_ascii_uppercase()
@@ -172,7 +169,7 @@ fn phase_tool_id(phase_id: &str, model_id: &str) -> String {
         }
     }
 
-    if is_ui_ux_phase(phase_id) {
+    if caps.is_ui_ux {
         if let Ok(value) = std::env::var("AO_PHASE_TOOL_UI_UX") {
             let tool = normalize_tool_id(&value);
             if !tool.is_empty() {
@@ -181,7 +178,7 @@ fn phase_tool_id(phase_id: &str, model_id: &str) -> String {
         }
     }
 
-    if is_research_phase(phase_id) {
+    if caps.is_research {
         if let Ok(value) = std::env::var("AO_PHASE_TOOL_RESEARCH") {
             let tool = normalize_tool_id(&value);
             if !tool.is_empty() {
@@ -208,8 +205,15 @@ fn parse_env_bool(key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn enforce_write_capable_phase_target(tool_id: String, model_id: String) -> (String, String) {
+fn enforce_write_capable_phase_target(
+    tool_id: String,
+    model_id: String,
+    phase_writes_files: bool,
+) -> (String, String) {
     let normalized_tool_id = normalize_tool_id(&tool_id);
+    if !phase_writes_files {
+        return (normalized_tool_id, model_id);
+    }
     if !parse_env_bool("AO_ALLOW_NON_EDITING_PHASE_TOOL")
         && !tool_supports_repository_writes(&normalized_tool_id)
     {
@@ -267,7 +271,7 @@ fn phase_complexity_from_env(phase_id: &str) -> Option<ModelRoutingComplexity> {
         .and_then(|value| ModelRoutingComplexity::parse(&value))
 }
 
-fn phase_fallback_models_from_env(phase_id: &str) -> Vec<String> {
+fn phase_fallback_models_from_env(phase_id: &str, caps: &PhaseCapabilities) -> Vec<String> {
     let phase_key = env_phase_key(phase_id);
     let phase_specific = format!("AO_PHASE_FALLBACK_MODELS_{phase_key}");
     if let Ok(value) = std::env::var(&phase_specific) {
@@ -277,7 +281,7 @@ fn phase_fallback_models_from_env(phase_id: &str) -> Vec<String> {
         }
     }
 
-    if is_ui_ux_phase(phase_id) {
+    if caps.is_ui_ux {
         if let Ok(value) = std::env::var("AO_PHASE_FALLBACK_MODELS_UI_UX") {
             let parsed = parse_model_list(&value);
             if !parsed.is_empty() {
@@ -286,7 +290,7 @@ fn phase_fallback_models_from_env(phase_id: &str) -> Vec<String> {
         }
     }
 
-    if is_research_phase(phase_id) {
+    if caps.is_research {
         if let Ok(value) = std::env::var("AO_PHASE_FALLBACK_MODELS_RESEARCH") {
             let parsed = parse_model_list(&value);
             if !parsed.is_empty() {

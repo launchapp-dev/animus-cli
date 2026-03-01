@@ -457,9 +457,10 @@ fn model_candidates() -> Vec<String> {
         }
     }
 
-    let mut models = vec![default_primary_model_for_phase("implementation", None).to_string()];
+    let impl_caps = protocol::PhaseCapabilities::defaults_for_phase("implementation");
+    let mut models = vec![default_primary_model_for_phase(None, &impl_caps).to_string()];
     models.extend(
-        default_fallback_models_for_phase("implementation", None)
+        default_fallback_models_for_phase(None, &impl_caps)
             .into_iter()
             .map(|model| model.to_string()),
     );

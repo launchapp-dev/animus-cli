@@ -559,6 +559,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
             agent_id: Some(default_agent.clone()),
             directive: legacy_runtime.phase_directives.get("default").cloned(),
             runtime: None,
+            capabilities: None,
             output_contract: None,
             output_json_schema: None,
             decision_contract: None,
@@ -621,6 +622,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                             .and_then(|profile| profile.phase_directive.clone())
                     }),
                 runtime,
+                capabilities: None,
                 output_contract,
                 output_json_schema,
                 decision_contract: None,

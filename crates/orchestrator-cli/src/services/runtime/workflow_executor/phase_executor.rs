@@ -116,6 +116,10 @@ fn phase_fallback_models_for(project_root: &str, phase_id: &str) -> Vec<String> 
     load_agent_runtime_config(project_root).phase_fallback_models(phase_id)
 }
 
+fn load_phase_capabilities(project_root: &str, phase_id: &str) -> protocol::PhaseCapabilities {
+    load_agent_runtime_config(project_root).phase_capabilities(phase_id)
+}
+
 fn phase_output_contract_for(
     project_root: &str,
     phase_id: &str,
@@ -199,18 +203,15 @@ pub(crate) fn build_phase_prompt(
     task_description: &str,
     phase_id: &str,
 ) -> String {
-    let is_write_phase =
-        matches!(phase_id, "implementation" | "wireframe" | "design");
-    let phase_action_rule = if is_write_phase {
+    let caps = load_phase_capabilities(project_root, phase_id);
+    let phase_action_rule = if caps.writes_files {
         "Requirements:\n- Make concrete file changes in this repository."
     } else {
         "Requirements:\n- This is a READ-ONLY phase. Do NOT create, edit, or write any files. Do NOT run commands that modify the repository.\n- Read and analyze the codebase to assess the task. Your only output should be your assessment and phase decision."
     };
-    let enforce_product_file_changes =
-        matches!(phase_id, "implementation");
     let phase_contract = phase_output_contract_for(project_root, phase_id);
     let require_commit_message = phase_requires_commit_message_with_config(project_root, phase_id);
-    let product_change_rule = if enforce_product_file_changes {
+    let product_change_rule = if caps.enforce_product_changes {
         "- For this phase, changes must include product source/config/test files outside `.ao/` unless the task is explicitly documentation-only."
     } else {
         ""
@@ -227,7 +228,7 @@ pub(crate) fn build_phase_prompt(
         String::new()
     };
     let phase_directive = phase_directive_for(project_root, phase_id);
-    let phase_safety_rules = phase_safety_rules(phase_id);
+    let phase_safety_rules = phase_safety_rules(&caps);
     let phase_decision_rule = if phase_decision_contract_for(project_root, phase_id).is_some() {
         format!(
             "- Before finishing, emit one JSON line with your phase assessment:\n  {{\"kind\":\"phase_decision\",\"phase_id\":\"{phase_id}\",\"verdict\":\"advance|rework|fail\",\"confidence\":0.0-1.0,\"risk\":\"low|medium|high\",\"reason\":\"...\",\"evidence\":[{{\"kind\":\"...\",\"description\":\"...\"}}]}}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Be honest about confidence. 0.5 = uncertain, 0.8+ = confident."
@@ -262,8 +263,8 @@ pub(crate) fn build_phase_prompt(
     phase_prompt
 }
 
-fn phase_safety_rules(phase_id: &str) -> &'static str {
-    if phase_id.eq_ignore_ascii_case("research") {
+fn phase_safety_rules(caps: &protocol::PhaseCapabilities) -> &'static str {
+    if caps.is_research {
         return "- For research phases, treat greenfield repositories as valid: missing app source files is not a blocker by itself.\n- Do targeted discovery only: inspect first-party code (`src/`, `apps/`, `db/`, `tests/`) and active `.ao` task/requirement docs; avoid broad recursive listings.\n- Do not scan dependency or checkpoint trees unless explicitly required: skip `node_modules/`, `.git/`, `.ao/workflow-state/checkpoints/`, and `.ao/runs/`.\n- If code context is limited, produce concrete assumptions, risks, and a build-ready plan in repository artifacts instead of stopping.\n- Emit `research_required` only for true external blockers that cannot be reasonably unblocked with explicit assumptions.";
     }
 
@@ -287,7 +288,7 @@ pub(crate) enum PhaseExecutionOutcome {
 }
 
 pub(crate) fn phase_requires_commit_message(phase_id: &str) -> bool {
-    phase_id == "implementation"
+    protocol::PhaseCapabilities::defaults_for_phase(phase_id).requires_commit
 }
 
 fn phase_requires_commit_message_with_config(project_root: &str, phase_id: &str) -> bool {
@@ -712,6 +713,7 @@ pub(crate) async fn run_workflow_phase_with_agent(
     phase_id: &str,
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
 ) -> Result<PhaseExecutionOutcome> {
+    let caps = load_phase_capabilities(project_root, phase_id);
     let routing_complexity = routing_complexity(task_complexity);
     let agent_model_override = phase_model_override_for(project_root, phase_id);
     let agent_tool_override = phase_tool_override_for(project_root, phase_id);
@@ -734,8 +736,9 @@ pub(crate) async fn run_workflow_phase_with_agent(
         configured_fallback_models.as_slice(),
         routing_complexity,
         Some(project_root),
+        &caps,
     );
-    let parse_research_signal = phase_id != "research";
+    let parse_research_signal = !caps.is_research;
     let prompt = build_phase_prompt(
         project_root,
         workflow_id,
@@ -795,7 +798,7 @@ pub(crate) async fn run_workflow_phase_with_agent(
             if let Some(schema) = phase_output_schema.as_ref() {
                 inject_response_schema_into_launch_args(&mut runtime_contract, schema);
             }
-            if !matches!(phase_id, "implementation" | "wireframe" | "design") {
+            if !caps.writes_files {
                 inject_read_only_flag(&mut runtime_contract);
             }
             inject_cli_launch_overrides(
@@ -1323,6 +1326,7 @@ pub(crate) async fn run_workflow_phase(
             });
 
             let routing_complexity = routing_complexity(task_complexity);
+            let exec_caps = runtime_loaded.config.phase_capabilities(phase_id);
             let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
                 phase_id,
                 runtime_loaded
@@ -1347,6 +1351,7 @@ pub(crate) async fn run_workflow_phase(
                     .as_slice(),
                 routing_complexity,
                 Some(project_root),
+                &exec_caps,
             );
             if let Some((tool, model)) = execution_targets.first() {
                 metadata.selected_tool = Some(tool.clone());

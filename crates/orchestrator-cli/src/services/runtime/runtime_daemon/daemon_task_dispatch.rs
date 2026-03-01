@@ -270,6 +270,7 @@ pub fn daemon_agent_assignee_for_workflow_start(
         .unwrap_or_else(|| phase_id.clone());
 
     let fallback_models = runtime_config.phase_fallback_models(&phase_id);
+    let caps = runtime_config.phase_capabilities(&phase_id);
     let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
         &phase_id,
         runtime_config.phase_model_override(&phase_id),
@@ -277,6 +278,7 @@ pub fn daemon_agent_assignee_for_workflow_start(
         fallback_models.as_slice(),
         routing_complexity_for_task(task),
         Some(project_root),
+        &caps,
     );
     let model = execution_targets.first().map(|(_, model)| model.clone());
     (role, model)

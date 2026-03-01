@@ -296,6 +296,9 @@
       "mode": "agent",
       "agent_id": "default",
       "directive": "Gather external and codebase evidence needed to de-risk the next implementation step. Treat greenfield repositories as valid and provide assumptions/plan artifacts when source is sparse. Keep discovery targeted to first-party code and active requirement/task docs; avoid broad scans of dependency or workflow checkpoint directories. Only emit research_required for true external blockers.",
+      "capabilities": {
+        "is_research": true
+      },
       "runtime": {
         "tool": null,
         "model": null,
@@ -345,6 +348,11 @@
       "agent_id": "swe",
       "directive": "Implement production-quality code for this task. Keep changes focused and executable.",
       "runtime": null,
+      "capabilities": {
+        "writes_files": true,
+        "requires_commit": true,
+        "enforce_product_changes": true
+      },
       "output_contract": {
         "kind": "implementation_result",
         "required_fields": [

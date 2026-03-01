@@ -179,6 +179,8 @@ pub struct PhaseExecutionDefinition {
     #[serde(default)]
     pub runtime: Option<AgentRuntimeOverrides>,
     #[serde(default)]
+    pub capabilities: Option<protocol::PhaseCapabilities>,
+    #[serde(default)]
     pub output_contract: Option<PhaseOutputContract>,
     #[serde(default)]
     pub output_json_schema: Option<Value>,
@@ -272,6 +274,13 @@ fn normalized_nonempty_values(values: &[String]) -> Vec<String> {
 }
 
 impl AgentRuntimeConfig {
+    pub fn phase_capabilities(&self, phase_id: &str) -> protocol::PhaseCapabilities {
+        self.phase_execution(phase_id)
+            .and_then(|def| def.capabilities.clone())
+            .unwrap_or_default()
+            .merge_with_defaults(phase_id)
+    }
+
     pub fn has_phase_definition(&self, phase_id: &str) -> bool {
         self.phase_execution(phase_id).is_some()
     }
@@ -823,6 +832,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                             .to_string(),
                     ),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
@@ -837,6 +847,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("po".to_string()),
                     directive: Some("Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: Some(PhaseDecisionContract {
@@ -863,6 +874,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         timeout_secs: Some(900),
                         ..AgentRuntimeOverrides::default()
                     }),
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
@@ -877,6 +889,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("default".to_string()),
                     directive: Some("Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
@@ -891,6 +904,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("default".to_string()),
                     directive: Some("Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
@@ -905,6 +919,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("default".to_string()),
                     directive: Some("Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
@@ -922,6 +937,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                             .to_string(),
                     ),
                     runtime: None,
+                    capabilities: None,
                     output_contract: Some(implementation_output_contract.clone()),
                     output_json_schema: Some(json!({
                         "type": "object",
@@ -949,6 +965,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("swe".to_string()),
                     directive: Some("Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: Some(PhaseDecisionContract {
@@ -968,6 +985,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     agent_id: Some("swe".to_string()),
                     directive: Some("Add or update tests and validate behavior. Ensure failures are addressed before finishing.".to_string()),
                     runtime: None,
+                    capabilities: None,
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: Some(PhaseDecisionContract {

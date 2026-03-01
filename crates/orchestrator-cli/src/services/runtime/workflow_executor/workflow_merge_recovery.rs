@@ -157,7 +157,8 @@ pub(crate) async fn attempt_ai_merge_conflict_recovery(
     task: &orchestrator_core::OrchestratorTask,
     context: &MergeConflictContext,
 ) -> Result<()> {
-    let model = default_primary_model_for_phase("implementation", None).to_string();
+    let impl_caps = protocol::PhaseCapabilities::defaults_for_phase("implementation");
+    let model = default_primary_model_for_phase(None, &impl_caps).to_string();
     let tool = tool_for_model_id(&model).to_string();
     let prompt = build_merge_conflict_recovery_prompt(task, context);
     let transcript = run_merge_conflict_recovery_prompt_against_runner(

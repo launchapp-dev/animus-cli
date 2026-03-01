@@ -148,7 +148,8 @@ pub(crate) async fn attempt_ai_failure_recovery(
         return AiRecoveryAction::Fail;
     }
 
-    let model = default_primary_model_for_phase("implementation", None).to_string();
+    let impl_caps = protocol::PhaseCapabilities::defaults_for_phase("implementation");
+    let model = default_primary_model_for_phase(None, &impl_caps).to_string();
     let tool = tool_for_model_id(&model).to_string();
 
     let prompt = format!(

@@ -258,7 +258,7 @@ mod tests {
         InMemoryServiceHub, Priority, RequirementItem, RequirementPriority, RequirementStatus,
         TaskCreateInput, TaskType, VisionDraftInput,
     };
-    use protocol::ModelRoutingComplexity;
+    use protocol::{ModelRoutingComplexity, PhaseCapabilities};
     use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::TempDir;
 
@@ -416,17 +416,21 @@ mod tests {
         let _phase = EnvVarGuard::set("AO_PHASE_TOOL_RESEARCH", None);
         let _uiux = EnvVarGuard::set("AO_PHASE_TOOL_UI_UX", None);
 
+        let research_caps = PhaseCapabilities::defaults_for_phase("research");
         let (research_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
             "research",
             Some("gemini-2.5-pro"),
             None,
             None,
+            &research_caps,
         );
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         let (implementation_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
             "implementation",
             Some("gpt-5.3-codex"),
             None,
             None,
+            &impl_caps,
         );
         assert_eq!(research_tool, "gemini");
         assert_eq!(implementation_tool, "codex");
@@ -440,17 +444,21 @@ mod tests {
         let _research = EnvVarGuard::set("AO_PHASE_TOOL_RESEARCH", Some("gemini"));
         let _specific = EnvVarGuard::set("AO_PHASE_TOOL_IMPLEMENTATION", Some("opencode"));
 
+        let research_caps = PhaseCapabilities::defaults_for_phase("research");
         let (research_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
             "research",
             Some("gpt-5.3-codex"),
             None,
             None,
+            &research_caps,
         );
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         let (implementation_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
             "implementation",
             Some("gpt-5.3-codex"),
             None,
             None,
+            &impl_caps,
         );
         assert_eq!(research_tool, "gemini");
         assert_eq!(implementation_tool, "opencode");
@@ -460,26 +468,36 @@ mod tests {
     fn resolve_phase_execution_target_falls_back_to_write_capable_tool() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", None);
-        let _phase_model = EnvVarGuard::set("AO_PHASE_MODEL_UI_UX", Some("gemini-2.5-pro"));
         let _fallback_model = EnvVarGuard::set("AO_PHASE_MODEL_FILE_EDIT", None);
         let _fallback_tool = EnvVarGuard::set("AO_PHASE_TOOL_FILE_EDIT", None);
+        let _global_model = EnvVarGuard::set("AO_PHASE_MODEL", None);
+        let _impl_model = EnvVarGuard::set("AO_PHASE_MODEL_IMPLEMENTATION", None);
 
+        let write_caps = PhaseCapabilities {
+            writes_files: true,
+            is_ui_ux: true,
+            ..Default::default()
+        };
         let (tool, model) =
-            PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None);
-        assert_eq!(tool, "claude");
-        assert_eq!(model, "claude-sonnet-4-6");
+            PhaseTargetPlanner::resolve_phase_execution_target("wireframe", None, None, None, &write_caps);
+        assert!(
+            protocol::tool_supports_repository_writes(&tool),
+            "write phase should get a write-capable tool, got: {tool}"
+        );
+        assert!(!model.is_empty());
     }
 
     #[test]
-    fn resolve_phase_execution_target_can_allow_non_editing_tool() {
+    fn resolve_phase_execution_target_skips_write_enforcement_for_read_only_phase() {
         let _lock = env_lock().lock().expect("env lock should be available");
-        let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
+        let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", None);
         let _phase_model = EnvVarGuard::set("AO_PHASE_MODEL_UI_UX", Some("gemini-2.5-pro"));
         let _fallback_model = EnvVarGuard::set("AO_PHASE_MODEL_FILE_EDIT", None);
         let _fallback_tool = EnvVarGuard::set("AO_PHASE_TOOL_FILE_EDIT", None);
 
+        let caps = PhaseCapabilities::defaults_for_phase("ux-research");
         let (tool, model) =
-            PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None);
+            PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None, &caps);
         assert_eq!(tool, "gemini");
         assert_eq!(model, "gemini-2.5-pro");
     }
@@ -488,11 +506,13 @@ mod tests {
     fn resolve_phase_execution_target_prefers_runtime_overrides() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         let (tool, model) = PhaseTargetPlanner::resolve_phase_execution_target(
             "implementation",
             Some("gpt-5.3-codex"),
             Some("codex"),
             None,
+            &impl_caps,
         );
         assert_eq!(tool, "codex");
         assert_eq!(model, "gpt-5.3-codex");
@@ -505,17 +525,20 @@ mod tests {
         let _phase_model = EnvVarGuard::set("AO_PHASE_MODEL_CODE_REVIEW", None);
         let _global_model = EnvVarGuard::set("AO_PHASE_MODEL", None);
 
+        let review_caps = PhaseCapabilities::defaults_for_phase("code-review");
         let (_tool_medium, model_medium) = PhaseTargetPlanner::resolve_phase_execution_target(
             "code-review",
             None,
             None,
             Some(ModelRoutingComplexity::Medium),
+            &review_caps,
         );
         let (_tool_high, model_high) = PhaseTargetPlanner::resolve_phase_execution_target(
             "code-review",
             None,
             None,
             Some(ModelRoutingComplexity::High),
+            &review_caps,
         );
 
         assert_eq!(model_medium, "claude-sonnet-4-6");
@@ -617,6 +640,7 @@ mod tests {
             Some("sonnet,glm-4.5,minimax-m1"),
         );
 
+        let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         let targets = PhaseTargetPlanner::build_phase_execution_targets(
             "implementation",
             None,
@@ -624,6 +648,7 @@ mod tests {
             &[],
             None,
             None,
+            &impl_caps,
         );
         let models: Vec<_> = targets
             .iter()
