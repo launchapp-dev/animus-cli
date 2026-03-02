@@ -218,6 +218,16 @@ struct DaemonEventsInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonLogsInput {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
 const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
 const OUTPUT_TAIL_SCHEMA: &str = "ao.output.tail.v1";
@@ -1155,6 +1165,27 @@ impl AoMcpServer {
             params.0.project_root,
         )
         .await
+    }
+
+    #[tool(
+        name = "ao.daemon.logs",
+        description = "Read daemon log file. Purpose: View raw daemon log output for debugging. Prerequisites: Daemon should have been started with --autonomous. Example: {\"limit\": 50} or {\"search\": \"error\"}. Sequencing: Use ao.daemon.status first to confirm running, then ao.daemon.logs to inspect output.",
+        input_schema = ao_schema_for_type::<DaemonLogsInput>()
+    )]
+    async fn ao_daemon_logs(
+        &self,
+        params: Parameters<DaemonLogsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        match build_daemon_logs_result(&self.default_project_root, params.0) {
+            Ok(result) => Ok(CallToolResult::structured(json!({
+                "tool": "ao.daemon.logs",
+                "result": result,
+            }))),
+            Err(error) => Ok(CallToolResult::structured_error(json!({
+                "tool": "ao.daemon.logs",
+                "error": error.to_string(),
+            }))),
+        }
     }
 
     #[tool(
@@ -3251,6 +3282,49 @@ fn build_daemon_events_poll_result(
         "limit": limit,
         "count": response.count,
         "events": response.events,
+    }))
+}
+
+const DEFAULT_DAEMON_LOGS_LIMIT: usize = 100;
+
+fn build_daemon_logs_result(default_project_root: &str, input: DaemonLogsInput) -> Result<Value> {
+    let project_root =
+        resolve_daemon_events_project_root(default_project_root, input.project_root);
+    let limit = input.limit.unwrap_or(DEFAULT_DAEMON_LOGS_LIMIT).max(1);
+    let log_path = crate::services::runtime::autonomous_daemon_log_path(&project_root);
+
+    let content = match std::fs::read_to_string(&log_path) {
+        Ok(c) => c,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({
+                "log_path": log_path.display().to_string(),
+                "line_count": 0,
+                "lines": [],
+                "has_more": false,
+            }));
+        }
+        Err(err) => {
+            anyhow::bail!("failed to read daemon log at {}: {}", log_path.display(), err);
+        }
+    };
+
+    let mut lines: Vec<&str> = content.lines().collect();
+
+    if let Some(ref needle) = input.search {
+        lines.retain(|line| line.contains(needle.as_str()));
+    }
+
+    let total = lines.len();
+    let has_more = total > limit;
+    if total > limit {
+        lines = lines.split_off(total - limit);
+    }
+
+    Ok(json!({
+        "log_path": log_path.display().to_string(),
+        "line_count": lines.len(),
+        "lines": lines,
+        "has_more": has_more,
     }))
 }
 
