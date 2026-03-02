@@ -1,0 +1,54 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "REQ-030 Phase 1, item 3: The daemon runs unconditionally 24/7. Add active_hours configuration to restrict proactive behavior to configured time windows.\n\nChanges needed:\n1. Add to DaemonProjectConfig in daemon_config.rs:\n   - `active_hours: Option<ActiveHoursConfig>` with `start_hour: u8` (0-23), `end_hour: u8` (0-23), `timezone: Option<String>` (default local)\n   - `active_days: Option<Vec<String>>` (e.g., [\"mon\", \"tue\", \"wed\", \"thu\", \"fri\"])\n2. Add `is_within_active_hours(config: &DaemonProjectConfig) -> bool` helper\n3. In project_tick(), when active_hours is configured and current time is outside the window:\n   - Skip proactive operations (heartbeat evaluation, stale suggestions, cron jobs)\n   - Continue reactive operations (workflow dispatch, reconciliation, git integration) — these should always run\n4. Add `ao daemon config set --active-hours \"09:00-18:00\" --active-days \"mon-fri\"` CLI support\n5. Add tests: proactive ops skipped outside hours, reactive ops still run, no gating when unconfigured\n\nKey files:\n- crates/orchestrator-core/src/daemon_config.rs (DaemonProjectConfig)\n- crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs",
+  "estimated_effort": null,
+  "id": "TASK-222",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [
+    "REQ-030"
+  ],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-02T21:36:17.719233Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-02T21:36:17.719233Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "low",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Add time-of-day gating (active_hours) to daemon config",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

@@ -1,0 +1,52 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "When running `ao workflow execute --task-id TASK-148 --pipeline-id gated`, the requirements phase defaulted to `ao-oai-runner` with model `minimax/MiniMax-M2.5` instead of claude. The agent profile for requirements doesn't specify a tool/model, so it falls through to the default model routing which picks MiniMax.\n\nThe agent-runtime-config default agent profile likely has `model` and `tool` set to MiniMax/oai-runner. For the gated pipeline, requirements/implementation/code-review/po-review phases should default to claude unless explicitly overridden.\n\nOptions:\n1. Set default tool/model in agent-runtime-config to claude-sonnet-4-6\n2. Allow YAML pipeline phases to specify tool/model overrides\n3. Fix the compiled defaults in `default_primary_model_for_phase()` to take precedence over agent profile defaults\n\nKey files:\n- `.ao/state/agent-runtime-config.v2.json` (agents.default.model / agents.default.tool)\n- `crates/protocol/src/model_routing.rs` (default_primary_model_for_phase)\n- `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_phase_targets.rs`",
+  "estimated_effort": null,
+  "id": "TASK-219",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-02T20:33:21.514250Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-02T20:33:21.514250Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Fix model routing for workflow execute — defaults to oai-runner/MiniMax instead of claude",
+  "type": "bugfix",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

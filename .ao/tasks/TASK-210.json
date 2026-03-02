@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T20:50:02.690649Z",
     "created_at": "2026-03-02T20:08:06.843794Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-02T20:08:41.859211Z",
+    "updated_at": "2026-03-02T20:50:02.690650Z",
     "updated_by": "ao-cli",
-    "version": 2
+    "version": 3
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Fix daemon-events MCP resource to filter by project_root and return tail",
   "type": "bugfix",

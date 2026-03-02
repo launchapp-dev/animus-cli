@@ -1,0 +1,54 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "REQ-030 Phase 5, items 12-14: The daemon handles outbound git operations (push, PR create) but has no inbound git event detection. Add polling-based detection of remote git state changes.\n\nChanges needed:\n1. Add `git_event_polling_enabled: bool` to DaemonProjectConfig (default: false)\n2. Add `git_event_poll_interval_secs: Option<u64>` (default: 300 = 5min, separate from tick interval)\n3. On each git event poll interval:\n   a. Run `git fetch --quiet` to update remote refs\n   b. Compare remote main HEAD with last-known SHA — detect new pushes\n   c. Run `gh pr list --state open --json number,title,headRefName,updatedAt` — detect new/updated PRs\n   d. Compare against last-known PR state (stored in .ao/state/git-event-state.json)\n4. When new push detected: emit `git-push-detected` daemon event, optionally trigger configured pipeline\n5. When new PR detected: emit `git-pr-opened` daemon event, optionally auto-create code-review task\n6. Store git event state in `.ao/state/git-event-state.json` (last_remote_sha, known_pr_numbers)\n7. All events flow through DaemonNotificationRuntime for webhook/Slack delivery\n8. Respect active_hours gating\n9. Add tests: push detection fires on new SHA, PR detection finds new PRs, deduplication prevents re-firing\n\nNote: This overlaps with TASK-216 (trigger declarations for event-driven workflow dispatch from REQ-031). TASK-216 defines the trigger config schema; this task implements the actual git polling. They should be coordinated — this task provides the detection layer, TASK-216 provides the config-driven dispatch layer.\n\nKey files:\n- crates/orchestrator-core/src/daemon_config.rs\n- crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_git_helpers.rs\n- crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs\n- New file: daemon_git_event_polling.rs",
+  "estimated_effort": null,
+  "id": "TASK-226",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [
+    "REQ-030"
+  ],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-02T21:36:59.209257Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-02T21:36:59.209257Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "low",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Add inbound git event polling for proactive workflow triggers",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

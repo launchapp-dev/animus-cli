@@ -220,6 +220,7 @@ async fn run_workflow_phase_with_agent(
         task_complexity,
         phase_id,
         phase_attempt,
+        None,
     )
     .await
 }

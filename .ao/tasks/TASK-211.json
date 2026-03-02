@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T20:50:16.891168Z",
     "created_at": "2026-03-02T20:08:14.342365Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-02T20:08:42.627302Z",
+    "updated_at": "2026-03-02T20:50:16.891169Z",
     "updated_by": "ao-cli",
-    "version": 2
+    "version": 3
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Add ao.daemon.logs MCP tool for reading daemon log file",
   "type": "feature",

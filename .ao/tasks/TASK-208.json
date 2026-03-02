@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T20:50:00.670691Z",
     "created_at": "2026-03-02T20:07:53.588471Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-02T20:08:40.331091Z",
+    "updated_at": "2026-03-02T20:50:00.670693Z",
     "updated_by": "ao-cli",
-    "version": 2
+    "version": 3
   },
   "paused": false,
   "priority": "critical",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Add dispatch retry budget with auto-block to prevent daemon retry storms",
   "type": "bugfix",

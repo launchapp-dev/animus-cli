@@ -1242,6 +1242,10 @@ async fn handle_workflow_execute(
             .map(|p| p.attempt)
             .unwrap_or(0);
 
+        let phase_overrides = crate::services::runtime::PhaseExecuteOverrides {
+            tool: args.tool.clone(),
+            model: args.model.clone(),
+        };
         let run_result = crate::services::runtime::run_workflow_phase(
             project_root,
             &execution_cwd,
@@ -1252,6 +1256,7 @@ async fn handle_workflow_execute(
             task_complexity,
             phase_id,
             phase_attempt,
+            Some(&phase_overrides),
         )
         .await;
 

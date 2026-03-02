@@ -25,9 +25,9 @@
     "created_at": "2026-02-28T15:13:38.666969Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-28T15:13:43.380205Z",
-    "updated_at": "2026-02-28T16:55:30.386007Z",
+    "updated_at": "2026-03-02T20:50:15.986466Z",
     "updated_by": "ao-cli",
-    "version": 9
+    "version": 10
   },
   "paused": false,
   "priority": "high",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Kill stale runner processes on daemon startup when lock PID is alive but unresponsive",
   "type": "bugfix",

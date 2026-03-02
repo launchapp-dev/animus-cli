@@ -505,6 +505,8 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
     let mut command = Command::new(&binary);
     command
         .env("AO_CONFIG_DIR", &config_dir)
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .stdin(Stdio::null());

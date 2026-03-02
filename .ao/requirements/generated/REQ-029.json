@@ -10,7 +10,11 @@
     "flows": [],
     "mockups": [],
     "related_requirements": [],
-    "tasks": [],
+    "tasks": [
+      "TASK-200",
+      "TASK-201",
+      "TASK-202"
+    ],
     "tests": [],
     "workflows": []
   },
@@ -19,5 +23,5 @@
   "tags": [],
   "title": "MCP Skill Discovery and Installation Layer",
   "type": null,
-  "updated_at": "2026-03-02T00:29:56.004004Z"
+  "updated_at": "2026-03-02T21:31:46.406529Z"
 }

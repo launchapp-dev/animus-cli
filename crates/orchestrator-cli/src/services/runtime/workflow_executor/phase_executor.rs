@@ -25,6 +25,12 @@ use crate::services::runtime::runtime_daemon::daemon_scheduler::runtime_support:
     WorkflowPhaseRuntimeSettings,
 };
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PhaseExecuteOverrides {
+    pub(crate) tool: Option<String>,
+    pub(crate) model: Option<String>,
+}
+
 const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/runtime/workflow_phase.prompt"
@@ -857,6 +863,8 @@ pub(crate) async fn run_workflow_phase_with_agent(
 ) -> Result<PhaseExecutionOutcome> {
     let caps = load_phase_capabilities(project_root, phase_id);
     let routing_complexity = routing_complexity(task_complexity);
+    let settings_tool = phase_runtime_settings.and_then(|s| s.tool.as_deref());
+    let settings_model = phase_runtime_settings.and_then(|s| s.model.as_deref());
     let agent_model_override = phase_model_override_for(project_root, phase_id);
     let agent_tool_override = phase_tool_override_for(project_root, phase_id);
     let agent_fallback_models = phase_fallback_models_for(project_root, phase_id);
@@ -869,12 +877,10 @@ pub(crate) async fn run_workflow_phase_with_agent(
     };
     let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
         phase_id,
-        agent_model_override
-            .as_deref()
-            .or_else(|| phase_runtime_settings.and_then(|settings| settings.model.as_deref())),
-        agent_tool_override
-            .as_deref()
-            .or_else(|| phase_runtime_settings.and_then(|settings| settings.tool.as_deref())),
+        settings_model
+            .or(agent_model_override.as_deref()),
+        settings_tool
+            .or(agent_tool_override.as_deref()),
         configured_fallback_models.as_slice(),
         routing_complexity,
         Some(project_root),
@@ -1392,6 +1398,7 @@ pub(crate) async fn run_workflow_phase(
     task_complexity: Option<orchestrator_core::Complexity>,
     phase_id: &str,
     phase_attempt: u32,
+    overrides: Option<&PhaseExecuteOverrides>,
 ) -> Result<PhaseExecutionRunResult> {
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
@@ -1469,12 +1476,15 @@ pub(crate) async fn run_workflow_phase(
 
     match definition.mode {
         orchestrator_core::PhaseExecutionMode::Agent => {
+            let cli_tool_override = overrides.and_then(|o| o.tool.as_deref());
+            let cli_model_override = overrides.and_then(|o| o.model.as_deref());
+
             let runtime_settings = Some(WorkflowPhaseRuntimeSettings {
-                tool: merged_runtime
-                    .phase_tool_override(phase_id)
+                tool: cli_tool_override
+                    .or_else(|| merged_runtime.phase_tool_override(phase_id))
                     .map(ToOwned::to_owned),
-                model: merged_runtime
-                    .phase_model_override(phase_id)
+                model: cli_model_override
+                    .or_else(|| merged_runtime.phase_model_override(phase_id))
                     .map(ToOwned::to_owned),
                 fallback_models: merged_runtime.phase_fallback_models(phase_id),
                 reasoning_effort: merged_runtime
@@ -1493,15 +1503,15 @@ pub(crate) async fn run_workflow_phase(
             let exec_caps = merged_runtime.phase_capabilities(phase_id);
             let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
                 phase_id,
-                merged_runtime
-                    .phase_model_override(phase_id)
+                cli_model_override
+                    .or_else(|| merged_runtime.phase_model_override(phase_id))
                     .or_else(|| {
                         runtime_settings
                             .as_ref()
                             .and_then(|settings| settings.model.as_deref())
                     }),
-                merged_runtime
-                    .phase_tool_override(phase_id)
+                cli_tool_override
+                    .or_else(|| merged_runtime.phase_tool_override(phase_id))
                     .or_else(|| {
                         runtime_settings
                             .as_ref()

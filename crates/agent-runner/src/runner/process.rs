@@ -773,6 +773,8 @@ pub async fn spawn_cli_process(
         .args(&invocation.args)
         .current_dir(cwd)
         .envs(env)
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
