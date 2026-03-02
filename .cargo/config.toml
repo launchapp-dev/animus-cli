@@ -19,6 +19,6 @@ wt-build = "build --manifest-path"
 wt-test = "test --manifest-path"
 
 # Runtime binary set used by ao in local dev and release packaging
-ao-bin-build = "build -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p llm-mcp-server"
-ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p llm-mcp-server"
-ao-bin-check = "check -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p llm-mcp-server"
+ao-bin-build = "build -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
+ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
+ao-bin-check = "check -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"

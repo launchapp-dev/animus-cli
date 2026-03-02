@@ -25,7 +25,6 @@ jobs:
           - orchestrator-core
           - agent-runner
           - llm-cli-wrapper
-          - llm-mcp-server
           - orchestrator-web-contracts
           - orchestrator-web-api
           - orchestrator-web-server

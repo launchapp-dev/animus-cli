@@ -35,7 +35,6 @@
 pub mod cli;
 pub mod config;
 pub mod error;
-pub mod mcp_manager;
 pub mod parser;
 pub mod tester;
 pub mod validator;
@@ -49,7 +48,6 @@ pub use cli::{
 };
 pub use config::Config;
 pub use error::{Error, Result};
-pub use mcp_manager::McpServerManager;
 pub use parser::{OutputParser, ParsedOutput};
 pub use tester::{CliTester, TestResult, TestSuite};
 pub use validator::{CliValidator, ValidationResult};

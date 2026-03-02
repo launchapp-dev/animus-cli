@@ -16,8 +16,7 @@ crates/
 ├── protocol/                # Wire protocol types shared across all crates
 ├── agent-runner/            # Standalone daemon managing LLM CLI processes via IPC
 ├── llm-cli-wrapper/         # Abstraction over AI CLI tools (claude, codex, gemini, etc.)
-├── oai-runner/              # OpenAI-compatible streaming API client
-└── llm-mcp-server/          # MCP server for external agent bridging
+└── oai-runner/              # OpenAI-compatible streaming API client
 ```
 
 ## Build & Run

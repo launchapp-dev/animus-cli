@@ -204,7 +204,6 @@ fn workspace_axum_dependency_is_pinned_and_consumed_from_workspace() {
     for manifest_path in [
         "crates/orchestrator-cli/Cargo.toml",
         "crates/orchestrator-web-server/Cargo.toml",
-        "crates/llm-mcp-server/Cargo.toml",
     ] {
         let manifest = parse_toml(&root.join(manifest_path))
             .unwrap_or_else(|error| panic!("manifest should parse ({manifest_path}): {error}"));

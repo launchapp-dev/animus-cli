@@ -3,7 +3,6 @@ members = [
   "crates/agent-runner",
   "crates/protocol",
   "crates/llm-cli-wrapper",
-  "crates/llm-mcp-server",
   "crates/orchestrator-core",
   "crates/orchestrator-cli",
   "crates/orchestrator-web-contracts",
@@ -15,7 +14,6 @@ default-members = [
   "crates/orchestrator-cli",
   "crates/agent-runner",
   "crates/llm-cli-wrapper",
-  "crates/llm-mcp-server",
   "crates/oai-runner",
 ]
 resolver = "2"

@@ -199,8 +199,7 @@ impl TestSuite {
     /// - Execute tool calls
     /// - Handle MCP-specific features
     ///
-    /// Note: This requires the MCP server to be running.
-    /// Use McpServerManager to start the server before running these tests.
+    /// Note: This requires an MCP server to be running.
     pub fn mcp_integration() -> Self {
         Self::new("MCP Integration")
             .with_description("Tests Model Context Protocol support and tool integration")
