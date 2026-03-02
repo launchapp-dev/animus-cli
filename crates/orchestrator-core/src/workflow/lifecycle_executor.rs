@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use chrono::Utc;
 
 use crate::agent_runtime_config::{PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS};
-use crate::state_machines::{builtin_compiled_state_machines, CompiledStateMachines};
+use crate::state_machines::{
+    builtin_compiled_state_machines, evaluate_guard, CompiledStateMachines, GuardContext,
+};
 use crate::types::{
     OrchestratorTask, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict,
     WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
@@ -128,6 +130,27 @@ impl WorkflowLifecycleExecutor {
             .and_then(|cfg| cfg.backoff.as_ref())
             .map(|backoff| backoff.delay_for_attempt(attempt))
             .unwrap_or(0)
+    }
+
+    fn guard_context_for_phase<'a>(
+        &self,
+        phase_id: &'a str,
+        rework_counts: &'a HashMap<String, u32>,
+    ) -> GuardContext<'a> {
+        GuardContext {
+            phase_id,
+            rework_counts,
+            max_reworks_for_phase: self.max_reworks_for_phase(phase_id),
+        }
+    }
+
+    fn is_rework_budget_available(
+        &self,
+        phase_id: &str,
+        rework_counts: &HashMap<String, u32>,
+    ) -> bool {
+        let context = self.guard_context_for_phase(phase_id, rework_counts);
+        evaluate_guard("rework_budget_available", &context)
     }
 
     fn resolve_verdict_target(
@@ -614,13 +637,13 @@ impl WorkflowLifecycleExecutor {
                     .map(|p| p.phase_id.as_str())
                     .unwrap_or("unknown");
                 let rework_target = decision.target_phase.as_deref().unwrap_or(phase_id);
-                let rework_count = workflow
-                    .rework_counts
-                    .get(rework_target)
-                    .copied()
-                    .unwrap_or(0);
-                let max_reworks = self.max_reworks_for_phase(rework_target);
-                if rework_count >= max_reworks {
+                if !self.is_rework_budget_available(rework_target, &workflow.rework_counts) {
+                    let rework_count = workflow
+                        .rework_counts
+                        .get(rework_target)
+                        .copied()
+                        .unwrap_or(0);
+                    let max_reworks = self.max_reworks_for_phase(rework_target);
                     return GateEvaluationResult::Fail {
                         reason: format!(
                             "rework budget exceeded for phase {} ({} reworks, max {}): {}",
@@ -652,8 +675,7 @@ impl WorkflowLifecycleExecutor {
                         .get(workflow.current_phase_index)
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
-                    let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
-                    if rework_count < self.max_reworks_for_phase(phase_id) {
+                    if self.is_rework_budget_available(phase_id, &workflow.rework_counts) {
                         return GateEvaluationResult::Rework {
                             reason: format!(
                                 "low confidence ({:.2}) with high risk — requesting rework",
@@ -669,8 +691,7 @@ impl WorkflowLifecycleExecutor {
                         .get(workflow.current_phase_index)
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
-                    let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
-                    if rework_count < self.max_reworks_for_phase(phase_id) {
+                    if self.is_rework_budget_available(phase_id, &workflow.rework_counts) {
                         return GateEvaluationResult::Rework {
                             reason: format!(
                                 "guardrail violations: {}",

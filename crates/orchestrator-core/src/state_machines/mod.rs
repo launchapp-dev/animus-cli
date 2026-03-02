@@ -9,9 +9,9 @@ pub mod schema;
 mod validator;
 
 pub use engine::{
-    compile_state_machines_document, CompiledRequirementLifecycleMachine, CompiledStateMachines,
-    CompiledWorkflowMachine, MachineMetadata, MachineSource, RequirementTransitionOutcome,
-    WorkflowTransitionOutcome,
+    compile_state_machines_document, evaluate_guard, CompiledRequirementLifecycleMachine,
+    CompiledStateMachines, CompiledWorkflowMachine, GuardContext, MachineMetadata, MachineSource,
+    RequirementTransitionOutcome, WorkflowTransitionOutcome,
 };
 pub use schema::{
     builtin_state_machines_document, RequirementLifecycleEvent, RequirementLifecyclePolicy,

@@ -1,4 +1,7 @@
-use crate::state_machines::{builtin_compiled_state_machines, CompiledWorkflowMachine};
+use crate::state_machines::{
+    builtin_compiled_state_machines, evaluate_guard, CompiledWorkflowMachine, GuardContext,
+    WorkflowTransitionOutcome,
+};
 use crate::types::{WorkflowMachineEvent, WorkflowMachineState};
 
 #[derive(Debug, Clone)]
@@ -39,5 +42,19 @@ impl WorkflowStateMachine {
         self.current = transition.to;
 
         self.current
+    }
+
+    pub fn apply_with_guard_context(
+        &mut self,
+        event: WorkflowMachineEvent,
+        context: &GuardContext,
+    ) -> WorkflowTransitionOutcome {
+        let outcome = self
+            .definition
+            .apply(self.current, event, |guard_id| {
+                evaluate_guard(guard_id, context)
+            });
+        self.current = outcome.to;
+        outcome
     }
 }

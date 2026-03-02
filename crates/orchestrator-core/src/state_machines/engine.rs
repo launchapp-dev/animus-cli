@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -99,6 +99,26 @@ pub struct RequirementTransitionOutcome {
     pub to: RequirementStatus,
     pub matched: bool,
     pub guard_passed: Option<bool>,
+}
+
+pub struct GuardContext<'a> {
+    pub phase_id: &'a str,
+    pub rework_counts: &'a HashMap<String, u32>,
+    pub max_reworks_for_phase: u32,
+}
+
+pub fn evaluate_guard(guard_id: &str, context: &GuardContext) -> bool {
+    match guard_id {
+        "rework_budget_available" => {
+            let count = context
+                .rework_counts
+                .get(context.phase_id)
+                .copied()
+                .unwrap_or(0);
+            count < context.max_reworks_for_phase
+        }
+        _ => true,
+    }
 }
 
 pub fn compile_state_machines_document(
@@ -415,6 +435,143 @@ mod tests {
             |_| false,
         );
 
+        assert!(!outcome.matched);
+        assert_eq!(outcome.to, RequirementStatus::PoReview);
+        assert_eq!(outcome.guard_passed, Some(false));
+    }
+
+    #[test]
+    fn evaluate_guard_rework_budget_available_when_under_limit() {
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("implementation".to_string(), 1);
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_rework_budget_available_when_at_limit() {
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("implementation".to_string(), 3);
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(!evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_rework_budget_available_when_over_limit() {
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("implementation".to_string(), 5);
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(!evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_rework_budget_available_when_no_reworks_yet() {
+        let rework_counts = HashMap::new();
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_rework_budget_available_with_zero_max() {
+        let rework_counts = HashMap::new();
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 0,
+        };
+        assert!(!evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_unknown_guard_passes() {
+        let rework_counts = HashMap::new();
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(evaluate_guard("unknown_guard", &context));
+    }
+
+    #[test]
+    fn evaluate_guard_checks_correct_phase() {
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("code-review".to_string(), 5);
+        let context = GuardContext {
+            phase_id: "implementation",
+            rework_counts: &rework_counts,
+            max_reworks_for_phase: 3,
+        };
+        assert!(evaluate_guard("rework_budget_available", &context));
+    }
+
+    #[test]
+    fn requirement_lifecycle_uses_evaluate_guard_for_rework_budget() {
+        let compiled = compile_state_machines_document(
+            builtin_state_machines_document(),
+            MachineSource::Builtin,
+        )
+        .expect("compile should succeed");
+
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("po_review".to_string(), 0);
+
+        let outcome = compiled.requirements_lifecycle.apply(
+            RequirementStatus::PoReview,
+            RequirementLifecycleEvent::PoFail,
+            |guard_id| {
+                let context = GuardContext {
+                    phase_id: "po_review",
+                    rework_counts: &rework_counts,
+                    max_reworks_for_phase: 3,
+                };
+                evaluate_guard(guard_id, &context)
+            },
+        );
+        assert!(outcome.matched);
+        assert_eq!(outcome.to, RequirementStatus::NeedsRework);
+        assert_eq!(outcome.guard_passed, Some(true));
+    }
+
+    #[test]
+    fn requirement_lifecycle_blocks_rework_when_budget_exceeded() {
+        let compiled = compile_state_machines_document(
+            builtin_state_machines_document(),
+            MachineSource::Builtin,
+        )
+        .expect("compile should succeed");
+
+        let mut rework_counts = HashMap::new();
+        rework_counts.insert("po_review".to_string(), 3);
+
+        let outcome = compiled.requirements_lifecycle.apply(
+            RequirementStatus::PoReview,
+            RequirementLifecycleEvent::PoFail,
+            |guard_id| {
+                let context = GuardContext {
+                    phase_id: "po_review",
+                    rework_counts: &rework_counts,
+                    max_reworks_for_phase: 3,
+                };
+                evaluate_guard(guard_id, &context)
+            },
+        );
         assert!(!outcome.matched);
         assert_eq!(outcome.to, RequirementStatus::PoReview);
         assert_eq!(outcome.guard_passed, Some(false));
