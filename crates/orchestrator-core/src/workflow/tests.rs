@@ -507,6 +507,139 @@ fn rework_without_target_reruns_current_phase() {
 }
 
 #[test]
+fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
+    use crate::agent_runtime_config::PhaseRetryConfig;
+    use crate::types::{PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionRisk};
+    use std::collections::HashMap;
+
+    let mut retry_configs = HashMap::new();
+    retry_configs.insert(
+        "implementation".to_string(),
+        PhaseRetryConfig {
+            max_attempts: 1,
+            backoff: None,
+        },
+    );
+
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()])
+        .with_retry_configs(retry_configs);
+
+    let mut workflow = executor.bootstrap(
+        "WF-retry-1".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-retry-1".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+
+    workflow
+        .rework_counts
+        .insert("implementation".to_string(), 1);
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(PhaseDecision {
+            kind: "phase_decision".to_string(),
+            phase_id: "implementation".to_string(),
+            verdict: PhaseDecisionVerdict::Rework,
+            reason: "needs changes".to_string(),
+            confidence: 0.5,
+            risk: WorkflowDecisionRisk::Medium,
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            commit_message: None,
+        }),
+    );
+
+    assert_eq!(
+        workflow.status,
+        WorkflowStatus::Failed,
+        "max_attempts=1 should escalate to failure on first rework exceeding budget"
+    );
+    assert!(workflow
+        .failure_reason
+        .as_ref()
+        .unwrap()
+        .contains("rework budget exceeded"));
+}
+
+#[test]
+fn phase_with_max_attempts_5_allows_more_retries() {
+    use crate::agent_runtime_config::PhaseRetryConfig;
+    use crate::types::{PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionRisk};
+    use std::collections::HashMap;
+
+    let mut retry_configs = HashMap::new();
+    retry_configs.insert(
+        "implementation".to_string(),
+        PhaseRetryConfig {
+            max_attempts: 5,
+            backoff: None,
+        },
+    );
+
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()])
+        .with_retry_configs(retry_configs);
+
+    let mut workflow = executor.bootstrap(
+        "WF-retry-5".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-retry-5".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+
+    for i in 0..4 {
+        workflow
+            .rework_counts
+            .insert("implementation".to_string(), i);
+        executor.mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: PhaseDecisionVerdict::Rework,
+                reason: format!("rework attempt {}", i + 1),
+                confidence: 0.5,
+                risk: WorkflowDecisionRisk::Medium,
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+            }),
+        );
+
+        assert_eq!(
+            workflow.status,
+            WorkflowStatus::Running,
+            "should still be running after rework {} with max_attempts=5",
+            i + 1
+        );
+    }
+
+    workflow
+        .rework_counts
+        .insert("implementation".to_string(), 5);
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(PhaseDecision {
+            kind: "phase_decision".to_string(),
+            phase_id: "implementation".to_string(),
+            verdict: PhaseDecisionVerdict::Rework,
+            reason: "final rework".to_string(),
+            confidence: 0.5,
+            risk: WorkflowDecisionRisk::Medium,
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            commit_message: None,
+        }),
+    );
+    assert_eq!(
+        workflow.status,
+        WorkflowStatus::Failed,
+        "should fail after exceeding max_attempts=5"
+    );
+}
+
+#[test]
 fn advance_to_specific_target_phase_by_id() {
     let executor = WorkflowLifecycleExecutor::new(vec![
         "requirements".to_string(),
@@ -577,5 +710,141 @@ fn rework_with_nonexistent_target_falls_back_to_current_phase() {
     assert_eq!(
         workflow.phases[1].status,
         WorkflowPhaseStatus::Running
+    );
+}
+
+#[test]
+fn default_max_attempts_is_3_when_no_config() {
+    use crate::types::{PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionRisk};
+
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+
+    let mut workflow = executor.bootstrap(
+        "WF-default-retry".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-default-retry".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+
+    for i in 0..3 {
+        workflow
+            .rework_counts
+            .insert("implementation".to_string(), i);
+        executor.mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: PhaseDecisionVerdict::Rework,
+                reason: format!("rework {}", i + 1),
+                confidence: 0.5,
+                risk: WorkflowDecisionRisk::Medium,
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+            }),
+        );
+        if i < 2 {
+            assert_eq!(
+                workflow.status,
+                WorkflowStatus::Running,
+                "should still be running after rework {} with default max_attempts=3",
+                i + 1
+            );
+        }
+    }
+
+    workflow
+        .rework_counts
+        .insert("implementation".to_string(), 3);
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(PhaseDecision {
+            kind: "phase_decision".to_string(),
+            phase_id: "implementation".to_string(),
+            verdict: PhaseDecisionVerdict::Rework,
+            reason: "exceeds budget".to_string(),
+            confidence: 0.5,
+            risk: WorkflowDecisionRisk::Medium,
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            commit_message: None,
+        }),
+    );
+    assert_eq!(
+        workflow.status,
+        WorkflowStatus::Failed,
+        "should fail when rework_count reaches default max_attempts=3"
+    );
+}
+
+#[test]
+fn backoff_calculation() {
+    use crate::agent_runtime_config::BackoffConfig;
+
+    let backoff = BackoffConfig {
+        initial_secs: 10,
+        factor: 2.0,
+        max_secs: Some(120),
+    };
+
+    assert_eq!(backoff.delay_for_attempt(0), 0);
+    assert_eq!(backoff.delay_for_attempt(1), 10);
+    assert_eq!(backoff.delay_for_attempt(2), 20);
+    assert_eq!(backoff.delay_for_attempt(3), 40);
+    assert_eq!(backoff.delay_for_attempt(4), 80);
+    assert_eq!(backoff.delay_for_attempt(5), 120);
+    assert_eq!(backoff.delay_for_attempt(6), 120);
+
+    let no_cap = BackoffConfig {
+        initial_secs: 5,
+        factor: 3.0,
+        max_secs: None,
+    };
+    assert_eq!(no_cap.delay_for_attempt(1), 5);
+    assert_eq!(no_cap.delay_for_attempt(2), 15);
+    assert_eq!(no_cap.delay_for_attempt(3), 45);
+
+    let linear = BackoffConfig {
+        initial_secs: 30,
+        factor: 1.0,
+        max_secs: None,
+    };
+    assert_eq!(linear.delay_for_attempt(1), 30);
+    assert_eq!(linear.delay_for_attempt(2), 30);
+    assert_eq!(linear.delay_for_attempt(10), 30);
+}
+
+#[test]
+fn executor_backoff_delay_for_phase_returns_correct_values() {
+    use crate::agent_runtime_config::{BackoffConfig, PhaseRetryConfig};
+    use std::collections::HashMap;
+
+    let mut retry_configs = HashMap::new();
+    retry_configs.insert(
+        "implementation".to_string(),
+        PhaseRetryConfig {
+            max_attempts: 3,
+            backoff: Some(BackoffConfig {
+                initial_secs: 10,
+                factor: 2.0,
+                max_secs: Some(60),
+            }),
+        },
+    );
+
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()])
+        .with_retry_configs(retry_configs);
+
+    assert_eq!(executor.backoff_delay_for_phase("implementation", 1), 10);
+    assert_eq!(executor.backoff_delay_for_phase("implementation", 2), 20);
+    assert_eq!(executor.backoff_delay_for_phase("implementation", 3), 40);
+    assert_eq!(executor.backoff_delay_for_phase("implementation", 4), 60);
+
+    assert_eq!(
+        executor.backoff_delay_for_phase("requirements", 1),
+        0,
+        "phase without retry config should have zero delay"
     );
 }

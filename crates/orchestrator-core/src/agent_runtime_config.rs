@@ -43,6 +43,56 @@ pub struct PhaseDecisionContract {
     pub allow_missing_decision: bool,
 }
 
+pub const DEFAULT_MAX_REWORK_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackoffConfig {
+    pub initial_secs: u64,
+    #[serde(default = "default_backoff_factor")]
+    pub factor: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_secs: Option<u64>,
+}
+
+impl BackoffConfig {
+    pub fn delay_for_attempt(&self, attempt: u32) -> u64 {
+        if attempt == 0 {
+            return 0;
+        }
+        let raw = self.initial_secs as f64 * self.factor.powi(attempt.saturating_sub(1) as i32);
+        let clamped = match self.max_secs {
+            Some(max) => raw.min(max as f64),
+            None => raw,
+        };
+        clamped as u64
+    }
+}
+
+fn default_backoff_factor() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseRetryConfig {
+    #[serde(default = "default_max_rework_attempts")]
+    pub max_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backoff: Option<BackoffConfig>,
+}
+
+impl Default for PhaseRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS,
+            backoff: None,
+        }
+    }
+}
+
+fn default_max_rework_attempts() -> u32 {
+    DEFAULT_MAX_REWORK_ATTEMPTS
+}
+
 fn default_min_confidence() -> f32 {
     0.6
 }
@@ -186,6 +236,8 @@ pub struct PhaseExecutionDefinition {
     pub output_json_schema: Option<Value>,
     #[serde(default)]
     pub decision_contract: Option<PhaseDecisionContract>,
+    #[serde(default)]
+    pub retry: Option<PhaseRetryConfig>,
     #[serde(default)]
     pub command: Option<PhaseCommandDefinition>,
     #[serde(default)]
@@ -472,6 +524,12 @@ impl AgentRuntimeConfig {
     pub fn phase_decision_contract(&self, phase_id: &str) -> Option<&PhaseDecisionContract> {
         self.phase_execution(phase_id)
             .and_then(|def| def.decision_contract.as_ref())
+    }
+
+    pub fn phase_retry_config(&self, phase_id: &str) -> PhaseRetryConfig {
+        self.phase_execution(phase_id)
+            .and_then(|definition| definition.retry.clone())
+            .unwrap_or_default()
     }
 
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
@@ -836,6 +894,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -856,6 +915,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                     }),
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -878,6 +938,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -893,6 +954,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -908,6 +970,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -923,6 +986,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     output_contract: None,
                     output_json_schema: None,
                     decision_contract: None,
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -954,6 +1018,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                     }),
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -974,6 +1039,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                     }),
+                    retry: None,
                     command: None,
                     manual: None,
                 },
@@ -994,6 +1060,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                     }),
+                    retry: None,
                     command: None,
                     manual: None,
                 },

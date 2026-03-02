@@ -18,9 +18,9 @@ pub use agent_runtime_config::{
     agent_runtime_config_path, builtin_agent_runtime_config, ensure_agent_runtime_config_file,
     load_agent_runtime_config, load_agent_runtime_config_or_default, write_agent_runtime_config,
     AgentProfile, AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides,
-    AgentRuntimeSource, CommandCwdMode, LoadedAgentRuntimeConfig, PhaseCommandDefinition,
-    PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition,
-    PhaseOutputContract,
+    AgentRuntimeSource, BackoffConfig, CommandCwdMode, LoadedAgentRuntimeConfig,
+    PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode,
+    PhaseManualDefinition, PhaseOutputContract, PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS,
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{
