@@ -656,6 +656,8 @@ pub(crate) async fn handle_daemon(
                 let alive = is_process_alive(pid);
                 if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
                     status = DaemonStatus::Crashed;
+                    remove_daemon_pid(project_root);
+                    let _ = set_daemon_pid(project_root, None);
                 }
             }
             print_value(status, json)
@@ -670,6 +672,8 @@ pub(crate) async fn handle_daemon(
                 if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
                     health.status = DaemonStatus::Crashed;
                     health.healthy = false;
+                    remove_daemon_pid(project_root);
+                    let _ = set_daemon_pid(project_root, None);
                 }
             }
             print_value(health, json)
