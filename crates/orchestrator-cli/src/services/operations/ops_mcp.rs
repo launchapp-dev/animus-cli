@@ -218,6 +218,28 @@ struct DaemonEventsInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonConfigInput {
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonConfigSetInput {
+    #[serde(default)]
+    auto_merge: Option<bool>,
+    #[serde(default)]
+    auto_pr: Option<bool>,
+    #[serde(default)]
+    auto_commit_before_merge: Option<bool>,
+    #[serde(default)]
+    auto_prune_worktrees_after_merge: Option<bool>,
+    #[serde(default)]
+    auto_run_ready: Option<bool>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
 const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
 const OUTPUT_TAIL_SCHEMA: &str = "ao.output.tail.v1";
@@ -1155,6 +1177,38 @@ impl AoMcpServer {
             params.0.project_root,
         )
         .await
+    }
+
+    #[tool(
+        name = "ao.daemon.config",
+        description = "Read daemon configuration. Purpose: View current daemon automation settings (auto-merge, auto-PR, etc). Prerequisites: None. Example: {}. Sequencing: Use ao.daemon.config-set to update values, or ao.daemon.status to check if daemon is running.",
+        input_schema = ao_schema_for_type::<DaemonConfigInput>()
+    )]
+    async fn ao_daemon_config(
+        &self,
+        params: Parameters<DaemonConfigInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.daemon.config",
+            vec!["daemon".to_string(), "config".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.daemon.config-set",
+        description = "Update daemon configuration. Purpose: Persist daemon automation settings like auto-merge, auto-PR, auto-commit-before-merge, auto-prune-worktrees-after-merge, and auto-run-ready. Prerequisites: None. Example: {\"auto_merge\": true, \"auto_pr\": true}. Sequencing: Use ao.daemon.config to read current values first.",
+        input_schema = ao_schema_for_type::<DaemonConfigSetInput>()
+    )]
+    async fn ao_daemon_config_set(
+        &self,
+        params: Parameters<DaemonConfigSetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_daemon_config_set_args(&input);
+        self.run_tool("ao.daemon.config-set", args, input.project_root)
+            .await
     }
 
     #[tool(
@@ -2522,6 +2576,23 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
     push_opt(&mut args, "--runner-scope", input.runner_scope.clone());
+    args
+}
+
+fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<String> {
+    let mut args = vec!["daemon".to_string(), "config".to_string()];
+    push_bool_set(&mut args, "--auto-merge", input.auto_merge);
+    push_bool_set(&mut args, "--auto-pr", input.auto_pr);
+    push_bool_set(
+        &mut args,
+        "--auto-commit-before-merge",
+        input.auto_commit_before_merge,
+    );
+    push_bool_set(
+        &mut args,
+        "--auto-prune-worktrees-after-merge",
+        input.auto_prune_worktrees_after_merge,
+    );
     args
 }
 
