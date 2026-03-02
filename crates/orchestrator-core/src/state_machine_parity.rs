@@ -33,6 +33,9 @@ fn workflow_transition_matrix_matches_legacy_behavior() {
         WorkflowMachineEvent::MergeConflictDetected,
         WorkflowMachineEvent::MergeConflictResolved,
         WorkflowMachineEvent::NoMorePhases,
+        WorkflowMachineEvent::PhaseSkipped,
+        WorkflowMachineEvent::RetryPhaseStarted,
+        WorkflowMachineEvent::PhaseTargetSelected,
     ];
 
     for state in states {
@@ -78,6 +81,7 @@ fn legacy_transition(
             WorkflowMachineEvent::PhaseSucceeded | WorkflowMachineEvent::PhaseFailed => {
                 WorkflowMachineState::EvaluateGates
             }
+            WorkflowMachineEvent::PhaseSkipped => WorkflowMachineState::EvaluateTransition,
             WorkflowMachineEvent::PauseRequested => WorkflowMachineState::Paused,
             WorkflowMachineEvent::CancelRequested => WorkflowMachineState::Cancelled,
             _ => WorkflowMachineState::RunPhase,
@@ -86,7 +90,8 @@ fn legacy_transition(
             WorkflowMachineEvent::GatesPassed
             | WorkflowMachineEvent::GatesFailed
             | WorkflowMachineEvent::PolicyDecisionReady
-            | WorkflowMachineEvent::PolicyDecisionFailed => WorkflowMachineState::ApplyTransition,
+            | WorkflowMachineEvent::PolicyDecisionFailed
+            | WorkflowMachineEvent::PhaseTargetSelected => WorkflowMachineState::ApplyTransition,
             WorkflowMachineEvent::PauseRequested => WorkflowMachineState::Paused,
             WorkflowMachineEvent::CancelRequested => WorkflowMachineState::Cancelled,
             WorkflowMachineEvent::ReworkBudgetExceeded => WorkflowMachineState::HumanEscalated,
@@ -95,7 +100,8 @@ fn legacy_transition(
         WorkflowMachineState::ApplyTransition => match event {
             WorkflowMachineEvent::Start => WorkflowMachineState::EvaluateTransition,
             WorkflowMachineEvent::NoMorePhases => WorkflowMachineState::Completed,
-            WorkflowMachineEvent::PhaseStarted => WorkflowMachineState::RunPhase,
+            WorkflowMachineEvent::PhaseStarted
+            | WorkflowMachineEvent::RetryPhaseStarted => WorkflowMachineState::RunPhase,
             WorkflowMachineEvent::PauseRequested => WorkflowMachineState::Paused,
             WorkflowMachineEvent::CancelRequested => WorkflowMachineState::Cancelled,
             WorkflowMachineEvent::ReworkBudgetExceeded => WorkflowMachineState::HumanEscalated,
