@@ -904,6 +904,9 @@ pub enum WorkflowMachineEvent {
     MergeConflictDetected,
     MergeConflictResolved,
     NoMorePhases,
+    PhaseSkipped,
+    RetryPhaseStarted,
+    PhaseTargetSelected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

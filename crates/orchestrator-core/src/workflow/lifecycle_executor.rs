@@ -247,6 +247,9 @@ impl WorkflowLifecycleExecutor {
                 phase.completed_at = Some(now);
             }
 
+            let mut machine = self.state_machine(workflow.machine_state);
+            machine.apply(WorkflowMachineEvent::PhaseSkipped);
+
             let next_phase = workflow
                 .phases
                 .get(workflow.current_phase_index + 1)
@@ -263,6 +266,7 @@ impl WorkflowLifecycleExecutor {
 
             let next_idx = workflow.current_phase_index + 1;
             if next_idx < workflow.phases.len() {
+                machine.apply(WorkflowMachineEvent::PhaseStarted);
                 workflow.current_phase_index = next_idx;
                 if let Some(next) = workflow.phases.get_mut(next_idx) {
                     next.status = WorkflowPhaseStatus::Running;
@@ -271,11 +275,14 @@ impl WorkflowLifecycleExecutor {
                     workflow.current_phase = Some(next.phase_id.clone());
                 }
             } else {
+                machine.apply(WorkflowMachineEvent::NoMorePhases);
                 workflow.status = WorkflowStatus::Completed;
                 workflow.completed_at = Some(now);
                 workflow.current_phase = None;
+                workflow.machine_state = machine.state();
                 break;
             }
+            workflow.machine_state = machine.state();
         }
     }
 
@@ -418,9 +425,6 @@ impl WorkflowLifecycleExecutor {
 
         match self.evaluate_gates(&decision, workflow) {
             GateEvaluationResult::Pass => {
-                machine.apply(WorkflowMachineEvent::GatesPassed);
-                machine.apply(WorkflowMachineEvent::PolicyDecisionReady);
-
                 let (confidence, risk, source) = match &decision {
                     Some(d) => (d.confidence, d.risk, WorkflowDecisionSource::Llm),
                     None => (
@@ -438,6 +442,12 @@ impl WorkflowLifecycleExecutor {
                 let config_target = self.resolve_verdict_target(&current_phase_id, "advance");
                 let decision_target = decision.as_ref().and_then(|d| d.target_phase.clone());
                 let target_phase_id = config_target.or(decision_target);
+                if target_phase_id.is_some() {
+                    machine.apply(WorkflowMachineEvent::PhaseTargetSelected);
+                } else {
+                    machine.apply(WorkflowMachineEvent::GatesPassed);
+                    machine.apply(WorkflowMachineEvent::PolicyDecisionReady);
+                }
                 let next_idx = match &target_phase_id {
                     Some(id) => find_phase_index(&workflow.phases, id),
                     None => {
@@ -563,8 +573,7 @@ impl WorkflowLifecycleExecutor {
                 });
 
                 let mut machine = self.state_machine(workflow.machine_state);
-                machine.apply(WorkflowMachineEvent::Start);
-                machine.apply(WorkflowMachineEvent::PhaseStarted);
+                machine.apply(WorkflowMachineEvent::RetryPhaseStarted);
                 workflow.machine_state = machine.state();
                 workflow.status = WorkflowStatus::Running;
             }

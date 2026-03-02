@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{RequirementStatus, WorkflowMachineEvent, WorkflowMachineState};
 
 pub const STATE_MACHINES_SCHEMA_ID: &str = "ao.state-machines.v1";
-pub const STATE_MACHINES_VERSION: u32 = 1;
+pub const STATE_MACHINES_VERSION: u32 = 2;
 pub const DEFAULT_REQUIREMENT_MAX_REWORK_ROUNDS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,6 +382,27 @@ pub fn builtin_state_machines_document() -> StateMachinesDocument {
                     from: WorkflowMachineState::MergeConflict,
                     event: WorkflowMachineEvent::MergeConflictResolved,
                     to: WorkflowMachineState::Completed,
+                    guard: None,
+                    action: None,
+                },
+                WorkflowTransitionDefinition {
+                    from: WorkflowMachineState::RunPhase,
+                    event: WorkflowMachineEvent::PhaseSkipped,
+                    to: WorkflowMachineState::EvaluateTransition,
+                    guard: None,
+                    action: None,
+                },
+                WorkflowTransitionDefinition {
+                    from: WorkflowMachineState::ApplyTransition,
+                    event: WorkflowMachineEvent::RetryPhaseStarted,
+                    to: WorkflowMachineState::RunPhase,
+                    guard: None,
+                    action: None,
+                },
+                WorkflowTransitionDefinition {
+                    from: WorkflowMachineState::EvaluateGates,
+                    event: WorkflowMachineEvent::PhaseTargetSelected,
+                    to: WorkflowMachineState::ApplyTransition,
                     guard: None,
                     action: None,
                 },
