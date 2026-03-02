@@ -106,6 +106,8 @@ mod tests {
             paused: false,
             cancelled: false,
             resource_requirements: ResourceRequirements::default(),
+            consecutive_dispatch_failures: None,
+            last_dispatch_failure_at: None,
         }
     }
 

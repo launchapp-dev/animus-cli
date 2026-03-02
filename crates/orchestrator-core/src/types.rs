@@ -1116,6 +1116,10 @@ pub struct OrchestratorTask {
     pub cancelled: bool,
     #[serde(default)]
     pub resource_requirements: ResourceRequirements,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consecutive_dispatch_failures: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatch_failure_at: Option<String>,
 }
 
 const FRONTEND_TAGS: &[&str] = &[

@@ -67,6 +67,8 @@ pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus)
         task.blocked_at = None;
         task.blocked_phase = None;
         task.blocked_by = None;
+        task.consecutive_dispatch_failures = None;
+        task.last_dispatch_failure_at = None;
     }
 }
 
@@ -527,6 +529,8 @@ pub(super) fn create_task_in_state(
         paused: false,
         cancelled: false,
         resource_requirements: Default::default(),
+        consecutive_dispatch_failures: None,
+        last_dispatch_failure_at: None,
     };
     state.tasks.insert(id, task.clone());
     Ok(task)

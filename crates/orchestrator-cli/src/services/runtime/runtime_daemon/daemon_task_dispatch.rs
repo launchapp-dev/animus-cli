@@ -1,6 +1,8 @@
 use super::*;
 
 const EM_WORK_QUEUE_STATE_FILE: &str = "em-work-queue.json";
+const MAX_DISPATCH_RETRIES: u32 = 3;
+const MIN_RETRY_DELAY_SECS: i64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskSelectionSource {
@@ -451,7 +453,23 @@ pub async fn sync_task_status_for_workflow_result(
         }
         WorkflowStatus::Failed => {
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
-            let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+            if let Ok(mut task) = hub.tasks().get(task_id).await {
+                let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
+                task.consecutive_dispatch_failures = Some(count);
+                task.last_dispatch_failure_at = Some(Utc::now().to_rfc3339());
+                if count >= MAX_DISPATCH_RETRIES {
+                    let reason = format!(
+                        "auto-blocked after {} consecutive dispatch failures",
+                        count
+                    );
+                    let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
+                } else {
+                    let _ = hub.tasks().replace(task).await;
+                    let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+                }
+            } else {
+                let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+            }
         }
         WorkflowStatus::Escalated => {
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
@@ -468,6 +486,23 @@ pub async fn sync_task_status_for_workflow_result(
                 .await;
         }
     }
+}
+
+fn should_skip_dispatch(task: &orchestrator_core::OrchestratorTask) -> bool {
+    if let Some(count) = task.consecutive_dispatch_failures {
+        if count >= MAX_DISPATCH_RETRIES {
+            return true;
+        }
+    }
+    if let Some(ref last_failure) = task.last_dispatch_failure_at {
+        if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(last_failure) {
+            let elapsed = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
+            if elapsed.num_seconds() < MIN_RETRY_DELAY_SECS {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 pub async fn run_ready_task_workflows_for_project(
@@ -524,6 +559,9 @@ pub async fn run_ready_task_workflows_for_project(
                 if active_task_ids.contains(&task.id) {
                     continue;
                 }
+                if should_skip_dispatch(&task) {
+                    continue;
+                }
                 if completed_task_ids.contains(&task.id) {
                     let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
                     continue;
@@ -560,6 +598,9 @@ pub async fn run_ready_task_workflows_for_project(
                 continue;
             }
             if active_task_ids.contains(&task.id) {
+                continue;
+            }
+            if should_skip_dispatch(&task) {
                 continue;
             }
             if completed_task_ids.contains(&task.id) {

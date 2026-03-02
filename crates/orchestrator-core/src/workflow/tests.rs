@@ -465,6 +465,8 @@ fn make_task(task_type: TaskType, priority: Priority) -> OrchestratorTask {
         paused: false,
         cancelled: false,
         resource_requirements: ResourceRequirements::default(),
+        consecutive_dispatch_failures: None,
+        last_dispatch_failure_at: None,
     }
 }
 
