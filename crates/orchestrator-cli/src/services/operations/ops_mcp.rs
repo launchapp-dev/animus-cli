@@ -59,11 +59,33 @@ struct TaskListInput {
     #[serde(default)]
     priority: Option<String>,
     #[serde(default)]
+    risk: Option<String>,
+    #[serde(default)]
     assignee_type: Option<String>,
     #[serde(default)]
     tag: Vec<String>,
     #[serde(default)]
     linked_requirement: Option<String>,
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct TaskPrioritizedInput {
+    #[serde(default)]
+    project_root: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    assignee_type: Option<String>,
     #[serde(default)]
     search: Option<String>,
     #[serde(default)]
@@ -761,6 +783,7 @@ impl AoMcpServer {
         push_opt(&mut args, "--task-type", input.task_type);
         push_opt(&mut args, "--status", input.status);
         push_opt(&mut args, "--priority", input.priority);
+        push_opt(&mut args, "--risk", input.risk);
         push_opt(&mut args, "--assignee-type", input.assignee_type);
         for tag in input.tag {
             args.push("--tag".to_string());
@@ -1385,16 +1408,21 @@ impl AoMcpServer {
     #[tool(
         name = "ao.task.prioritized",
         description = "List tasks in priority order. Purpose: Get ordered list of tasks ready for work (by priority, then dependencies). Prerequisites: None. Example: {\"limit\": 10}. Sequencing: Use ao.task.next for single best task, or ao.task.list for filtered views.",
-        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
+        input_schema = ao_schema_for_type::<TaskPrioritizedInput>()
     )]
     async fn ao_task_prioritized(
         &self,
-        params: Parameters<PaginatedProjectRootInput>,
+        params: Parameters<TaskPrioritizedInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
+        let mut args = vec!["task".to_string(), "prioritized".to_string()];
+        push_opt(&mut args, "--status", input.status);
+        push_opt(&mut args, "--priority", input.priority);
+        push_opt(&mut args, "--assignee-type", input.assignee_type);
+        push_opt(&mut args, "--search", input.search);
         self.run_list_tool(
             "ao.task.prioritized",
-            vec!["task".to_string(), "prioritized".to_string()],
+            args,
             input.project_root,
             ListGuardInput {
                 limit: input.limit,
