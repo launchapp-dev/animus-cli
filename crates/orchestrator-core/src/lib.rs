@@ -87,11 +87,13 @@ pub use workflow::{
 pub use workflow_config::{
     builtin_workflow_config, ensure_workflow_config_file, legacy_workflow_config_paths,
     load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata,
-    resolve_pipeline_phase_plan, validate_workflow_and_runtime_configs, validate_workflow_config,
-    workflow_config_hash, workflow_config_path, write_workflow_config, LoadedWorkflowConfig,
-    PhaseUiDefinition, PipelineDefinition, WorkflowCheckpointRetentionConfig, WorkflowConfig,
-    WorkflowConfigMetadata, WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME,
-    WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION,
+    resolve_pipeline_phase_plan, resolve_pipeline_verdict_routing,
+    validate_workflow_and_runtime_configs, validate_workflow_config, workflow_config_hash,
+    workflow_config_path, write_workflow_config, LoadedWorkflowConfig, PhaseTransitionConfig,
+    PhaseUiDefinition, PipelineDefinition, PipelinePhaseConfig, PipelinePhaseEntry,
+    WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata,
+    WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
+    WORKFLOW_CONFIG_VERSION,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path,

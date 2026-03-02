@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,55 @@ pub struct PhaseUiDefinition {
     pub visible: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PhaseTransitionConfig {
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelinePhaseConfig {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub on_verdict: HashMap<String, PhaseTransitionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PipelinePhaseEntry {
+    Simple(String),
+    Rich(PipelinePhaseConfig),
+}
+
+impl PipelinePhaseEntry {
+    pub fn phase_id(&self) -> &str {
+        match self {
+            PipelinePhaseEntry::Simple(id) => id.as_str(),
+            PipelinePhaseEntry::Rich(config) => config.id.as_str(),
+        }
+    }
+
+    pub fn on_verdict(&self) -> Option<&HashMap<String, PhaseTransitionConfig>> {
+        match self {
+            PipelinePhaseEntry::Simple(_) => None,
+            PipelinePhaseEntry::Rich(config) => {
+                if config.on_verdict.is_empty() {
+                    None
+                } else {
+                    Some(&config.on_verdict)
+                }
+            }
+        }
+    }
+}
+
+impl From<String> for PipelinePhaseEntry {
+    fn from(id: String) -> Self {
+        PipelinePhaseEntry::Simple(id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDefinition {
     pub id: String,
@@ -39,7 +88,27 @@ pub struct PipelineDefinition {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
-    pub phases: Vec<String>,
+    pub phases: Vec<PipelinePhaseEntry>,
+}
+
+impl PipelineDefinition {
+    pub fn phase_ids(&self) -> Vec<String> {
+        self.phases
+            .iter()
+            .map(|entry| entry.phase_id().trim().to_owned())
+            .filter(|id| !id.is_empty())
+            .collect()
+    }
+
+    pub fn on_verdict_for_phase(
+        &self,
+        phase_id: &str,
+    ) -> Option<&HashMap<String, PhaseTransitionConfig>> {
+        self.phases
+            .iter()
+            .find(|entry| entry.phase_id().eq_ignore_ascii_case(phase_id))
+            .and_then(|entry| entry.on_verdict())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,10 +298,10 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
                         "Default execution flow across requirements, implementation, review, and testing."
                             .to_string(),
                     phases: vec![
-                        "requirements".to_string(),
-                        "implementation".to_string(),
-                        "code-review".to_string(),
-                        "testing".to_string(),
+                        "requirements".to_string().into(),
+                        "implementation".to_string().into(),
+                        "code-review".to_string().into(),
+                        "testing".to_string().into(),
                     ],
                 },
                 PipelineDefinition {
@@ -242,13 +311,13 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
                         "Frontend-oriented flow with UX research, wireframes, and mockup review gates."
                             .to_string(),
                     phases: vec![
-                        "requirements".to_string(),
-                        "ux-research".to_string(),
-                        "wireframe".to_string(),
-                        "mockup-review".to_string(),
-                        "implementation".to_string(),
-                        "code-review".to_string(),
-                        "testing".to_string(),
+                        "requirements".to_string().into(),
+                        "ux-research".to_string().into(),
+                        "wireframe".to_string().into(),
+                        "mockup-review".to_string().into(),
+                        "implementation".to_string().into(),
+                        "code-review".to_string().into(),
+                        "testing".to_string().into(),
                     ],
                 },
             ],
@@ -377,7 +446,7 @@ pub fn resolve_pipeline_phase_plan(
     let phases: Vec<String> = pipeline
         .phases
         .iter()
-        .map(String::as_str)
+        .map(|entry| entry.phase_id())
         .map(str::trim)
         .filter(|phase| !phase.is_empty())
         .map(ToOwned::to_owned)
@@ -390,6 +459,38 @@ pub fn resolve_pipeline_phase_plan(
     }
 }
 
+pub fn resolve_pipeline_verdict_routing(
+    config: &WorkflowConfig,
+    pipeline_id: Option<&str>,
+) -> HashMap<String, HashMap<String, PhaseTransitionConfig>> {
+    let requested = pipeline_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.default_pipeline_id.trim());
+
+    if requested.is_empty() {
+        return HashMap::new();
+    }
+
+    let Some(pipeline) = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id.eq_ignore_ascii_case(requested))
+    else {
+        return HashMap::new();
+    };
+
+    let mut routing = HashMap::new();
+    for entry in &pipeline.phases {
+        if let Some(verdicts) = entry.on_verdict() {
+            if !verdicts.is_empty() {
+                routing.insert(entry.phase_id().to_owned(), verdicts.clone());
+            }
+        }
+    }
+    routing
+}
+
 pub fn validate_workflow_and_runtime_configs(
     workflow: &WorkflowConfig,
     runtime: &AgentRuntimeConfig,
@@ -398,8 +499,8 @@ pub fn validate_workflow_and_runtime_configs(
 
     let mut errors = Vec::new();
     for pipeline in &workflow.pipelines {
-        for phase in &pipeline.phases {
-            let phase_id = phase.trim();
+        for entry in &pipeline.phases {
+            let phase_id = entry.phase_id().trim();
             if phase_id.is_empty() {
                 continue;
             }
@@ -512,8 +613,15 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             continue;
         }
 
-        for phase in &pipeline.phases {
-            let phase_id = phase.trim();
+        let phase_ids_in_pipeline: Vec<&str> = pipeline
+            .phases
+            .iter()
+            .map(|entry| entry.phase_id().trim())
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        for entry in &pipeline.phases {
+            let phase_id = entry.phase_id().trim();
             if phase_id.is_empty() {
                 errors.push(format!(
                     "pipeline '{}' contains an empty phase id",
@@ -531,6 +639,28 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                     "pipeline '{}' references unknown phase '{}'; add it to phase_catalog",
                     pipeline_id, phase_id
                 ));
+            }
+
+            if let Some(verdicts) = entry.on_verdict() {
+                for (verdict_key, transition) in verdicts {
+                    let target = transition.target.trim();
+                    if target.is_empty() {
+                        errors.push(format!(
+                            "pipeline '{}' phase '{}' on_verdict '{}' has an empty target",
+                            pipeline_id, phase_id, verdict_key
+                        ));
+                        continue;
+                    }
+                    if !phase_ids_in_pipeline
+                        .iter()
+                        .any(|id| id.eq_ignore_ascii_case(target))
+                    {
+                        errors.push(format!(
+                            "pipeline '{}' phase '{}' on_verdict '{}' targets unknown phase '{}'",
+                            pipeline_id, phase_id, verdict_key, target
+                        ));
+                    }
+                }
             }
         }
     }
@@ -582,5 +712,97 @@ mod tests {
                 .contains("checkpoint_retention.keep_last_per_phase"),
             "validation error should mention checkpoint retention"
         );
+    }
+
+    #[test]
+    fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
+        let mut config = builtin_workflow_config();
+        let standard_pipeline = config
+            .pipelines
+            .iter_mut()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+
+        let mut on_verdict = HashMap::new();
+        on_verdict.insert(
+            "rework".to_string(),
+            PhaseTransitionConfig {
+                target: "nonexistent-phase".to_string(),
+                guard: None,
+            },
+        );
+        standard_pipeline.phases[0] = PipelinePhaseEntry::Rich(PipelinePhaseConfig {
+            id: "requirements".to_string(),
+            on_verdict,
+        });
+
+        let err = validate_workflow_config(&config)
+            .expect_err("on_verdict with nonexistent target should fail validation");
+        let message = err.to_string();
+        assert!(
+            message.contains("targets unknown phase 'nonexistent-phase'"),
+            "error should mention the unknown target phase: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn serde_round_trips_simple_string_phases() {
+        let config = builtin_workflow_config();
+        let json = serde_json::to_string(&config).expect("serialize");
+        let deserialized: WorkflowConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized.pipelines.len(), config.pipelines.len());
+        for (orig, deser) in config.pipelines.iter().zip(deserialized.pipelines.iter()) {
+            let orig_ids: Vec<&str> = orig.phases.iter().map(|e| e.phase_id()).collect();
+            let deser_ids: Vec<&str> = deser.phases.iter().map(|e| e.phase_id()).collect();
+            assert_eq!(orig_ids, deser_ids);
+        }
+    }
+
+    #[test]
+    fn serde_deserializes_rich_phase_config() {
+        let json = r#"{
+            "id": "code-review",
+            "on_verdict": {
+                "rework": { "target": "implementation" }
+            }
+        }"#;
+        let entry: PipelinePhaseEntry = serde_json::from_str(json).expect("deserialize rich entry");
+        assert_eq!(entry.phase_id(), "code-review");
+        let verdicts = entry.on_verdict().expect("should have on_verdict");
+        assert!(verdicts.contains_key("rework"));
+        assert_eq!(verdicts["rework"].target, "implementation");
+    }
+
+    #[test]
+    fn serde_deserializes_simple_string_phase() {
+        let json = r#""requirements""#;
+        let entry: PipelinePhaseEntry =
+            serde_json::from_str(json).expect("deserialize simple string");
+        assert_eq!(entry.phase_id(), "requirements");
+        assert!(entry.on_verdict().is_none());
+    }
+
+    #[test]
+    fn serde_deserializes_mixed_pipeline_phases() {
+        let json = r#"{
+            "id": "test-pipeline",
+            "name": "Test",
+            "description": "",
+            "phases": [
+                "requirements",
+                { "id": "implementation", "on_verdict": { "rework": { "target": "requirements" } } },
+                "testing"
+            ]
+        }"#;
+        let pipeline: PipelineDefinition = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(pipeline.phases.len(), 3);
+        assert_eq!(pipeline.phases[0].phase_id(), "requirements");
+        assert!(pipeline.phases[0].on_verdict().is_none());
+        assert_eq!(pipeline.phases[1].phase_id(), "implementation");
+        let verdicts = pipeline.phases[1].on_verdict().expect("should have verdicts");
+        assert_eq!(verdicts["rework"].target, "requirements");
+        assert_eq!(pipeline.phases[2].phase_id(), "testing");
+        assert!(pipeline.phases[2].on_verdict().is_none());
     }
 }

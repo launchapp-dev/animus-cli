@@ -196,9 +196,9 @@ mod tests {
             .find(|pipeline| pipeline.id == STANDARD_PIPELINE_ID)
             .expect("standard pipeline should exist");
         standard_pipeline.phases = vec![
-            "requirements".to_string(),
-            "testing".to_string(),
-            "implementation".to_string(),
+            "requirements".to_string().into(),
+            "testing".to_string().into(),
+            "implementation".to_string().into(),
         ];
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");

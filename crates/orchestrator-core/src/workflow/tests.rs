@@ -780,6 +780,61 @@ fn default_max_attempts_is_3_when_no_config() {
 }
 
 #[test]
+fn on_verdict_rework_routes_to_configured_phase() {
+    use crate::workflow_config::PhaseTransitionConfig;
+    use std::collections::HashMap;
+
+    let mut verdict_routing = HashMap::new();
+    let mut code_review_verdicts = HashMap::new();
+    code_review_verdicts.insert(
+        "rework".to_string(),
+        PhaseTransitionConfig {
+            target: "requirements".to_string(),
+            guard: None,
+        },
+    );
+    verdict_routing.insert("code-review".to_string(), code_review_verdicts);
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec![
+            "requirements".to_string(),
+            "implementation".to_string(),
+            "code-review".to_string(),
+        ],
+        verdict_routing,
+    );
+    let mut workflow = executor.bootstrap(
+        "WF-verdict-rework".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-verdict-rework".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.current_phase_index, 2);
+
+    let decision = make_rework_decision(None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 0);
+    assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
+    assert_eq!(
+        workflow.phases[0].status,
+        WorkflowPhaseStatus::Running
+    );
+
+    let last_decision = workflow.decision_history.last().unwrap();
+    assert_eq!(last_decision.decision, WorkflowDecisionAction::Rework);
+    assert_eq!(
+        last_decision.target_phase.as_deref(),
+        Some("requirements")
+    );
+}
+
+#[test]
 fn backoff_calculation() {
     use crate::agent_runtime_config::BackoffConfig;
 
@@ -846,5 +901,96 @@ fn executor_backoff_delay_for_phase_returns_correct_values() {
         executor.backoff_delay_for_phase("requirements", 1),
         0,
         "phase without retry config should have zero delay"
+    );
+}
+
+#[test]
+fn on_verdict_advance_skips_to_configured_phase() {
+    use crate::workflow_config::PhaseTransitionConfig;
+    use std::collections::HashMap;
+
+    let mut verdict_routing = HashMap::new();
+    let mut requirements_verdicts = HashMap::new();
+    requirements_verdicts.insert(
+        "advance".to_string(),
+        PhaseTransitionConfig {
+            target: "code-review".to_string(),
+            guard: None,
+        },
+    );
+    verdict_routing.insert("requirements".to_string(), requirements_verdicts);
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec![
+            "requirements".to_string(),
+            "implementation".to_string(),
+            "code-review".to_string(),
+            "testing".to_string(),
+        ],
+        verdict_routing,
+    );
+    let mut workflow = executor.bootstrap(
+        "WF-verdict-advance".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-verdict-advance".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
+
+    executor.mark_current_phase_success(&mut workflow);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 2);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.phases[2].status, WorkflowPhaseStatus::Running);
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Pending,
+    );
+
+    let last_decision = workflow.decision_history.last().unwrap();
+    assert_eq!(last_decision.decision, WorkflowDecisionAction::Advance);
+    assert_eq!(
+        last_decision.target_phase.as_deref(),
+        Some("code-review")
+    );
+}
+
+#[test]
+fn no_on_verdict_uses_default_advance_behavior() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "code-review".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-default-advance".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-default-advance".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
+
+    executor.mark_current_phase_success(&mut workflow);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 1);
+    assert_eq!(
+        workflow.current_phase.as_deref(),
+        Some("implementation")
+    );
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+
+    executor.mark_current_phase_success(&mut workflow);
+
+    assert_eq!(workflow.current_phase_index, 2);
+    assert_eq!(
+        workflow.current_phase.as_deref(),
+        Some("code-review")
     );
 }

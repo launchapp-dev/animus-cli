@@ -474,7 +474,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                 .map(String::as_str)
                 .map(str::trim)
                 .filter(|phase| !phase.is_empty())
-                .map(ToOwned::to_owned)
+                .map(|phase| orchestrator_core::PipelinePhaseEntry::Simple(phase.to_owned()))
                 .collect(),
         })
         .collect();
@@ -739,7 +739,7 @@ fn remove_phase_definition(project_root: &str, phase_id: &str) -> Result<Value> 
         pipeline
             .phases
             .iter()
-            .any(|phase| phase.eq_ignore_ascii_case(phase_id))
+            .any(|phase| phase.phase_id().eq_ignore_ascii_case(phase_id))
     }) {
         return Err(anyhow!(
             "cannot remove phase '{}' because at least one pipeline references it",
@@ -780,7 +780,7 @@ fn preview_phase_removal(project_root: &str, phase_id: &str) -> Result<Value> {
             pipeline
                 .phases
                 .iter()
-                .any(|phase| phase.eq_ignore_ascii_case(normalized_phase_id.as_str()))
+                .any(|phase| phase.phase_id().eq_ignore_ascii_case(normalized_phase_id.as_str()))
         })
         .map(|pipeline| pipeline.id.clone())
         .collect();
@@ -1182,7 +1182,11 @@ pub(crate) async fn handle_workflow(
                     id: args.id,
                     name: args.name,
                     description: args.description.unwrap_or_default(),
-                    phases: args.phases,
+                    phases: args
+                        .phases
+                        .into_iter()
+                        .map(orchestrator_core::PipelinePhaseEntry::Simple)
+                        .collect(),
                 })
             })?;
             print_value(upsert_pipeline(project_root, pipeline)?, json)
