@@ -5,7 +5,7 @@ use crate::models::{CliErrorBody, CliErrorEnvelope, CliSuccessEnvelope};
 pub struct CliEnvelopeService;
 
 impl CliEnvelopeService {
-    pub const CLI_SCHEMA: &'static str = "ao.cli.v1";
+    pub const CLI_SCHEMA: &'static str = protocol::CLI_SCHEMA_ID;
 
     pub fn ok<T: Serialize>(data: T) -> CliSuccessEnvelope<T> {
         CliSuccessEnvelope {

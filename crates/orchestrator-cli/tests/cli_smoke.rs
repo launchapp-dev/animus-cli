@@ -1,4 +1,5 @@
 use std::process::Command;
+use protocol::CLI_SCHEMA_ID;
 
 #[test]
 fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
@@ -364,7 +365,7 @@ fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::E
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(
         payload.get("schema").and_then(|value| value.as_str()),
-        Some("ao.cli.v1")
+        Some(CLI_SCHEMA_ID)
     );
     assert_eq!(
         payload

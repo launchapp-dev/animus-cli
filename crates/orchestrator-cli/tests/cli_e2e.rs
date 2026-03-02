@@ -3,6 +3,7 @@ mod test_harness;
 
 use anyhow::{Context, Result};
 use fs2::FileExt;
+use protocol::CLI_SCHEMA_ID;
 use serde_json::Value;
 use std::fs::OpenOptions;
 use std::process::Command;
@@ -150,7 +151,7 @@ fn e2e_task_create_warns_for_unlinked_non_chore_in_json_mode() -> Result<()> {
         serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
     assert_eq!(
         payload.get("schema").and_then(Value::as_str),
-        Some("ao.cli.v1")
+        Some(CLI_SCHEMA_ID)
     );
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
     assert!(

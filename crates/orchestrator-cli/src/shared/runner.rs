@@ -7,16 +7,13 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{
     AgentControlAction, AgentRunEvent, IpcAuthRequest, IpcAuthResult, ModelStatus,
-    OutputStreamType, RunId,
+    OutputStreamType, RunId, MAX_UNIX_SOCKET_PATH_LEN,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 
 use crate::{unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
-
-#[cfg(unix)]
-const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;
 
 impl From<AgentControlActionArg> for AgentControlAction {
     fn from(value: AgentControlActionArg) -> Self {

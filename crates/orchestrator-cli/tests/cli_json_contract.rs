@@ -2,13 +2,14 @@
 mod test_harness;
 
 use anyhow::Result;
+use protocol::CLI_SCHEMA_ID;
 use serde_json::Value;
 use test_harness::CliHarness;
 
 fn assert_success_envelope(payload: &Value) {
     assert_eq!(
         payload.get("schema").and_then(Value::as_str),
-        Some("ao.cli.v1")
+        Some(CLI_SCHEMA_ID)
     );
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
     assert!(
@@ -20,7 +21,7 @@ fn assert_success_envelope(payload: &Value) {
 fn assert_error_envelope(payload: &Value, expected_code: &str, expected_exit_code: i32) {
     assert_eq!(
         payload.get("schema").and_then(Value::as_str),
-        Some("ao.cli.v1")
+        Some(CLI_SCHEMA_ID)
     );
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
     assert_eq!(

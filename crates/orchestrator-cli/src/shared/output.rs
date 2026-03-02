@@ -1,9 +1,10 @@
 use anyhow::Result;
 use serde::Serialize;
+use protocol::CLI_SCHEMA_ID;
 
 use super::{classify_cli_error_kind, CliErrorKind};
 
-const CLI_SCHEMA: &str = "ao.cli.v1";
+const CLI_SCHEMA: &str = CLI_SCHEMA_ID;
 
 #[derive(Debug, Serialize)]
 struct CliSuccessEnvelope<T: Serialize> {
@@ -36,7 +37,7 @@ pub(crate) fn print_ok(message: &str, json: bool) {
         println!(
             "{}",
             serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
-                "{\"schema\":\"ao.cli.v1\",\"ok\":true,\"data\":{\"message\":\"ok\"}}".to_string()
+                format!("{{\"schema\":\"{}\",\"ok\":true,\"data\":{{\"message\":\"ok\"}}}}", CLI_SCHEMA_ID)
             })
         );
     } else {
@@ -85,7 +86,7 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
         eprintln!(
             "{}",
             serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
-                "{\"schema\":\"ao.cli.v1\",\"ok\":false,\"error\":{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}".to_string()
+                format!("{{\"schema\":\"{}\",\"ok\":false,\"error\":{{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}}}", CLI_SCHEMA_ID)
             })
         );
     } else {

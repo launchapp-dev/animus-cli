@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use protocol::CLI_SCHEMA_ID;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,7 +52,7 @@ impl CliHarness {
             )
         })?;
 
-        if payload.get("schema").and_then(Value::as_str) != Some("ao.cli.v1") {
+        if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
             anyhow::bail!(
                 "unexpected schema for command {}: {}",
                 args.join(" "),
@@ -94,7 +95,7 @@ impl CliHarness {
             )
         })?;
 
-        if payload.get("schema").and_then(Value::as_str) != Some("ao.cli.v1") {
+        if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
             anyhow::bail!(
                 "unexpected schema for failing command {}: {}",
                 args.join(" "),
