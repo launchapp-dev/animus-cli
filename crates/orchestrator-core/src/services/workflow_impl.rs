@@ -20,6 +20,21 @@ fn effective_pipeline_id(
     crate::workflow::STANDARD_PIPELINE_ID.to_string()
 }
 
+fn load_phase_retry_configs(
+    project_root: &std::path::Path,
+) -> std::collections::HashMap<String, crate::agent_runtime_config::PhaseRetryConfig> {
+    let config = crate::agent_runtime_config::load_agent_runtime_config_or_default(project_root);
+    config
+        .phases
+        .iter()
+        .filter_map(|(phase_id, def)| {
+            def.retry
+                .as_ref()
+                .map(|retry| (phase_id.clone(), retry.clone()))
+        })
+        .collect()
+}
+
 fn load_compiled_state_machines(
     project_root: &std::path::Path,
 ) -> Result<crate::state_machines::CompiledStateMachines> {
@@ -260,6 +275,7 @@ impl WorkflowServiceApi for FileServiceHub {
     async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path());
         let task = self.state.read().await.tasks.get(&input.task_id).cloned();
         let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
         let executor = WorkflowLifecycleExecutor::with_state_machines(
@@ -268,7 +284,8 @@ impl WorkflowServiceApi for FileServiceHub {
                 Some(pipeline_id.as_str()),
             )?,
             state_machines,
-        );
+        )
+        .with_retry_configs(retry_configs);
         let workflow = executor.bootstrap(
             id.clone(),
             WorkflowRunInput {
@@ -393,6 +410,7 @@ impl WorkflowServiceApi for FileServiceHub {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path());
         WorkflowLifecycleExecutor::with_state_machines(
             crate::resolve_phase_plan_for_pipeline(
                 Some(self.project_root.as_path()),
@@ -400,6 +418,7 @@ impl WorkflowServiceApi for FileServiceHub {
             )?,
             state_machines,
         )
+        .with_retry_configs(retry_configs)
         .mark_current_phase_success_with_decision(&mut workflow, decision);
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;

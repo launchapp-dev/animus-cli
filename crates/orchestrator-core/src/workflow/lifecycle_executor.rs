@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 
+use crate::agent_runtime_config::{PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS};
 use crate::state_machines::{builtin_compiled_state_machines, CompiledStateMachines};
 use crate::types::{
     OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction,
@@ -7,8 +10,6 @@ use crate::types::{
     WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
     WorkflowStatus,
 };
-
-const MAX_PHASE_REWORKS: u32 = 3;
 
 enum GateEvaluationResult {
     Pass,
@@ -23,6 +24,7 @@ use super::state_machine::WorkflowStateMachine;
 pub struct WorkflowLifecycleExecutor {
     phase_plan: Vec<String>,
     state_machines: CompiledStateMachines,
+    retry_configs: HashMap<String, PhaseRetryConfig>,
 }
 
 impl Default for WorkflowLifecycleExecutor {
@@ -30,6 +32,7 @@ impl Default for WorkflowLifecycleExecutor {
         Self {
             phase_plan: phase_plan_for_pipeline_id(Some(STANDARD_PIPELINE_ID)),
             state_machines: builtin_compiled_state_machines(),
+            retry_configs: HashMap::new(),
         }
     }
 }
@@ -46,7 +49,28 @@ impl WorkflowLifecycleExecutor {
         Self {
             phase_plan,
             state_machines,
+            retry_configs: HashMap::new(),
         }
+    }
+
+    pub fn with_retry_configs(mut self, configs: HashMap<String, PhaseRetryConfig>) -> Self {
+        self.retry_configs = configs;
+        self
+    }
+
+    fn max_reworks_for_phase(&self, phase_id: &str) -> u32 {
+        self.retry_configs
+            .get(phase_id)
+            .map(|cfg| cfg.max_attempts)
+            .unwrap_or(DEFAULT_MAX_REWORK_ATTEMPTS)
+    }
+
+    pub fn backoff_delay_for_phase(&self, phase_id: &str, attempt: u32) -> u64 {
+        self.retry_configs
+            .get(phase_id)
+            .and_then(|cfg| cfg.backoff.as_ref())
+            .map(|backoff| backoff.delay_for_attempt(attempt))
+            .unwrap_or(0)
     }
 
     fn state_machine(&self, initial: WorkflowMachineState) -> WorkflowStateMachine {
@@ -403,12 +427,14 @@ impl WorkflowLifecycleExecutor {
                     .map(|p| p.phase_id.as_str())
                     .unwrap_or("unknown");
                 let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
-                if rework_count >= MAX_PHASE_REWORKS {
+                let max_reworks = self.max_reworks_for_phase(phase_id);
+                if rework_count >= max_reworks {
                     return GateEvaluationResult::Fail {
                         reason: format!(
-                            "rework budget exceeded for phase {} ({} reworks): {}",
+                            "rework budget exceeded for phase {} ({} reworks, max {}): {}",
                             phase_id,
                             rework_count,
+                            max_reworks,
                             if decision.reason.is_empty() {
                                 "agent requested rework"
                             } else {
@@ -434,7 +460,7 @@ impl WorkflowLifecycleExecutor {
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
                     let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
-                    if rework_count < MAX_PHASE_REWORKS {
+                    if rework_count < self.max_reworks_for_phase(phase_id) {
                         return GateEvaluationResult::Rework {
                             reason: format!(
                                 "low confidence ({:.2}) with high risk — requesting rework",
@@ -450,7 +476,7 @@ impl WorkflowLifecycleExecutor {
                         .map(|p| p.phase_id.as_str())
                         .unwrap_or("unknown");
                     let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
-                    if rework_count < MAX_PHASE_REWORKS {
+                    if rework_count < self.max_reworks_for_phase(phase_id) {
                         return GateEvaluationResult::Rework {
                             reason: format!(
                                 "guardrail violations: {}",
