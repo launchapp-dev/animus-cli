@@ -1993,28 +1993,19 @@ fn parse_resource_uri(uri: &str) -> (String, std::collections::HashMap<String, S
     }
 }
 
-fn read_daemon_events(_project_root: &str, limit: usize) -> Result<String, std::io::Error> {
-    use protocol::Config;
-    let path = Config::global_config_dir().join("daemon-events.jsonl");
-    if !path.exists() {
-        return Ok(json!({
-            "events": [],
-            "limit": limit,
-            "message": "no daemon events file found"
-        }).to_string());
-    }
-    let content = fs::read_to_string(&path)?;
-    let events: Vec<Value> = content
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .take(limit)
-        .collect();
-    Ok(json!({
-        "events": events,
-        "count": events.len(),
+fn read_daemon_events(project_root: &str, limit: usize) -> Result<String, std::io::Error> {
+    let canonical_root = crate::services::runtime::canonicalize_lossy(project_root);
+    let response =
+        crate::services::runtime::poll_daemon_events(Some(limit), Some(canonical_root.as_str()))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let result = serde_json::json!({
+        "events": response.events,
+        "count": response.count,
         "limit": limit,
-        "events_path": path.to_string_lossy()
-    }).to_string())
+        "project_root": canonical_root,
+        "events_path": response.events_path,
+    });
+    Ok(result.to_string())
 }
 
 fn read_file_with_mtime(path: &Path) -> Result<(String, Option<u64>), std::io::Error> {
