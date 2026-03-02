@@ -237,6 +237,10 @@ pub(crate) fn build_phase_prompt(
         String::new()
     };
 
+    let phase_order = pipeline_phase_order_for_workflow(project_root, workflow_id);
+    let prior_outputs = load_prior_phase_outputs(project_root, workflow_id, phase_id, &phase_order);
+    let prior_phase_context = format_prior_phase_outputs(&prior_outputs);
+
     let phase_prompt = WORKFLOW_PHASE_PROMPT_TEMPLATE
         .replace("__PROJECT_ROOT__", project_root)
         .replace("__WORKFLOW_ID__", workflow_id)
@@ -252,7 +256,8 @@ pub(crate) fn build_phase_prompt(
         .replace(
             "__IMPLEMENTATION_COMMIT_RULE__",
             implementation_commit_rule.as_str(),
-        );
+        )
+        .replace("__PRIOR_PHASE_OUTPUTS__", &prior_phase_context);
 
     if let Some(system_prompt) = phase_system_prompt_for(project_root, phase_id) {
         if !system_prompt.trim().is_empty() {
@@ -1521,5 +1526,381 @@ pub(crate) async fn run_workflow_phase(
                 signals,
             })
         }
+    }
+}
+
+const MAX_PRIOR_CONTEXT_CHARS: usize = 4000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PersistedPhaseOutput {
+    pub(crate) phase_id: String,
+    pub(crate) completed_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) commit_message: Option<String>,
+}
+
+pub(crate) fn phase_output_dir(project_root: &str, workflow_id: &str) -> PathBuf {
+    Path::new(project_root)
+        .join(".ao")
+        .join("state")
+        .join("workflows")
+        .join(workflow_id)
+        .join("phase-outputs")
+}
+
+pub(crate) fn persist_phase_output(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    outcome: &PhaseExecutionOutcome,
+) -> Result<()> {
+    let dir = phase_output_dir(project_root, workflow_id);
+    std::fs::create_dir_all(&dir)?;
+
+    let (verdict, confidence, reason, commit_message) = match outcome {
+        PhaseExecutionOutcome::Completed {
+            commit_message,
+            phase_decision,
+        } => {
+            let (v, c, r) = match phase_decision {
+                Some(decision) => (
+                    Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
+                    Some(decision.confidence),
+                    if decision.reason.is_empty() {
+                        None
+                    } else {
+                        Some(decision.reason.clone())
+                    },
+                ),
+                None => (Some("advance".to_string()), None, None),
+            };
+            (v, c, r, commit_message.clone())
+        }
+        PhaseExecutionOutcome::NeedsResearch { reason } => (
+            Some("rework".to_string()),
+            None,
+            Some(format!("Needs research: {reason}")),
+            None,
+        ),
+        PhaseExecutionOutcome::ManualPending { instructions, .. } => (
+            Some("manual_pending".to_string()),
+            None,
+            Some(instructions.clone()),
+            None,
+        ),
+    };
+
+    let output = PersistedPhaseOutput {
+        phase_id: phase_id.to_string(),
+        completed_at: chrono::Utc::now().to_rfc3339(),
+        verdict,
+        confidence,
+        reason,
+        commit_message,
+    };
+
+    let payload = serde_json::to_string_pretty(&output)?;
+    let file_path = dir.join(format!("{phase_id}.json"));
+    let tmp_path = file_path.with_file_name(format!("{phase_id}.{}.tmp", Uuid::new_v4()));
+    std::fs::write(&tmp_path, &payload)?;
+    std::fs::rename(&tmp_path, &file_path)?;
+    Ok(())
+}
+
+pub(crate) fn load_prior_phase_outputs(
+    project_root: &str,
+    workflow_id: &str,
+    current_phase_id: &str,
+    pipeline_phase_order: &[String],
+) -> Vec<PersistedPhaseOutput> {
+    let dir = phase_output_dir(project_root, workflow_id);
+    if !dir.exists() {
+        return Vec::new();
+    }
+
+    let mut outputs = Vec::new();
+    for prior_phase_id in pipeline_phase_order {
+        if prior_phase_id == current_phase_id {
+            break;
+        }
+        let file_path = dir.join(format!("{prior_phase_id}.json"));
+        if let Ok(contents) = std::fs::read_to_string(&file_path) {
+            if let Ok(output) = serde_json::from_str::<PersistedPhaseOutput>(&contents) {
+                outputs.push(output);
+            }
+        }
+    }
+    outputs
+}
+
+pub(crate) fn format_prior_phase_outputs(outputs: &[PersistedPhaseOutput]) -> String {
+    if outputs.is_empty() {
+        return String::new();
+    }
+
+    let mut sections: Vec<String> = Vec::new();
+    for output in outputs {
+        let mut section = format!("### {} (completed)", output.phase_id);
+        if let Some(ref verdict) = output.verdict {
+            section.push_str(&format!("\nVerdict: {verdict}"));
+        }
+        if let Some(confidence) = output.confidence {
+            section.push_str(&format!("\nConfidence: {confidence:.1}"));
+        }
+        if let Some(ref reason) = output.reason {
+            section.push_str(&format!("\nReasoning: {reason}"));
+        }
+        if let Some(ref cm) = output.commit_message {
+            section.push_str(&format!("\nCommit: {cm}"));
+        }
+        sections.push(section);
+    }
+
+    let mut result = "## Prior Phase Results\n".to_string();
+    result.push_str(&sections.join("\n\n"));
+
+    if result.len() > MAX_PRIOR_CONTEXT_CHARS {
+        let mut truncated = "## Prior Phase Results\n".to_string();
+        let mut budget = MAX_PRIOR_CONTEXT_CHARS - truncated.len() - 30;
+        for section in sections.iter().rev() {
+            if section.len() <= budget {
+                truncated.push_str(section);
+                truncated.push_str("\n\n");
+                budget = budget.saturating_sub(section.len() + 2);
+            } else {
+                truncated.insert_str(
+                    "## Prior Phase Results\n".len(),
+                    "(earlier phases truncated for brevity)\n\n",
+                );
+                break;
+            }
+        }
+        return truncated.trim_end().to_string();
+    }
+
+    result
+}
+
+fn pipeline_phase_order_for_workflow(project_root: &str, workflow_id: &str) -> Vec<String> {
+    let workflow_path = Path::new(project_root)
+        .join(".ao")
+        .join("workflow-state")
+        .join(format!("{workflow_id}.json"));
+    let contents = match std::fs::read_to_string(&workflow_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let workflow: orchestrator_core::OrchestratorWorkflow = match serde_json::from_str(&contents) {
+        Ok(w) => w,
+        Err(_) => return Vec::new(),
+    };
+    workflow
+        .phases
+        .iter()
+        .map(|phase| phase.phase_id.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_persist_and_load_phase_output() {
+        let tmp = std::env::temp_dir().join(format!("ao-test-phase-output-{}", Uuid::new_v4()));
+        let project_root = tmp.to_str().unwrap();
+        let workflow_id = "wf-test-001";
+
+        let outcome = PhaseExecutionOutcome::Completed {
+            commit_message: Some("feat: add login flow".to_string()),
+            phase_decision: Some(orchestrator_core::PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "research".to_string(),
+                verdict: orchestrator_core::PhaseDecisionVerdict::Advance,
+                confidence: 0.9,
+                risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                reason: "Research complete, found relevant patterns".to_string(),
+                evidence: vec![],
+                guardrail_violations: vec![],
+                commit_message: None,
+            }),
+        };
+
+        persist_phase_output(project_root, workflow_id, "research", &outcome).unwrap();
+
+        let output_file = phase_output_dir(project_root, workflow_id).join("research.json");
+        assert!(output_file.exists());
+
+        let loaded: PersistedPhaseOutput =
+            serde_json::from_str(&std::fs::read_to_string(&output_file).unwrap()).unwrap();
+        assert_eq!(loaded.phase_id, "research");
+        assert_eq!(loaded.verdict.as_deref(), Some("advance"));
+        assert!((loaded.confidence.unwrap() - 0.9).abs() < f32::EPSILON);
+        assert_eq!(
+            loaded.reason.as_deref(),
+            Some("Research complete, found relevant patterns")
+        );
+        assert_eq!(
+            loaded.commit_message.as_deref(),
+            Some("feat: add login flow")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_prior_phase_outputs_ordering() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ao-test-phase-output-order-{}",
+            Uuid::new_v4()
+        ));
+        let project_root = tmp.to_str().unwrap();
+        let workflow_id = "wf-test-002";
+
+        let research_outcome = PhaseExecutionOutcome::Completed {
+            commit_message: None,
+            phase_decision: Some(orchestrator_core::PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "research".to_string(),
+                verdict: orchestrator_core::PhaseDecisionVerdict::Advance,
+                confidence: 0.8,
+                risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                reason: "Research done".to_string(),
+                evidence: vec![],
+                guardrail_violations: vec![],
+                commit_message: None,
+            }),
+        };
+        persist_phase_output(project_root, workflow_id, "research", &research_outcome).unwrap();
+
+        let impl_outcome = PhaseExecutionOutcome::Completed {
+            commit_message: Some("feat: implement feature".to_string()),
+            phase_decision: Some(orchestrator_core::PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: orchestrator_core::PhaseDecisionVerdict::Advance,
+                confidence: 0.95,
+                risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                reason: "Implementation complete".to_string(),
+                evidence: vec![],
+                guardrail_violations: vec![],
+                commit_message: None,
+            }),
+        };
+        persist_phase_output(project_root, workflow_id, "implementation", &impl_outcome).unwrap();
+
+        let pipeline_order = vec![
+            "research".to_string(),
+            "implementation".to_string(),
+            "review".to_string(),
+        ];
+
+        let loaded = load_prior_phase_outputs(project_root, workflow_id, "review", &pipeline_order);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].phase_id, "research");
+        assert_eq!(loaded[1].phase_id, "implementation");
+
+        let loaded_impl =
+            load_prior_phase_outputs(project_root, workflow_id, "implementation", &pipeline_order);
+        assert_eq!(loaded_impl.len(), 1);
+        assert_eq!(loaded_impl[0].phase_id, "research");
+
+        let loaded_research =
+            load_prior_phase_outputs(project_root, workflow_id, "research", &pipeline_order);
+        assert_eq!(loaded_research.len(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_format_prior_phase_outputs_empty() {
+        let result = format_prior_phase_outputs(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_prior_phase_outputs_renders_sections() {
+        let outputs = vec![
+            PersistedPhaseOutput {
+                phase_id: "research".to_string(),
+                completed_at: "2026-03-01T00:00:00Z".to_string(),
+                verdict: Some("advance".to_string()),
+                confidence: Some(0.9),
+                reason: Some("Found patterns".to_string()),
+                commit_message: None,
+            },
+            PersistedPhaseOutput {
+                phase_id: "implementation".to_string(),
+                completed_at: "2026-03-01T01:00:00Z".to_string(),
+                verdict: Some("advance".to_string()),
+                confidence: Some(0.95),
+                reason: Some("Implemented".to_string()),
+                commit_message: Some("feat: add feature".to_string()),
+            },
+        ];
+        let result = format_prior_phase_outputs(&outputs);
+        assert!(result.contains("## Prior Phase Results"));
+        assert!(result.contains("### research (completed)"));
+        assert!(result.contains("### implementation (completed)"));
+        assert!(result.contains("Verdict: advance"));
+        assert!(result.contains("Confidence: 0.9"));
+        assert!(result.contains("Reasoning: Found patterns"));
+        assert!(result.contains("Commit: feat: add feature"));
+    }
+
+    #[test]
+    fn test_format_prior_phase_outputs_truncation() {
+        let long_reason = "x".repeat(3000);
+        let outputs = vec![
+            PersistedPhaseOutput {
+                phase_id: "early".to_string(),
+                completed_at: "2026-03-01T00:00:00Z".to_string(),
+                verdict: Some("advance".to_string()),
+                confidence: None,
+                reason: Some(long_reason),
+                commit_message: None,
+            },
+            PersistedPhaseOutput {
+                phase_id: "recent".to_string(),
+                completed_at: "2026-03-01T01:00:00Z".to_string(),
+                verdict: Some("advance".to_string()),
+                confidence: Some(0.9),
+                reason: Some("Recent work".to_string()),
+                commit_message: None,
+            },
+        ];
+        let result = format_prior_phase_outputs(&outputs);
+        assert!(result.len() <= MAX_PRIOR_CONTEXT_CHARS);
+        assert!(result.contains("### recent (completed)"));
+    }
+
+    #[test]
+    fn test_persist_needs_research_outcome() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ao-test-phase-output-research-{}",
+            Uuid::new_v4()
+        ));
+        let project_root = tmp.to_str().unwrap();
+        let workflow_id = "wf-test-003";
+
+        let outcome = PhaseExecutionOutcome::NeedsResearch {
+            reason: "Need API docs".to_string(),
+        };
+        persist_phase_output(project_root, workflow_id, "implementation", &outcome).unwrap();
+
+        let output_file =
+            phase_output_dir(project_root, workflow_id).join("implementation.json");
+        let loaded: PersistedPhaseOutput =
+            serde_json::from_str(&std::fs::read_to_string(&output_file).unwrap()).unwrap();
+        assert_eq!(loaded.verdict.as_deref(), Some("rework"));
+        assert!(loaded.reason.as_deref().unwrap().contains("Need API docs"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

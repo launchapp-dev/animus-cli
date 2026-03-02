@@ -320,6 +320,13 @@ async fn process_phase_execution_completion(
                 &result.signals,
             ));
 
+            let _ = persist_phase_output(
+                project_root,
+                &workflow.id,
+                &phase_id,
+                &result.outcome,
+            );
+
             match result.outcome {
                 PhaseExecutionOutcome::Completed { phase_decision, .. } => {
                     enforce_frontend_phase_gate(project_root, &workflow.id, &phase_id, &task)?;

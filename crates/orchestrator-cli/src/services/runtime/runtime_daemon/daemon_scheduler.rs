@@ -1928,6 +1928,15 @@ fn enforce_frontend_phase_gate(
     frontend_phase_gate::enforce_frontend_phase_gate(project_root, workflow_id, phase_id, task)
 }
 
+fn persist_phase_output(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    outcome: &PhaseExecutionOutcome,
+) -> Result<()> {
+    phase_exec::persist_phase_output(project_root, workflow_id, phase_id, outcome)
+}
+
 fn pipeline_for_task(task: &orchestrator_core::OrchestratorTask) -> String {
     if task.is_frontend_related() {
         orchestrator_core::UI_UX_PIPELINE_ID.to_string()
