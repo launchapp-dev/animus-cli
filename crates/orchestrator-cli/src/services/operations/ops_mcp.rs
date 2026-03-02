@@ -218,6 +218,16 @@ struct DaemonEventsInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+struct DaemonLogsInput {
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    search: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
 const MAX_DAEMON_EVENTS_LIMIT: usize = 500;
 const OUTPUT_TAIL_SCHEMA: &str = "ao.output.tail.v1";
@@ -1155,6 +1165,29 @@ impl AoMcpServer {
             params.0.project_root,
         )
         .await
+    }
+
+    #[tool(
+        name = "ao.daemon.logs",
+        description = "Read daemon log file. Purpose: View daemon process logs for debugging crashes and issues. Prerequisites: Daemon should have been started at least once. Example: {\"limit\": 100} or {\"search\": \"error\"}. Sequencing: Use ao.daemon.status first to check if daemon is running, then ao.daemon.logs to debug issues.",
+        input_schema = ao_schema_for_type::<DaemonLogsInput>()
+    )]
+    async fn ao_daemon_logs(
+        &self,
+        params: Parameters<DaemonLogsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec!["daemon".to_string(), "logs".to_string()];
+        if let Some(limit) = input.limit {
+            args.push("--limit".to_string());
+            args.push(limit.to_string());
+        }
+        if let Some(search) = input.search {
+            args.push("--search".to_string());
+            args.push(search);
+        }
+        self.run_tool("ao.daemon.logs", args, input.project_root)
+            .await
     }
 
     #[tool(

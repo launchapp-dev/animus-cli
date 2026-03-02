@@ -675,8 +675,7 @@ pub(crate) async fn handle_daemon(
             print_value(health, json)
         }
         DaemonCommand::Logs(args) => {
-            let logs = daemon.logs(args.limit).await?;
-            print_value(logs, json)
+            handle_daemon_logs(args.limit, args.search, project_root, json)
         }
         DaemonCommand::ClearLogs => daemon
             .clear_logs()
@@ -687,6 +686,72 @@ pub(crate) async fn handle_daemon(
             print_value(serde_json::json!({ "active_agents": active_agents }), json)
         }
         DaemonCommand::Config(args) => handle_daemon_config(args, project_root, json),
+    }
+}
+
+fn handle_daemon_logs(
+    limit: Option<usize>,
+    search: Option<String>,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let log_path = autonomous_daemon_log_path(project_root);
+    let limit = limit.unwrap_or(100);
+
+    let content = match fs::read_to_string(&log_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return print_value(
+                serde_json::json!({
+                    "log_path": log_path.display().to_string(),
+                    "line_count": 0,
+                    "lines": [],
+                    "has_more": false,
+                }),
+                json,
+            );
+        }
+        Err(err) => {
+            return Err(anyhow!(
+                "failed to read daemon log at {}: {}",
+                log_path.display(),
+                err
+            ));
+        }
+    };
+
+    let all_lines: Vec<&str> = content.lines().collect();
+
+    let filtered: Vec<&str> = if let Some(ref search) = search {
+        all_lines
+            .iter()
+            .filter(|line| line.contains(search.as_str()))
+            .copied()
+            .collect()
+    } else {
+        all_lines
+    };
+
+    let total = filtered.len();
+    let has_more = total > limit;
+    let start = total.saturating_sub(limit);
+    let lines: Vec<&str> = filtered[start..].to_vec();
+
+    if json {
+        print_value(
+            serde_json::json!({
+                "log_path": log_path.display().to_string(),
+                "line_count": lines.len(),
+                "lines": lines,
+                "has_more": has_more,
+            }),
+            json,
+        )
+    } else {
+        for line in &lines {
+            println!("{}", line);
+        }
+        Ok(())
     }
 }
 

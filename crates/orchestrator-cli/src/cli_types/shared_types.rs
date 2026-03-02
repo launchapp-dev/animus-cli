@@ -75,6 +75,8 @@ pub(crate) struct LogArgs {
         help = "Maximum number of recent log lines to return."
     )]
     pub(crate) limit: Option<usize>,
+    #[arg(long, help = "Filter log lines containing this search string.")]
+    pub(crate) search: Option<String>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
