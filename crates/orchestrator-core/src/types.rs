@@ -885,6 +885,24 @@ pub enum WorkflowMachineState {
     Cancelled,
 }
 
+impl WorkflowMachineState {
+    pub fn to_workflow_status(&self) -> WorkflowStatus {
+        match self {
+            Self::Idle => WorkflowStatus::Pending,
+            Self::EvaluateTransition
+            | Self::RunPhase
+            | Self::EvaluateGates
+            | Self::ApplyTransition
+            | Self::MergeConflict => WorkflowStatus::Running,
+            Self::Paused => WorkflowStatus::Paused,
+            Self::Completed => WorkflowStatus::Completed,
+            Self::Failed => WorkflowStatus::Failed,
+            Self::HumanEscalated => WorkflowStatus::Escalated,
+            Self::Cancelled => WorkflowStatus::Cancelled,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkflowMachineEvent {
@@ -1211,6 +1229,12 @@ pub struct OrchestratorWorkflow {
     pub total_reworks: u32,
     #[serde(default)]
     pub decision_history: Vec<WorkflowDecisionRecord>,
+}
+
+impl OrchestratorWorkflow {
+    pub fn sync_status(&mut self) {
+        self.status = self.machine_state.to_workflow_status();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

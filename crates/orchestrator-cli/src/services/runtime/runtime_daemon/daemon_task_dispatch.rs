@@ -243,7 +243,7 @@ pub fn active_workflow_task_ids(
             matches!(
                 workflow.status,
                 WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
-            )
+            ) && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
         })
         .map(|workflow| workflow.task_id.clone())
         .collect()

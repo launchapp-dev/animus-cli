@@ -280,6 +280,9 @@ pub async fn recover_orphaned_running_workflows(
         if workflow.status != WorkflowStatus::Running {
             continue;
         }
+        if workflow.machine_state == orchestrator_core::WorkflowMachineState::MergeConflict {
+            continue;
+        }
         if in_flight.contains(&workflow.id) {
             continue;
         }

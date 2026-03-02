@@ -276,10 +276,10 @@ impl WorkflowLifecycleExecutor {
                 }
             } else {
                 machine.apply(WorkflowMachineEvent::NoMorePhases);
-                workflow.status = WorkflowStatus::Completed;
                 workflow.completed_at = Some(now);
                 workflow.current_phase = None;
                 workflow.machine_state = machine.state();
+                workflow.sync_status();
                 break;
             }
             workflow.machine_state = machine.state();
@@ -311,14 +311,15 @@ impl WorkflowLifecycleExecutor {
             first.attempt = 1;
         }
 
+        let ms = machine.state();
         OrchestratorWorkflow {
             id: workflow_id,
             task_id: input.task_id,
             pipeline_id: input.pipeline_id,
-            status: WorkflowStatus::Running,
+            status: ms.to_workflow_status(),
             current_phase_index: 0,
             phases,
-            machine_state: machine.state(),
+            machine_state: ms,
             current_phase: self.phase_plan.first().cloned(),
             started_at: now,
             completed_at: None,
@@ -344,7 +345,7 @@ impl WorkflowLifecycleExecutor {
         let mut machine = self.state_machine(workflow.machine_state);
         machine.apply(WorkflowMachineEvent::PauseRequested);
         workflow.machine_state = machine.state();
-        workflow.status = WorkflowStatus::Paused;
+        workflow.sync_status();
     }
 
     pub fn resume(&self, workflow: &mut OrchestratorWorkflow) {
@@ -359,7 +360,7 @@ impl WorkflowLifecycleExecutor {
         machine.apply(WorkflowMachineEvent::ResumeRequested);
         machine.apply(WorkflowMachineEvent::PhaseStarted);
         workflow.machine_state = machine.state();
-        workflow.status = WorkflowStatus::Running;
+        workflow.sync_status();
         workflow.completed_at = None;
         workflow.failure_reason = None;
 
@@ -389,7 +390,7 @@ impl WorkflowLifecycleExecutor {
         let mut machine = self.state_machine(workflow.machine_state);
         machine.apply(WorkflowMachineEvent::CancelRequested);
         workflow.machine_state = machine.state();
-        workflow.status = WorkflowStatus::Cancelled;
+        workflow.sync_status();
         workflow.completed_at = Some(Utc::now());
     }
 
@@ -489,7 +490,7 @@ impl WorkflowLifecycleExecutor {
                     machine.apply(WorkflowMachineEvent::Start);
                     machine.apply(WorkflowMachineEvent::PhaseStarted);
                     workflow.machine_state = machine.state();
-                    workflow.status = WorkflowStatus::Running;
+                    workflow.sync_status();
                 } else {
                     workflow.decision_history.push(WorkflowDecisionRecord {
                         timestamp: Utc::now(),
@@ -507,7 +508,7 @@ impl WorkflowLifecycleExecutor {
                     });
                     machine.apply(WorkflowMachineEvent::NoMorePhases);
                     workflow.machine_state = machine.state();
-                    workflow.status = WorkflowStatus::Completed;
+                    workflow.sync_status();
                     workflow.completed_at = Some(Utc::now());
                     workflow.current_phase = None;
                 }
@@ -575,20 +576,14 @@ impl WorkflowLifecycleExecutor {
                 let mut machine = self.state_machine(workflow.machine_state);
                 machine.apply(WorkflowMachineEvent::RetryPhaseStarted);
                 workflow.machine_state = machine.state();
-                workflow.status = WorkflowStatus::Running;
+                workflow.sync_status();
             }
             GateEvaluationResult::Fail { reason } => {
                 machine.apply(WorkflowMachineEvent::GatesFailed);
                 machine.apply(WorkflowMachineEvent::PolicyDecisionFailed);
                 machine.apply(WorkflowMachineEvent::ReworkBudgetExceeded);
                 workflow.machine_state = machine.state();
-                let is_escalated =
-                    workflow.machine_state == WorkflowMachineState::HumanEscalated;
-                workflow.status = if is_escalated {
-                    WorkflowStatus::Escalated
-                } else {
-                    WorkflowStatus::Failed
-                };
+                workflow.sync_status();
                 workflow.completed_at = Some(Utc::now());
                 workflow.failure_reason = Some(reason.clone());
 
@@ -739,11 +734,7 @@ impl WorkflowLifecycleExecutor {
         machine.apply(WorkflowMachineEvent::PolicyDecisionFailed);
         machine.apply(WorkflowMachineEvent::ReworkBudgetExceeded);
         workflow.machine_state = machine.state();
-        workflow.status = if workflow.machine_state == WorkflowMachineState::HumanEscalated {
-            WorkflowStatus::Escalated
-        } else {
-            WorkflowStatus::Failed
-        };
+        workflow.sync_status();
         workflow.completed_at = Some(Utc::now());
         workflow.failure_reason = Some(error.clone());
         workflow.decision_history.push(self.decision_record(
@@ -767,6 +758,7 @@ impl WorkflowLifecycleExecutor {
         if workflow.machine_state != WorkflowMachineState::MergeConflict {
             workflow.machine_state = WorkflowMachineState::MergeConflict;
         }
+        workflow.sync_status();
         workflow.failure_reason = Some(error);
         workflow.completed_at = None;
     }
@@ -782,7 +774,7 @@ impl WorkflowLifecycleExecutor {
         if workflow.machine_state != WorkflowMachineState::Completed {
             workflow.machine_state = WorkflowMachineState::Completed;
         }
-        workflow.status = WorkflowStatus::Completed;
+        workflow.sync_status();
         workflow.failure_reason = None;
         workflow.completed_at = Some(Utc::now());
     }
@@ -844,7 +836,7 @@ impl WorkflowLifecycleExecutor {
             .insert(workflow.current_phase_index, research_phase);
         workflow.current_phase = Some("research".to_string());
         workflow.machine_state = WorkflowMachineState::RunPhase;
-        workflow.status = WorkflowStatus::Running;
+        workflow.sync_status();
         workflow.failure_reason = None;
         workflow.completed_at = None;
         workflow.decision_history.push(self.decision_record(
@@ -861,7 +853,8 @@ impl WorkflowLifecycleExecutor {
     pub fn execute_to_terminal(&self, workflow: &mut OrchestratorWorkflow) {
         while matches!(workflow.status, WorkflowStatus::Running) {
             let Some(phase) = workflow.phases.get(workflow.current_phase_index) else {
-                workflow.status = WorkflowStatus::Completed;
+                workflow.machine_state = WorkflowMachineState::Completed;
+                workflow.sync_status();
                 workflow.completed_at = Some(Utc::now());
                 workflow.current_phase = None;
                 break;

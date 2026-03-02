@@ -168,6 +168,9 @@ pub async fn execute_running_workflow_phases_for_project(
         if workflow.status != WorkflowStatus::Running {
             continue;
         }
+        if workflow.machine_state == orchestrator_core::WorkflowMachineState::MergeConflict {
+            continue;
+        }
         if in_flight_workflow_ids.contains(&workflow.id) {
             continue;
         }

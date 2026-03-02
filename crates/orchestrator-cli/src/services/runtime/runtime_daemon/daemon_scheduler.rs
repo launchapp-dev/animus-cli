@@ -1439,7 +1439,7 @@ mod tests {
             )
             .await
             .expect("workflow should enter merge-conflict state");
-        assert_eq!(conflicted.status, WorkflowStatus::Completed);
+        assert_eq!(conflicted.status, WorkflowStatus::Running);
         assert_eq!(
             conflicted.machine_state,
             orchestrator_core::WorkflowMachineState::MergeConflict

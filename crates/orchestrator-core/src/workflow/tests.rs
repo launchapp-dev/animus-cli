@@ -376,7 +376,7 @@ fn lifecycle_marks_completed_workflow_as_merge_conflict() {
         &mut workflow,
         "failed to merge source branch into target branch".to_string(),
     );
-    assert_eq!(workflow.status, WorkflowStatus::Completed);
+    assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
     assert_eq!(
         workflow.failure_reason.as_deref(),
@@ -1268,4 +1268,159 @@ fn no_on_verdict_uses_default_advance_behavior() {
         workflow.current_phase.as_deref(),
         Some("code-review")
     );
+}
+
+#[test]
+fn machine_state_to_workflow_status_mapping() {
+    assert_eq!(
+        WorkflowMachineState::Idle.to_workflow_status(),
+        WorkflowStatus::Pending
+    );
+    assert_eq!(
+        WorkflowMachineState::EvaluateTransition.to_workflow_status(),
+        WorkflowStatus::Running
+    );
+    assert_eq!(
+        WorkflowMachineState::RunPhase.to_workflow_status(),
+        WorkflowStatus::Running
+    );
+    assert_eq!(
+        WorkflowMachineState::EvaluateGates.to_workflow_status(),
+        WorkflowStatus::Running
+    );
+    assert_eq!(
+        WorkflowMachineState::ApplyTransition.to_workflow_status(),
+        WorkflowStatus::Running
+    );
+    assert_eq!(
+        WorkflowMachineState::Paused.to_workflow_status(),
+        WorkflowStatus::Paused
+    );
+    assert_eq!(
+        WorkflowMachineState::Completed.to_workflow_status(),
+        WorkflowStatus::Completed
+    );
+    assert_eq!(
+        WorkflowMachineState::MergeConflict.to_workflow_status(),
+        WorkflowStatus::Running
+    );
+    assert_eq!(
+        WorkflowMachineState::Failed.to_workflow_status(),
+        WorkflowStatus::Failed
+    );
+    assert_eq!(
+        WorkflowMachineState::HumanEscalated.to_workflow_status(),
+        WorkflowStatus::Escalated
+    );
+    assert_eq!(
+        WorkflowMachineState::Cancelled.to_workflow_status(),
+        WorkflowStatus::Cancelled
+    );
+}
+
+#[test]
+fn sync_status_derives_from_machine_state() {
+    let mut workflow = make_workflow(WorkflowStatus::Pending);
+    workflow.machine_state = WorkflowMachineState::RunPhase;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+
+    workflow.machine_state = WorkflowMachineState::Paused;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+
+    workflow.machine_state = WorkflowMachineState::Completed;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+
+    workflow.machine_state = WorkflowMachineState::Failed;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Failed);
+
+    workflow.machine_state = WorkflowMachineState::HumanEscalated;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Escalated);
+
+    workflow.machine_state = WorkflowMachineState::Cancelled;
+    workflow.sync_status();
+    assert_eq!(workflow.status, WorkflowStatus::Cancelled);
+}
+
+#[test]
+fn bootstrap_derives_status_from_machine_state() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+    ]);
+    let workflow = executor.bootstrap(
+        "WF-derive-test".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-derive".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+}
+
+#[test]
+fn status_stays_in_sync_through_lifecycle_transitions() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-sync-test".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-sync".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+
+    executor.pause(&mut workflow);
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+
+    executor.resume(&mut workflow);
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+}
+
+#[test]
+fn cancel_keeps_status_synced_with_machine_state() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-cancel-sync".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-cancel-sync".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+
+    executor.cancel(&mut workflow);
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
+    assert_eq!(workflow.status, WorkflowStatus::Cancelled);
+}
+
+#[test]
+fn failed_phase_keeps_status_synced_with_machine_state() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-fail-sync".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-fail-sync".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+
+    executor.mark_current_phase_failed(&mut workflow, "test error".to_string());
+    assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
 }

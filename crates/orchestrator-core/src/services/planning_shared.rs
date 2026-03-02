@@ -722,6 +722,8 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                             | crate::WorkflowStatus::Pending
                             | crate::WorkflowStatus::Paused
                     )
+                    && workflow.machine_state
+                        != crate::types::WorkflowMachineState::MergeConflict
             });
             if has_active_workflow {
                 continue;
