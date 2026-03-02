@@ -541,6 +541,32 @@ struct WorkflowDestructiveInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct WorkflowPhaseGetInput {
+    phase: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct WorkflowExecuteInput {
+    task_id: String,
+    #[serde(default)]
+    pipeline_id: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    phase_timeout_secs: Option<u64>,
+    #[serde(default)]
+    input_json: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct IdInput {
     id: String,
     #[serde(default)]
@@ -1982,6 +2008,137 @@ impl AoMcpServer {
             input.project_root,
         )
         .await
+    }
+
+    #[tool(
+        name = "ao.workflow.phases.list",
+        description = "List workflow phase definitions. Purpose: View configured phases available for pipelines. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.phases.get for details on a specific phase, or ao.workflow.pipelines.list to see how phases are composed.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_workflow_phases_list(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.workflow.phases.list",
+            vec![
+                "workflow".to_string(),
+                "phases".to_string(),
+                "list".to_string(),
+            ],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.workflow.phases.get",
+        description = "Get a workflow phase definition. Purpose: View full details of a specific phase including runtime config. Prerequisites: Phase must exist (use ao.workflow.phases.list to find phase ids). Example: {\"phase\": \"implementation\"}. Sequencing: Use after ao.workflow.phases.list to inspect a specific phase.",
+        input_schema = ao_schema_for_type::<WorkflowPhaseGetInput>()
+    )]
+    async fn ao_workflow_phases_get(
+        &self,
+        params: Parameters<WorkflowPhaseGetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "phases".to_string(),
+            "get".to_string(),
+            "--phase".to_string(),
+            input.phase,
+        ];
+        self.run_tool("ao.workflow.phases.get", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.pipelines.list",
+        description = "List workflow pipeline definitions. Purpose: View available pipelines and their phase composition. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.phases.list to see individual phase details, or ao.workflow.run with a pipeline_id to execute one.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_workflow_pipelines_list(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.workflow.pipelines.list",
+            vec![
+                "workflow".to_string(),
+                "pipelines".to_string(),
+                "list".to_string(),
+            ],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.workflow.config.get",
+        description = "Read effective workflow config. Purpose: View the resolved workflow configuration including phases, pipelines, and settings. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.config.validate to check for issues, or ao.workflow.phases.list for phase details.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_workflow_config_get(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.workflow.config.get",
+            vec![
+                "workflow".to_string(),
+                "config".to_string(),
+                "get".to_string(),
+            ],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.workflow.config.validate",
+        description = "Validate workflow config. Purpose: Check workflow configuration for shape errors and broken references. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.config.get to view the config first, or after modifying phases/pipelines to verify consistency.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_workflow_config_validate(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.workflow.config.validate",
+            vec![
+                "workflow".to_string(),
+                "config".to_string(),
+                "validate".to_string(),
+            ],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.workflow.execute",
+        description = "Execute a workflow synchronously. Purpose: Run a workflow without the daemon, blocking until completion. Prerequisites: Task must exist (use ao.task.get to verify). Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"phase\": \"implementation\"}. Sequencing: Use ao.task.get to verify the task first, or ao.workflow.config.get to review workflow config.",
+        input_schema = ao_schema_for_type::<WorkflowExecuteInput>()
+    )]
+    async fn ao_workflow_execute(
+        &self,
+        params: Parameters<WorkflowExecuteInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "workflow".to_string(),
+            "execute".to_string(),
+            "--task-id".to_string(),
+            input.task_id,
+        ];
+        push_opt(&mut args, "--pipeline-id", input.pipeline_id);
+        push_opt(&mut args, "--phase", input.phase);
+        push_opt(&mut args, "--model", input.model);
+        push_opt(&mut args, "--tool", input.tool);
+        push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
+        push_opt(&mut args, "--input-json", input.input_json);
+        self.run_tool("ao.workflow.execute", args, input.project_root)
+            .await
     }
 }
 
