@@ -1,10 +1,9 @@
 use super::*;
-use protocol::{IpcAuthRequest, IpcAuthResult};
+use protocol::{IpcAuthRequest, IpcAuthResult, MAX_UNIX_SOCKET_PATH_LEN};
 #[cfg(unix)]
 use std::hash::{Hash, Hasher};
 
-#[cfg(unix)]
-const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;
+const RUNNER_IPC_TIMEOUT: Duration = Duration::from_millis(900);
 
 pub(super) fn max_agents_override_from_env() -> Option<usize> {
     std::env::var("AO_MAX_AGENTS")
@@ -275,7 +274,7 @@ where
     stream.flush().await.ok()?;
 
     let mut line = String::new();
-    let read_len = tokio::time::timeout(Duration::from_millis(900), async {
+    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, async {
         let mut reader = BufReader::new(stream);
         reader.read_line(&mut line).await
     })
@@ -311,7 +310,7 @@ pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatu
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let read_len = tokio::time::timeout(Duration::from_millis(900), reader.read_line(&mut line))
+    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line))
         .await
         .ok()?
         .ok()?;
@@ -341,7 +340,7 @@ pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatu
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let read_len = tokio::time::timeout(Duration::from_millis(900), reader.read_line(&mut line))
+    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line))
         .await
         .ok()?
         .ok()?;

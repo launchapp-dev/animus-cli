@@ -30,3 +30,6 @@ pub use output::*;
 pub use repository_scope::*;
 
 pub const PROTOCOL_VERSION: &str = "1.0.0";
+
+pub const CLI_SCHEMA_ID: &str = "ao.cli.v1";
+pub const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;

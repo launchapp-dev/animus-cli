@@ -3133,6 +3133,7 @@ fn build_daemon_events_poll_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::CLI_SCHEMA_ID;
     use crate::services::runtime::daemon_events_log_path;
     use crate::services::runtime::DaemonEventRecord;
     use chrono::{Duration, Utc};
@@ -3302,12 +3303,12 @@ mod tests {
     fn build_cli_error_payload_prefers_stderr_envelope_over_stdout_envelope() {
         let mut result = sample_cli_failure_result();
         result.stdout_json = Some(json!({
-            "schema": "ao.cli.v1",
+            "schema": CLI_SCHEMA_ID,
             "ok": false,
             "error": { "message": "stdout-error" }
         }));
         result.stderr_json = Some(json!({
-            "schema": "ao.cli.v1",
+            "schema": CLI_SCHEMA_ID,
             "ok": false,
             "error": { "message": "stderr-error" }
         }));
@@ -3329,7 +3330,7 @@ mod tests {
     fn build_cli_error_payload_falls_back_to_stdout_envelope_when_stderr_json_missing() {
         let mut result = sample_cli_failure_result();
         result.stdout_json = Some(json!({
-            "schema": "ao.cli.v1",
+            "schema": CLI_SCHEMA_ID,
             "ok": false,
             "error": { "message": "stdout-error" }
         }));
