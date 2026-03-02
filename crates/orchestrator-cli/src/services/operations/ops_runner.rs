@@ -4,7 +4,7 @@ use crate::print_value;
 use crate::shared::{connect_runner, runner_config_dir, write_json_line};
 use anyhow::Result;
 use orchestrator_core::ServiceHub;
-use protocol::{RunnerStatusRequest, RunnerStatusResponse};
+use protocol::{kill_process, process_exists, RunnerStatusRequest, RunnerStatusResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -37,8 +37,6 @@ fn load_cli_tracker() -> Result<CliTrackerStateCli> {
 fn save_cli_tracker(tracker: &CliTrackerStateCli) -> Result<()> {
     write_json_pretty(&protocol::cli_tracker_path(), tracker)
 }
-
-use protocol::{process_exists as process_exists_cli, kill_process as kill_process_cli};
 
 async fn query_runner_status_direct(project_root: &str) -> Option<RunnerStatusResponse> {
     let config_dir = runner_config_dir(Path::new(project_root));
@@ -86,7 +84,7 @@ pub(crate) async fn handle_runner(
                     .processes
                     .into_iter()
                     .filter_map(|(run_id, pid)| {
-                        if process_exists_cli(pid) {
+                        if process_exists(pid) {
                             Some(RunnerOrphanCli { run_id, pid })
                         } else {
                             None
@@ -106,7 +104,7 @@ pub(crate) async fn handle_runner(
                     let Some(pid) = tracker.processes.get(&run_id).copied() else {
                         continue;
                     };
-                    if !process_exists_cli(pid) || kill_process_cli(pid) {
+                    if !process_exists(pid) || kill_process(pid) {
                         cleaned.push(run_id.clone());
                         tracker.processes.remove(&run_id);
                     }

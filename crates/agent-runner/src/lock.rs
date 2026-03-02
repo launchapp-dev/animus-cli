@@ -87,4 +87,4 @@ fn get_ipc_address() -> String {
     }
 }
 
-pub use protocol::process_exists;
+use protocol::process_exists;
