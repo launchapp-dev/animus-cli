@@ -14,7 +14,8 @@ use super::daemon_events::{emit_daemon_event, next_daemon_event};
 use super::daemon_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use super::daemon_scheduler::{
     clear_running_workflow_phase_pool, drain_running_workflow_phases_for_project,
-    pause_running_workflow_phase_spawns, project_tick, resume_running_workflow_phase_spawns,
+    pause_running_workflow_phase_spawns, project_tick,
+    recover_orphaned_running_workflows_on_startup, resume_running_workflow_phase_spawns,
     subscribe_phase_completion_wake,
 };
 use super::{canonicalize_lossy, get_daemon_pid, set_daemon_pid, set_runtime_paused};
@@ -412,6 +413,27 @@ pub(super) async fn handle_daemon_run(
                 json,
                 notification_runtime.as_mut(),
             )?;
+
+            let startup_hub = Arc::new(FileServiceHub::new(&primary_root)?);
+            let startup_orphans = recover_orphaned_running_workflows_on_startup(
+                startup_hub as Arc<dyn ServiceHub>,
+                &primary_root,
+            )
+            .await;
+            if startup_orphans > 0 {
+                emit_daemon_event_with_notifications(
+                    &mut seq,
+                    "orphan-detection",
+                    Some(primary_root.clone()),
+                    serde_json::json!({
+                        "orphaned_workflows_recovered": startup_orphans,
+                        "recovery_action": "blocked",
+                        "blocked_reason": "orphaned_after_daemon_restart",
+                    }),
+                    json,
+                    notification_runtime.as_mut(),
+                )?;
+            }
         }
 
         match orchestrator_core::compile_and_write_yaml_workflows(std::path::Path::new(project_root))

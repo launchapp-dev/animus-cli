@@ -2006,3 +2006,14 @@ pub(super) async fn drain_running_workflow_phases_for_project(
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
     project_tick_ops::project_tick(root, args).await
 }
+
+pub(super) async fn recover_orphaned_running_workflows_on_startup(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> usize {
+    project_tick_ops::reconciliation::recover_orphaned_running_workflows_on_startup(
+        hub,
+        project_root,
+    )
+    .await
+}
