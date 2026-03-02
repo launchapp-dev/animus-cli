@@ -151,7 +151,7 @@ pub fn daemon_events_log_path() -> PathBuf {
 /// This constructs the canonical MCP tool prefix whitelist for enforcing
 /// MCP-only policy on agent runs. The prefixes cover both direct tool names
 /// and MCP-prefixed variants.
-pub fn default_allowed_mcp_tool_prefixes(agent_id: &str) -> Vec<String> {
+pub fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
     let normalized = agent_id.trim().to_ascii_lowercase();
     let mut prefixes = vec![
         "ao.".to_string(),

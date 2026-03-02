@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use cli_wrapper::{ensure_codex_config_override, ensure_flag, ensure_flag_value, LaunchInvocation};
 use protocol::{AgentRunEvent, OutputStreamType, RunId};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
 use tokio::process::Command;
@@ -55,10 +55,6 @@ impl Drop for TempPathCleanup {
             let _ = std::fs::remove_file(path);
         }
     }
-}
-
-fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
-    protocol::default_allowed_mcp_tool_prefixes(agent_id)
 }
 
 fn resolve_mcp_tool_enforcement(
@@ -136,7 +132,7 @@ fn resolve_mcp_tool_enforcement(
         .unwrap_or_default();
 
     if enabled && allowed_prefixes.is_empty() {
-        allowed_prefixes = default_allowed_tool_prefixes(&agent_id);
+        allowed_prefixes = protocol::default_allowed_tool_prefixes(&agent_id);
     }
 
     McpToolEnforcement {

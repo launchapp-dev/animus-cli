@@ -8,7 +8,7 @@ use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -31,16 +31,12 @@ struct RunnerOrphanDetectionCli {
     count: usize,
 }
 
-fn cli_tracker_path_cli() -> PathBuf {
-    protocol::cli_tracker_path()
-}
-
 fn load_cli_tracker() -> Result<CliTrackerStateCli> {
-    read_json_or_default(&cli_tracker_path_cli())
+    read_json_or_default(&protocol::cli_tracker_path())
 }
 
 fn save_cli_tracker(tracker: &CliTrackerStateCli) -> Result<()> {
-    write_json_pretty(&cli_tracker_path_cli(), tracker)
+    write_json_pretty(&protocol::cli_tracker_path(), tracker)
 }
 
 #[cfg(unix)]

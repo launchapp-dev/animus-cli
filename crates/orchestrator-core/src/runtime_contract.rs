@@ -34,10 +34,6 @@ fn normalized_tool(tool: &str) -> String {
     tool.trim().to_ascii_lowercase()
 }
 
-pub fn default_allowed_tool_prefixes(agent_id: Option<&str>) -> Vec<String> {
-    protocol::default_allowed_mcp_tool_prefixes(agent_id.unwrap_or("ao"))
-}
-
 pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
     match normalized_tool(tool).as_str() {
         "claude" => Some(CliCapabilities {
@@ -276,7 +272,7 @@ pub fn build_runtime_contract(
             "endpoint": mcp_endpoint,
             "enforce_only": enforce_mcp_only,
             "allowed_tool_prefixes": if enforce_mcp_only {
-                default_allowed_tool_prefixes(mcp_agent_id)
+                protocol::default_allowed_tool_prefixes(mcp_agent_id.unwrap_or("ao"))
             } else {
                 Vec::<String>::new()
             }

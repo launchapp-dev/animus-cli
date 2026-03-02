@@ -1,10 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 use tracing::{debug, info, warn};
-
-use crate::config;
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -15,12 +12,8 @@ use std::sync::Mutex;
 static JOB_HANDLES: Lazy<Mutex<HashMap<u32, windows::Win32::Foundation::HANDLE>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn get_tracker_path() -> PathBuf {
-    protocol::cli_tracker_path()
-}
-
 pub fn cleanup_orphaned_clis() -> Result<()> {
-    let tracker_path = get_tracker_path();
+    let tracker_path = protocol::cli_tracker_path();
 
     if !tracker_path.exists() {
         debug!(path = %tracker_path.display(), "No orphan tracker file found");
@@ -60,7 +53,7 @@ pub fn cleanup_orphaned_clis() -> Result<()> {
 }
 
 pub fn track_process(run_id: &str, pid: u32) -> Result<()> {
-    let tracker_path = get_tracker_path();
+    let tracker_path = protocol::cli_tracker_path();
     let mut tracked: HashMap<String, u32> = if tracker_path.exists() {
         let content = fs::read_to_string(&tracker_path)?;
         serde_json::from_str(&content).unwrap_or_default()
@@ -81,7 +74,7 @@ pub fn track_process(run_id: &str, pid: u32) -> Result<()> {
 }
 
 pub fn untrack_process(run_id: &str) -> Result<()> {
-    let tracker_path = get_tracker_path();
+    let tracker_path = protocol::cli_tracker_path();
     if !tracker_path.exists() {
         return Ok(());
     }
