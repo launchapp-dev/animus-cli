@@ -531,6 +531,7 @@ pub(super) fn create_task_in_state(
         resource_requirements: Default::default(),
         consecutive_dispatch_failures: None,
         last_dispatch_failure_at: None,
+        dispatch_history: Vec::new(),
     };
     state.tasks.insert(id, task.clone());
     Ok(task)

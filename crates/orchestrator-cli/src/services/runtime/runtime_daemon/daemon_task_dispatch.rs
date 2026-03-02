@@ -316,6 +316,48 @@ pub async fn auto_assign_task_to_daemon_agent(
     Ok(())
 }
 
+async fn record_dispatch_history_entry(
+    hub: Arc<dyn ServiceHub>,
+    task_id: &str,
+    workflow_id: &str,
+    outcome: &str,
+) {
+    let workflow = hub.workflows().get(workflow_id).await.ok();
+    let now = Utc::now();
+    let started_at = workflow
+        .as_ref()
+        .map(|w| w.started_at.to_rfc3339())
+        .unwrap_or_else(|| now.to_rfc3339());
+    let ended_at = now.to_rfc3339();
+    let duration_secs = workflow.as_ref().map(|w| {
+        let start = w.started_at;
+        (now - start).num_milliseconds() as f64 / 1000.0
+    });
+    let failed_phase = workflow.as_ref().and_then(|w| w.current_phase.clone());
+    let failure_reason = workflow.as_ref().and_then(|w| w.failure_reason.clone());
+
+    let entry = orchestrator_core::DispatchHistoryEntry {
+        workflow_id: workflow_id.to_string(),
+        started_at,
+        ended_at: Some(ended_at),
+        duration_secs,
+        outcome: outcome.to_string(),
+        failed_phase: if outcome != "completed" { failed_phase } else { None },
+        failure_reason: if outcome != "completed" { failure_reason } else { None },
+    };
+
+    let Ok(mut task) = hub.tasks().get(task_id).await else {
+        return;
+    };
+    task.dispatch_history.push(entry);
+    let max = orchestrator_core::MAX_DISPATCH_HISTORY_ENTRIES;
+    if task.dispatch_history.len() > max {
+        let drain_count = task.dispatch_history.len() - max;
+        task.dispatch_history.drain(..drain_count);
+    }
+    let _ = hub.tasks().replace(task).await;
+}
+
 pub async fn sync_task_status_for_workflow_result(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
@@ -325,6 +367,9 @@ pub async fn sync_task_status_for_workflow_result(
 ) {
     match workflow_status {
         WorkflowStatus::Completed => {
+            if let Some(wf_id) = workflow_id {
+                record_dispatch_history_entry(hub.clone(), task_id, wf_id, "completed").await;
+            }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let task = hub.tasks().get(task_id).await;
             let Ok(task) = task else {
@@ -452,6 +497,9 @@ pub async fn sync_task_status_for_workflow_result(
             }
         }
         WorkflowStatus::Failed => {
+            if let Some(wf_id) = workflow_id {
+                record_dispatch_history_entry(hub.clone(), task_id, wf_id, "failed").await;
+            }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             if let Ok(mut task) = hub.tasks().get(task_id).await {
                 let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
@@ -472,10 +520,16 @@ pub async fn sync_task_status_for_workflow_result(
             }
         }
         WorkflowStatus::Escalated => {
+            if let Some(wf_id) = workflow_id {
+                record_dispatch_history_entry(hub.clone(), task_id, wf_id, "escalated").await;
+            }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
         }
         WorkflowStatus::Cancelled => {
+            if let Some(wf_id) = workflow_id {
+                record_dispatch_history_entry(hub.clone(), task_id, wf_id, "cancelled").await;
+            }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = hub.tasks().set_status(task_id, TaskStatus::Cancelled).await;
         }

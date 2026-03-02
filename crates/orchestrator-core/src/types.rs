@@ -1062,6 +1062,23 @@ fn default_timestamp_now() -> DateTime<Utc> {
     Utc::now()
 }
 
+pub const MAX_DISPATCH_HISTORY_ENTRIES: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchHistoryEntry {
+    pub workflow_id: String,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorTask {
     pub id: String,
@@ -1120,6 +1137,8 @@ pub struct OrchestratorTask {
     pub consecutive_dispatch_failures: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_dispatch_failure_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dispatch_history: Vec<DispatchHistoryEntry>,
 }
 
 const FRONTEND_TAGS: &[&str] = &[

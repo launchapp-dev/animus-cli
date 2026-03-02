@@ -1660,6 +1660,26 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.task.history",
+        description = "Get workflow dispatch history for a task. Purpose: View past workflow executions including timing, outcomes, and failure details. Prerequisites: Task must exist. Example: {\"id\": \"TASK-001\"}. Sequencing: Use ao.task.get first to verify task exists, or ao.task.list to find tasks.",
+        input_schema = ao_schema_for_type::<TaskGetInput>()
+    )]
+    async fn ao_task_history(
+        &self,
+        params: Parameters<TaskGetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "task".to_string(),
+            "history".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.task.history", args, input.project_root)
+            .await
+    }
+
+    #[tool(
         name = "ao.workflow.get",
         description = "Get workflow details by ID. Purpose: View full workflow state including current phase, decisions, and checkpoints. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.list to find workflows, or ao.workflow.run to start new ones.",
         input_schema = ao_schema_for_type::<IdInput>()

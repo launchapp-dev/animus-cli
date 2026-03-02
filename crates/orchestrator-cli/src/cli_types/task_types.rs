@@ -38,6 +38,8 @@ pub(crate) enum TaskCommand {
     DependencyRemove(TaskDependencyRemoveArgs),
     /// Set task status.
     Status(TaskStatusArgs),
+    /// Show workflow dispatch history for a task.
+    History(IdArgs),
 }
 
 #[derive(Debug, Args)]

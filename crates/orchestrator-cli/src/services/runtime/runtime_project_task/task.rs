@@ -356,6 +356,10 @@ pub(crate) async fn handle_task(
                 json,
             )
         }
+        TaskCommand::History(args) => {
+            let task = tasks.get(&args.id).await?;
+            print_value(&task.dispatch_history, json)
+        }
     }
 }
 
