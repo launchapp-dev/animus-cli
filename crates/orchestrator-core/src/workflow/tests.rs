@@ -591,13 +591,14 @@ fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
             evidence: Vec::new(),
             guardrail_violations: Vec::new(),
             commit_message: None,
+            target_phase: None,
         }),
     );
 
     assert_eq!(
         workflow.status,
-        WorkflowStatus::Failed,
-        "max_attempts=1 should escalate to failure on first rework exceeding budget"
+        WorkflowStatus::Escalated,
+        "max_attempts=1 should escalate on first rework exceeding budget"
     );
     assert!(workflow
         .failure_reason
@@ -648,6 +649,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
                 evidence: Vec::new(),
                 guardrail_violations: Vec::new(),
                 commit_message: None,
+                target_phase: None,
             }),
         );
 
@@ -674,12 +676,13 @@ fn phase_with_max_attempts_5_allows_more_retries() {
             evidence: Vec::new(),
             guardrail_violations: Vec::new(),
             commit_message: None,
+            target_phase: None,
         }),
     );
     assert_eq!(
         workflow.status,
-        WorkflowStatus::Failed,
-        "should fail after exceeding max_attempts=5"
+        WorkflowStatus::Escalated,
+        "should escalate after exceeding max_attempts=5"
     );
 }
 
@@ -1013,6 +1016,7 @@ fn default_max_attempts_is_3_when_no_config() {
                 evidence: Vec::new(),
                 guardrail_violations: Vec::new(),
                 commit_message: None,
+                target_phase: None,
             }),
         );
         if i < 2 {
@@ -1040,12 +1044,13 @@ fn default_max_attempts_is_3_when_no_config() {
             evidence: Vec::new(),
             guardrail_violations: Vec::new(),
             commit_message: None,
+            target_phase: None,
         }),
     );
     assert_eq!(
         workflow.status,
-        WorkflowStatus::Failed,
-        "should fail when rework_count reaches default max_attempts=3"
+        WorkflowStatus::Escalated,
+        "should escalate when rework_count reaches default max_attempts=3"
     );
 }
 

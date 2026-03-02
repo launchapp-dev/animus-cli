@@ -1729,6 +1729,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 commit_message: None,
+                target_phase: None,
             }),
         };
 
@@ -1775,6 +1776,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 commit_message: None,
+                target_phase: None,
             }),
         };
         persist_phase_output(project_root, workflow_id, "research", &research_outcome).unwrap();
@@ -1791,6 +1793,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 commit_message: None,
+                target_phase: None,
             }),
         };
         persist_phase_output(project_root, workflow_id, "implementation", &impl_outcome).unwrap();

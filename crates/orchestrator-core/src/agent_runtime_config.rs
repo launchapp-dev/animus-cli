@@ -1821,6 +1821,7 @@ mod tests {
             output_contract: None,
             output_json_schema: None,
             decision_contract: None,
+            retry: None,
             command: Some(PhaseCommandDefinition {
                 program: "cargo".to_string(),
                 args: vec!["test".to_string(), "--workspace".to_string()],
@@ -1863,6 +1864,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec!["clippy".to_string()],
@@ -1894,6 +1896,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: None,
                 manual: None,
             },
@@ -1915,6 +1918,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "  ".to_string(),
                     args: vec![],
@@ -1947,6 +1951,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec![],
@@ -1979,6 +1984,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec![],
@@ -2013,6 +2019,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec![],
@@ -2045,6 +2052,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec![],
@@ -2080,6 +2088,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec!["clippy".to_string()],
@@ -2115,6 +2124,7 @@ mod tests {
             output_contract: None,
             output_json_schema: None,
             decision_contract: None,
+            retry: None,
             command: Some(PhaseCommandDefinition {
                 program: "bash".to_string(),
                 args: vec![
@@ -2204,6 +2214,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec!["test".to_string(), "  ".to_string()],
@@ -2238,6 +2249,7 @@ mod tests {
                 output_contract: None,
                 output_json_schema: None,
                 decision_contract: None,
+                retry: None,
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec![],
