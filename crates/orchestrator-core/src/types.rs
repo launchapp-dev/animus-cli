@@ -797,6 +797,8 @@ pub struct PhaseDecision {
     pub guardrail_violations: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_phase: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1376,6 +1378,7 @@ mod tests {
             }],
             guardrail_violations: vec![],
             commit_message: Some("test: validate phase decision contract".to_string()),
+            target_phase: None,
         };
 
         let serialized =

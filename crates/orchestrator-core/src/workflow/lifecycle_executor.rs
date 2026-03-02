@@ -12,8 +12,15 @@ const MAX_PHASE_REWORKS: u32 = 3;
 
 enum GateEvaluationResult {
     Pass,
-    Rework { reason: String },
+    Rework {
+        reason: String,
+        target_phase: Option<String>,
+    },
     Fail { reason: String },
+}
+
+fn find_phase_index(phases: &[WorkflowPhaseExecution], phase_id: &str) -> Option<usize> {
+    phases.iter().position(|p| p.phase_id == phase_id)
 }
 
 use super::phase_plan::{phase_plan_for_pipeline_id, STANDARD_PIPELINE_ID};
@@ -240,8 +247,19 @@ impl WorkflowLifecycleExecutor {
                     .map(|d| d.guardrail_violations.clone())
                     .unwrap_or_default();
 
-                let next_idx = workflow.current_phase_index + 1;
-                if next_idx < workflow.phases.len() {
+                let target_phase_id = decision.as_ref().and_then(|d| d.target_phase.clone());
+                let next_idx = match &target_phase_id {
+                    Some(id) => find_phase_index(&workflow.phases, id),
+                    None => {
+                        let idx = workflow.current_phase_index + 1;
+                        if idx < workflow.phases.len() {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(next_idx) = next_idx {
                     let next_phase_id = workflow.phases[next_idx].phase_id.clone();
                     workflow.current_phase_index = next_idx;
                     if let Some(phase) = workflow.phases.get_mut(next_idx) {
@@ -294,20 +312,37 @@ impl WorkflowLifecycleExecutor {
                     workflow.current_phase = None;
                 }
             }
-            GateEvaluationResult::Rework { reason } => {
+            GateEvaluationResult::Rework {
+                reason,
+                target_phase,
+            } => {
                 machine.apply(WorkflowMachineEvent::GatesFailed);
                 workflow.machine_state = machine.state();
 
+                let rework_target_idx = match &target_phase {
+                    Some(id) => find_phase_index(&workflow.phases, id),
+                    None => Some(workflow.current_phase_index),
+                };
+                let rework_idx = rework_target_idx.unwrap_or(workflow.current_phase_index);
+
+                let rework_phase_id = workflow
+                    .phases
+                    .get(rework_idx)
+                    .map(|p| p.phase_id.clone())
+                    .unwrap_or_else(|| current_phase_id.clone());
+
                 let rework_count = workflow
                     .rework_counts
-                    .entry(current_phase_id.clone())
+                    .entry(rework_phase_id.clone())
                     .or_insert(0);
                 *rework_count += 1;
 
-                if let Some(phase) = workflow.phases.get_mut(workflow.current_phase_index) {
+                workflow.current_phase_index = rework_idx;
+                if let Some(phase) = workflow.phases.get_mut(rework_idx) {
                     phase.status = WorkflowPhaseStatus::Running;
                     phase.completed_at = None;
                     phase.attempt += 1;
+                    workflow.current_phase = Some(phase.phase_id.clone());
                 }
 
                 let confidence = decision.as_ref().map(|d| d.confidence).unwrap_or(0.5);
@@ -320,7 +355,7 @@ impl WorkflowLifecycleExecutor {
                     timestamp: Utc::now(),
                     phase_id: current_phase_id,
                     decision: WorkflowDecisionAction::Rework,
-                    target_phase: None,
+                    target_phase: target_phase.or(Some(rework_phase_id)),
                     reason,
                     confidence,
                     risk,
@@ -402,12 +437,17 @@ impl WorkflowLifecycleExecutor {
                     .get(workflow.current_phase_index)
                     .map(|p| p.phase_id.as_str())
                     .unwrap_or("unknown");
-                let rework_count = workflow.rework_counts.get(phase_id).copied().unwrap_or(0);
+                let rework_target = decision.target_phase.as_deref().unwrap_or(phase_id);
+                let rework_count = workflow
+                    .rework_counts
+                    .get(rework_target)
+                    .copied()
+                    .unwrap_or(0);
                 if rework_count >= MAX_PHASE_REWORKS {
                     return GateEvaluationResult::Fail {
                         reason: format!(
                             "rework budget exceeded for phase {} ({} reworks): {}",
-                            phase_id,
+                            rework_target,
                             rework_count,
                             if decision.reason.is_empty() {
                                 "agent requested rework"
@@ -423,6 +463,7 @@ impl WorkflowLifecycleExecutor {
                     } else {
                         decision.reason.clone()
                     },
+                    target_phase: decision.target_phase.clone(),
                 };
             }
             PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Skip => {
@@ -440,6 +481,7 @@ impl WorkflowLifecycleExecutor {
                                 "low confidence ({:.2}) with high risk — requesting rework",
                                 decision.confidence
                             ),
+                            target_phase: None,
                         };
                     }
                 }
@@ -456,6 +498,7 @@ impl WorkflowLifecycleExecutor {
                                 "guardrail violations: {}",
                                 decision.guardrail_violations.join("; ")
                             ),
+                            target_phase: None,
                         };
                     }
                 }

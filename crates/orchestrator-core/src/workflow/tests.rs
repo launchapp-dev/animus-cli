@@ -1,8 +1,9 @@
 use super::*;
 use crate::types::{
-    CheckpointReason, OrchestratorWorkflow, WorkflowCheckpointMetadata, WorkflowDecisionRecord,
-    WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
-    WorkflowRunInput, WorkflowStatus,
+    CheckpointReason, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict,
+    WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord,
+    WorkflowDecisionRisk, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
+    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
 };
 use chrono::Utc;
 
@@ -406,4 +407,175 @@ fn lifecycle_resolves_merge_conflict_and_clears_failure_reason() {
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
     assert!(workflow.failure_reason.is_none());
     assert!(workflow.completed_at.is_some());
+}
+
+fn make_rework_decision(target_phase: Option<String>) -> PhaseDecision {
+    PhaseDecision {
+        kind: "phase_decision".to_string(),
+        phase_id: "code-review".to_string(),
+        verdict: PhaseDecisionVerdict::Rework,
+        confidence: 0.7,
+        risk: WorkflowDecisionRisk::Medium,
+        reason: "needs rework".to_string(),
+        evidence: vec![],
+        guardrail_violations: vec![],
+        commit_message: None,
+        target_phase,
+    }
+}
+
+#[test]
+fn rework_routes_to_prior_phase_by_id() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "code-review".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-rework-target".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-rework".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.current_phase_index, 2);
+
+    let decision = make_rework_decision(Some("implementation".to_string()));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 1);
+    assert_eq!(
+        workflow.current_phase.as_deref(),
+        Some("implementation")
+    );
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+    assert!(workflow.phases[1].attempt >= 2);
+
+    let last_decision = workflow.decision_history.last().unwrap();
+    assert_eq!(last_decision.decision, WorkflowDecisionAction::Rework);
+    assert_eq!(
+        last_decision.target_phase.as_deref(),
+        Some("implementation")
+    );
+    assert_eq!(*workflow.rework_counts.get("implementation").unwrap(), 1);
+}
+
+#[test]
+fn rework_without_target_reruns_current_phase() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "implementation".to_string(),
+        "code-review".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-rework-current".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-rework-current".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.current_phase_index, 1);
+    let attempt_before = workflow.phases[1].attempt;
+
+    let decision = make_rework_decision(None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 1);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+    assert_eq!(workflow.phases[1].attempt, attempt_before + 1);
+
+    let last_decision = workflow.decision_history.last().unwrap();
+    assert_eq!(last_decision.decision, WorkflowDecisionAction::Rework);
+    assert_eq!(
+        last_decision.target_phase.as_deref(),
+        Some("code-review")
+    );
+}
+
+#[test]
+fn advance_to_specific_target_phase_by_id() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "testing".to_string(),
+        "code-review".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-advance-target".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-advance-target".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
+
+    let decision = PhaseDecision {
+        kind: "phase_decision".to_string(),
+        phase_id: "requirements".to_string(),
+        verdict: PhaseDecisionVerdict::Advance,
+        confidence: 0.95,
+        risk: WorkflowDecisionRisk::Low,
+        reason: "skip implementation, go to testing".to_string(),
+        evidence: vec![],
+        guardrail_violations: vec![],
+        commit_message: None,
+        target_phase: Some("testing".to_string()),
+    };
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 2);
+    assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
+    assert_eq!(workflow.phases[2].status, WorkflowPhaseStatus::Running);
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Pending
+    );
+
+    let last_decision = workflow.decision_history.last().unwrap();
+    assert_eq!(last_decision.decision, WorkflowDecisionAction::Advance);
+    assert_eq!(last_decision.target_phase.as_deref(), Some("testing"));
+}
+
+#[test]
+fn rework_with_nonexistent_target_falls_back_to_current_phase() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "implementation".to_string(),
+        "code-review".to_string(),
+    ]);
+    let mut workflow = executor.bootstrap(
+        "WF-rework-bad-target".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-rework-bad".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.current_phase_index, 1);
+
+    let decision = make_rework_decision(Some("nonexistent-phase".to_string()));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 1);
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
 }
