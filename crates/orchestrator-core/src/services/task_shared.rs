@@ -1,14 +1,20 @@
 use super::*;
 use std::collections::HashSet;
 
-pub(super) fn next_task_id(tasks: &HashMap<String, OrchestratorTask>) -> String {
-    let next_seq = tasks
-        .keys()
-        .filter_map(|task_id| task_id.strip_prefix("TASK-"))
+pub(crate) fn next_sequential_id<'a>(
+    keys: impl Iterator<Item = &'a String>,
+    prefix: &str,
+) -> String {
+    let next_seq = keys
+        .filter_map(|id| id.strip_prefix(prefix))
         .filter_map(|seq| seq.parse::<u32>().ok())
         .max()
         .map_or(1, |max_seq| max_seq.saturating_add(1));
-    format!("TASK-{next_seq:03}")
+    format!("{prefix}{next_seq:03}")
+}
+
+pub(super) fn next_task_id(tasks: &HashMap<String, OrchestratorTask>) -> String {
+    next_sequential_id(tasks.keys(), "TASK-")
 }
 
 pub(super) fn validate_task_status_transition(

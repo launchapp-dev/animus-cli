@@ -102,11 +102,13 @@ fn normalize_requirement_range(mut range: RequirementRange) -> RequirementRange 
 }
 
 fn defaults_for_tier(tier: ComplexityTier) -> (RequirementRange, TaskDensity) {
-    match tier {
-        ComplexityTier::Simple => (RequirementRange { min: 4, max: 8 }, TaskDensity::Low),
-        ComplexityTier::Medium => (RequirementRange { min: 8, max: 14 }, TaskDensity::Medium),
-        ComplexityTier::Complex => (RequirementRange { min: 14, max: 30 }, TaskDensity::High),
-    }
+    let (min, max) = tier.requirement_range_defaults();
+    let density = match tier {
+        ComplexityTier::Simple => TaskDensity::Low,
+        ComplexityTier::Medium => TaskDensity::Medium,
+        ComplexityTier::Complex => TaskDensity::High,
+    };
+    (RequirementRange { min, max }, density)
 }
 
 fn clamp_requirement_range_for_tier(

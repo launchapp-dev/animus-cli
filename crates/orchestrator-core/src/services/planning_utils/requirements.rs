@@ -242,11 +242,7 @@ fn requirements_from_constraints(
         unique_constraints.push(constraint.trim().to_string());
     }
 
-    let dedicated_limit = match assessment.tier {
-        crate::types::ComplexityTier::Simple => 2,
-        crate::types::ComplexityTier::Medium => 3,
-        crate::types::ComplexityTier::Complex => usize::MAX,
-    };
+    let dedicated_limit = assessment.tier.dedicated_requirement_limit();
 
     let mut requirements = Vec::new();
     let mut remaining = Vec::new();

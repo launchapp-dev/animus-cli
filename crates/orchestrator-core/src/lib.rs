@@ -59,9 +59,10 @@ pub use state_machines::{
     StateMachinesDocument,
 };
 pub use types::{
-    AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,
-    ArchitectureEntity, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
-    CodebaseInsight, Complexity, ComplexityAssessment, ComplexityTier, DaemonHealth, DaemonStatus,
+    is_frontend_related_content, AgentHandoffRequestInput, AgentHandoffResult,
+    AgentHandoffStatus, ArchitectureEdge, ArchitectureEntity, ArchitectureGraph, Assignee,
+    ChecklistItem, CheckpointReason, CodebaseInsight, Complexity, ComplexityAssessment,
+    ComplexityTier, DaemonHealth, DaemonStatus,
     DependencyType, HandoffTargetRole, ImpactArea, LogEntry, LogLevel, OrchestratorProject,
     OrchestratorTask, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, PhaseEvidence,
     PhaseEvidenceKind, Priority, ProjectConcurrencyLimits, ProjectConfig, ProjectCreateInput,

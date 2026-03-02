@@ -296,6 +296,40 @@ pub enum ComplexityTier {
     Complex,
 }
 
+impl ComplexityTier {
+    pub const fn task_count_range(self) -> (usize, usize) {
+        match self {
+            Self::Simple => (1, 2),
+            Self::Medium => (2, 4),
+            Self::Complex => (3, 6),
+        }
+    }
+
+    pub const fn requirement_range_defaults(self) -> (usize, usize) {
+        match self {
+            Self::Simple => (4, 8),
+            Self::Medium => (8, 14),
+            Self::Complex => (14, 30),
+        }
+    }
+
+    pub const fn dedicated_requirement_limit(self) -> usize {
+        match self {
+            Self::Simple => 2,
+            Self::Medium => 3,
+            Self::Complex => usize::MAX,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Medium => "medium",
+            Self::Complex => "complex",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskDensity {
@@ -1076,6 +1110,61 @@ pub struct OrchestratorTask {
     pub resource_requirements: ResourceRequirements,
 }
 
+const FRONTEND_TAGS: &[&str] = &[
+    "frontend",
+    "ui",
+    "ux",
+    "design",
+    "react",
+    "web",
+    "landing-page",
+    "design-system",
+    "nextjs",
+];
+
+const FRONTEND_TOKENS: &[&str] = &[
+    "frontend",
+    "ui",
+    "ux",
+    "react",
+    "tailwind",
+    "css",
+    "component",
+    "storybook",
+    "wireframe",
+    "mockup",
+    "nextjs",
+];
+
+const FRONTEND_PHRASES: &[&str] = &[
+    "user interface",
+    "user experience",
+    "design system",
+    "landing page",
+];
+
+pub fn is_frontend_related_content(tags: &[String], text: &str) -> bool {
+    if tags.iter().any(|tag| {
+        let t = tag.trim().to_ascii_lowercase();
+        FRONTEND_TAGS.contains(&t.as_str())
+    }) {
+        return true;
+    }
+
+    let haystack = text.to_ascii_lowercase();
+    let tokenized: String = haystack
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect();
+    let tokens: std::collections::HashSet<&str> = tokenized.split_whitespace().collect();
+
+    if FRONTEND_TOKENS.iter().any(|needle| tokens.contains(needle)) {
+        return true;
+    }
+
+    FRONTEND_PHRASES.iter().any(|needle| haystack.contains(needle))
+}
+
 impl OrchestratorTask {
     pub fn is_frontend_related(&self) -> bool {
         if self.workflow_metadata.requires_design {
@@ -1090,53 +1179,8 @@ impl OrchestratorTask {
             return true;
         }
 
-        if self.tags.iter().any(|tag| {
-            matches!(
-                tag.trim().to_ascii_lowercase().as_str(),
-                "frontend"
-                    | "ui"
-                    | "ux"
-                    | "design"
-                    | "react"
-                    | "web"
-                    | "landing-page"
-                    | "design-system"
-            )
-        }) {
-            return true;
-        }
-
-        let haystack = format!("{} {}", self.title, self.description).to_ascii_lowercase();
-        let tokenized: String = haystack
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
-            .collect();
-        let tokens: std::collections::HashSet<&str> = tokenized.split_whitespace().collect();
-
-        if [
-            "frontend",
-            "ui",
-            "ux",
-            "react",
-            "tailwind",
-            "css",
-            "component",
-            "storybook",
-        ]
-        .iter()
-        .any(|needle| tokens.contains(*needle))
-        {
-            return true;
-        }
-
-        [
-            "user interface",
-            "user experience",
-            "design system",
-            "landing page",
-        ]
-        .iter()
-        .any(|needle| haystack.contains(needle))
+        let text = format!("{} {}", self.title, self.description);
+        is_frontend_related_content(&self.tags, &text)
     }
 }
 

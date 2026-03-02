@@ -9,13 +9,7 @@ pub(super) use requirements::{
 };
 
 pub(super) fn next_requirement_id(requirements: &HashMap<String, RequirementItem>) -> String {
-    let next_seq = requirements
-        .keys()
-        .filter_map(|req_id| req_id.strip_prefix("REQ-"))
-        .filter_map(|seq| seq.parse::<u32>().ok())
-        .max()
-        .map_or(1, |max_seq| max_seq.saturating_add(1));
-    format!("REQ-{next_seq:03}")
+    crate::services::task_shared::next_sequential_id(requirements.keys(), "REQ-")
 }
 
 pub(super) fn default_vision_project_name(project_root: &Path) -> String {
@@ -78,11 +72,7 @@ pub(super) fn build_vision_markdown(
 
     let complexity_block = complexity_assessment
         .map(|assessment| {
-            let tier = match assessment.tier {
-                ComplexityTier::Simple => "simple",
-                ComplexityTier::Medium => "medium",
-                ComplexityTier::Complex => "complex",
-            };
+            let tier = assessment.tier.as_str();
             let task_density = match assessment.task_density {
                 TaskDensity::Low => "low",
                 TaskDensity::Medium => "medium",

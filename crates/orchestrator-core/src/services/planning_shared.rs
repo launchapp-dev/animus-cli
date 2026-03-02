@@ -238,59 +238,13 @@ pub(super) fn refine_requirements_and_record(
 }
 
 fn requirement_is_frontend_related(requirement: &RequirementItem) -> bool {
-    if requirement.tags.iter().any(|tag| {
-        matches!(
-            tag.trim().to_ascii_lowercase().as_str(),
-            "frontend"
-                | "ui"
-                | "ux"
-                | "design"
-                | "react"
-                | "web"
-                | "design-system"
-                | "landing-page"
-        )
-    }) {
-        return true;
-    }
-
-    let haystack = format!(
+    let text = format!(
         "{} {} {}",
         requirement.title,
         requirement.description,
         requirement.acceptance_criteria.join(" ")
-    )
-    .to_ascii_lowercase();
-    let tokenized: String = haystack
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
-        .collect();
-    let tokens: std::collections::HashSet<&str> = tokenized.split_whitespace().collect();
-
-    if [
-        "frontend",
-        "ui",
-        "ux",
-        "wireframe",
-        "mockup",
-        "react",
-        "css",
-        "component",
-    ]
-    .iter()
-    .any(|needle| tokens.contains(*needle))
-    {
-        return true;
-    }
-
-    [
-        "user interface",
-        "user experience",
-        "design system",
-        "landing page",
-    ]
-    .iter()
-    .any(|needle| haystack.contains(needle))
+    );
+    crate::types::is_frontend_related_content(&requirement.tags, &text)
 }
 
 fn requirement_needs_research(requirement: &RequirementItem) -> bool {
@@ -415,11 +369,7 @@ fn build_requirement_task_specs(
         .filter(|criterion| !criterion.is_empty())
         .collect::<Vec<_>>();
 
-    let (min_tasks, max_tasks) = match assessment.tier {
-        ComplexityTier::Simple => (1usize, 2usize),
-        ComplexityTier::Medium => (2usize, 4usize),
-        ComplexityTier::Complex => (3usize, 6usize),
-    };
+    let (min_tasks, max_tasks) = assessment.tier.task_count_range();
     if actionable_criteria.len() <= 1 && min_tasks <= 1 {
         let description = build_detailed_description(&requirement.title, &[]);
         return vec![(requirement.title.clone(), description)];
