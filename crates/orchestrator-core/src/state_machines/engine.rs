@@ -620,4 +620,472 @@ mod tests {
         assert_eq!(outcome.to, RequirementStatus::PoReview);
         assert_eq!(outcome.guard_passed, Some(false));
     }
+
+    fn builtin_workflow() -> CompiledWorkflowMachine {
+        compile_state_machines_document(
+            builtin_state_machines_document(),
+            MachineSource::Builtin,
+        )
+        .expect("compile should succeed")
+        .workflow
+    }
+
+    #[test]
+    fn no_transition_idle_phase_succeeded() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::Idle,
+            WorkflowMachineEvent::PhaseSucceeded,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn no_transition_run_phase_start() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::RunPhase,
+            WorkflowMachineEvent::Start,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn no_transition_completed_phase_started() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::Completed,
+            WorkflowMachineEvent::PhaseStarted,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn no_transition_failed_gates_passed() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::Failed,
+            WorkflowMachineEvent::GatesPassed,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn no_transition_cancelled_start() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::Cancelled,
+            WorkflowMachineEvent::Start,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn no_transition_paused_phase_succeeded() {
+        let wf = builtin_workflow();
+        let result = wf.apply(
+            WorkflowMachineState::Paused,
+            WorkflowMachineEvent::PhaseSucceeded,
+            |_| true,
+        );
+        assert!(matches!(
+            result,
+            Err(TransitionError::NoTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn valid_idle_start() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::Idle,
+                WorkflowMachineEvent::Start,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::EvaluateTransition);
+    }
+
+    #[test]
+    fn valid_evaluate_transition_phase_started() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::EvaluateTransition,
+                WorkflowMachineEvent::PhaseStarted,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::RunPhase);
+    }
+
+    #[test]
+    fn valid_run_phase_phase_succeeded() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::RunPhase,
+                WorkflowMachineEvent::PhaseSucceeded,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::EvaluateGates);
+    }
+
+    #[test]
+    fn valid_evaluate_gates_gates_passed() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::EvaluateGates,
+                WorkflowMachineEvent::GatesPassed,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::ApplyTransition);
+    }
+
+    #[test]
+    fn valid_apply_transition_no_more_phases() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::ApplyTransition,
+                WorkflowMachineEvent::NoMorePhases,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Completed);
+    }
+
+    #[test]
+    fn valid_run_phase_phase_failed() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::RunPhase,
+                WorkflowMachineEvent::PhaseFailed,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::EvaluateGates);
+    }
+
+    #[test]
+    fn valid_run_phase_phase_skipped() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::RunPhase,
+                WorkflowMachineEvent::PhaseSkipped,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::EvaluateTransition);
+    }
+
+    #[test]
+    fn valid_pause_from_idle() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::Idle,
+                WorkflowMachineEvent::PauseRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Paused);
+    }
+
+    #[test]
+    fn valid_pause_from_run_phase() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::RunPhase,
+                WorkflowMachineEvent::PauseRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Paused);
+    }
+
+    #[test]
+    fn valid_pause_from_evaluate_gates() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::EvaluateGates,
+                WorkflowMachineEvent::PauseRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Paused);
+    }
+
+    #[test]
+    fn valid_cancel_from_idle() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::Idle,
+                WorkflowMachineEvent::CancelRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Cancelled);
+    }
+
+    #[test]
+    fn valid_cancel_from_run_phase() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::RunPhase,
+                WorkflowMachineEvent::CancelRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Cancelled);
+    }
+
+    #[test]
+    fn valid_cancel_from_paused() {
+        let wf = builtin_workflow();
+        let outcome = wf
+            .apply(
+                WorkflowMachineState::Paused,
+                WorkflowMachineEvent::CancelRequested,
+                |_| true,
+            )
+            .expect("should transition");
+        assert_eq!(outcome.to, WorkflowMachineState::Cancelled);
+    }
+
+    #[test]
+    fn guard_blocked_returns_error() {
+        let mut doc = builtin_state_machines_document();
+        doc.workflow.transitions.retain(|t| {
+            !(t.from == WorkflowMachineState::Idle && t.event == WorkflowMachineEvent::Start)
+        });
+        doc.workflow.transitions.insert(
+            0,
+            WorkflowTransitionDefinition {
+                from: WorkflowMachineState::Idle,
+                event: WorkflowMachineEvent::Start,
+                to: WorkflowMachineState::EvaluateTransition,
+                guard: Some("rework_budget_available".to_string()),
+                action: None,
+            },
+        );
+
+        let compiled = compile_state_machines_document(doc, MachineSource::Builtin)
+            .expect("compile should succeed");
+
+        let result = compiled.workflow.apply(
+            WorkflowMachineState::Idle,
+            WorkflowMachineEvent::Start,
+            |_| false,
+        );
+
+        match result {
+            Err(TransitionError::GuardBlocked { from, event, guard }) => {
+                assert_eq!(from, WorkflowMachineState::Idle);
+                assert_eq!(event, WorkflowMachineEvent::Start);
+                assert_eq!(guard, "rework_budget_available");
+            }
+            other => panic!("expected GuardBlocked, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn guard_blocked_falls_through_to_unguarded() {
+        let mut doc = builtin_state_machines_document();
+        doc.workflow.transitions.insert(
+            0,
+            WorkflowTransitionDefinition {
+                from: WorkflowMachineState::Idle,
+                event: WorkflowMachineEvent::Start,
+                to: WorkflowMachineState::Failed,
+                guard: Some("rework_budget_available".to_string()),
+                action: None,
+            },
+        );
+
+        let compiled = compile_state_machines_document(doc, MachineSource::Builtin)
+            .expect("compile should succeed");
+
+        let outcome = compiled
+            .workflow
+            .apply(
+                WorkflowMachineState::Idle,
+                WorkflowMachineEvent::Start,
+                |_| false,
+            )
+            .expect("should fall through to unguarded transition");
+
+        assert_eq!(outcome.to, WorkflowMachineState::EvaluateTransition);
+    }
+
+    #[test]
+    fn full_lifecycle_happy_path() {
+        let wf = builtin_workflow();
+        let mut state = WorkflowMachineState::Idle;
+
+        let steps: &[(WorkflowMachineEvent, WorkflowMachineState)] = &[
+            (
+                WorkflowMachineEvent::Start,
+                WorkflowMachineState::EvaluateTransition,
+            ),
+            (
+                WorkflowMachineEvent::PhaseStarted,
+                WorkflowMachineState::RunPhase,
+            ),
+            (
+                WorkflowMachineEvent::PhaseSucceeded,
+                WorkflowMachineState::EvaluateGates,
+            ),
+            (
+                WorkflowMachineEvent::GatesPassed,
+                WorkflowMachineState::ApplyTransition,
+            ),
+            (
+                WorkflowMachineEvent::NoMorePhases,
+                WorkflowMachineState::Completed,
+            ),
+        ];
+
+        for (event, expected) in steps {
+            let outcome = wf
+                .apply(state, *event, |_| true)
+                .unwrap_or_else(|e| panic!("step {:?} from {:?} failed: {}", event, state, e));
+            assert_eq!(
+                outcome.to, *expected,
+                "from {:?} on {:?}: expected {:?}, got {:?}",
+                state, event, expected, outcome.to
+            );
+            state = outcome.to;
+        }
+
+        assert_eq!(state, WorkflowMachineState::Completed);
+    }
+
+    #[test]
+    fn full_lifecycle_with_rework() {
+        let wf = builtin_workflow();
+        let mut state = WorkflowMachineState::Idle;
+
+        let steps: &[(WorkflowMachineEvent, WorkflowMachineState)] = &[
+            (
+                WorkflowMachineEvent::Start,
+                WorkflowMachineState::EvaluateTransition,
+            ),
+            (
+                WorkflowMachineEvent::PhaseStarted,
+                WorkflowMachineState::RunPhase,
+            ),
+            (
+                WorkflowMachineEvent::PhaseSucceeded,
+                WorkflowMachineState::EvaluateGates,
+            ),
+            (
+                WorkflowMachineEvent::GatesFailed,
+                WorkflowMachineState::ApplyTransition,
+            ),
+            (
+                WorkflowMachineEvent::RetryPhaseStarted,
+                WorkflowMachineState::RunPhase,
+            ),
+            (
+                WorkflowMachineEvent::PhaseSucceeded,
+                WorkflowMachineState::EvaluateGates,
+            ),
+            (
+                WorkflowMachineEvent::GatesPassed,
+                WorkflowMachineState::ApplyTransition,
+            ),
+            (
+                WorkflowMachineEvent::NoMorePhases,
+                WorkflowMachineState::Completed,
+            ),
+        ];
+
+        for (event, expected) in steps {
+            let outcome = wf
+                .apply(state, *event, |_| true)
+                .unwrap_or_else(|e| panic!("step {:?} from {:?} failed: {}", event, state, e));
+            assert_eq!(
+                outcome.to, *expected,
+                "from {:?} on {:?}: expected {:?}, got {:?}",
+                state, event, expected, outcome.to
+            );
+            state = outcome.to;
+        }
+
+        assert_eq!(state, WorkflowMachineState::Completed);
+    }
+
+    #[test]
+    fn state_unchanged_on_no_transition_error() {
+        let wf = builtin_workflow();
+        let state_before = WorkflowMachineState::Idle;
+        let result = wf.apply(
+            state_before,
+            WorkflowMachineEvent::PhaseSucceeded,
+            |_| true,
+        );
+        assert!(result.is_err());
+        assert_eq!(state_before, WorkflowMachineState::Idle);
+    }
+
+    #[test]
+    fn state_unchanged_on_guard_blocked_error() {
+        let mut doc = builtin_state_machines_document();
+        doc.workflow.transitions.retain(|t| {
+            !(t.from == WorkflowMachineState::Idle && t.event == WorkflowMachineEvent::Start)
+        });
+        doc.workflow.transitions.insert(
+            0,
+            WorkflowTransitionDefinition {
+                from: WorkflowMachineState::Idle,
+                event: WorkflowMachineEvent::Start,
+                to: WorkflowMachineState::EvaluateTransition,
+                guard: Some("rework_budget_available".to_string()),
+                action: None,
+            },
+        );
+
+        let compiled = compile_state_machines_document(doc, MachineSource::Builtin)
+            .expect("compile should succeed");
+
+        let state_before = WorkflowMachineState::Idle;
+        let result = compiled.workflow.apply(
+            state_before,
+            WorkflowMachineEvent::Start,
+            |_| false,
+        );
+        assert!(result.is_err());
+        assert_eq!(state_before, WorkflowMachineState::Idle);
+    }
 }
