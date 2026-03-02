@@ -414,6 +414,39 @@ pub(super) async fn handle_daemon_run(
             )?;
         }
 
+        match orchestrator_core::compile_and_write_yaml_workflows(std::path::Path::new(project_root))
+        {
+            Ok(Some(result)) => {
+                let source_count = result.source_files.len();
+                emit_daemon_event_with_notifications(
+                    &mut seq,
+                    "yaml-compile",
+                    Some(primary_root.clone()),
+                    serde_json::json!({
+                        "compiled": true,
+                        "source_files": source_count,
+                        "output_path": result.output_path.display().to_string(),
+                    }),
+                    json,
+                    notification_runtime.as_mut(),
+                )?;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                emit_daemon_event_with_notifications(
+                    &mut seq,
+                    "yaml-compile",
+                    Some(primary_root.clone()),
+                    serde_json::json!({
+                        "compiled": false,
+                        "error": error.to_string(),
+                    }),
+                    json,
+                    notification_runtime.as_mut(),
+                )?;
+            }
+        }
+
         let interval = Duration::from_secs(args.interval_secs.max(1));
         let mut completion_wake_rx = subscribe_phase_completion_wake();
         loop {

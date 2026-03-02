@@ -95,6 +95,8 @@ pub(crate) enum WorkflowConfigCommand {
     Validate,
     /// Migrate legacy workflow config to v2.
     MigrateV2,
+    /// Compile YAML workflow files into workflow-config.v2.json.
+    Compile,
 }
 
 #[derive(Debug, Subcommand)]

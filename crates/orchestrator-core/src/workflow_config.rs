@@ -1,13 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::agent_runtime_config::AgentRuntimeConfig;
 
@@ -727,6 +725,257 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
     }
 }
 
+pub const YAML_WORKFLOWS_DIR: &str = "workflows";
+
+#[derive(Debug, Clone, Deserialize)]
+struct YamlPhaseRichConfig {
+    #[serde(default)]
+    skip_if: Vec<String>,
+    #[serde(default)]
+    on_verdict: HashMap<String, PhaseTransitionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum YamlPhaseEntry {
+    Simple(String),
+    Rich(HashMap<String, YamlPhaseRichConfig>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct YamlPipelineDefinition {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    phases: Vec<YamlPhaseEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct YamlWorkflowFile {
+    #[serde(default)]
+    default_pipeline_id: Option<String>,
+    #[serde(default)]
+    phase_catalog: Option<BTreeMap<String, PhaseUiDefinition>>,
+    #[serde(default)]
+    pipelines: Vec<YamlPipelineDefinition>,
+}
+
+fn yaml_phase_entry_to_pipeline_phase_entry(entry: YamlPhaseEntry) -> Result<PipelinePhaseEntry> {
+    match entry {
+        YamlPhaseEntry::Simple(id) => Ok(PipelinePhaseEntry::Simple(id)),
+        YamlPhaseEntry::Rich(map) => {
+            if map.len() != 1 {
+                return Err(anyhow!(
+                    "rich phase entry must have exactly one key (the phase id), got {}",
+                    map.len()
+                ));
+            }
+            let (id, config) = map.into_iter().next().unwrap();
+            Ok(PipelinePhaseEntry::Rich(PipelinePhaseConfig {
+                id,
+                on_verdict: config.on_verdict,
+                skip_if: config.skip_if,
+            }))
+        }
+    }
+}
+
+fn yaml_pipeline_to_pipeline_definition(
+    yaml: YamlPipelineDefinition,
+) -> Result<PipelineDefinition> {
+    let phases = yaml
+        .phases
+        .into_iter()
+        .map(yaml_phase_entry_to_pipeline_phase_entry)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(PipelineDefinition {
+        id: yaml.id.clone(),
+        name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
+        description: yaml.description.unwrap_or_default(),
+        phases,
+    })
+}
+
+pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
+    let yaml_file: YamlWorkflowFile =
+        serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
+
+    let pipelines = yaml_file
+        .pipelines
+        .into_iter()
+        .map(yaml_pipeline_to_pipeline_definition)
+        .collect::<Result<Vec<_>>>()?;
+
+    let base = builtin_workflow_config();
+
+    let default_pipeline_id = yaml_file
+        .default_pipeline_id
+        .unwrap_or(base.default_pipeline_id);
+    let phase_catalog = yaml_file.phase_catalog.unwrap_or(base.phase_catalog);
+
+    Ok(WorkflowConfig {
+        schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
+        version: WORKFLOW_CONFIG_VERSION,
+        default_pipeline_id,
+        phase_catalog,
+        pipelines: if pipelines.is_empty() {
+            base.pipelines
+        } else {
+            pipelines
+        },
+        checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
+    })
+}
+
+pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".ao").join(YAML_WORKFLOWS_DIR)
+}
+
+pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<WorkflowConfig>> {
+    let workflows_dir = yaml_workflows_dir(project_root);
+    let single_file = project_root.join(".ao").join("workflows.yaml");
+
+    let mut yaml_sources: Vec<(PathBuf, String)> = Vec::new();
+
+    if single_file.exists() {
+        let content = fs::read_to_string(&single_file)
+            .with_context(|| format!("failed to read {}", single_file.display()))?;
+        yaml_sources.push((single_file, content));
+    }
+
+    if workflows_dir.is_dir() {
+        let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
+            .with_context(|| format!("failed to read directory {}", workflows_dir.display()))?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "yaml" || ext == "yml")
+                    .unwrap_or(false)
+            })
+            .collect();
+        entries.sort_by_key(|e| e.path());
+
+        for entry in entries {
+            let path = entry.path();
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            yaml_sources.push((path, content));
+        }
+    }
+
+    if yaml_sources.is_empty() {
+        return Ok(None);
+    }
+
+    let mut merged_config: Option<WorkflowConfig> = None;
+    for (path, content) in &yaml_sources {
+        let parsed = parse_yaml_workflow_config(content)
+            .with_context(|| format!("error in YAML file {}", path.display()))?;
+        merged_config = Some(match merged_config {
+            None => parsed,
+            Some(base) => merge_yaml_into_config(base, parsed),
+        });
+    }
+
+    Ok(merged_config)
+}
+
+pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> WorkflowConfig {
+    let mut pipelines = base.pipelines;
+
+    for yaml_pipeline in yaml.pipelines {
+        if let Some(pos) = pipelines
+            .iter()
+            .position(|p| p.id.eq_ignore_ascii_case(&yaml_pipeline.id))
+        {
+            pipelines[pos] = yaml_pipeline;
+        } else {
+            pipelines.push(yaml_pipeline);
+        }
+    }
+
+    let mut phase_catalog = base.phase_catalog;
+    for (key, value) in yaml.phase_catalog {
+        phase_catalog.insert(key, value);
+    }
+
+    let default_pipeline_id = if yaml.default_pipeline_id != base.default_pipeline_id
+        && !yaml.default_pipeline_id.is_empty()
+    {
+        yaml.default_pipeline_id
+    } else {
+        base.default_pipeline_id
+    };
+
+    WorkflowConfig {
+        schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
+        version: WORKFLOW_CONFIG_VERSION,
+        default_pipeline_id,
+        phase_catalog,
+        pipelines,
+        checkpoint_retention: base.checkpoint_retention,
+    }
+}
+
+pub struct CompileYamlResult {
+    pub config: WorkflowConfig,
+    pub source_files: Vec<PathBuf>,
+    pub output_path: PathBuf,
+}
+
+pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<CompileYamlResult>> {
+    let workflows_dir = yaml_workflows_dir(project_root);
+    let single_file = project_root.join(".ao").join("workflows.yaml");
+
+    let mut source_files: Vec<PathBuf> = Vec::new();
+    if single_file.exists() {
+        source_files.push(single_file);
+    }
+    if workflows_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&workflows_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .map(|ext| ext == "yaml" || ext == "yml")
+                    .unwrap_or(false)
+                {
+                    source_files.push(path);
+                }
+            }
+        }
+    }
+    source_files.sort();
+
+    if source_files.is_empty() {
+        return Ok(None);
+    }
+
+    let existing_config = load_workflow_config(project_root).ok();
+    let yaml_config = compile_yaml_workflow_files(project_root)?
+        .ok_or_else(|| anyhow!("no YAML workflow files found"))?;
+
+    let final_config = match existing_config {
+        Some(base) => merge_yaml_into_config(base, yaml_config),
+        None => yaml_config,
+    };
+
+    validate_workflow_config(&final_config)?;
+    write_workflow_config(project_root, &final_config)?;
+
+    let output_path = workflow_config_path(project_root);
+    Ok(Some(CompileYamlResult {
+        config: final_config,
+        source_files,
+        output_path,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,5 +1169,318 @@ mod tests {
             guards.get("testing").unwrap(),
             &vec!["task_type == 'docs'".to_string()]
         );
+    }
+
+    #[test]
+    fn yaml_parses_simple_pipeline() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard Pipeline
+    description: Default development workflow
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse simple YAML");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("should have standard pipeline");
+        assert_eq!(standard.name, "Standard Pipeline");
+        assert_eq!(standard.phases.len(), 4);
+        assert_eq!(standard.phases[0].phase_id(), "requirements");
+        assert_eq!(standard.phases[1].phase_id(), "implementation");
+        assert_eq!(standard.phases[2].phase_id(), "code-review");
+        assert_eq!(standard.phases[3].phase_id(), "testing");
+    }
+
+    #[test]
+    fn yaml_parses_rich_phase_with_skip_if() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing:
+          skip_if:
+            - "task_type == 'docs'"
+      - code-review
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with skip_if");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("should have standard pipeline");
+        assert_eq!(standard.phases.len(), 4);
+        assert_eq!(standard.phases[2].phase_id(), "testing");
+        assert_eq!(standard.phases[2].skip_if(), &["task_type == 'docs'"]);
+    }
+
+    #[test]
+    fn yaml_parses_rich_phase_with_on_verdict() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - code-review:
+          on_verdict:
+            rework:
+              target: implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with on_verdict");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("should have standard pipeline");
+        assert_eq!(standard.phases[2].phase_id(), "code-review");
+        let verdicts = standard.phases[2]
+            .on_verdict()
+            .expect("should have on_verdict");
+        assert_eq!(verdicts["rework"].target, "implementation");
+    }
+
+    #[test]
+    fn yaml_parses_mixed_simple_and_rich_phases() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing:
+          skip_if:
+            - "task_type == 'docs'"
+      - code-review:
+          on_verdict:
+            rework:
+              target: implementation
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse mixed phases");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("should have standard pipeline");
+        assert_eq!(standard.phases.len(), 4);
+        assert_eq!(standard.phases[0].phase_id(), "requirements");
+        assert!(standard.phases[0].on_verdict().is_none());
+        assert!(standard.phases[0].skip_if().is_empty());
+        assert_eq!(standard.phases[2].phase_id(), "testing");
+        assert_eq!(standard.phases[2].skip_if(), &["task_type == 'docs'"]);
+        assert_eq!(standard.phases[3].phase_id(), "code-review");
+        let verdicts = standard.phases[3]
+            .on_verdict()
+            .expect("should have on_verdict");
+        assert_eq!(verdicts["rework"].target, "implementation");
+    }
+
+    #[test]
+    fn yaml_merge_replaces_pipeline_by_id() {
+        let base = builtin_workflow_config();
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Overridden Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+        let yaml_config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let merged = merge_yaml_into_config(base.clone(), yaml_config);
+        let standard = merged
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+        assert_eq!(standard.name, "Overridden Standard");
+        assert_eq!(standard.phases.len(), 3);
+        assert!(
+            merged.pipelines.iter().any(|p| p.id == "ui-ux-standard"),
+            "non-overridden pipeline should be preserved"
+        );
+    }
+
+    #[test]
+    fn yaml_merge_adds_new_pipeline() {
+        let base = builtin_workflow_config();
+        let base_count = base.pipelines.len();
+        let yaml = r#"
+pipelines:
+  - id: quick-fix
+    name: Quick Fix
+    phases:
+      - implementation
+      - testing
+"#;
+        let yaml_config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let merged = merge_yaml_into_config(base, yaml_config);
+        assert_eq!(merged.pipelines.len(), base_count + 1);
+        assert!(merged.pipelines.iter().any(|p| p.id == "quick-fix"));
+    }
+
+    #[test]
+    fn yaml_missing_files_returns_none() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let result = compile_yaml_workflow_files(temp.path()).expect("should not error");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn yaml_invalid_syntax_returns_error() {
+        let yaml = "pipelines:\n  - id: [invalid";
+        let result = parse_yaml_workflow_config(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("failed to parse YAML"),
+            "error should mention YAML parsing: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn yaml_pipeline_name_defaults_to_id() {
+        let yaml = r#"
+pipelines:
+  - id: quick-fix
+    phases:
+      - implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse");
+        let pipeline = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "quick-fix")
+            .expect("pipeline");
+        assert_eq!(pipeline.name, "quick-fix");
+    }
+
+    #[test]
+    fn yaml_compile_reads_from_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_dir = temp.path().join(".ao").join("state");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let builtin = builtin_workflow_config();
+        crate::domain_state::write_json_pretty(
+            &state_dir.join(WORKFLOW_CONFIG_FILE_NAME),
+            &builtin,
+        )
+        .expect("write base config");
+
+        let workflows_dir = temp.path().join(".ao").join("workflows");
+        fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        fs::write(
+            workflows_dir.join("pipelines.yaml"),
+            r#"
+pipelines:
+  - id: standard
+    name: YAML Standard
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#,
+        )
+        .expect("write yaml");
+
+        let result =
+            compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+        let config = result.expect("should have config");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+        assert_eq!(standard.name, "YAML Standard");
+    }
+
+    #[test]
+    fn yaml_compile_reads_single_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ao_dir = temp.path().join(".ao");
+        fs::create_dir_all(&ao_dir).expect("create .ao dir");
+        fs::write(
+            ao_dir.join("workflows.yaml"),
+            r#"
+pipelines:
+  - id: standard
+    name: Single File Standard
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#,
+        )
+        .expect("write yaml");
+
+        let result =
+            compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+        let config = result.expect("should have config");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+        assert_eq!(standard.name, "Single File Standard");
+    }
+
+    #[test]
+    fn yaml_compile_and_write_validates_and_writes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state_dir = temp.path().join(".ao").join("state");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let builtin = builtin_workflow_config();
+        crate::domain_state::write_json_pretty(
+            &state_dir.join(WORKFLOW_CONFIG_FILE_NAME),
+            &builtin,
+        )
+        .expect("write base config");
+
+        let workflows_dir = temp.path().join(".ao").join("workflows");
+        fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+        fs::write(
+            workflows_dir.join("pipelines.yaml"),
+            r#"
+pipelines:
+  - id: standard
+    name: Compiled Standard
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#,
+        )
+        .expect("write yaml");
+
+        let result =
+            compile_and_write_yaml_workflows(temp.path()).expect("compile and write should succeed");
+        let compile_result = result.expect("should have result");
+        assert_eq!(compile_result.source_files.len(), 1);
+
+        let reloaded = load_workflow_config(temp.path()).expect("reload config");
+        let standard = reloaded
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+        assert_eq!(standard.name, "Compiled Standard");
     }
 }

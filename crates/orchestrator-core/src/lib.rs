@@ -59,10 +59,9 @@ pub use state_machines::{
     StateMachinesDocument,
 };
 pub use types::{
-    is_frontend_related_content, AgentHandoffRequestInput, AgentHandoffResult,
-    AgentHandoffStatus, ArchitectureEdge, ArchitectureEntity, ArchitectureGraph, Assignee,
-    ChecklistItem, CheckpointReason, CodebaseInsight, Complexity, ComplexityAssessment,
-    ComplexityTier, DaemonHealth, DaemonStatus,
+    AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,
+    ArchitectureEntity, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
+    CodebaseInsight, Complexity, ComplexityAssessment, ComplexityTier, DaemonHealth, DaemonStatus,
     DependencyType, HandoffTargetRole, ImpactArea, LogEntry, LogLevel, OrchestratorProject,
     OrchestratorTask, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, PhaseEvidence,
     PhaseEvidenceKind, Priority, ProjectConcurrencyLimits, ProjectConfig, ProjectCreateInput,
@@ -86,15 +85,17 @@ pub use workflow::{
     STANDARD_PIPELINE_ID, UI_UX_PIPELINE_ID,
 };
 pub use workflow_config::{
-    builtin_workflow_config, ensure_workflow_config_file, legacy_workflow_config_paths,
-    load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata,
-    resolve_pipeline_phase_plan, resolve_pipeline_skip_guards, resolve_pipeline_verdict_routing,
+    builtin_workflow_config, compile_and_write_yaml_workflows, compile_yaml_workflow_files,
+    ensure_workflow_config_file, legacy_workflow_config_paths, load_workflow_config,
+    load_workflow_config_or_default, load_workflow_config_with_metadata,
+    merge_yaml_into_config, parse_yaml_workflow_config, resolve_pipeline_phase_plan,
+    resolve_pipeline_skip_guards, resolve_pipeline_verdict_routing,
     validate_workflow_and_runtime_configs, validate_workflow_config, workflow_config_hash,
-    workflow_config_path, write_workflow_config, LoadedWorkflowConfig, PhaseTransitionConfig,
-    PhaseUiDefinition, PipelineDefinition, PipelinePhaseConfig, PipelinePhaseEntry,
-    WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata,
-    WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
-    WORKFLOW_CONFIG_VERSION,
+    workflow_config_path, write_workflow_config, yaml_workflows_dir, CompileYamlResult,
+    LoadedWorkflowConfig, PhaseTransitionConfig, PhaseUiDefinition, PipelineDefinition,
+    PipelinePhaseConfig, PipelinePhaseEntry, WorkflowCheckpointRetentionConfig, WorkflowConfig,
+    WorkflowConfigMetadata, WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME,
+    WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path,

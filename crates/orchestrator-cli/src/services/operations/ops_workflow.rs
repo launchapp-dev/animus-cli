@@ -395,6 +395,29 @@ fn validate_workflow_config_payload(project_root: &str) -> Value {
     }
 }
 
+fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value> {
+    match orchestrator_core::compile_and_write_yaml_workflows(Path::new(project_root))? {
+        Some(result) => {
+            let source_files: Vec<String> = result
+                .source_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            Ok(serde_json::json!({
+                "compiled": true,
+                "source_files": source_files,
+                "output_path": result.output_path.display().to_string(),
+                "pipelines": result.config.pipelines.iter().map(|p| &p.id).collect::<Vec<_>>(),
+                "hash": orchestrator_core::workflow_config_hash(&result.config),
+            }))
+        }
+        None => Ok(serde_json::json!({
+            "compiled": false,
+            "message": "no YAML workflow files found in .ao/workflows/ or .ao/workflows.yaml",
+        })),
+    }
+}
+
 fn title_case_phase_id(phase_id: &str) -> String {
     phase_id
         .split(['-', '_'])
@@ -1105,6 +1128,9 @@ pub(crate) async fn handle_workflow(
                 print_value(validate_workflow_config_payload(project_root), json)
             }
             WorkflowConfigCommand::MigrateV2 => print_value(migrate_v1_to_v2(project_root)?, json),
+            WorkflowConfigCommand::Compile => {
+                print_value(compile_yaml_workflows_payload(project_root)?, json)
+            }
         },
         WorkflowCommand::StateMachine { command } => match command {
             WorkflowStateMachineCommand::Get => {
