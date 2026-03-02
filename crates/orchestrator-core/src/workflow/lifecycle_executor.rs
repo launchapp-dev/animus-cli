@@ -5,10 +5,10 @@ use chrono::Utc;
 use crate::agent_runtime_config::{PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS};
 use crate::state_machines::{builtin_compiled_state_machines, CompiledStateMachines};
 use crate::types::{
-    OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction,
-    WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent,
-    WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
-    WorkflowStatus,
+    OrchestratorTask, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict,
+    WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
+    WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
+    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
 };
 use crate::workflow_config::PhaseTransitionConfig;
 
@@ -30,12 +30,36 @@ pub type VerdictRouting = HashMap<String, HashMap<String, PhaseTransitionConfig>
 use super::phase_plan::{phase_plan_for_pipeline_id, STANDARD_PIPELINE_ID};
 use super::state_machine::WorkflowStateMachine;
 
+pub fn evaluate_skip_guard(guard: &str, task: &OrchestratorTask) -> bool {
+    let guard = guard.trim();
+    if let Some((lhs, rhs)) = guard.split_once("!=") {
+        let field = lhs.trim();
+        let value = rhs.trim().trim_matches('\'').trim_matches('"');
+        match field {
+            "task_type" => task.task_type.as_str() != value,
+            "priority" => task.priority.as_str() != value,
+            _ => false,
+        }
+    } else if let Some((lhs, rhs)) = guard.split_once("==") {
+        let field = lhs.trim();
+        let value = rhs.trim().trim_matches('\'').trim_matches('"');
+        match field {
+            "task_type" => task.task_type.as_str() == value,
+            "priority" => task.priority.as_str() == value,
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkflowLifecycleExecutor {
     phase_plan: Vec<String>,
     state_machines: CompiledStateMachines,
     retry_configs: HashMap<String, PhaseRetryConfig>,
     verdict_routing: VerdictRouting,
+    skip_guards: HashMap<String, Vec<String>>,
 }
 
 impl Default for WorkflowLifecycleExecutor {
@@ -45,6 +69,7 @@ impl Default for WorkflowLifecycleExecutor {
             state_machines: builtin_compiled_state_machines(),
             retry_configs: HashMap::new(),
             verdict_routing: HashMap::new(),
+            skip_guards: HashMap::new(),
         }
     }
 }
@@ -63,6 +88,7 @@ impl WorkflowLifecycleExecutor {
             state_machines: builtin_compiled_state_machines(),
             retry_configs: HashMap::new(),
             verdict_routing,
+            skip_guards: HashMap::new(),
         }
     }
 
@@ -75,11 +101,17 @@ impl WorkflowLifecycleExecutor {
             state_machines,
             retry_configs: HashMap::new(),
             verdict_routing: HashMap::new(),
+            skip_guards: HashMap::new(),
         }
     }
 
     pub fn with_retry_configs(mut self, configs: HashMap<String, PhaseRetryConfig>) -> Self {
         self.retry_configs = configs;
+        self
+    }
+
+    pub fn with_skip_guards(mut self, skip_guards: HashMap<String, Vec<String>>) -> Self {
+        self.skip_guards = skip_guards;
         self
     }
 
@@ -108,6 +140,7 @@ impl WorkflowLifecycleExecutor {
             .and_then(|verdicts| verdicts.get(verdict))
             .map(|config| config.target.clone())
     }
+
 
     fn state_machine(&self, initial: WorkflowMachineState) -> WorkflowStateMachine {
         WorkflowStateMachine::with_definition(initial, self.state_machines.workflow.clone())
@@ -144,6 +177,82 @@ impl WorkflowLifecycleExecutor {
             machine_version,
             machine_hash,
             machine_source,
+        }
+    }
+
+    pub fn skip_guarded_phases(
+        &self,
+        workflow: &mut OrchestratorWorkflow,
+        task: &OrchestratorTask,
+    ) {
+        if !matches!(workflow.status, WorkflowStatus::Running) {
+            return;
+        }
+
+        loop {
+            let phase = match workflow.phases.get(workflow.current_phase_index) {
+                Some(p) => p,
+                None => break,
+            };
+
+            if !matches!(
+                phase.status,
+                WorkflowPhaseStatus::Running | WorkflowPhaseStatus::Pending | WorkflowPhaseStatus::Ready
+            ) {
+                break;
+            }
+
+            let guards = match self.skip_guards.get(&phase.phase_id) {
+                Some(g) if !g.is_empty() => g,
+                _ => break,
+            };
+
+            let matched_guard = guards
+                .iter()
+                .find(|guard| evaluate_skip_guard(guard, task));
+
+            let matched_guard = match matched_guard {
+                Some(g) => g.clone(),
+                None => break,
+            };
+
+            let phase_id = phase.phase_id.clone();
+            let now = Utc::now();
+
+            if let Some(phase) = workflow.phases.get_mut(workflow.current_phase_index) {
+                phase.status = WorkflowPhaseStatus::Skipped;
+                phase.completed_at = Some(now);
+            }
+
+            let next_phase = workflow
+                .phases
+                .get(workflow.current_phase_index + 1)
+                .map(|p| p.phase_id.clone());
+
+            workflow.decision_history.push(self.decision_record(
+                phase_id,
+                WorkflowDecisionAction::Skip,
+                next_phase.clone(),
+                format!("skip_if guard matched: {}", matched_guard),
+                1.0,
+                WorkflowDecisionRisk::Low,
+            ));
+
+            let next_idx = workflow.current_phase_index + 1;
+            if next_idx < workflow.phases.len() {
+                workflow.current_phase_index = next_idx;
+                if let Some(next) = workflow.phases.get_mut(next_idx) {
+                    next.status = WorkflowPhaseStatus::Running;
+                    next.started_at = Some(now);
+                    next.attempt += 1;
+                    workflow.current_phase = Some(next.phase_id.clone());
+                }
+            } else {
+                workflow.status = WorkflowStatus::Completed;
+                workflow.completed_at = Some(now);
+                workflow.current_phase = None;
+                break;
+            }
         }
     }
 

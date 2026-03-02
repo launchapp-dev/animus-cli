@@ -1,11 +1,13 @@
 use super::*;
 use crate::types::{
-    CheckpointReason, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict,
-    WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord,
-    WorkflowDecisionRisk, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
-    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
+    Assignee, CheckpointReason, Complexity, OrchestratorTask, OrchestratorWorkflow, PhaseDecision,
+    PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, TaskMetadata,
+    TaskStatus, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionAction,
+    WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowMachineEvent, WorkflowMachineState,
+    WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
 };
 use chrono::Utc;
+use std::collections::HashMap;
 
 fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
     OrchestratorWorkflow {
@@ -424,6 +426,48 @@ fn make_rework_decision(target_phase: Option<String>) -> PhaseDecision {
     }
 }
 
+fn make_task(task_type: TaskType, priority: Priority) -> OrchestratorTask {
+    OrchestratorTask {
+        id: "TASK-skip".to_string(),
+        title: "Test task".to_string(),
+        description: "Test description".to_string(),
+        task_type,
+        status: TaskStatus::InProgress,
+        blocked_reason: None,
+        blocked_at: None,
+        blocked_phase: None,
+        blocked_by: None,
+        priority,
+        risk: RiskLevel::default(),
+        scope: Scope::default(),
+        complexity: Complexity::default(),
+        impact_area: Vec::new(),
+        assignee: Assignee::default(),
+        estimated_effort: None,
+        linked_requirements: Vec::new(),
+        linked_architecture_entities: Vec::new(),
+        dependencies: Vec::new(),
+        checklist: Vec::new(),
+        tags: Vec::new(),
+        workflow_metadata: crate::types::WorkflowMetadata::default(),
+        worktree_path: None,
+        branch_name: None,
+        metadata: TaskMetadata {
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            created_by: "test".to_string(),
+            updated_by: "test".to_string(),
+            started_at: None,
+            completed_at: None,
+            version: 1,
+        },
+        deadline: None,
+        paused: false,
+        cancelled: false,
+        resource_requirements: ResourceRequirements::default(),
+    }
+}
+
 #[test]
 fn rework_routes_to_prior_phase_by_id() {
     let executor = WorkflowLifecycleExecutor::new(vec![
@@ -636,6 +680,232 @@ fn phase_with_max_attempts_5_allows_more_retries() {
         workflow.status,
         WorkflowStatus::Failed,
         "should fail after exceeding max_attempts=5"
+    );
+}
+
+#[test]
+fn skip_guarded_phase_skips_when_task_type_matches() {
+    let mut guards = HashMap::new();
+    guards.insert(
+        "testing".to_string(),
+        vec!["task_type == 'docs'".to_string()],
+    );
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "testing".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-1".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Docs, Priority::Medium);
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Skipped
+    );
+    assert!(workflow
+        .decision_history
+        .iter()
+        .any(|r| r.decision == crate::types::WorkflowDecisionAction::Skip
+            && r.phase_id == "testing"));
+}
+
+#[test]
+fn skip_guarded_phase_does_not_skip_when_guard_does_not_match() {
+    let mut guards = HashMap::new();
+    guards.insert(
+        "testing".to_string(),
+        vec!["task_type == 'docs'".to_string()],
+    );
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "testing".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-2".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Feature, Priority::High);
+
+    executor.mark_current_phase_success(&mut workflow);
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+}
+
+#[test]
+fn skip_guarded_phase_any_matching_guard_causes_skip() {
+    let mut guards = HashMap::new();
+    guards.insert(
+        "testing".to_string(),
+        vec![
+            "task_type == 'refactor'".to_string(),
+            "priority == 'low'".to_string(),
+        ],
+    );
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "testing".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-3".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Feature, Priority::Low);
+
+    executor.mark_current_phase_success(&mut workflow);
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Skipped
+    );
+}
+
+#[test]
+fn skip_guarded_phase_with_empty_skip_if_runs_normally() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "testing".to_string(),
+    ]);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-4".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Docs, Priority::Medium);
+
+    executor.mark_current_phase_success(&mut workflow);
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+}
+
+#[test]
+fn skip_guard_evaluator_supports_not_equals() {
+    let task = make_task(TaskType::Feature, Priority::High);
+    assert!(lifecycle_executor::evaluate_skip_guard(
+        "task_type != 'docs'",
+        &task
+    ));
+    assert!(!lifecycle_executor::evaluate_skip_guard(
+        "task_type != 'feature'",
+        &task
+    ));
+}
+
+#[test]
+fn skip_guarded_phase_skips_first_phase_on_bootstrap() {
+    let mut guards = HashMap::new();
+    guards.insert(
+        "requirements".to_string(),
+        vec!["task_type == 'chore'".to_string()],
+    );
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "testing".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-boot".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Chore, Priority::Medium);
+
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+    assert_eq!(
+        workflow.phases[0].status,
+        WorkflowPhaseStatus::Skipped
+    );
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Running
+    );
+}
+
+#[test]
+fn skip_guarded_phases_skips_consecutive_phases() {
+    let mut guards = HashMap::new();
+    guards.insert(
+        "testing".to_string(),
+        vec!["task_type == 'docs'".to_string()],
+    );
+    guards.insert(
+        "code-review".to_string(),
+        vec!["task_type == 'docs'".to_string()],
+    );
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "code-review".to_string(),
+        "testing".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-skip-consec".to_string(),
+        WorkflowRunInput {
+            task_id: "TASK-skip".to_string(),
+            pipeline_id: Some("standard".to_string()),
+        },
+    );
+    let task = make_task(TaskType::Docs, Priority::Medium);
+
+    executor.mark_current_phase_success(&mut workflow);
+    executor.skip_guarded_phases(&mut workflow, &task);
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+    assert_eq!(
+        workflow.phases[1].status,
+        WorkflowPhaseStatus::Skipped
+    );
+    assert_eq!(
+        workflow.phases[2].status,
+        WorkflowPhaseStatus::Skipped
     );
 }
 

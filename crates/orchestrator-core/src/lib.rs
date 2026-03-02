@@ -87,7 +87,7 @@ pub use workflow::{
 pub use workflow_config::{
     builtin_workflow_config, ensure_workflow_config_file, legacy_workflow_config_paths,
     load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata,
-    resolve_pipeline_phase_plan, resolve_pipeline_verdict_routing,
+    resolve_pipeline_phase_plan, resolve_pipeline_skip_guards, resolve_pipeline_verdict_routing,
     validate_workflow_and_runtime_configs, validate_workflow_config, workflow_config_hash,
     workflow_config_path, write_workflow_config, LoadedWorkflowConfig, PhaseTransitionConfig,
     PhaseUiDefinition, PipelineDefinition, PipelinePhaseConfig, PipelinePhaseEntry,
