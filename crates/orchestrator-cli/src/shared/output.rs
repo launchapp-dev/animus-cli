@@ -19,6 +19,8 @@ struct CliErrorBody {
     code: String,
     message: String,
     exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +77,7 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
     let code = kind.code();
     let exit_code = kind.exit_code();
     if json {
+        let details = super::extract_cli_error_details(err);
         let envelope = CliErrorEnvelope {
             schema: CLI_SCHEMA,
             ok: false,
@@ -82,6 +85,7 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
                 code: code.to_string(),
                 message: err.to_string(),
                 exit_code,
+                details,
             },
         };
         eprintln!(

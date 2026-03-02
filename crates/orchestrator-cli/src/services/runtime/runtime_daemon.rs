@@ -283,10 +283,35 @@ fn autonomous_startup_failure_error(
         .unwrap_or_else(|| "process was not alive after startup probe completed".to_string());
     let diagnostics = autonomous_startup_log_diagnostics(log_path, startup_log_offset);
 
-    anyhow!(
+    let log_tail = read_autonomous_startup_log_tail(
+        log_path,
+        startup_log_offset,
+        AUTONOMOUS_STARTUP_LOG_TAIL_LINES,
+    )
+    .ok()
+    .flatten();
+
+    let message = format!(
         "autonomous daemon failed startup validation for pid {daemon_pid}: {status_detail}. startup log path: {}.\n{diagnostics}",
         log_path.display()
-    )
+    );
+
+    let mut details = serde_json::json!({
+        "daemon_pid": daemon_pid,
+        "log_path": log_path.display().to_string(),
+    });
+    if let Some(tail) = log_tail {
+        details["startup_log_tail"] = serde_json::Value::String(
+            truncate_from_end(&tail, AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS),
+        );
+    }
+    if let Some(status) = exit_status {
+        details["exit_code"] = serde_json::json!(status.code());
+    }
+
+    crate::CliError::new(crate::CliErrorKind::Internal, message)
+        .with_details(details)
+        .into()
 }
 
 fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
@@ -576,9 +601,31 @@ pub(crate) async fn handle_daemon(
                     ));
                 }
 
+                if !is_process_alive(daemon_pid) {
+                    let _ = set_daemon_pid(project_root, None);
+                    return Err(autonomous_startup_failure_error(
+                        daemon_pid,
+                        None,
+                        daemon_spawn.log_path.as_path(),
+                        daemon_spawn.startup_log_offset,
+                    ));
+                }
+
                 drop(daemon_spawn.child);
                 let _ = set_daemon_pid(project_root, Some(daemon_pid));
                 write_daemon_pid(project_root, daemon_pid);
+
+                if let Ok(Some(recorded_pid)) = get_daemon_pid(project_root) {
+                    if recorded_pid != daemon_pid {
+                        let _ = set_daemon_pid(project_root, None);
+                        return Err(anyhow!(
+                            "autonomous daemon startup validation failed: daemon-state.json recorded pid {} but expected {}",
+                            recorded_pid,
+                            daemon_pid
+                        ));
+                    }
+                }
+
                 let _ = set_runtime_paused(project_root, false);
                 return print_value(
                     serde_json::json!({
@@ -750,6 +797,31 @@ mod tests {
         assert!(message.contains(log_path.to_string_lossy().as_ref()));
         assert!(message.contains("startup log tail"));
         assert!(message.contains("third"));
+    }
+
+    #[test]
+    fn autonomous_startup_failure_error_includes_structured_details() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let log_path = temp.path().join("daemon.log");
+        fs::write(&log_path, "startup line\nerror: crashed\n")
+            .expect("log file should be written");
+
+        let error = autonomous_startup_failure_error(9999, None, log_path.as_path(), 0);
+        let details = crate::extract_cli_error_details(&error)
+            .expect("structured details should be present");
+        assert_eq!(
+            details.get("daemon_pid").and_then(serde_json::Value::as_u64),
+            Some(9999)
+        );
+        assert!(details
+            .get("log_path")
+            .and_then(serde_json::Value::as_str)
+            .is_some());
+        let tail = details
+            .get("startup_log_tail")
+            .and_then(serde_json::Value::as_str)
+            .expect("startup_log_tail should be present");
+        assert!(tail.contains("error: crashed"));
     }
 
     #[cfg(unix)]

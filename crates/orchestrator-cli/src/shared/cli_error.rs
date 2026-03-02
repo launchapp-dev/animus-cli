@@ -35,6 +35,7 @@ impl CliErrorKind {
 pub(crate) struct CliError {
     kind: CliErrorKind,
     message: String,
+    details: Option<serde_json::Value>,
 }
 
 impl CliError {
@@ -42,11 +43,21 @@ impl CliError {
         Self {
             kind,
             message: message.into(),
+            details: None,
         }
+    }
+
+    pub(crate) fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
     }
 
     pub(crate) const fn kind(&self) -> CliErrorKind {
         self.kind
+    }
+
+    pub(crate) fn details(&self) -> Option<&serde_json::Value> {
+        self.details.as_ref()
     }
 }
 
@@ -101,6 +112,15 @@ pub(crate) fn classify_cli_error_kind(err: &anyhow::Error) -> CliErrorKind {
     CliErrorKind::Internal
 }
 
+pub(crate) fn extract_cli_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {
+    for source in err.chain() {
+        if let Some(cli_error) = source.downcast_ref::<CliError>() {
+            return cli_error.details().cloned();
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +166,26 @@ mod tests {
             classify_cli_error_kind(&unavailable),
             CliErrorKind::Unavailable
         );
+    }
+
+    #[test]
+    fn extract_cli_error_details_returns_attached_details() {
+        let err: anyhow::Error = CliError::new(CliErrorKind::Internal, "daemon failed")
+            .with_details(serde_json::json!({"startup_log_tail": "error: panic"}))
+            .into();
+        let details = extract_cli_error_details(&err).expect("details should be present");
+        assert_eq!(
+            details
+                .get("startup_log_tail")
+                .and_then(serde_json::Value::as_str),
+            Some("error: panic")
+        );
+    }
+
+    #[test]
+    fn extract_cli_error_details_returns_none_when_absent() {
+        let err: anyhow::Error =
+            CliError::new(CliErrorKind::Internal, "plain error").into();
+        assert!(extract_cli_error_details(&err).is_none());
     }
 }
