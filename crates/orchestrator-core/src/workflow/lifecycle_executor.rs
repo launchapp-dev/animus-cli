@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 
 use crate::state_machines::{builtin_compiled_state_machines, CompiledStateMachines};
@@ -7,6 +9,7 @@ use crate::types::{
     WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
     WorkflowStatus,
 };
+use crate::workflow_config::PhaseTransitionConfig;
 
 const MAX_PHASE_REWORKS: u32 = 3;
 
@@ -23,6 +26,8 @@ fn find_phase_index(phases: &[WorkflowPhaseExecution], phase_id: &str) -> Option
     phases.iter().position(|p| p.phase_id == phase_id)
 }
 
+pub type VerdictRouting = HashMap<String, HashMap<String, PhaseTransitionConfig>>;
+
 use super::phase_plan::{phase_plan_for_pipeline_id, STANDARD_PIPELINE_ID};
 use super::state_machine::WorkflowStateMachine;
 
@@ -30,6 +35,7 @@ use super::state_machine::WorkflowStateMachine;
 pub struct WorkflowLifecycleExecutor {
     phase_plan: Vec<String>,
     state_machines: CompiledStateMachines,
+    verdict_routing: VerdictRouting,
 }
 
 impl Default for WorkflowLifecycleExecutor {
@@ -37,6 +43,7 @@ impl Default for WorkflowLifecycleExecutor {
         Self {
             phase_plan: phase_plan_for_pipeline_id(Some(STANDARD_PIPELINE_ID)),
             state_machines: builtin_compiled_state_machines(),
+            verdict_routing: HashMap::new(),
         }
     }
 }
@@ -46,6 +53,17 @@ impl WorkflowLifecycleExecutor {
         Self::with_state_machines(phase_plan, builtin_compiled_state_machines())
     }
 
+    pub fn with_verdict_routing(
+        phase_plan: Vec<String>,
+        verdict_routing: VerdictRouting,
+    ) -> Self {
+        Self {
+            phase_plan,
+            state_machines: builtin_compiled_state_machines(),
+            verdict_routing,
+        }
+    }
+
     pub fn with_state_machines(
         phase_plan: Vec<String>,
         state_machines: CompiledStateMachines,
@@ -53,7 +71,19 @@ impl WorkflowLifecycleExecutor {
         Self {
             phase_plan,
             state_machines,
+            verdict_routing: HashMap::new(),
         }
+    }
+
+    fn resolve_verdict_target(
+        &self,
+        current_phase_id: &str,
+        verdict: &str,
+    ) -> Option<String> {
+        self.verdict_routing
+            .get(current_phase_id)
+            .and_then(|verdicts| verdicts.get(verdict))
+            .map(|config| config.target.clone())
     }
 
     fn state_machine(&self, initial: WorkflowMachineState) -> WorkflowStateMachine {
@@ -247,7 +277,9 @@ impl WorkflowLifecycleExecutor {
                     .map(|d| d.guardrail_violations.clone())
                     .unwrap_or_default();
 
-                let target_phase_id = decision.as_ref().and_then(|d| d.target_phase.clone());
+                let config_target = self.resolve_verdict_target(&current_phase_id, "advance");
+                let decision_target = decision.as_ref().and_then(|d| d.target_phase.clone());
+                let target_phase_id = config_target.or(decision_target);
                 let next_idx = match &target_phase_id {
                     Some(id) => find_phase_index(&workflow.phases, id),
                     None => {
@@ -319,7 +351,10 @@ impl WorkflowLifecycleExecutor {
                 machine.apply(WorkflowMachineEvent::GatesFailed);
                 workflow.machine_state = machine.state();
 
-                let rework_target_idx = match &target_phase {
+                let config_rework_target =
+                    self.resolve_verdict_target(&current_phase_id, "rework");
+                let effective_target = config_rework_target.or(target_phase);
+                let rework_target_idx = match &effective_target {
                     Some(id) => find_phase_index(&workflow.phases, id),
                     None => Some(workflow.current_phase_index),
                 };
@@ -355,7 +390,7 @@ impl WorkflowLifecycleExecutor {
                     timestamp: Utc::now(),
                     phase_id: current_phase_id,
                     decision: WorkflowDecisionAction::Rework,
-                    target_phase: target_phase.or(Some(rework_phase_id)),
+                    target_phase: effective_target.or(Some(rework_phase_id)),
                     reason,
                     confidence,
                     risk,

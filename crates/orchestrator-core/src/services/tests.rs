@@ -992,9 +992,9 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         name: "Planning Custom".to_string(),
         description: "planning execution pipeline".to_string(),
         phases: vec![
-            "requirements".to_string(),
-            "testing".to_string(),
-            "implementation".to_string(),
+            "requirements".to_string().into(),
+            "testing".to_string().into(),
+            "implementation".to_string().into(),
         ],
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
