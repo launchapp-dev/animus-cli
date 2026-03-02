@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
-    RunnerScopeArg,
+    DaemonStopArgs, RunnerScopeArg,
 };
 
 mod daemon_events;
@@ -66,6 +66,10 @@ struct DaemonRuntimeState {
     runtime_paused: bool,
     #[serde(default)]
     daemon_pid: Option<u32>,
+    #[serde(default)]
+    shutdown_requested: bool,
+    #[serde(default)]
+    shutdown_timeout_secs: Option<u64>,
 }
 
 fn daemon_runtime_state_path(project_root: &str) -> PathBuf {
@@ -121,6 +125,22 @@ pub(super) fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()>
     let mut state = load_daemon_runtime_state(project_root)?;
     state.runtime_paused = paused;
     save_daemon_runtime_state(project_root, &state)
+}
+
+pub(super) fn set_shutdown_requested(
+    project_root: &str,
+    requested: bool,
+    timeout_secs: Option<u64>,
+) -> Result<()> {
+    let mut state = load_daemon_runtime_state(project_root)?;
+    state.shutdown_requested = requested;
+    state.shutdown_timeout_secs = if requested { timeout_secs } else { None };
+    save_daemon_runtime_state(project_root, &state)
+}
+
+pub(super) fn is_shutdown_requested(project_root: &str) -> Result<(bool, Option<u64>)> {
+    let state = load_daemon_runtime_state(project_root)?;
+    Ok((state.shutdown_requested, state.shutdown_timeout_secs))
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
@@ -671,17 +691,9 @@ pub(crate) async fn handle_daemon(
         }
         DaemonCommand::Run(args) => handle_daemon_run(args, hub, project_root, json).await,
         DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
-        DaemonCommand::Stop => {
-            if let Some(existing_pid) = get_daemon_pid(project_root)? {
-                let _ = terminate_process(existing_pid);
-                let _ = set_daemon_pid(project_root, None);
-            }
-            remove_daemon_pid(project_root);
-            let result = daemon.stop().await;
-            if result.is_ok() {
-                let _ = set_runtime_paused(project_root, true);
-            }
-            result.map(|_| print_ok("daemon stopped", json))
+        DaemonCommand::Stop(args) => {
+            handle_daemon_stop(args, hub.clone(), project_root, json).await?;
+            Ok(())
         }
         DaemonCommand::Pause => {
             let result = daemon.pause().await;
@@ -740,8 +752,62 @@ pub(crate) async fn handle_daemon(
     }
 }
 
-const DEFAULT_DAEMON_LOG_LINES: usize = 100;
+async fn handle_daemon_stop(
+    args: DaemonStopArgs,
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let daemon = hub.daemon();
+    let existing_pid = get_daemon_pid(project_root)?;
 
+    if let Some(pid) = existing_pid {
+        if is_process_alive(pid) {
+            let _ = set_shutdown_requested(project_root, true, Some(args.shutdown_timeout_secs));
+
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_secs(args.shutdown_timeout_secs);
+
+            loop {
+                if !is_process_alive(pid) {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    let _ = terminate_process(pid);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+
+            let _ = set_shutdown_requested(project_root, false, None);
+            let _ = set_daemon_pid(project_root, None);
+        } else {
+            let _ = set_daemon_pid(project_root, None);
+        }
+    }
+
+    remove_daemon_pid(project_root);
+    let result = daemon.stop().await;
+    if result.is_ok() {
+        let _ = set_runtime_paused(project_root, true);
+    }
+    result?;
+
+    let graceful = existing_pid
+        .map(|pid| !is_process_alive(pid))
+        .unwrap_or(true);
+
+    print_value(
+        serde_json::json!({
+            "message": "daemon stopped",
+            "graceful": graceful,
+            "shutdown_timeout_secs": args.shutdown_timeout_secs,
+        }),
+        json,
+    )
+}
+
+const DEFAULT_DAEMON_LOG_LINES: usize = 100;
 
 fn handle_daemon_logs(
     limit: Option<usize>,

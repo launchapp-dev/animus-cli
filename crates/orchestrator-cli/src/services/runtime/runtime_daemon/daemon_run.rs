@@ -18,7 +18,10 @@ use super::daemon_scheduler::{
     recover_orphaned_running_workflows_on_startup, resume_running_workflow_phase_spawns,
     subscribe_phase_completion_wake,
 };
-use super::{canonicalize_lossy, get_daemon_pid, set_daemon_pid, set_runtime_paused};
+use super::{
+    canonicalize_lossy, get_daemon_pid, is_shutdown_requested, set_daemon_pid, set_runtime_paused,
+    set_shutdown_requested,
+};
 
 struct DaemonRunGuard {
     project_root: String,
@@ -545,6 +548,47 @@ pub(super) async fn handle_daemon_run(
                     )?;
                 }
                 clear_running_workflow_phase_pool(project_root);
+                break;
+            }
+
+            let shutdown = is_shutdown_requested(project_root)
+                .unwrap_or((false, None));
+            if shutdown.0 {
+                emit_daemon_event_with_notifications(
+                    &mut seq,
+                    "graceful-shutdown",
+                    Some(primary_root.clone()),
+                    serde_json::json!({
+                        "timeout_secs": shutdown.1,
+                    }),
+                    json,
+                    notification_runtime.as_mut(),
+                )?;
+                pause_running_workflow_phase_spawns(project_root);
+                if let Err(error) = drain_running_workflow_phases_for_project(
+                    hub.clone(),
+                    project_root,
+                    args.max_tasks_per_tick,
+                )
+                .await
+                {
+                    emit_daemon_event_with_notifications(
+                        &mut seq,
+                        "log",
+                        Some(primary_root.clone()),
+                        serde_json::json!({
+                            "level": "error",
+                            "message": format!(
+                                "failed draining in-flight workflow phases during graceful shutdown: {}",
+                                error
+                            ),
+                        }),
+                        json,
+                        notification_runtime.as_mut(),
+                    )?;
+                }
+                clear_running_workflow_phase_pool(project_root);
+                let _ = set_shutdown_requested(project_root, false, None);
                 break;
             }
 

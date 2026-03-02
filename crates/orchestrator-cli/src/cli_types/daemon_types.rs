@@ -9,7 +9,7 @@ pub(crate) enum DaemonCommand {
     /// Run the daemon in the current foreground process.
     Run(DaemonRunArgs),
     /// Stop the running daemon.
-    Stop,
+    Stop(DaemonStopArgs),
     /// Show daemon runtime status.
     Status,
     /// Show daemon health diagnostics.
@@ -316,6 +316,18 @@ pub(crate) struct DaemonConfigArgs {
     pub(crate) notification_config_file: Option<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) clear_notification_config: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DaemonStopArgs {
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 60,
+        value_parser = parse_positive_u64,
+        help = "Maximum seconds to wait for in-flight agents to finish before force-stopping."
+    )]
+    pub(crate) shutdown_timeout_secs: u64,
 }
 
 #[derive(Debug, Args)]
