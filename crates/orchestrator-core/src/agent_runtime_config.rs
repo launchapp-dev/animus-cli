@@ -151,6 +151,47 @@ pub struct AgentToolPolicy {
     pub deny: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMcpServerSource {
+    Builtin,
+    Custom,
+}
+
+impl Default for AgentMcpServerSource {
+    fn default() -> Self {
+        Self::Builtin
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentMcpServerConfig {
+    #[serde(default)]
+    pub source: AgentMcpServerSource,
+    #[serde(default)]
+    pub tool_policy: AgentToolPolicy,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentCapabilities {
+    #[serde(flatten)]
+    pub flags: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentProjectOverrides {
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     #[serde(default)]
@@ -167,6 +208,12 @@ pub struct AgentProfile {
     pub skills: Vec<String>,
     #[serde(default)]
     pub capabilities: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_server_configs: Option<BTreeMap<String, AgentMcpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_capabilities: Option<AgentCapabilities>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_overrides: Option<BTreeMap<String, AgentProjectOverrides>>,
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
@@ -699,6 +746,9 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_server_configs: None,
+                    structured_capabilities: None,
+                    project_overrides: None,
                 },
             ),
             (
@@ -726,6 +776,9 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_server_configs: None,
+                    structured_capabilities: None,
+                    project_overrides: None,
                 },
             ),
             (
@@ -787,6 +840,9 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_server_configs: None,
+                    structured_capabilities: None,
+                    project_overrides: None,
                 },
             ),
             (
@@ -849,6 +905,9 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_server_configs: None,
+                    structured_capabilities: None,
+                    project_overrides: None,
                 },
             ),
             (
@@ -876,6 +935,9 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     max_attempts: None,
                     extra_args: vec![],
                     codex_config_overrides: vec![],
+                    mcp_server_configs: None,
+                    structured_capabilities: None,
+                    project_overrides: None,
                 },
             ),
         ]),
@@ -2269,5 +2331,182 @@ mod tests {
         assert!(err
             .to_string()
             .contains("env must not contain empty keys"));
+    }
+
+    #[test]
+    fn legacy_config_without_new_fields_deserializes_with_none_defaults() {
+        let json = r#"{
+            "schema": "ao.agent-runtime-config.v2",
+            "version": 2,
+            "tools_allowlist": ["cargo"],
+            "agents": {
+                "default": {
+                    "description": "Test agent",
+                    "system_prompt": "You are a test agent.",
+                    "tool": null,
+                    "model": null,
+                    "fallback_models": [],
+                    "reasoning_effort": null,
+                    "web_search": null,
+                    "network_access": null,
+                    "timeout_secs": null,
+                    "max_attempts": null,
+                    "extra_args": [],
+                    "codex_config_overrides": []
+                }
+            },
+            "phases": {
+                "default": {
+                    "mode": "agent",
+                    "agent_id": "default",
+                    "directive": "Do work."
+                }
+            }
+        }"#;
+
+        let config: AgentRuntimeConfig = serde_json::from_str(json).expect("deserialize");
+        validate_agent_runtime_config(&config).expect("validate");
+        let profile = config.agent_profile("default").expect("default profile");
+        assert!(profile.role.is_none());
+        assert!(profile.mcp_servers.is_empty());
+        assert!(profile.skills.is_empty());
+        assert!(profile.capabilities.is_empty());
+        assert_eq!(profile.tool_policy, AgentToolPolicy::default());
+        assert!(profile.mcp_server_configs.is_none());
+        assert!(profile.structured_capabilities.is_none());
+        assert!(profile.project_overrides.is_none());
+    }
+
+    #[test]
+    fn agent_tool_policy_roundtrips() {
+        let policy = AgentToolPolicy {
+            allow: vec!["task.*".to_string(), "workflow.*".to_string()],
+            deny: vec!["project.remove".to_string()],
+        };
+        let json = serde_json::to_string(&policy).expect("serialize");
+        let restored: AgentToolPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn agent_mcp_server_config_roundtrips() {
+        let config = AgentMcpServerConfig {
+            source: AgentMcpServerSource::Custom,
+            tool_policy: AgentToolPolicy {
+                allow: vec!["read.*".to_string()],
+                deny: vec!["write.*".to_string()],
+            },
+            env: BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]),
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        let restored: AgentMcpServerConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn agent_mcp_server_source_defaults_to_builtin() {
+        let config: AgentMcpServerConfig =
+            serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(config.source, AgentMcpServerSource::Builtin);
+        assert!(config.tool_policy.allow.is_empty());
+        assert!(config.tool_policy.deny.is_empty());
+        assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn agent_capabilities_flattens_bool_map() {
+        let caps = AgentCapabilities {
+            flags: BTreeMap::from([
+                ("planning".to_string(), true),
+                ("implementation".to_string(), false),
+            ]),
+        };
+        let json = serde_json::to_string(&caps).expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("parse value");
+        assert_eq!(value["planning"], json!(true));
+        assert_eq!(value["implementation"], json!(false));
+
+        let restored: AgentCapabilities = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, caps);
+    }
+
+    #[test]
+    fn agent_project_overrides_roundtrips() {
+        let overrides = AgentProjectOverrides {
+            tool: Some("codex".to_string()),
+            model: Some("gpt-4".to_string()),
+            extra_args: vec!["--verbose".to_string()],
+            env: BTreeMap::from([("DEBUG".to_string(), "1".to_string())]),
+        };
+        let json = serde_json::to_string(&overrides).expect("serialize");
+        let restored: AgentProjectOverrides = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.tool, overrides.tool);
+        assert_eq!(restored.model, overrides.model);
+        assert_eq!(restored.extra_args, overrides.extra_args);
+        assert_eq!(restored.env, overrides.env);
+    }
+
+    #[test]
+    fn profile_with_new_fields_roundtrips_through_json() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("default profile");
+        profile.mcp_server_configs = Some(BTreeMap::from([(
+            "ao".to_string(),
+            AgentMcpServerConfig {
+                source: AgentMcpServerSource::Builtin,
+                tool_policy: AgentToolPolicy {
+                    allow: vec!["task.*".to_string()],
+                    deny: vec![],
+                },
+                env: BTreeMap::new(),
+            },
+        )]));
+        profile.structured_capabilities = Some(AgentCapabilities {
+            flags: BTreeMap::from([("planning".to_string(), true)]),
+        });
+        profile.project_overrides = Some(BTreeMap::from([(
+            "my-project".to_string(),
+            AgentProjectOverrides {
+                tool: Some("codex".to_string()),
+                model: None,
+                extra_args: vec![],
+                env: BTreeMap::new(),
+            },
+        )]));
+
+        let json = serde_json::to_string_pretty(&config).expect("serialize");
+        let restored: AgentRuntimeConfig = serde_json::from_str(&json).expect("deserialize");
+        validate_agent_runtime_config(&restored).expect("validate");
+
+        let restored_profile = restored
+            .agent_profile("default")
+            .expect("default profile");
+        assert!(restored_profile.mcp_server_configs.is_some());
+        let mcp_configs = restored_profile.mcp_server_configs.as_ref().unwrap();
+        assert_eq!(mcp_configs.len(), 1);
+        assert_eq!(
+            mcp_configs["ao"].source,
+            AgentMcpServerSource::Builtin
+        );
+
+        assert!(restored_profile.structured_capabilities.is_some());
+        let caps = restored_profile.structured_capabilities.as_ref().unwrap();
+        assert_eq!(caps.flags.get("planning"), Some(&true));
+
+        assert!(restored_profile.project_overrides.is_some());
+        let overrides = restored_profile.project_overrides.as_ref().unwrap();
+        assert_eq!(
+            overrides["my-project"].tool.as_deref(),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn new_fields_skipped_in_serialization_when_none() {
+        let config = builtin_agent_runtime_config();
+        let json = serde_json::to_string_pretty(&config).expect("serialize");
+        assert!(!json.contains("mcp_server_configs"));
+        assert!(!json.contains("structured_capabilities"));
+        assert!(!json.contains("project_overrides"));
     }
 }

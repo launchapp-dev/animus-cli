@@ -408,6 +408,8 @@ fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value> {
                 "source_files": source_files,
                 "output_path": result.output_path.display().to_string(),
                 "pipelines": result.config.pipelines.iter().map(|p| &p.id).collect::<Vec<_>>(),
+                "phase_definitions": result.config.phase_definitions.len(),
+                "agent_profiles": result.config.agent_profiles.len(),
                 "hash": orchestrator_core::workflow_config_hash(&result.config),
             }))
         }
@@ -550,6 +552,9 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                         max_attempts: profile.max_attempts,
                         extra_args: profile.extra_args.clone(),
                         codex_config_overrides: profile.codex_config_overrides.clone(),
+                        mcp_server_configs: None,
+                        structured_capabilities: None,
+                        project_overrides: None,
                     },
                 )
             })
