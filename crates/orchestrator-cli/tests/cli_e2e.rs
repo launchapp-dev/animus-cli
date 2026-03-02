@@ -768,8 +768,6 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
         "--skip-runner",
         "--interval-secs",
         "1",
-        "--include-registry",
-        "false",
         "--auto-run-ready",
         "false",
         "--startup-cleanup",

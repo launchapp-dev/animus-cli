@@ -1053,7 +1053,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.daemon.start",
-        description = "Start the AO daemon. Purpose: Launch the background daemon for task scheduling and agent management. Prerequisites: None. Example: {} or {\"include-registry\": true, \"interval-secs\": 5}. Sequencing: After starting, use ao.daemon.status or ao.daemon.health to verify it's running.",
+        description = "Start the AO daemon. Purpose: Launch the background daemon for task scheduling and agent management. Prerequisites: None. Example: {} or {\"interval-secs\": 5}. Sequencing: After starting, use ao.daemon.status or ao.daemon.health to verify it's running.",
         input_schema = ao_schema_for_type::<DaemonStartInput>()
     )]
     async fn ao_daemon_start(
