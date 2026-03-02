@@ -19,7 +19,7 @@ pub enum PostMergeOutcome {
 }
 
 fn merge_queue_branch_name(task_id: &str) -> String {
-    format!("ao/merge-queue/{}", sanitize_identifier_for_git(task_id))
+    format!("ao/merge-queue/{}", protocol::sanitize_identifier(task_id, "task"))
 }
 
 fn pull_request_title(task: &orchestrator_core::OrchestratorTask) -> String {
@@ -373,7 +373,7 @@ pub async fn post_success_merge_push_and_cleanup(
         let merge_worktree_root = ensure_repo_worktree_root(project_root)?;
         let merge_worktree_path = merge_worktree_root.join(format!(
             "__merge-{}",
-            sanitize_identifier_for_git(cfg.auto_merge_target_branch.as_str())
+            protocol::sanitize_identifier(cfg.auto_merge_target_branch.as_str(), "branch")
         ));
         let merge_worktree_path_str = merge_worktree_path.to_string_lossy().to_string();
         let merge_context = MergeConflictContext {

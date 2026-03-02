@@ -1,5 +1,4 @@
 use super::*;
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 pub struct PostSuccessGitConfig {
@@ -175,32 +174,12 @@ pub fn task_status_label(status: TaskStatus) -> &'static str {
     }
 }
 
-pub fn sanitize_identifier_for_git(value: &str) -> String {
-    let mut sanitized = String::new();
-    let mut previous_dash = false;
-    for ch in value.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            sanitized.push(ch.to_ascii_lowercase());
-            previous_dash = false;
-        } else if !previous_dash {
-            sanitized.push('-');
-            previous_dash = true;
-        }
-    }
-    sanitized = sanitized.trim_matches('-').to_string();
-    if sanitized.is_empty() {
-        "task".to_string()
-    } else {
-        sanitized
-    }
-}
-
 pub fn default_task_worktree_name(task_id: &str) -> String {
-    format!("task-{}", sanitize_identifier_for_git(task_id))
+    format!("task-{}", protocol::sanitize_identifier(task_id, "task"))
 }
 
 pub fn default_task_branch_name(task_id: &str) -> String {
-    format!("ao/{}", sanitize_identifier_for_git(task_id))
+    format!("ao/{}", protocol::sanitize_identifier(task_id, "task"))
 }
 
 pub fn ao_root_dir() -> Result<PathBuf> {
@@ -210,26 +189,7 @@ pub fn ao_root_dir() -> Result<PathBuf> {
 }
 
 pub fn repo_worktree_scope(project_root: &str) -> String {
-    let canonical = Path::new(project_root)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(project_root));
-    let canonical_display = canonical.to_string_lossy();
-    let repo_name = canonical
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(sanitize_identifier_for_git)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "repo".to_string());
-
-    let mut hasher = Sha256::new();
-    hasher.update(canonical_display.as_bytes());
-    let digest = hasher.finalize();
-    let suffix = format!(
-        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]
-    );
-
-    format!("{repo_name}-{suffix}")
+    protocol::repository_scope_for_path(Path::new(project_root))
 }
 
 pub fn repo_ao_root(project_root: &str) -> Result<PathBuf> {
