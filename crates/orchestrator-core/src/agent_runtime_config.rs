@@ -1800,4 +1800,462 @@ mod tests {
         assert!(config.is_structured_output_phase("custom-phase"));
         assert!(!config.is_structured_output_phase("   "));
     }
+
+    fn make_minimal_config_with_phase(
+        phase_id: &str,
+        definition: PhaseExecutionDefinition,
+    ) -> AgentRuntimeConfig {
+        let mut config = builtin_agent_runtime_config();
+        config.phases.insert(phase_id.to_string(), definition);
+        config
+    }
+
+    #[test]
+    fn command_mode_phase_roundtrips_through_json() {
+        let definition = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Command,
+            agent_id: None,
+            directive: Some("Run cargo test".to_string()),
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            command: Some(PhaseCommandDefinition {
+                program: "cargo".to_string(),
+                args: vec!["test".to_string(), "--workspace".to_string()],
+                env: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
+                cwd_mode: CommandCwdMode::ProjectRoot,
+                cwd_path: None,
+                timeout_secs: Some(300),
+                success_exit_codes: vec![0],
+                parse_json_output: false,
+                expected_result_kind: None,
+                expected_schema: None,
+            }),
+            manual: None,
+        };
+
+        let json = serde_json::to_string(&definition).expect("serialize");
+        let restored: PhaseExecutionDefinition =
+            serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.mode, PhaseExecutionMode::Command);
+        assert!(restored.agent_id.is_none());
+        let cmd = restored.command.expect("command block present");
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(cmd.args, vec!["test", "--workspace"]);
+        assert_eq!(cmd.timeout_secs, Some(300));
+        assert_eq!(cmd.success_exit_codes, vec![0]);
+        assert!(!cmd.parse_json_output);
+    }
+
+    #[test]
+    fn command_mode_phase_validates_successfully() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: Some("Run linter".to_string()),
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["clippy".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        validate_agent_runtime_config(&config).expect("valid command-mode config");
+    }
+
+    #[test]
+    fn command_mode_rejects_missing_command_block() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: None,
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("requires command block"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_program() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "  ".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("program must not be empty"));
+    }
+
+    #[test]
+    fn command_mode_rejects_agent_id() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: Some("swe".to_string()),
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must not include agent_id"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_success_exit_codes() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("success_exit_codes must include at least one code"));
+    }
+
+    #[test]
+    fn command_mode_cwd_path_required_for_path_mode() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::Path,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("cwd_path must be set"));
+    }
+
+    #[test]
+    fn command_mode_rejects_manual_block() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: Some(PhaseManualDefinition {
+                    instructions: "Wait for approval".to_string(),
+                    approval_note_required: false,
+                }),
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must not include manual block"));
+    }
+
+    #[test]
+    fn phase_mode_returns_command_for_command_phase() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: Some("Run linter".to_string()),
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["clippy".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        assert_eq!(
+            config.phase_mode("lint"),
+            Some(PhaseExecutionMode::Command)
+        );
+        let cmd = config.phase_command("lint").expect("command block present");
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(cmd.args, vec!["clippy"]);
+    }
+
+    #[test]
+    fn command_mode_with_json_output_parsing_roundtrips() {
+        let definition = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Command,
+            agent_id: None,
+            directive: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            command: Some(PhaseCommandDefinition {
+                program: "bash".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "echo '{\"kind\":\"test_result\",\"passed\":true}'".to_string(),
+                ],
+                env: BTreeMap::new(),
+                cwd_mode: CommandCwdMode::TaskRoot,
+                cwd_path: None,
+                timeout_secs: Some(60),
+                success_exit_codes: vec![0, 1],
+                parse_json_output: true,
+                expected_result_kind: Some("test_result".to_string()),
+                expected_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "required": ["kind", "passed"],
+                    "properties": {
+                        "kind": {"const": "test_result"},
+                        "passed": {"type": "boolean"}
+                    }
+                })),
+            }),
+            manual: None,
+        };
+
+        let json = serde_json::to_string_pretty(&definition).expect("serialize");
+        let restored: PhaseExecutionDefinition =
+            serde_json::from_str(&json).expect("deserialize");
+
+        let cmd = restored.command.expect("command present");
+        assert!(cmd.parse_json_output);
+        assert_eq!(cmd.expected_result_kind.as_deref(), Some("test_result"));
+        assert!(cmd.expected_schema.is_some());
+        assert_eq!(cmd.success_exit_codes, vec![0, 1]);
+        assert_eq!(cmd.cwd_mode, CommandCwdMode::TaskRoot);
+    }
+
+    #[test]
+    fn command_mode_defaults_cwd_to_project_root_and_exit_code_zero() {
+        let json = r#"{
+            "mode": "command",
+            "command": {
+                "program": "make"
+            }
+        }"#;
+        let definition: PhaseExecutionDefinition =
+            serde_json::from_str(json).expect("deserialize minimal command phase");
+        assert_eq!(definition.mode, PhaseExecutionMode::Command);
+        let cmd = definition.command.expect("command present");
+        assert_eq!(cmd.program, "make");
+        assert_eq!(cmd.cwd_mode, CommandCwdMode::ProjectRoot);
+        assert_eq!(cmd.success_exit_codes, vec![0]);
+        assert!(cmd.args.is_empty());
+        assert!(cmd.env.is_empty());
+        assert!(cmd.timeout_secs.is_none());
+        assert!(!cmd.parse_json_output);
+    }
+
+    #[test]
+    fn builtin_config_all_phases_are_agent_mode() {
+        let config = builtin_agent_runtime_config();
+        for (phase_id, definition) in &config.phases {
+            assert_eq!(
+                definition.mode,
+                PhaseExecutionMode::Agent,
+                "builtin phase '{}' should be agent mode",
+                phase_id
+            );
+            assert!(
+                definition.command.is_none(),
+                "builtin phase '{}' should have no command block",
+                phase_id
+            );
+        }
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_args() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["test".to_string(), "  ".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("args must not contain empty values"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_env_keys() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::from([("  ".to_string(), "value".to_string())]),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                }),
+                manual: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("env must not contain empty keys"));
+    }
 }
