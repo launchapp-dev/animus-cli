@@ -567,6 +567,17 @@ struct WorkflowExecuteInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct WorkflowPhaseApproveInput {
+    workflow_id: String,
+    #[serde(default)]
+    phase_id: Option<String>,
+    #[serde(default)]
+    feedback: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct IdInput {
     id: String,
     #[serde(default)]
@@ -2138,6 +2149,29 @@ impl AoMcpServer {
         push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
         push_opt(&mut args, "--input-json", input.input_json);
         self.run_tool("ao.workflow.execute", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.phase.approve",
+        description = "Approve a gated workflow phase. Purpose: Unblock gate phases that require manual approval before proceeding. Prerequisites: Workflow must have a pending gate phase. Example: {\"workflow_id\": \"wf-abc123\"} or {\"workflow_id\": \"wf-abc123\", \"phase_id\": \"po-review\", \"feedback\": \"Approved\"}. Sequencing: Use ao.workflow.get first to see pending gates, then ao.workflow.phase.approve to unblock.",
+        input_schema = ao_schema_for_type::<WorkflowPhaseApproveInput>()
+    )]
+    async fn ao_workflow_phase_approve(
+        &self,
+        params: Parameters<WorkflowPhaseApproveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "workflow".to_string(),
+            "phase".to_string(),
+            "approve".to_string(),
+            "--id".to_string(),
+            input.workflow_id,
+        ];
+        push_opt(&mut args, "--phase-id", input.phase_id);
+        push_opt(&mut args, "--feedback", input.feedback);
+        self.run_tool("ao.workflow.phase.approve", args, input.project_root)
             .await
     }
 }
