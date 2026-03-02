@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T00:25:09.990987Z",
     "created_at": "2026-03-01T21:20:09.146051Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:50:56.205496Z",
+    "updated_at": "2026-03-02T00:25:09.990990Z",
     "updated_by": "ao-cli",
-    "version": 2
+    "version": 3
   },
   "paused": false,
   "priority": "medium",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Deduplicate binary-on-PATH lookup and parallel CliInvocation/LaunchInvocation types",
   "type": "feature",

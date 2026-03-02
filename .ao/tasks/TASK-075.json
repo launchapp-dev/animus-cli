@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-03-01T20:47:15.156573Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "Blocked by status update",
+  "blocked_reason": null,
   "branch_name": "ao/task-075",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:05:49.682620Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:13:49.344564Z",
-    "updated_at": "2026-03-01T20:47:15.156575Z",
+    "updated_at": "2026-03-02T00:25:48.279099Z",
     "updated_by": "ao-daemon",
-    "version": 712
+    "version": 713
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "ready",
   "tags": [],
   "title": "Add MCP resources for project state context injection",
   "type": "feature",

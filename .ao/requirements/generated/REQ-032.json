@@ -1,26 +1,23 @@
 {
+  "acceptance_criteria": [],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-03-02T00:32:07.157214Z",
+  "description": "AO agents start every phase cold — they only see the task title/description and phase directive. No knowledge from prior phases (research findings, implementation decisions, review feedback) carries forward. This causes repeated work, lost context, and inconsistent decisions across a workflow. Cross-task memory is also absent — agents cannot learn from patterns across completed tasks.\n\n## Gap Analysis\n- OpenClaw: SQLite + sqlite-vec memory with markdown files, semantic search, persistent across all sessions\n- Letta (MemGPT): 4-tier memory (message buffer → core memory → recall → archival), agents can edit their own memory mid-session\n- Claude Code: CLAUDE.md + auto-memory (~/.claude/projects/memory/MEMORY.md), loaded into context at session start\n- AO: phase_executor.rs injects only task_title, task_description, phase_directive into agent prompt. No prior phase outputs, no cross-task patterns, no persistent memory.\n\n## Scope\n\n### Phase 1: Cross-Phase Memory (immediate value)\n1. **Phase output capture**: When a phase completes, persist its structured output (from output contracts) to `.ao/state/workflows/<workflow_id>/phase-outputs/<phase_id>.json`\n2. **Prior phase injection**: phase_executor.rs injects summaries of completed phase outputs into the next phase's prompt context. Template variable: `__PRIOR_PHASE_OUTPUTS__`\n3. **Decision trail**: Persist phase decision signals (research_required, verdict, reasoning) and make them available to subsequent phases\n\n### Phase 2: Task-Level Memory\n4. **Task memory file**: `TASK-XXX.memory.md` — agents can append findings, decisions, and context during execution. Persisted in `.ao/state/tasks/<task_id>/memory.md`\n5. **Memory injection**: Daemon reads task memory file and includes it in phase prompt construction\n\n### Phase 3: Project-Level Memory\n6. **Project agent memory**: `~/.ao/<scope>/agent-memory.md` — cross-task patterns, recurring error solutions, codebase conventions discovered by agents\n7. **Memory management CLI**: `ao memory list`, `ao memory get`, `ao memory clear` for inspecting and managing accumulated memory\n8. **Memory size management**: Automatic summarization or truncation when memory files exceed context budget\n\n### Phase 4: Semantic Search (future)\n9. **SQLite + sqlite-vec**: When markdown memory files grow large enough, add rusqlite-based vector storage for semantic retrieval\n10. **Embedding generation**: Use local or API-based embeddings to index memory chunks\n\n## Architecture Notes\n- Phase 1 builds directly on existing phase_executor.rs prompt construction and output contract enforcement\n- Phase output JSON is already produced — it just needs to be persisted and re-injected\n- rusqlite is a well-maintained Rust crate; sqlite-vec extension provides vector search without a separate DB process\n- Memory injection should respect token budgets — summarize rather than dump entire histories\n- File-based approaches (phases 1-3) should cover 90% of use cases before needing vector search\n\n## References\n- Phase executor prompt construction: crates/orchestrator-cli/src/services/runtime/workflow_executor/phase_executor.rs (lines 753-813)\n- Output contracts: phase execution metadata in workflow state\n- OpenClaw memory: SQLite + sqlite-vec with markdown files\n- Letta architecture: https://docs.letta.com/concepts/memgpt/\n- Claude auto-memory: ~/.claude/projects/memory/MEMORY.md",
   "id": "REQ-032",
-  "title": "Reactive bounded agent pool scheduler replacing tick-based batch execution",
-  "description": "The daemon scheduler currently uses a tick-based batch model: each tick spawns up to N agents into a JoinSet, blocks until ALL complete, sleeps for interval_secs, then repeats. This means if one agent takes 20 minutes and another takes 2 minutes, 4 agent slots sit idle for 18 minutes. The scheduler should instead maintain a bounded pool of N concurrent agent slots and reactively fill slots as agents complete \u2014 no waiting for the entire batch.\n\nCurrent flow (daemon_run.rs loop \u2192 project_tick):\n1. project_tick() runs housekeeping (git flush, stale reconciliation, dependency gates, merge gates, binary refresh)\n2. run_ready_task_workflows_for_project() creates workflow state for up to max_tasks_per_tick ready tasks\n3. execute_running_workflow_phases_for_project() spawns agents into JoinSet, BLOCKS until ALL complete\n4. Collect summary metrics, emit events\n5. Sleep interval_secs (default 5s)\n6. Repeat\n\nTarget flow:\n1. Agent pool maintains N concurrent slots via semaphore\n2. When any agent completes \u2192 process result (advance/rework/fail) \u2192 immediately check for next queued task \u2192 spawn if slot available\n3. Separate housekeeping timer runs independently (git ops, stale detection, merges, dependency reconciliation) on its own interval\n4. Work queue feeds the pool with priority ordering\n5. No batch waiting \u2014 individual agent lifecycle is independent\n\nKey constraints:\n- Backward compatible: --max-tasks-per-tick can map to pool size, interval_secs applies to housekeeping only\n- Must preserve all existing housekeeping operations (resume_interrupted, reconcile_stale, dependency gates, merge gates, binary refresh, EM queue)\n- Must preserve all existing event emission (health, queue, task-state-change, phase events)\n- Agent runner IPC is already concurrent-safe (tokio unix socket)\n- FileServiceHub uses atomic writes so concurrent access is safe",
-  "priority": "must-have",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "should",
   "status": "draft",
-  "acceptance_criteria": [
-    "Agent slots are immediately backfilled when an agent completes \u2014 no waiting for batch peers",
-    "Pool maintains exactly N concurrent agents (configurable via --max-agents or AO_MAX_AGENTS)",
-    "Housekeeping operations (git, stale, merge, dependency reconciliation) run on a separate timer independent of agent execution",
-    "Priority ordering is respected when selecting next task from queue",
-    "EM work queue entries take precedence over auto-prioritized tasks",
-    "All existing daemon events (health, queue, task-state-change, phase events) continue to be emitted",
-    "Graceful drain: when pool is shutting down, running agents complete but no new ones start",
-    "Pool utilization is visible via ao daemon status (active_agents, pool_size, queued_tasks)",
-    "Existing CLI flags (--max-tasks-per-tick, --interval-secs, --auto-run-ready) remain functional with reasonable mapping to new model",
-    "No regression in existing integration tests"
-  ],
-  "metadata": {
-    "created_at": "2026-02-27T17:17:57.685369+00:00",
-    "created_by": "human",
-    "updated_at": "2026-02-27T17:17:57.685735+00:00",
-    "updated_by": "human",
-    "version": 1
-  }
+  "tags": [],
+  "title": "Persistent Agent Memory Across Phases and Tasks",
+  "type": null,
+  "updated_at": "2026-03-02T00:32:07.157214Z"
 }

@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-03-01T20:47:19.216278Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "dependency gate: dependency TASK-135 is blocked; dependency TASK-136 is blocked",
+  "blocked_reason": null,
   "branch_name": null,
   "cancelled": false,
   "checklist": [],
@@ -28,15 +28,15 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T00:28:42.172195Z",
     "created_at": "2026-02-28T23:47:55.355891Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T20:47:19.377598Z",
+    "updated_at": "2026-03-02T00:28:42.172200Z",
     "updated_by": "ao-daemon",
-    "version": 6
+    "version": 7
   },
-  "paused": true,
+  "paused": false,
   "priority": "critical",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -45,7 +45,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "done",
   "tags": [],
   "title": "Integrate oai-runner into AO routing and runtime contract",
   "type": "feature",

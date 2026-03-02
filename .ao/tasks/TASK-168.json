@@ -1,0 +1,59 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [
+    {
+      "dependency_type": "blocked-by",
+      "task_id": "TASK-167"
+    }
+  ],
+  "description": "Add per-phase verdict-to-target routing in pipeline configuration. Currently all verdicts are handled uniformly: Advance goes to index+1, Rework re-runs current. With on_verdict config, each phase can declare where each verdict routes.\n\nChanges needed:\n1. Add PhaseTransitionConfig type to workflow_config.rs:\n   - on_verdict: HashMap<String, TransitionTarget> where key is verdict name (advance/rework/fail/skip)\n   - TransitionTarget: { target: String, guard: Option<String> }\n2. Add WorkflowPhaseConfig to pipeline definition (extending the current phases: Vec<String> to phases: Vec<WorkflowPhaseConfig>)\n3. Update lifecycle_executor.rs to consult on_verdict config when processing decisions\n4. Default behavior when on_verdict is not configured: advance->next, rework->current (backward compat)\n5. Validate on_verdict targets exist in pipeline phases during workflow config validation\n\nExample config:\n  code-review:\n    on_verdict:\n      rework: { target: implementation }\n      advance: { target: testing }\n      fail: { target: _escalate }\n\nKey files:\n- crates/orchestrator-core/src/workflow_config.rs (PipelineDefinition)\n- crates/orchestrator-core/src/workflow/lifecycle_executor.rs\n- Depends on TASK-167 (ID-based routing)",
+  "estimated_effort": null,
+  "id": "TASK-168",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [
+    "REQ-031"
+  ],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-02T00:45:00.855108Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-02T00:46:13.522045Z",
+    "updated_by": "ao-cli",
+    "version": 3
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Add on_verdict transition routing to pipeline phase config",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

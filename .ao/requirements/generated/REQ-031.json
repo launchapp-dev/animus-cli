@@ -1,24 +1,32 @@
 {
+  "acceptance_criteria": [],
+  "category": null,
+  "comments": [],
+  "created_at": "2026-03-02T00:31:11.109812Z",
+  "description": "AO already has a compiled state machine (10 states, 15 events, 34 transitions in state_machines/schema.rs) but it acts as a bookkeeping layer, not a routing layer. Phase advancement is positional (current_phase_index + 1), not driven by the state machine transitions. The Rework decision has a target_phase field but the executor ignores it — it just re-runs the current phase. Additionally, pipelines are JSON-only with no user-authored YAML surface.\n\n## Current Architecture (what exists)\n- WorkflowMachineState: Idle, EvaluateTransition, RunPhase, EvaluateGates, ApplyTransition, Paused, Completed, MergeConflict, Failed, Cancelled\n- WorkflowDecisionAction: Advance, Skip, Rework, Repeat, Fail (with target_phase: Option<String>)\n- WorkflowPhaseExecution.attempt: u32 (per-phase retry counter)\n- MAX_PHASE_REWORKS=3 in lifecycle_executor.rs\n- Phase capabilities (PhaseCapabilities from TASK-147)\n- Checkpoint system (save/restore at phase boundaries)\n- Research phase dynamic injection\n\n## Gap Analysis\n- Phase routing is index-based, not ID-based — Rework can't jump to a specific phase\n- No skip conditions — phases always execute unless manually removed\n- No conditional transitions (on_verdict routing) — code-review can't route to different phases based on verdict\n- No escalation state — workflow goes straight to Failed when rework budget exceeds, no HumanEscalated\n- No per-phase retry config — global MAX_PHASE_REWORKS applies to all phases equally\n- No cross-phase data passing — each phase starts fresh with only task title/description\n- No YAML surface — pipelines defined only in .ao/state/ JSON managed via CLI\n- No command-mode phases — every phase requires an AI agent\n- No parallel phases — strictly sequential execution\n\n## Scope\n\n### Phase 1: State Machine as Routing Layer\n1. ID-based phase transitions: Replace current_phase_index with ID-based lookup. When Rework specifies target_phase, executor jumps to that phase.\n2. on_verdict routing: Per-phase config declaring verdict-to-target routing (e.g., code-review rework -> implementation, advance -> testing).\n3. skip_if conditions: Per-phase guards evaluated against task context (task_type, impact_area, capabilities).\n4. HumanEscalated state: New state distinct from Paused/Failed. Entered on rework budget exceeded. Awaitable via ao workflow resume with feedback.\n5. Per-phase retry config: max_attempts and retry_backoff configurable per phase.\n\n### Phase 2: YAML Surface and Composability\n6. YAML workflow definitions: ao.workflows.yaml committed to repo, compiles to internal JSON.\n7. Cross-phase data passing: Persist phase output JSON, inject into next phase prompt via template variables.\n8. Command-mode phases: Shell command phases (command: cargo test) with exit code + stdout as output.\n9. Sub-pipeline composition: Reference other pipelines as nested steps.\n\n### Phase 3: Advanced Patterns\n10. Parallel phase execution: depends_on for DAG-style concurrency.\n11. Trigger declarations: on: push, on: pr_opened, on: schedule for event-driven dispatch.\n12. Loop constructs: Bounded iteration with exit conditions.\n\n## References\n- State machine: crates/orchestrator-core/src/state_machines/schema.rs\n- FSM engine: crates/orchestrator-core/src/state_machines/engine.rs\n- Phase advancement: crates/orchestrator-core/src/workflow/lifecycle_executor.rs\n- Workflow config: crates/orchestrator-core/src/workflow_config.rs\n- Phase executor: crates/orchestrator-cli/src/services/runtime/workflow_executor/phase_executor.rs",
   "id": "REQ-031",
-  "title": "Daemon process reliability \u2014 health monitoring, crash recovery, and clean lifecycle management",
-  "description": "The daemon scheduler process (ao daemon run) must be resilient against silent crashes, stale state, and orphaned workflows. When the daemon process dies, it currently leaves workflows in 'running' state with no agents actually executing. The daemon status MCP tool reports 'running' based on stale state rather than checking the actual process. There is no logging, no crash recovery, and no watchdog. This requirement covers: (1) daemon stderr/stdout logging to a file instead of /dev/null, (2) PID-file-based liveness detection for daemon status, (3) automatic workflow cleanup on daemon startup for orphaned running workflows, (4) daemon watchdog that auto-restarts on crash, (5) clean pause/stop that cancels or checkpoints in-flight workflows before exit.",
-  "priority": "must-have",
+  "legacy_id": null,
+  "links": {
+    "flows": [],
+    "mockups": [],
+    "related_requirements": [],
+    "tasks": [
+      "TASK-167",
+      "TASK-168",
+      "TASK-169",
+      "TASK-170",
+      "TASK-171",
+      "TASK-172",
+      "TASK-173",
+      "TASK-174"
+    ],
+    "tests": [],
+    "workflows": []
+  },
+  "priority": "should",
   "status": "draft",
-  "acceptance_criteria": [
-    "Daemon process writes logs to ~/.ao/<scope>/daemon/daemon.log with rotation",
-    "ao daemon status verifies the daemon PID is alive, not just state file presence",
-    "On startup, daemon detects and resets orphaned 'running' workflows whose agents are no longer alive",
-    "ao daemon stop gracefully waits for in-flight phase executions (with configurable timeout) before stopping",
-    "ao daemon pause checkpoints running workflows and stops spawning new agents",
-    "Daemon start can optionally enable a watchdog that auto-restarts on unexpected exit",
-    "All daemon lifecycle events (start, stop, pause, resume, crash) are recorded in daemon event log",
-    "MCP tool ao.daemon.start returns error if daemon subprocess exits within 5 seconds of spawn"
-  ],
-  "metadata": {
-    "created_at": "2026-02-27T17:06:02.855235+00:00",
-    "created_by": "human",
-    "updated_at": "2026-02-27T17:06:02.855560+00:00",
-    "updated_by": "human",
-    "version": 1
-  }
+  "tags": [],
+  "title": "State Machine-Driven Workflow Engine with Composable YAML Pipelines",
+  "type": null,
+  "updated_at": "2026-03-02T00:45:45.472505Z"
 }

@@ -1,0 +1,54 @@
+{
+  "assignee": {
+    "type": "unassigned"
+  },
+  "blocked_at": null,
+  "blocked_by": null,
+  "blocked_phase": null,
+  "blocked_reason": null,
+  "branch_name": null,
+  "cancelled": false,
+  "checklist": [],
+  "complexity": "medium",
+  "deadline": null,
+  "dependencies": [],
+  "description": "Add per-phase skip conditions that are evaluated before phase execution. If any guard matches, the phase is marked Skipped and the workflow advances to the next phase.\n\nChanges needed:\n1. Add skip_if: Vec<String> to WorkflowPhaseConfig in workflow_config.rs\n2. Add simple expression evaluator for guards. Expressions operate on typed task context fields:\n   - task_type == 'docs' | task_type == 'chore' | task_type == 'experiment'\n   - impact_area not contains 'Frontend'\n   - phase_capability.writes_files == false\n3. Evaluate skip_if guards in lifecycle_executor.rs before entering RunPhase state\n4. When skip fires: set phase status to Skipped, record WorkflowDecisionAction::Skip with reason, advance to next\n5. Add WorkflowPhaseStatus::Skipped handling in daemon_phase_pool.rs (already exists but unused)\n6. Add tests: skip based on task_type, skip based on impact_area, no skip when guard doesn't match\n\nKey files:\n- crates/orchestrator-core/src/workflow_config.rs\n- crates/orchestrator-core/src/workflow/lifecycle_executor.rs\n- crates/orchestrator-core/src/types.rs (WorkflowPhaseStatus::Skipped already exists)",
+  "estimated_effort": null,
+  "id": "TASK-169",
+  "impact_area": [],
+  "linked_architecture_entities": [],
+  "linked_requirements": [
+    "REQ-031"
+  ],
+  "metadata": {
+    "completed_at": null,
+    "created_at": "2026-03-02T00:45:01.594308Z",
+    "created_by": "ao-cli",
+    "started_at": null,
+    "updated_at": "2026-03-02T00:45:01.594308Z",
+    "updated_by": "ao-cli",
+    "version": 1
+  },
+  "paused": false,
+  "priority": "high",
+  "resource_requirements": {
+    "max_cpu_percent": null,
+    "max_memory_mb": null,
+    "requires_network": true
+  },
+  "risk": "medium",
+  "scope": "medium",
+  "status": "backlog",
+  "tags": [],
+  "title": "Add skip_if guard conditions to workflow phase execution",
+  "type": "feature",
+  "workflow_metadata": {
+    "requires_architecture": false,
+    "requires_design": false,
+    "requires_production_deploy": false,
+    "requires_qa": true,
+    "requires_staging_deploy": false,
+    "workflow_id": null
+  },
+  "worktree_path": null
+}

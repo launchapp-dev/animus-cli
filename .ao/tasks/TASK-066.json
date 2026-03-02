@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-03-01T20:47:15.528253Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "Blocked by status update",
+  "blocked_reason": null,
   "branch_name": "ao/task-066",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T16:05:15.157634Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:37:28.139998Z",
-    "updated_at": "2026-03-01T20:47:15.528254Z",
+    "updated_at": "2026-03-02T00:25:47.522146Z",
     "updated_by": "ao-daemon",
-    "version": 640
+    "version": 641
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "ready",
   "tags": [],
   "title": "Add workflow phase timeline visualization in web UI",
   "type": "feature",

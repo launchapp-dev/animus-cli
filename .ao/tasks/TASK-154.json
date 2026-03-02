@@ -20,13 +20,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T00:25:07.026365Z",
     "created_at": "2026-03-01T21:19:08.818081Z",
     "created_by": "ao-cli",
     "started_at": "2026-03-01T21:50:19.331238Z",
-    "updated_at": "2026-03-01T21:50:19.747680Z",
+    "updated_at": "2026-03-02T00:25:07.026366Z",
     "updated_by": "samishukri",
-    "version": 3
+    "version": 4
   },
   "paused": false,
   "priority": "high",
@@ -37,7 +37,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Centralize runner config resolution chain (3-way duplication across crates)",
   "type": "feature",

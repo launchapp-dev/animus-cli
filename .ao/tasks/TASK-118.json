@@ -3,10 +3,10 @@
     "type": "human",
     "user_id": "samishukri"
   },
-  "blocked_at": "2026-03-01T20:52:46.469207Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "Blocked by status update",
+  "blocked_reason": null,
   "branch_name": "ao/task-118",
   "cancelled": false,
   "checklist": [],
@@ -24,11 +24,11 @@
     "created_at": "2026-02-27T19:09:52.537989Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T20:00:09.791448Z",
-    "updated_at": "2026-03-01T20:52:46.469209Z",
+    "updated_at": "2026-03-02T00:25:49.746502Z",
     "updated_by": "samishukri",
-    "version": 32
+    "version": 33
   },
-  "paused": true,
+  "paused": false,
   "priority": "medium",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -37,7 +37,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "ready",
   "tags": [],
   "title": "Remove hardcoded codex fallback in enforce_write_capable_phase_target",
   "type": "refactor",

@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-03-01T21:54:40.485647Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "dependency gate: dependency TASK-132 is ready",
+  "blocked_reason": null,
   "branch_name": null,
   "cancelled": false,
   "checklist": [],
@@ -24,15 +24,15 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T00:28:41.440577Z",
     "created_at": "2026-02-28T23:47:39.345260Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-01T21:54:40.655247Z",
+    "updated_at": "2026-03-02T00:28:41.440580Z",
     "updated_by": "ao-daemon",
-    "version": 21
+    "version": 23
   },
-  "paused": true,
+  "paused": false,
   "priority": "critical",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -41,7 +41,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "done",
   "tags": [],
   "title": "Add API key resolution and model-to-base-URL config",
   "type": "feature",

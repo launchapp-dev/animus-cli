@@ -2,10 +2,10 @@
   "assignee": {
     "type": "unassigned"
   },
-  "blocked_at": "2026-03-01T21:54:40.887343Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "dependency gate: dependency TASK-132 is ready",
+  "blocked_reason": null,
   "branch_name": null,
   "cancelled": false,
   "checklist": [],
@@ -24,15 +24,15 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T00:28:39.193606Z",
     "created_at": "2026-02-28T23:45:32.525085Z",
     "created_by": "ao-cli",
     "started_at": "2026-03-01T20:47:00.421739Z",
-    "updated_at": "2026-03-01T21:54:41.058311Z",
+    "updated_at": "2026-03-02T00:28:39.193608Z",
     "updated_by": "ao-daemon",
-    "version": 33
+    "version": 35
   },
-  "paused": true,
+  "paused": false,
   "priority": "critical",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -41,7 +41,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "done",
   "tags": [],
   "title": "Implement OpenAI-compatible streaming API client",
   "type": "feature",

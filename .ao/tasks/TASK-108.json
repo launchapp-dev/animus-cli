@@ -4,10 +4,10 @@
     "role": "default",
     "type": "agent"
   },
-  "blocked_at": "2026-03-01T21:50:48.249297Z",
+  "blocked_at": null,
   "blocked_by": null,
   "blocked_phase": null,
-  "blocked_reason": "Blocked by status update",
+  "blocked_reason": null,
   "branch_name": "ao/task-108",
   "cancelled": false,
   "checklist": [],
@@ -25,11 +25,11 @@
     "created_at": "2026-02-27T17:18:14.579689Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:24:51.828097Z",
-    "updated_at": "2026-03-01T21:50:48.249298Z",
+    "updated_at": "2026-03-02T00:25:49.015410Z",
     "updated_by": "ao-daemon",
-    "version": 175
+    "version": 176
   },
-  "paused": true,
+  "paused": false,
   "priority": "high",
   "resource_requirements": {
     "max_cpu_percent": null,
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "blocked",
+  "status": "ready",
   "tags": [],
   "title": "Extract agent phase execution into standalone AgentSlot abstraction",
   "type": "feature",
