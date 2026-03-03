@@ -15,7 +15,6 @@ mod ops_runner;
 mod ops_setup;
 mod ops_skill;
 mod ops_status;
-mod ops_task_control;
 mod ops_web;
 mod ops_workflow;
 
@@ -36,6 +35,5 @@ pub(crate) use ops_runner::*;
 pub(crate) use ops_setup::*;
 pub(crate) use ops_skill::*;
 pub(crate) use ops_status::*;
-pub(crate) use ops_task_control::*;
 pub(crate) use ops_web::*;
 pub(crate) use ops_workflow::*;

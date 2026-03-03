@@ -1,20 +1,22 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    evaluate_task_priority_policy, services::ServiceHub, TaskCreateInput, TaskFilter,
-    TaskPriorityPolicyReport, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub,
+    TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskStatus,
+    TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 
 use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 use crate::{
-    ensure_destructive_confirmation, parse_dependency_type, parse_input_json_or,
-    parse_priority_opt, parse_risk_opt, parse_task_status, parse_task_type_opt, print_value,
-    TaskCommand,
+    ensure_destructive_confirmation, invalid_input_error, parse_dependency_type,
+    parse_input_json_or, parse_priority_opt, parse_risk_opt, parse_task_status,
+    parse_task_type_opt, print_value, TaskCommand,
 };
 
 #[derive(Debug, Serialize)]
@@ -359,6 +361,218 @@ pub(crate) async fn handle_task(
         TaskCommand::History(args) => {
             let task = tasks.get(&args.id).await?;
             print_value(&task.dispatch_history, json)
+        }
+        TaskCommand::Pause(args) => {
+            let mut task = tasks.get(&args.task_id).await?;
+            if task.paused {
+                return print_value(
+                    serde_json::json!({
+                        "success": false,
+                        "message": "task is already paused",
+                        "task_id": args.task_id,
+                    }),
+                    json,
+                );
+            }
+            task.paused = true;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} paused", args.task_id),
+                }),
+                json,
+            )
+        }
+        TaskCommand::Resume(args) => {
+            let mut task = tasks.get(&args.task_id).await?;
+            if !task.paused {
+                return print_value(
+                    serde_json::json!({
+                        "success": false,
+                        "message": "task is not paused",
+                        "task_id": args.task_id,
+                    }),
+                    json,
+                );
+            }
+            task.paused = false;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} resumed", args.task_id),
+                }),
+                json,
+            )
+        }
+        TaskCommand::Cancel(args) => {
+            let mut task = tasks.get(&args.task_id).await?;
+            if task.cancelled {
+                return print_value(
+                    serde_json::json!({
+                        "success": false,
+                        "message": "task is already cancelled",
+                        "task_id": args.task_id,
+                    }),
+                    json,
+                );
+            }
+            if args.dry_run {
+                let task_id = task.id.clone();
+                return print_value(
+                    serde_json::json!({
+                        "operation": "task.cancel",
+                        "target": { "task_id": task_id },
+                        "action": "task.cancel",
+                        "dry_run": true,
+                        "destructive": true,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "mark task as cancelled",
+                            "set task status to cancelled",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao task cancel --task-id {} --confirm {}' to apply",
+                            task_id, task_id
+                        ),
+                    }),
+                    json,
+                );
+            }
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.task_id,
+                "task cancel",
+                "--task-id",
+            )?;
+            task.cancelled = true;
+            task.status = TaskStatus::Cancelled;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} cancelled", args.task_id),
+                }),
+                json,
+            )
+        }
+        TaskCommand::SetPriority(args) => {
+            let priority = parse_priority_opt(Some(args.priority.as_str()))?
+                .ok_or_else(|| anyhow!("priority is required"))?;
+            let mut task = tasks.get(&args.task_id).await?;
+            task.priority = priority;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} priority set to {}", args.task_id, args.priority),
+                }),
+                json,
+            )
+        }
+        TaskCommand::SetDeadline(args) => {
+            let mut task = tasks.get(&args.task_id).await?;
+            let normalized = args
+                .deadline
+                .as_deref()
+                .map(|deadline| {
+                    chrono::DateTime::parse_from_rfc3339(deadline)
+                        .map(|value| value.with_timezone(&Utc).to_rfc3339())
+                        .with_context(|| {
+                            format!(
+                                "invalid deadline format '{deadline}'; expected RFC 3339 timestamp such as 2026-03-01T09:30:00Z"
+                            )
+                        })
+                })
+                .transpose()?;
+            task.deadline = normalized;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} deadline updated", args.task_id),
+                }),
+                json,
+            )
+        }
+        TaskCommand::RebalancePriority(args) => {
+            const OPERATION: &str = "task.rebalance-priority";
+            const CONFIRM_TOKEN: &str = "apply";
+            let all_tasks = tasks.list().await?;
+            let plan = plan_task_priority_rebalance(
+                &all_tasks,
+                TaskPriorityRebalanceOptions {
+                    high_budget_percent: args.high_budget_percent,
+                    essential_task_ids: args.essential_task_id,
+                    nice_to_have_task_ids: args.nice_to_have_task_id,
+                },
+            )?;
+
+            if !args.apply {
+                return print_value(
+                    serde_json::json!({
+                        "operation": OPERATION,
+                        "target": all_tasks.len().to_string(),
+                        "action": OPERATION,
+                        "dry_run": true,
+                        "destructive": true,
+                        "requires_confirmation": true,
+                        "planned_effects": [
+                            "reserve critical for blocked active tasks",
+                            "enforce high-priority budget for active tasks",
+                            "rebalance remaining tasks to medium/low",
+                        ],
+                        "next_step": format!(
+                            "rerun 'ao task rebalance-priority --apply --confirm {}' to apply",
+                            CONFIRM_TOKEN
+                        ),
+                        "plan": plan,
+                    }),
+                    json,
+                );
+            }
+
+            if args.confirm.as_deref().map(str::trim) != Some(CONFIRM_TOKEN) {
+                return Err(invalid_input_error(format!(
+                    "CONFIRMATION_REQUIRED: rerun 'ao task rebalance-priority --apply --confirm {CONFIRM_TOKEN}'; run without --apply to preview changes"
+                )));
+            }
+
+            let mut tasks_by_id: HashMap<String, orchestrator_core::OrchestratorTask> = all_tasks
+                .into_iter()
+                .map(|task| (task.id.clone(), task))
+                .collect();
+            for change in &plan.changes {
+                if let Some(mut task) = tasks_by_id.remove(change.task_id.as_str()) {
+                    task.priority = change.to;
+                    task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+                    tasks.replace(task).await?;
+                }
+            }
+
+            let changed_task_ids: Vec<String> = plan
+                .changes
+                .iter()
+                .map(|change| change.task_id.clone())
+                .collect();
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "operation": OPERATION,
+                    "dry_run": false,
+                    "applied": true,
+                    "changed_count": changed_task_ids.len(),
+                    "changed_task_ids": changed_task_ids,
+                    "plan": plan,
+                }),
+                json,
+            )
         }
     }
 }

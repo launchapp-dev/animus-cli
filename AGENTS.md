@@ -101,7 +101,6 @@ Full reference: `docs/cli-command-surface.md`
 | **Infrastructure** | `git`, `model`, `skill`, `mcp`, `web` | Git ops, model routing, skill packages, MCP server, web UI |
 | **UX** | `status`, `setup`, `doctor`, `tui`, `workflow-monitor` | Dashboard, onboarding, diagnostics, TUI |
 | **Review/QA** | `review`, `qa` | Review decisions, QA gates |
-| **Control** | `task-control` | Pause/resume/cancel tasks, priority, deadlines |
 | **Facade** | `planning` | Mirrors vision + requirements (legacy alias) |
 
 ## Key Implementation Files

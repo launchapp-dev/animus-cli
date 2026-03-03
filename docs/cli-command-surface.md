@@ -69,9 +69,8 @@ ao
 │   ├── checklist-update     Toggle checklist item
 │   ├── dependency-add       Add dependency edge
 │   ├── dependency-remove    Remove dependency edge
-│   └── status               Set task status
-│
-├── task-control             Task operational controls
+│   ├── status               Set task status
+│   ├── history              Show workflow dispatch history
 │   ├── pause                Pause task
 │   ├── resume               Resume paused task
 │   ├── cancel               Cancel task (confirmation)

@@ -42,7 +42,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
-    /// Manage tasks, dependencies, and status.
+    /// Manage tasks, dependencies, status, and operational controls.
     Task {
         #[command(subcommand)]
         command: TaskCommand,
@@ -92,11 +92,6 @@ pub(crate) enum Command {
     Errors {
         #[command(subcommand)]
         command: ErrorsCommand,
-    },
-    /// Apply operational task controls such as cancel, priority, and deadline.
-    TaskControl {
-        #[command(subcommand)]
-        command: TaskControlCommand,
     },
     /// Manage Git repositories, worktrees, and confirmation requests.
     Git {

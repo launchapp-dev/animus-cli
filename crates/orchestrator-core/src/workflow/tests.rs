@@ -467,6 +467,7 @@ fn make_task(task_type: TaskType, priority: Priority) -> OrchestratorTask {
         resource_requirements: ResourceRequirements::default(),
         consecutive_dispatch_failures: None,
         last_dispatch_failure_at: None,
+        dispatch_history: Vec::new(),
     }
 }
 

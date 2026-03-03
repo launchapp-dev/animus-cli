@@ -899,7 +899,7 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
         .to_string();
 
     let confirmation_error =
-        harness.run_json_err(&["task-control", "cancel", "--task-id", &task_id])?;
+        harness.run_json_err(&["task", "cancel", "--task-id", &task_id])?;
     let confirmation_message = confirmation_error
         .pointer("/error/message")
         .and_then(Value::as_str)
@@ -907,15 +907,15 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
     assert_eq!(
         confirmation_message,
         format!(
-            "CONFIRMATION_REQUIRED: rerun 'ao task-control cancel --task-id {} --confirm {}'; use --dry-run to preview changes",
+            "CONFIRMATION_REQUIRED: rerun 'ao task cancel --task-id {} --confirm {}'; use --dry-run to preview changes",
             task_id, task_id
         ),
-        "task-control cancel confirmation message should use canonical token order"
+        "task cancel confirmation message should use canonical token order"
     );
 
     let preview =
-        harness.run_json_ok(&["task-control", "cancel", "--task-id", &task_id, "--dry-run"])?;
-    assert_shared_destructive_dry_run_contract(&preview, "task-control.cancel", true);
+        harness.run_json_ok(&["task", "cancel", "--task-id", &task_id, "--dry-run"])?;
+    assert_shared_destructive_dry_run_contract(&preview, "task.cancel", true);
 
     let before_cancel = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
     assert_eq!(
@@ -926,7 +926,7 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
     );
 
     let cancelled = harness.run_json_ok(&[
-        "task-control",
+        "task",
         "cancel",
         "--task-id",
         &task_id,
@@ -998,7 +998,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "in-progress",
     ])?;
     harness.run_json_ok(&[
-        "task-control",
+        "task",
         "set-deadline",
         "--task-id",
         &early_id,
@@ -1030,7 +1030,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "in-progress",
     ])?;
     harness.run_json_ok(&[
-        "task-control",
+        "task",
         "set-deadline",
         "--task-id",
         &late_id,
@@ -1039,7 +1039,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
     ])?;
 
     let dry_run = harness.run_json_ok(&[
-        "task-control",
+        "task",
         "rebalance-priority",
         "--high-budget-percent",
         "34",
@@ -1050,7 +1050,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
     );
     assert_eq!(
         dry_run.pointer("/data/operation").and_then(Value::as_str),
-        Some("task-control.rebalance-priority")
+        Some("task.rebalance-priority")
     );
     assert_eq!(
         dry_run
@@ -1066,7 +1066,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
     );
 
     let confirmation_error = harness.run_json_err(&[
-        "task-control",
+        "task",
         "rebalance-priority",
         "--high-budget-percent",
         "34",
@@ -1082,7 +1082,7 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
     );
 
     let applied = harness.run_json_ok(&[
-        "task-control",
+        "task",
         "rebalance-priority",
         "--high-budget-percent",
         "34",
@@ -1144,7 +1144,7 @@ fn e2e_task_control_rebalance_priority_rejects_conflicting_overrides() -> Result
     harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "ready"])?;
 
     let payload = harness.run_json_err(&[
-        "task-control",
+        "task",
         "rebalance-priority",
         "--essential-task-id",
         &task_id,

@@ -19,7 +19,6 @@ mod runner_types;
 mod setup_types;
 mod shared_types;
 mod skill_types;
-mod task_control_types;
 mod task_types;
 mod tui_types;
 mod vision_types;
@@ -47,7 +46,6 @@ pub(crate) use runner_types::*;
 pub(crate) use setup_types::*;
 pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
-pub(crate) use task_control_types::*;
 pub(crate) use task_types::*;
 pub(crate) use tui_types::*;
 pub(crate) use vision_types::*;
@@ -255,10 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn task_control_rebalance_priority_parses_apply_and_overrides() {
+    fn task_rebalance_priority_parses_apply_and_overrides() {
         let cli = Cli::try_parse_from([
             "ao",
-            "task-control",
+            "task",
             "rebalance-priority",
             "--high-budget-percent",
             "15",
@@ -270,11 +268,11 @@ mod tests {
             "--confirm",
             "apply",
         ])
-        .expect("task-control rebalance-priority should parse");
+        .expect("task rebalance-priority should parse");
 
         match cli.command {
-            Command::TaskControl {
-                command: TaskControlCommand::RebalancePriority(args),
+            Command::Task {
+                command: TaskCommand::RebalancePriority(args),
             } => {
                 assert_eq!(args.high_budget_percent, 15);
                 assert_eq!(args.essential_task_id, vec!["TASK-001".to_string()]);
@@ -282,15 +280,15 @@ mod tests {
                 assert!(args.apply);
                 assert_eq!(args.confirm.as_deref(), Some("apply"));
             }
-            _ => panic!("expected task-control rebalance-priority command"),
+            _ => panic!("expected task rebalance-priority command"),
         }
     }
 
     #[test]
-    fn task_control_rebalance_priority_rejects_budget_above_100() {
+    fn task_rebalance_priority_rejects_budget_above_100() {
         let error = Cli::try_parse_from([
             "ao",
-            "task-control",
+            "task",
             "rebalance-priority",
             "--high-budget-percent",
             "101",

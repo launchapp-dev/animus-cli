@@ -97,4 +97,3 @@ Full command tree reference: `docs/cli-command-surface.md`
 ## Known Issues to Be Aware Of
 
 - `classify_error` uses string matching on error messages (fragile)
-- `task-control` is split from `task` (should be merged under `task`)

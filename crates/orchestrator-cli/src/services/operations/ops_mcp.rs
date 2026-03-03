@@ -1646,7 +1646,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec![
-            "task-control".to_string(),
+            "task".to_string(),
             "cancel".to_string(),
             "--task-id".to_string(),
             input.task_id,
@@ -1670,7 +1670,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = vec![
-            "task-control".to_string(),
+            "task".to_string(),
             "set-priority".to_string(),
             "--task-id".to_string(),
             input.task_id,
@@ -1692,7 +1692,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec![
-            "task-control".to_string(),
+            "task".to_string(),
             "set-deadline".to_string(),
             "--task-id".to_string(),
             input.task_id,
@@ -2907,7 +2907,7 @@ fn build_task_delete_args(id: String, confirm: Option<String>, dry_run: bool) ->
 
 fn build_task_control_args(action: &str, task_id: String) -> Vec<String> {
     vec![
-        "task-control".to_string(),
+        "task".to_string(),
         action.to_string(),
         "--task-id".to_string(),
         task_id,
@@ -3907,7 +3907,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "task-control".to_string(),
+                "task".to_string(),
                 "pause".to_string(),
                 "--task-id".to_string(),
                 "TASK-123".to_string(),
@@ -3921,7 +3921,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "task-control".to_string(),
+                "task".to_string(),
                 "resume".to_string(),
                 "--task-id".to_string(),
                 "TASK-456".to_string(),

@@ -132,9 +132,6 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Errors { command } => {
                     services::operations::handle_errors(command, &project_root, cli.json).await
                 }
-                Command::TaskControl { command } => {
-                    services::operations::handle_task_control(command, hub.clone(), cli.json).await
-                }
                 Command::Git { command } => {
                     services::operations::handle_git(command, &project_root, cli.json).await
                 }

@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
 
 use super::{
-    parse_positive_u64, parse_positive_usize, IdArgs, DEPENDENCY_TYPE_HELP,
-    INPUT_JSON_PRECEDENCE_HELP, TASK_PRIORITY_FILTER_HELP, TASK_PRIORITY_HELP,
+    parse_percentage_u8, parse_positive_u64, parse_positive_usize, IdArgs, TaskIdArgs,
+    DEPENDENCY_TYPE_HELP, INPUT_JSON_PRECEDENCE_HELP, TASK_PRIORITY_FILTER_HELP, TASK_PRIORITY_HELP,
     TASK_RISK_FILTER_HELP, TASK_STATUS_FILTER_HELP, TASK_STATUS_HELP, TASK_TYPE_FILTER_HELP,
     TASK_TYPE_HELP,
 };
@@ -40,6 +40,92 @@ pub(crate) enum TaskCommand {
     Status(TaskStatusArgs),
     /// Show workflow dispatch history for a task.
     History(IdArgs),
+    /// Pause a task.
+    Pause(TaskIdArgs),
+    /// Resume a paused task.
+    Resume(TaskIdArgs),
+    /// Cancel a task (confirmation required).
+    Cancel(TaskCancelArgs),
+    /// Set task priority.
+    SetPriority(TaskSetPriorityArgs),
+    /// Set or clear task deadline.
+    SetDeadline(TaskSetDeadlineArgs),
+    /// Rebalance task priorities using a high-priority budget policy.
+    RebalancePriority(TaskRebalancePriorityArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskCancelArgs {
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
+    pub(crate) task_id: String,
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Confirmation token; must match --task-id."
+    )]
+    pub(crate) confirm: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Preview cancellation payload without mutating task state."
+    )]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskSetPriorityArgs {
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
+    pub(crate) task_id: String,
+    #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_HELP)]
+    pub(crate) priority: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskSetDeadlineArgs {
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
+    pub(crate) task_id: String,
+    #[arg(
+        long,
+        value_name = "RFC3339",
+        help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z."
+    )]
+    pub(crate) deadline: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskRebalancePriorityArgs {
+    #[arg(
+        long,
+        value_name = "PERCENT",
+        default_value_t = 20,
+        value_parser = parse_percentage_u8,
+        help = "Maximum percentage of active tasks allowed at high priority (0-100)."
+    )]
+    pub(crate) high_budget_percent: u8,
+    #[arg(
+        long = "essential-task-id",
+        value_name = "TASK_ID",
+        help = "Task ids to prioritize first when selecting high-priority tasks. Repeat to add multiple ids."
+    )]
+    pub(crate) essential_task_id: Vec<String>,
+    #[arg(
+        long = "nice-to-have-task-id",
+        value_name = "TASK_ID",
+        help = "Task ids to force low priority unless promoted to critical by blocked status. Repeat to add multiple ids."
+    )]
+    pub(crate) nice_to_have_task_id: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Apply planned priority changes. Without this flag, command runs in dry-run mode."
+    )]
+    pub(crate) apply: bool,
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        help = "Confirmation token required with --apply. Use 'apply'."
+    )]
+    pub(crate) confirm: Option<String>,
 }
 
 #[derive(Debug, Args)]

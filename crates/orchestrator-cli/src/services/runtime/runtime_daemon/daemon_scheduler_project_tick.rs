@@ -1039,6 +1039,7 @@ mod tests {
                     workflow: workflow.clone(),
                     task: task.clone(),
                     phase_id: phase_id.clone(),
+                    spawned_at: std::time::Instant::now(),
                     run_result: Ok(PhaseExecutionRunResult {
                         outcome: PhaseExecutionOutcome::ManualPending {
                             instructions: "manual approval required".to_string(),
@@ -1078,7 +1079,7 @@ mod tests {
         assert_eq!(failed, 0);
         assert!(events.is_empty());
         assert!(
-            !has_running_workflow_phase_pool_activity(&project_root_str),
+            !phase_pool::has_running_workflow_phase_pool_activity(&project_root_str),
             "in-flight marker should be cleared after completion processing"
         );
 
@@ -1162,7 +1163,7 @@ thinking...
             "pool should track exactly pool_size in-flight workflows"
         );
         assert!(
-            has_running_workflow_phase_pool_activity(project_root),
+            phase_pool::has_running_workflow_phase_pool_activity(project_root),
             "pool should report activity when workflows are in-flight"
         );
 
@@ -1332,6 +1333,7 @@ thinking...
                 workflow: workflow1.clone(),
                 task: task1.clone(),
                 phase_id: phase_id.clone(),
+                spawned_at: std::time::Instant::now(),
                 run_result: Ok(PhaseExecutionRunResult {
                     outcome: PhaseExecutionOutcome::Completed {
                         commit_message: None,
@@ -1513,7 +1515,7 @@ thinking...
             state.in_flight_workflow_ids.insert(workflow.id.clone());
         });
 
-        let has_before = has_running_workflow_phase_pool_activity(&project_root_str);
+        let has_before = phase_pool::has_running_workflow_phase_pool_activity(&project_root_str);
         assert!(has_before, "should have running activity before drain");
 
         let phase_id = workflow
@@ -1525,6 +1527,7 @@ thinking...
                 workflow: workflow.clone(),
                 task: task.clone(),
                 phase_id: phase_id.clone(),
+                spawned_at: std::time::Instant::now(),
                 run_result: Ok(PhaseExecutionRunResult {
                     outcome: PhaseExecutionOutcome::Completed {
                         commit_message: None,
@@ -1556,7 +1559,7 @@ thinking...
         .await
         .expect("drain should succeed");
 
-        let has_after = has_running_workflow_phase_pool_activity(&project_root_str);
+        let has_after = phase_pool::has_running_workflow_phase_pool_activity(&project_root_str);
         assert!(
             !has_after,
             "should have no running activity after drain completes"
@@ -1574,7 +1577,7 @@ thinking...
             state.in_flight_workflow_ids.insert("wf-3".to_string());
         });
 
-        let has_activity = has_running_workflow_phase_pool_activity(project_root);
+        let has_activity = phase_pool::has_running_workflow_phase_pool_activity(project_root);
         assert!(has_activity, "should detect active workflows");
 
         let active_count = with_reactive_phase_pool_state_mut(project_root, |state| {
