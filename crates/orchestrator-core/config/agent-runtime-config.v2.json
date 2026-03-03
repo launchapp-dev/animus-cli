@@ -104,7 +104,11 @@
           "task.next*",
           "task.stats*",
           "task.update*",
-          "task-control.*",
+          "task.pause*",
+          "task.resume*",
+          "task.cancel*",
+          "task.set-priority*",
+          "task.set-deadline*",
           "workflow.*",
           "history.*"
         ]
@@ -112,7 +116,6 @@
       "tool_policy": {
         "allow": [
           "task.*",
-          "task-control.*",
           "workflow.*",
           "history.*"
         ],

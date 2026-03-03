@@ -833,7 +833,11 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                             "task.next*".to_string(),
                             "task.stats*".to_string(),
                             "task.update*".to_string(),
-                            "task-control.*".to_string(),
+                            "task.pause*".to_string(),
+                            "task.resume*".to_string(),
+                            "task.cancel*".to_string(),
+                            "task.set-priority*".to_string(),
+                            "task.set-deadline*".to_string(),
                             "workflow.*".to_string(),
                             "history.*".to_string(),
                         ],
@@ -841,7 +845,6 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool_policy: AgentToolPolicy {
                         allow: vec![
                             "task.*".to_string(),
-                            "task-control.*".to_string(),
                             "workflow.*".to_string(),
                             "history.*".to_string(),
                         ],
