@@ -1,5 +1,6 @@
 use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
+use crate::services::runtime::runtime_daemon::append_daemon_event_fire_and_forget;
 use crate::shared::{
     ensure_ai_generated_tasks_for_requirements, requirement_has_active_tasks,
 };

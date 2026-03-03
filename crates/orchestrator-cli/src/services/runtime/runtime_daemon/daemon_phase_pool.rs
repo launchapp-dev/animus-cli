@@ -18,6 +18,7 @@ pub struct ReactivePhaseCompletion {
     pub task: orchestrator_core::OrchestratorTask,
     pub phase_id: String,
     pub run_result: std::result::Result<PhaseExecutionRunResult, String>,
+    pub spawned_at: std::time::Instant,
 }
 
 #[derive(Debug)]
@@ -170,6 +171,26 @@ pub async fn execute_running_workflow_phases_for_project(
 
     let available_slots = max_phases_per_tick.saturating_sub(in_flight_workflow_ids.len());
     if available_slots == 0 {
+        let workflows = hub.workflows().list().await.unwrap_or_default();
+        let queued_count = workflows
+            .iter()
+            .filter(|w| {
+                w.status == WorkflowStatus::Running
+                    && w.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
+                    && !in_flight_workflow_ids.contains(&w.id)
+            })
+            .count();
+        if queued_count > 0 {
+            append_daemon_event_fire_and_forget(
+                "pool-full",
+                Some(project_root.to_string()),
+                serde_json::json!({
+                    "queued_count": queued_count,
+                    "active_count": in_flight_workflow_ids.len(),
+                    "pool_size": max_phases_per_tick,
+                }),
+            );
+        }
         return Ok((executed, failed, phase_events));
     }
 
@@ -273,15 +294,29 @@ pub async fn execute_running_workflow_phases_for_project(
         processed = processed.saturating_add(1);
     }
 
+    let pool_size = max_phases_per_tick;
     for scheduled in scheduled_runs {
         let project_root_owned = project_root.to_string();
         let wake_sender = phase_completion_wake_sender().clone();
         let completion_tx = completion_tx.clone();
-        with_reactive_phase_pool_state_mut(project_root, |state| {
+        let pool_active = with_reactive_phase_pool_state_mut(project_root, |state| {
             state
                 .in_flight_workflow_ids
                 .insert(scheduled.workflow.id.clone());
+            state.in_flight_workflow_ids.len()
         });
+        append_daemon_event_fire_and_forget(
+            "agent-spawned",
+            Some(project_root.to_string()),
+            serde_json::json!({
+                "task_id": scheduled.workflow.task_id,
+                "workflow_id": scheduled.workflow.id,
+                "phase_id": scheduled.phase_id,
+                "pool_active": pool_active,
+                "pool_size": pool_size,
+            }),
+        );
+        let spawned_at = std::time::Instant::now();
         tokio::spawn(async move {
             let run_result = run_workflow_phase_with_agent(
                 &project_root_owned,
@@ -310,6 +345,7 @@ pub async fn execute_running_workflow_phases_for_project(
                 task: scheduled.task,
                 phase_id: scheduled.phase_id,
                 run_result,
+                spawned_at,
             });
             let _ = wake_sender.send(project_root_owned);
         });

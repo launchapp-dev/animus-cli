@@ -147,12 +147,29 @@ pub(super) fn next_daemon_event(
     }
 }
 
-fn append_daemon_event(record: &DaemonEventRecord) -> Result<()> {
+pub(crate) fn append_daemon_event(record: &DaemonEventRecord) -> Result<()> {
     let path = daemon_events_log_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     append_line(&path, &serde_json::to_string(record)?)
+}
+
+pub(crate) fn append_daemon_event_fire_and_forget(
+    event_type: &str,
+    project_root: Option<String>,
+    data: serde_json::Value,
+) {
+    let record = DaemonEventRecord {
+        schema: "ao.daemon.event.v1".to_string(),
+        id: Uuid::new_v4().to_string(),
+        seq: 0,
+        timestamp: Utc::now().to_rfc3339(),
+        event_type: event_type.to_string(),
+        project_root,
+        data,
+    };
+    let _ = append_daemon_event(&record);
 }
 
 pub(super) fn emit_daemon_event(record: &DaemonEventRecord, json: bool) -> Result<()> {

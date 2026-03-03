@@ -28,7 +28,10 @@ use daemon_notifications::{
 };
 use daemon_run::handle_daemon_run;
 
-pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
+pub(crate) use daemon_events::{
+    append_daemon_event_fire_and_forget, daemon_events_log_path, poll_daemon_events,
+    DaemonEventRecord,
+};
 
 use protocol::{is_process_alive, terminate_process};
 
