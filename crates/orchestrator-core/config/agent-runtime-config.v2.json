@@ -420,5 +420,79 @@
       "command": null,
       "manual": null
     }
+  },
+  "cli_tools": {
+    "claude": {
+      "executable": "claude",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": true,
+      "supports_vision": true,
+      "supports_long_context": true,
+      "max_context_tokens": 200000,
+      "supports_mcp": true,
+      "read_only_flag": null,
+      "response_schema_flag": null
+    },
+    "codex": {
+      "executable": "codex",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": true,
+      "supports_vision": false,
+      "supports_long_context": false,
+      "max_context_tokens": 128000,
+      "supports_mcp": true,
+      "read_only_flag": null,
+      "response_schema_flag": null
+    },
+    "gemini": {
+      "executable": "gemini",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": true,
+      "supports_vision": true,
+      "supports_long_context": true,
+      "max_context_tokens": 1000000,
+      "supports_mcp": true,
+      "read_only_flag": null,
+      "response_schema_flag": null
+    },
+    "opencode": {
+      "executable": "opencode",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": true,
+      "supports_vision": false,
+      "supports_long_context": true,
+      "max_context_tokens": 200000,
+      "supports_mcp": true,
+      "read_only_flag": null,
+      "response_schema_flag": null
+    },
+    "oai-runner": {
+      "executable": "ao-oai-runner",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": true,
+      "supports_vision": false,
+      "supports_long_context": true,
+      "max_context_tokens": 200000,
+      "supports_mcp": true,
+      "read_only_flag": "--read-only",
+      "response_schema_flag": "--response-schema"
+    },
+    "aider": {
+      "executable": "aider",
+      "supports_file_editing": true,
+      "supports_streaming": true,
+      "supports_tool_use": false,
+      "supports_vision": false,
+      "supports_long_context": false,
+      "max_context_tokens": 128000,
+      "supports_mcp": false,
+      "read_only_flag": null,
+      "response_schema_flag": null
+    }
   }
 }

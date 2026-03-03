@@ -330,6 +330,30 @@ pub struct PhaseExecutionDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliToolConfig {
+    #[serde(default)]
+    pub executable: Option<String>,
+    #[serde(default)]
+    pub supports_file_editing: Option<bool>,
+    #[serde(default)]
+    pub supports_streaming: Option<bool>,
+    #[serde(default)]
+    pub supports_tool_use: Option<bool>,
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
+    #[serde(default)]
+    pub supports_long_context: Option<bool>,
+    #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+    #[serde(default)]
+    pub supports_mcp: Option<bool>,
+    #[serde(default)]
+    pub read_only_flag: Option<String>,
+    #[serde(default)]
+    pub response_schema_flag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRuntimeConfig {
     pub schema: String,
     pub version: u32,
@@ -339,6 +363,8 @@ pub struct AgentRuntimeConfig {
     pub agents: BTreeMap<String, AgentProfile>,
     #[serde(default)]
     pub phases: BTreeMap<String, PhaseExecutionDefinition>,
+    #[serde(default)]
+    pub cli_tools: BTreeMap<String, CliToolConfig>,
 }
 
 impl Default for AgentRuntimeConfig {
@@ -1169,6 +1195,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                 },
             ),
         ]),
+        cli_tools: BTreeMap::new(),
     }
 }
 

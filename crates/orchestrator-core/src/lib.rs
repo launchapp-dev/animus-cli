@@ -18,7 +18,7 @@ pub use agent_runtime_config::{
     agent_runtime_config_path, builtin_agent_runtime_config, ensure_agent_runtime_config_file,
     load_agent_runtime_config, load_agent_runtime_config_or_default, write_agent_runtime_config,
     AgentProfile, AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides,
-    AgentRuntimeSource, BackoffConfig, CommandCwdMode, LoadedAgentRuntimeConfig,
+    AgentRuntimeSource, BackoffConfig, CliToolConfig, CommandCwdMode, LoadedAgentRuntimeConfig,
     PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode,
     PhaseManualDefinition, PhaseOutputContract, PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS,
 };
@@ -45,8 +45,9 @@ pub use domain_state::{
 pub use events::{OrchestratorEvent, OrchestratorEventKind};
 pub use runtime::{EventSink, OrchestratorRuntime, RuntimeHandle};
 pub use runtime_contract::{
-    build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, CliCapabilities,
-    CliSessionResumeMode, CliSessionResumePlan,
+    build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool,
+    cli_capabilities_from_config, cli_tool_executable, cli_tool_read_only_flag,
+    cli_tool_response_schema_flag, CliCapabilities, CliSessionResumeMode, CliSessionResumePlan,
 };
 pub use services::{
     evaluate_task_priority_policy, plan_task_priority_rebalance, DaemonServiceApi, FileServiceHub,

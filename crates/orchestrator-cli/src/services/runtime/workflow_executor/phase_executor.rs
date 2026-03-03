@@ -141,42 +141,44 @@ fn phase_output_json_schema_for(project_root: &str, phase_id: &str) -> Option<Va
         .cloned()
 }
 
-fn inject_read_only_flag(runtime_contract: &mut Value) {
+fn inject_read_only_flag(
+    runtime_contract: &mut Value,
+    config: &orchestrator_core::AgentRuntimeConfig,
+) {
     let cli_name = runtime_contract
         .pointer("/cli/name")
         .and_then(Value::as_str)
         .unwrap_or("");
 
-    if cli_name == "oai-runner" {
+    if let Some(flag) = orchestrator_core::cli_tool_read_only_flag(cli_name, config) {
         if let Some(args) = runtime_contract
             .pointer_mut("/cli/launch/args")
             .and_then(Value::as_array_mut)
         {
             let prompt_idx = args.len().saturating_sub(1);
-            args.insert(prompt_idx, Value::String("--read-only".to_string()));
+            args.insert(prompt_idx, Value::String(flag));
         }
     }
 }
 
-fn inject_response_schema_into_launch_args(runtime_contract: &mut Value, schema: &Value) {
+fn inject_response_schema_into_launch_args(
+    runtime_contract: &mut Value,
+    schema: &Value,
+    config: &orchestrator_core::AgentRuntimeConfig,
+) {
     let cli_name = runtime_contract
         .pointer("/cli/name")
         .and_then(Value::as_str)
         .unwrap_or("");
 
-    let schema_flag = match cli_name {
-        "oai-runner" => Some("--response-schema"),
-        _ => None,
-    };
-
-    if let Some(flag) = schema_flag {
+    if let Some(flag) = orchestrator_core::cli_tool_response_schema_flag(cli_name, config) {
         if let Some(args) = runtime_contract
             .pointer_mut("/cli/launch/args")
             .and_then(Value::as_array_mut)
         {
             let prompt_idx = args.len().saturating_sub(1);
             let schema_str = serde_json::to_string(schema).unwrap_or_default();
-            args.insert(prompt_idx, Value::String(flag.to_string()));
+            args.insert(prompt_idx, Value::String(flag));
             args.insert(prompt_idx + 1, Value::String(schema_str));
         }
     }
@@ -712,6 +714,7 @@ pub(crate) async fn run_workflow_phase_attempt(
     let parse_phase_decision = phase_decision_contract_for(project_root, phase_id).is_some();
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
+    let stream_to_stderr = std::env::var("AO_STREAM_PHASE_OUTPUT").is_ok();
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
         if line.is_empty() {
@@ -757,6 +760,10 @@ pub(crate) async fn run_workflow_phase_attempt(
                         pending_phase_decision = Some(decision);
                     }
                 }
+                if stream_to_stderr {
+                    use std::io::Write as _;
+                    let _ = write!(std::io::stderr(), "{}", text);
+                }
             }
             AgentRunEvent::Thinking { content, .. } => {
                 if provider_exhaustion_reason.is_none() {
@@ -788,6 +795,10 @@ pub(crate) async fn run_workflow_phase_attempt(
                         }
                         pending_phase_decision = Some(decision);
                     }
+                }
+                if stream_to_stderr {
+                    use std::io::Write as _;
+                    let _ = write!(std::io::stderr(), "[2m{}[0m", content);
                 }
             }
             AgentRunEvent::Error { error, .. } => {
@@ -943,11 +954,16 @@ pub(crate) async fn run_workflow_phase_with_agent(
                     .expect("json object")
                     .insert("policy".to_string(), policy);
             }
+            let agent_config = load_agent_runtime_config(project_root);
             if let Some(schema) = phase_output_schema.as_ref() {
-                inject_response_schema_into_launch_args(&mut runtime_contract, schema);
+                inject_response_schema_into_launch_args(
+                    &mut runtime_contract,
+                    schema,
+                    &agent_config,
+                );
             }
             if !caps.writes_files {
-                inject_read_only_flag(&mut runtime_contract);
+                inject_read_only_flag(&mut runtime_contract, &agent_config);
             }
             inject_cli_launch_overrides(
                 &mut runtime_contract,

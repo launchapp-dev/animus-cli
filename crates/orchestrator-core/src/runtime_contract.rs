@@ -1,3 +1,4 @@
+use crate::agent_runtime_config::{AgentRuntimeConfig, CliToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -101,6 +102,63 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
         }),
         _ => None,
     }
+}
+
+impl CliToolConfig {
+    pub fn to_capabilities(&self) -> CliCapabilities {
+        CliCapabilities {
+            supports_file_editing: self.supports_file_editing.unwrap_or(false),
+            supports_streaming: self.supports_streaming.unwrap_or(false),
+            supports_tool_use: self.supports_tool_use.unwrap_or(false),
+            supports_vision: self.supports_vision.unwrap_or(false),
+            supports_long_context: self.supports_long_context.unwrap_or(false),
+            max_context_tokens: self.max_context_tokens,
+            supports_mcp: self.supports_mcp.unwrap_or(false),
+        }
+    }
+}
+
+pub fn cli_capabilities_from_config(
+    tool: &str,
+    config: &AgentRuntimeConfig,
+) -> Option<CliCapabilities> {
+    let normalized = normalized_tool(tool);
+    config
+        .cli_tools
+        .get(&normalized)
+        .map(|tc| tc.to_capabilities())
+        .or_else(|| cli_capabilities_for_tool(&normalized))
+}
+
+pub fn cli_tool_executable(tool: &str, config: &AgentRuntimeConfig) -> String {
+    let normalized = normalized_tool(tool);
+    config
+        .cli_tools
+        .get(&normalized)
+        .and_then(|tc| tc.executable.clone())
+        .unwrap_or_else(|| {
+            if normalized == "oai-runner" {
+                "ao-oai-runner".to_string()
+            } else {
+                normalized
+            }
+        })
+}
+
+pub fn cli_tool_read_only_flag(tool: &str, config: &AgentRuntimeConfig) -> Option<String> {
+    let normalized = normalized_tool(tool);
+    config
+        .cli_tools
+        .get(&normalized)
+        .and_then(|tc| tc.read_only_flag.clone())
+}
+
+pub fn cli_tool_response_schema_flag(tool: &str, config: &AgentRuntimeConfig) -> Option<String> {
+    let normalized = normalized_tool(tool);
+    config
+        .cli_tools
+        .get(&normalized)
+        .and_then(|tc| tc.response_schema_flag.clone())
 }
 
 pub fn build_cli_launch_contract(

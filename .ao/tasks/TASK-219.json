@@ -20,13 +20,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-03T05:29:17.703041Z",
     "created_at": "2026-03-02T20:33:21.514250Z",
     "created_by": "ao-cli",
     "started_at": "2026-03-03T05:21:20.111103Z",
-    "updated_at": "2026-03-03T05:21:20.553838Z",
+    "updated_at": "2026-03-03T05:29:17.703042Z",
     "updated_by": "samishukri",
-    "version": 3
+    "version": 4
   },
   "paused": false,
   "priority": "high",
@@ -37,7 +37,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "in-progress",
+  "status": "done",
   "tags": [],
   "title": "Fix model routing for workflow execute — defaults to oai-runner/MiniMax instead of claude",
   "type": "bugfix",

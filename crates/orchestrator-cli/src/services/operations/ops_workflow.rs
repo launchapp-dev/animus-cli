@@ -1179,12 +1179,29 @@ pub(crate) async fn handle_workflow(
     }
 }
 
+fn trace_workflow_execute(msg: &str) {
+    use std::io::Write as _;
+    let ts = chrono::Utc::now().format("%H:%M:%S%.3f");
+    let line = format!("[{ts}] {msg}");
+    let _ = writeln!(std::io::stderr(), "[workflow-execute] {line}");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/ao-workflow-debug.log")
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 async fn handle_workflow_execute(
     args: WorkflowExecuteArgs,
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    std::env::set_var("AO_STREAM_PHASE_OUTPUT", "1");
+    trace_workflow_execute(&format!("START task_id={} pipeline={:?}", args.task_id, args.pipeline_id));
+
     let tasks = hub.tasks();
     let workflows = hub.workflows();
 
@@ -1234,6 +1251,8 @@ async fn handle_workflow_execute(
     let task_complexity = Some(task.complexity);
     let mut results = Vec::new();
 
+    trace_workflow_execute(&format!("phases_to_run={:?}", phases_to_run));
+
     for phase_id in &phases_to_run {
         let phase_attempt = workflow
             .phases
@@ -1241,6 +1260,8 @@ async fn handle_workflow_execute(
             .find(|p| &p.phase_id == phase_id)
             .map(|p| p.attempt)
             .unwrap_or(0);
+
+        trace_workflow_execute(&format!("=== PHASE {} (attempt {}) ===", phase_id, phase_attempt));
 
         let phase_overrides = crate::services::runtime::PhaseExecuteOverrides {
             tool: args.tool.clone(),
@@ -1262,6 +1283,7 @@ async fn handle_workflow_execute(
 
         match run_result {
             Ok(result) => {
+                trace_workflow_execute(&format!("phase {} completed", phase_id));
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "completed",
@@ -1270,6 +1292,7 @@ async fn handle_workflow_execute(
                 }));
             }
             Err(err) => {
+                trace_workflow_execute(&format!("phase {} FAILED: {}", phase_id, err));
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "failed",
