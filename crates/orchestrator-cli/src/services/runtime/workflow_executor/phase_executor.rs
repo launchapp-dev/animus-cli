@@ -714,7 +714,10 @@ pub(crate) async fn run_workflow_phase_attempt(
     let parse_phase_decision = phase_decision_contract_for(project_root, phase_id).is_some();
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
-    let stream_to_stderr = std::env::var("AO_STREAM_PHASE_OUTPUT").is_ok();
+    let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
+    let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
+    let stream_verbose = stream_level == "verbose";
+    let stream_to_stderr = stream_normal || stream_verbose;
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
         if line.is_empty() {
@@ -762,7 +765,16 @@ pub(crate) async fn run_workflow_phase_attempt(
                 }
                 if stream_to_stderr {
                     use std::io::Write as _;
-                    let _ = write!(std::io::stderr(), "{}", text);
+                    if stream_verbose {
+                        let _ = write!(std::io::stderr(), "{}", text);
+                    } else {
+                        let trimmed = text.trim_start();
+                        let is_json = trimmed.starts_with('{')
+                            && serde_json::from_str::<serde_json::Value>(trimmed).is_ok();
+                        if !is_json {
+                            let _ = write!(std::io::stderr(), "{}", text);
+                        }
+                    }
                 }
             }
             AgentRunEvent::Thinking { content, .. } => {
@@ -796,7 +808,7 @@ pub(crate) async fn run_workflow_phase_attempt(
                         pending_phase_decision = Some(decision);
                     }
                 }
-                if stream_to_stderr {
+                if stream_verbose {
                     use std::io::Write as _;
                     let _ = write!(std::io::stderr(), "[2m{}[0m", content);
                 }

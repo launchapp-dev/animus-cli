@@ -198,6 +198,10 @@ pub(crate) struct WorkflowExecuteArgs {
     pub(crate) phase_timeout_secs: Option<u64>,
     #[arg(long, value_name = "JSON", help = "JSON payload for additional config overrides.")]
     pub(crate) input_json: Option<String>,
+    #[arg(long, default_value_t = false, help = "Suppress agent output streaming; only show phase summaries.")]
+    pub(crate) quiet: bool,
+    #[arg(long, default_value_t = false, help = "Show all agent output including thinking blocks and raw JSON.")]
+    pub(crate) verbose: bool,
 }
 
 #[derive(Debug, Args)]

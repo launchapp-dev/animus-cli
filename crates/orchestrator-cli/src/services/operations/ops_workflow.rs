@@ -1183,7 +1183,6 @@ fn trace_workflow_execute(msg: &str) {
     use std::io::Write as _;
     let ts = chrono::Utc::now().format("%H:%M:%S%.3f");
     let line = format!("[{ts}] {msg}");
-    let _ = writeln!(std::io::stderr(), "[workflow-execute] {line}");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1193,13 +1192,103 @@ fn trace_workflow_execute(msg: &str) {
     }
 }
 
+fn use_ansi_colors() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal()
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+fn emit_phase_header(phase_id: &str, index: usize, total: usize, json: bool) {
+    if json {
+        return;
+    }
+    use std::io::Write as _;
+    let color = use_ansi_colors();
+    let (bold, cyan, reset) = if color {
+        ("\x1b[1m", "\x1b[36m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
+    let _ = writeln!(
+        std::io::stderr(),
+        "\n{bold}{cyan}━━━ Phase {}/{}: {} ━━━{reset}",
+        index + 1,
+        total,
+        phase_id,
+    );
+}
+
+fn emit_phase_footer(phase_id: &str, duration: std::time::Duration, succeeded: bool, json: bool) {
+    if json {
+        return;
+    }
+    use std::io::Write as _;
+    let color = use_ansi_colors();
+    let dur = format_duration(duration);
+    if succeeded {
+        let (green, reset) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+        let _ = writeln!(std::io::stderr(), "{green}completed {phase_id} in {dur}{reset}");
+    } else {
+        let (red, reset) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+        let _ = writeln!(std::io::stderr(), "{red}failed {phase_id} in {dur}{reset}");
+    }
+}
+
+fn emit_workflow_summary(
+    results: &[serde_json::Value],
+    total_duration: std::time::Duration,
+    json: bool,
+) {
+    if json {
+        return;
+    }
+    use std::io::Write as _;
+    let color = use_ansi_colors();
+    let (bold, green, red, dim, reset) = if color {
+        ("\x1b[1m", "\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    let _ = writeln!(std::io::stderr(), "\n{bold}━━━ Workflow Summary ━━━{reset}");
+    for r in results {
+        let pid = r["phase_id"].as_str().unwrap_or("?");
+        let status = r["status"].as_str().unwrap_or("?");
+        let (icon, clr) = if status == "completed" {
+            ("ok", green)
+        } else {
+            ("FAIL", red)
+        };
+        let _ = writeln!(std::io::stderr(), "  {clr}{icon}{reset} {pid}: {dim}{status}{reset}");
+    }
+    let _ = writeln!(
+        std::io::stderr(),
+        "  {bold}Total: {}{reset}",
+        format_duration(total_duration)
+    );
+}
+
 async fn handle_workflow_execute(
     args: WorkflowExecuteArgs,
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    std::env::set_var("AO_STREAM_PHASE_OUTPUT", "1");
+    let stream_level = if args.quiet {
+        "quiet"
+    } else if args.verbose {
+        "verbose"
+    } else {
+        "normal"
+    };
+    std::env::set_var("AO_STREAM_PHASE_OUTPUT", stream_level);
     trace_workflow_execute(&format!("START task_id={} pipeline={:?}", args.task_id, args.pipeline_id));
 
     let tasks = hub.tasks();
@@ -1223,12 +1312,14 @@ async fn handle_workflow_execute(
             .ok_or_else(|| anyhow!("no workflow found for task '{}'", args.task_id))
     })?;
 
-    let execution_cwd = task
-        .worktree_path
-        .as_deref()
-        .filter(|p| !p.is_empty() && Path::new(p).exists())
-        .unwrap_or(project_root)
-        .to_string();
+    let execution_cwd = crate::services::runtime::daemon_scheduler::ensure_task_execution_cwd(
+        hub.clone(),
+        project_root,
+        &task,
+    )
+    .await
+    .unwrap_or_else(|_| project_root.to_string());
+    trace_workflow_execute(&format!("execution_cwd={}", execution_cwd));
 
     let phases_to_run: Vec<String> = if let Some(ref phase_id) = args.phase {
         vec![phase_id.clone()]
@@ -1250,10 +1341,12 @@ async fn handle_workflow_execute(
 
     let task_complexity = Some(task.complexity);
     let mut results = Vec::new();
+    let total_phases = phases_to_run.len();
+    let workflow_start = std::time::Instant::now();
 
     trace_workflow_execute(&format!("phases_to_run={:?}", phases_to_run));
 
-    for phase_id in &phases_to_run {
+    for (phase_index, phase_id) in phases_to_run.iter().enumerate() {
         let phase_attempt = workflow
             .phases
             .iter()
@@ -1262,6 +1355,8 @@ async fn handle_workflow_execute(
             .unwrap_or(0);
 
         trace_workflow_execute(&format!("=== PHASE {} (attempt {}) ===", phase_id, phase_attempt));
+        emit_phase_header(phase_id, phase_index, total_phases, json);
+        let phase_start = std::time::Instant::now();
 
         let phase_overrides = crate::services::runtime::PhaseExecuteOverrides {
             tool: args.tool.clone(),
@@ -1281,21 +1376,27 @@ async fn handle_workflow_execute(
         )
         .await;
 
+        let phase_elapsed = phase_start.elapsed();
+
         match run_result {
             Ok(result) => {
                 trace_workflow_execute(&format!("phase {} completed", phase_id));
+                emit_phase_footer(phase_id, phase_elapsed, true, json);
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "completed",
+                    "duration_secs": phase_elapsed.as_secs(),
                     "outcome": result.outcome,
                     "metadata": result.metadata,
                 }));
             }
             Err(err) => {
                 trace_workflow_execute(&format!("phase {} FAILED: {}", phase_id, err));
+                emit_phase_footer(phase_id, phase_elapsed, false, json);
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "failed",
+                    "duration_secs": phase_elapsed.as_secs(),
                     "error": err.to_string(),
                 }));
                 break;
@@ -1303,12 +1404,16 @@ async fn handle_workflow_execute(
         }
     }
 
+    let total_elapsed = workflow_start.elapsed();
+    emit_workflow_summary(&results, total_elapsed, json);
+
     print_value(
         serde_json::json!({
             "workflow_id": workflow.id,
             "task_id": task.id,
             "execution_cwd": execution_cwd,
             "phases_requested": phases_to_run,
+            "total_duration_secs": total_elapsed.as_secs(),
             "results": results,
         }),
         json,
