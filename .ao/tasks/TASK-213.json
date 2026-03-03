@@ -19,13 +19,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T23:08:48.331389Z",
     "created_at": "2026-03-02T20:08:28.832302Z",
     "created_by": "ao-cli",
     "started_at": null,
-    "updated_at": "2026-03-02T20:08:44.158625Z",
+    "updated_at": "2026-03-02T23:08:48.331391Z",
     "updated_by": "ao-cli",
-    "version": 2
+    "version": 3
   },
   "paused": false,
   "priority": "high",
@@ -36,7 +36,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Add workflow management MCP tools (phases, pipelines, config)",
   "type": "feature",

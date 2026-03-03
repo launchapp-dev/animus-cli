@@ -1,4 +1,8 @@
 agents:
+  default:
+    model: claude-sonnet-4-6
+    tool: claude
+
   po-reviewer:
     system_prompt: |
       You are a Product Owner reviewing completed development work.

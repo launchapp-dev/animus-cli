@@ -21,13 +21,13 @@
   "linked_architecture_entities": [],
   "linked_requirements": [],
   "metadata": {
-    "completed_at": null,
+    "completed_at": "2026-03-02T23:19:00.121126Z",
     "created_at": "2026-02-27T17:18:52.661706Z",
     "created_by": "ao-cli",
     "started_at": "2026-02-27T17:46:22.367928Z",
-    "updated_at": "2026-02-28T16:55:38.587227Z",
+    "updated_at": "2026-03-02T23:19:00.121128Z",
     "updated_by": "ao-daemon",
-    "version": 27
+    "version": 28
   },
   "paused": false,
   "priority": "medium",
@@ -38,7 +38,7 @@
   },
   "risk": "medium",
   "scope": "medium",
-  "status": "ready",
+  "status": "done",
   "tags": [],
   "title": "Add pool utilization metrics to daemon status and health endpoints",
   "type": "feature",
