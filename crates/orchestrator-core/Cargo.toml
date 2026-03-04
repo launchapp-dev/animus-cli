@@ -26,3 +26,4 @@ tempfile = "3"
 
 [features]
 jira = ["reqwest"]
+linear = ["reqwest"]

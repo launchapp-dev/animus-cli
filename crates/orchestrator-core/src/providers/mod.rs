@@ -76,6 +76,8 @@ pub mod builtin;
 #[cfg(feature = "jira")]
 pub mod jira;
 pub mod git;
+#[cfg(feature = "linear")]
+pub mod linear;
 
 pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
 #[cfg(feature = "jira")]
@@ -84,3 +86,5 @@ pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult,
     PullRequestInfo, WorktreeInfo,
 };
+#[cfg(feature = "linear")]
+pub use linear::LinearTaskProvider;
