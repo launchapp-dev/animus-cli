@@ -66,6 +66,12 @@ pub(crate) struct DaemonStartArgs {
     pub(crate) autonomous: bool,
     #[arg(
         long,
+        default_value_t = false,
+        help = "Use legacy scheduler tick mode (deprecated)."
+    )]
+    pub(crate) legacy: bool,
+    #[arg(
+        long,
         value_name = "SECONDS",
         default_value_t = 5,
         value_parser = parse_positive_u64,
@@ -282,6 +288,12 @@ pub(crate) struct DaemonRunArgs {
         help = "Run one scheduler tick and exit."
     )]
     pub(crate) once: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Use legacy scheduler tick mode (deprecated)."
+    )]
+    pub(crate) legacy: bool,
 }
 
 #[derive(Debug, Args)]

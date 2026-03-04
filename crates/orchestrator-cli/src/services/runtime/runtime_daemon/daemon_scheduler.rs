@@ -1784,6 +1784,7 @@ mod tests {
             phase_timeout_secs: None,
             idle_timeout_secs: None,
             once: true,
+            legacy: false,
         };
         let summary = project_tick(&project_root, &args)
             .await
@@ -1871,6 +1872,7 @@ mod tests {
             phase_timeout_secs: None,
             idle_timeout_secs: None,
             once: true,
+            legacy: false,
         };
         let summary = project_tick(&project_root, &args)
             .await

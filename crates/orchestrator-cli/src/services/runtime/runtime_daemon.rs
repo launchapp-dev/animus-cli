@@ -516,6 +516,9 @@ fn spawn_autonomous_daemon_run(
         .arg(args.stale_threshold_hours.to_string())
         .arg("--max-tasks-per-tick")
         .arg(args.max_tasks_per_tick.to_string());
+    if args.legacy {
+        command.arg("--legacy");
+    }
     if let Some(pool_size) = args.pool_size {
         command.arg("--pool-size").arg(pool_size.to_string());
     } else if let Some(max_agents) = args.max_agents {
