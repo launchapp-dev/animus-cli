@@ -2,10 +2,16 @@ use super::*;
 
 #[path = "daemon_git_helpers.rs"]
 mod git_helpers;
+
+#[allow(dead_code)]
 #[path = "daemon_git_worktree.rs"]
 mod git_worktree;
+
+#[allow(dead_code)]
 #[path = "daemon_git_merge.rs"]
 mod git_merge;
+
+#[allow(dead_code)]
 #[path = "daemon_git_integration.rs"]
 mod git_integration;
 #[path = "daemon_git_runtime_refresh.rs"]

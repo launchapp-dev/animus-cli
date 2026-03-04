@@ -1,3 +1,5 @@
+//! DEPRECATED: Legacy phase pool. Workflow-runner now manages phase execution.
+#![allow(dead_code)]
 use super::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

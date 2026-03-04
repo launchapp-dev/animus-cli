@@ -6,6 +6,7 @@ use crate::services::runtime::runtime_daemon::daemon_process_manager::{Completed
 #[path = "daemon_task_dispatch.rs"]
 pub(super) mod task_dispatch;
 
+#[allow(dead_code)]
 #[path = "daemon_phase_pool.rs"]
 pub(super) mod phase_pool;
 
@@ -18,6 +19,7 @@ pub(super) mod task_lifecycle;
 #[path = "daemon_bootstrap.rs"]
 pub(super) mod bootstrap;
 
+#[allow(dead_code)]
 #[path = "daemon_agent_slot.rs"]
 pub(super) mod agent_slot;
 

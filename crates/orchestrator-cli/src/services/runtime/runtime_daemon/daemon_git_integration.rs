@@ -1,3 +1,4 @@
+//! DEPRECATED: Will be replaced by GitProvider trait. See providers/git.rs
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

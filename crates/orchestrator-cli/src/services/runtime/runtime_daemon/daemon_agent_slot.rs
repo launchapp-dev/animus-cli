@@ -1,3 +1,4 @@
+//! DEPRECATED: Agent lifecycle now owned by workflow-runner.
 use super::*;
 use crate::services::runtime::workflow_executor::workflow_runner::{
     phase_execution_events_from_signals, AiRecoveryAction, AI_RECOVERY_MARKER,
