@@ -21,9 +21,10 @@ sha2 = "0.10"
 protocol = { path = "../protocol" }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 
-[dev-dependencies]
-tempfile = "3"
-
 [features]
 jira = ["reqwest"]
 linear = ["reqwest"]
+gitlab = ["reqwest"]
+
+[dev-dependencies]
+tempfile = "3"

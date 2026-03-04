@@ -75,6 +75,8 @@ pub trait RequirementsProvider: Send + Sync {
 pub mod builtin;
 #[cfg(feature = "jira")]
 pub mod jira;
+#[cfg(feature = "gitlab")]
+pub mod gitlab;
 pub mod git;
 #[cfg(feature = "linear")]
 pub mod linear;
@@ -88,3 +90,5 @@ pub use git::{
 };
 #[cfg(feature = "linear")]
 pub use linear::LinearTaskProvider;
+#[cfg(feature = "gitlab")]
+pub use gitlab::{GitLabConfig, GitLabGitProvider};
