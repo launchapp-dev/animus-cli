@@ -1061,6 +1061,24 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         }
     }
 
+    for (agent_id, profile) in &config.agent_profiles {
+        for server in &profile.mcp_servers {
+            if server.trim().is_empty() {
+                errors.push(format!(
+                    "agent_profiles['{}'].mcp_servers must not contain empty values",
+                    agent_id
+                ));
+                continue;
+            }
+            if !config.mcp_servers.contains_key(server) {
+                errors.push(format!(
+                    "agent_profiles['{}'].mcp_servers references unknown MCP server '{}'",
+                    agent_id, server
+                ));
+            }
+        }
+    }
+
     for (name, definition) in &config.tools {
         if name.trim().is_empty() {
             errors.push("tools contains an empty tool name".to_string());
@@ -2882,6 +2900,98 @@ integrations:
         assert_eq!(
             merged.integrations.unwrap().git.as_ref().and_then(|git| git.base_branch.as_deref()),
             Some("main")
+        );
+    }
+
+    #[test]
+    fn yaml_parses_top_level_mcp_servers() {
+        let yaml = r#"
+mcp_servers:
+  ao:
+    command: "node"
+    args: ["server.js"]
+    tools:
+      - search
+
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse MCP servers");
+        let server = config
+            .mcp_servers
+            .get("ao")
+            .expect("MCP server should be parsed");
+        assert_eq!(server.command, "node");
+        assert_eq!(server.args, vec!["server.js"]);
+        assert_eq!(server.tools, vec!["search"]);
+    }
+
+    #[test]
+    fn yaml_parses_agent_profile_referencing_top_level_mcp_server() {
+        let yaml = r#"
+mcp_servers:
+  ao:
+    command: "node"
+    args: ["server.js"]
+    tools:
+      - search
+agents:
+  researcher:
+    system_prompt: "You are a research agent focused on code analysis"
+    mcp_servers:
+      - ao
+
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse");
+        let profile = &config.agent_profiles["researcher"];
+        assert_eq!(profile.mcp_servers, vec!["ao".to_string()]);
+        assert!(validate_workflow_config(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_agent_profile_unknown_mcp_server_reference() {
+        let yaml = r#"
+mcp_servers:
+  ao:
+    command: "node"
+    args: ["server.js"]
+    tools:
+      - search
+agents:
+  researcher:
+    system_prompt: "You are a research agent focused on code analysis"
+    mcp_servers:
+      - missing
+
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse");
+        let err = validate_workflow_config(&config).expect_err("should reject missing MCP reference");
+        let message = err.to_string();
+        assert!(
+            message.contains(
+                "agent_profiles['researcher'].mcp_servers references unknown MCP server 'missing'"
+            ),
+            "error should mention unknown MCP server reference: {}",
+            message
         );
     }
 

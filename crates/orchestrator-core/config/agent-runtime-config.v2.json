@@ -19,7 +19,7 @@
       "description": "Default workflow phase agent profile.",
       "system_prompt": "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
       "role": null,
-      "mcp_servers": {},
+      "mcp_servers": [],
       "tool_policy": {
         "allow": [],
         "deny": []
@@ -41,17 +41,7 @@
       "description": "Compatibility alias for the software engineer persona.",
       "system_prompt": "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
       "role": "software_engineer",
-      "mcp_servers": {
-        "ao": [
-          "task.get*",
-          "task.list*",
-          "workflow.get*",
-          "workflow.list*",
-          "output.*",
-          "history.*",
-          "errors.*"
-        ]
-      },
+      "mcp_servers": ["ao"],
       "tool_policy": {
         "allow": [
           "task.*",
@@ -97,22 +87,7 @@
       "description": "Engineering Manager persona for prioritization, queue management, and scheduling.",
       "system_prompt": "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.",
       "role": "engineering_manager",
-      "mcp_servers": {
-        "ao": [
-          "task.list*",
-          "task.prioritized*",
-          "task.next*",
-          "task.stats*",
-          "task.update*",
-          "task.pause*",
-          "task.resume*",
-          "task.cancel*",
-          "task.set-priority*",
-          "task.set-deadline*",
-          "workflow.*",
-          "history.*"
-        ]
-      },
+      "mcp_servers": ["ao"],
       "tool_policy": {
         "allow": [
           "task.*",
@@ -157,18 +132,7 @@
       "description": "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.",
       "system_prompt": "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.",
       "role": "product_owner",
-      "mcp_servers": {
-        "ao": [
-          "vision.*",
-          "requirements.*",
-          "task.get*",
-          "task.list*",
-          "review.*",
-          "qa.*",
-          "workflow.get*",
-          "workflow.list*"
-        ]
-      },
+      "mcp_servers": ["ao"],
       "tool_policy": {
         "allow": [
           "vision.*",
@@ -215,17 +179,7 @@
       "description": "Software Engineer persona for implementation, testing, and code review.",
       "system_prompt": "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
       "role": "software_engineer",
-      "mcp_servers": {
-        "ao": [
-          "task.get*",
-          "task.list*",
-          "workflow.get*",
-          "workflow.list*",
-          "output.*",
-          "history.*",
-          "errors.*"
-        ]
-      },
+      "mcp_servers": ["ao"],
       "tool_policy": {
         "allow": [
           "task.*",

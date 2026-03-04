@@ -239,7 +239,7 @@ pub struct AgentProfile {
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
-    pub mcp_servers: BTreeMap<String, Vec<String>>,
+    pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub tool_policy: AgentToolPolicy,
     #[serde(default)]
@@ -736,18 +736,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
         kind: "implementation_result".to_string(),
         required_fields: vec!["commit_message".to_string()],
     };
-    let swe_mcp_servers = BTreeMap::from([(
-        "ao".to_string(),
-        vec![
-            "task.get*".to_string(),
-            "task.list*".to_string(),
-            "workflow.get*".to_string(),
-            "workflow.list*".to_string(),
-            "output.*".to_string(),
-            "history.*".to_string(),
-            "errors.*".to_string(),
-        ],
-    )]);
+    let swe_mcp_servers = vec!["ao".to_string()];
     let swe_tool_policy = AgentToolPolicy {
         allow: vec![
             "task.*".to_string(),
@@ -796,7 +785,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     description: "Default workflow phase agent profile".to_string(),
                     system_prompt: "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.".to_string(),
                     role: None,
-                    mcp_servers: BTreeMap::new(),
+                    mcp_servers: Vec::new(),
                     tool_policy: AgentToolPolicy::default(),
                     skills: vec![],
                     capabilities: BTreeMap::new(),
@@ -851,23 +840,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     description: "Engineering Manager persona for prioritization, queue management, and scheduling.".to_string(),
                     system_prompt: "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.".to_string(),
                     role: Some("engineering_manager".to_string()),
-                    mcp_servers: BTreeMap::from([(
-                        "ao".to_string(),
-                        vec![
-                            "task.list*".to_string(),
-                            "task.prioritized*".to_string(),
-                            "task.next*".to_string(),
-                            "task.stats*".to_string(),
-                            "task.update*".to_string(),
-                            "task.pause*".to_string(),
-                            "task.resume*".to_string(),
-                            "task.cancel*".to_string(),
-                            "task.set-priority*".to_string(),
-                            "task.set-deadline*".to_string(),
-                            "workflow.*".to_string(),
-                            "history.*".to_string(),
-                        ],
-                    )]),
+                    mcp_servers: vec!["ao".to_string()],
                     tool_policy: AgentToolPolicy {
                         allow: vec![
                             "task.*".to_string(),
@@ -918,19 +891,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     description: "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.".to_string(),
                     system_prompt: "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.".to_string(),
                     role: Some("product_owner".to_string()),
-                    mcp_servers: BTreeMap::from([(
-                        "ao".to_string(),
-                        vec![
-                            "vision.*".to_string(),
-                            "requirements.*".to_string(),
-                            "task.get*".to_string(),
-                            "task.list*".to_string(),
-                            "review.*".to_string(),
-                            "qa.*".to_string(),
-                            "workflow.get*".to_string(),
-                            "workflow.list*".to_string(),
-                        ],
-                    )]),
+                    mcp_servers: vec!["ao".to_string()],
                     tool_policy: AgentToolPolicy {
                         allow: vec![
                             "vision.*".to_string(),
@@ -1656,11 +1617,13 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
             return Err(anyhow!("agents['{}'].role must not be empty", agent_id));
         }
 
-        if profile.mcp_servers.iter().any(|(server, patterns)| {
-            server.trim().is_empty() || patterns.iter().any(|pattern| pattern.trim().is_empty())
-        }) {
+        if profile
+            .mcp_servers
+            .iter()
+            .any(|server| server.trim().is_empty())
+        {
             return Err(anyhow!(
-                "agents['{}'].mcp_servers must not contain empty server ids or tool patterns",
+                "agents['{}'].mcp_servers must not contain empty values",
                 agent_id
             ));
         }
@@ -1833,18 +1796,9 @@ mod tests {
         assert_eq!(swe.capabilities.get("code_review"), Some(&true));
         assert_eq!(swe.capabilities.get("planning"), Some(&false));
 
-        let em_tools = em.mcp_servers.get("ao").expect("em should define ao tools");
-        let po_tools = po.mcp_servers.get("ao").expect("po should define ao tools");
-        let swe_tools = swe
-            .mcp_servers
-            .get("ao")
-            .expect("swe should define ao tools");
-
-        assert!(em_tools
-            .iter()
-            .any(|pattern| pattern == "task.prioritized*"));
-        assert!(po_tools.iter().any(|pattern| pattern == "requirements.*"));
-        assert!(swe_tools.iter().any(|pattern| pattern == "errors.*"));
+        assert!(em.mcp_servers.iter().any(|server| server == "ao"));
+        assert!(po.mcp_servers.iter().any(|server| server == "ao"));
+        assert!(swe.mcp_servers.iter().any(|server| server == "ao"));
     }
 
     #[test]

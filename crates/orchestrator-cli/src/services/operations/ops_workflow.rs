@@ -538,7 +538,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                             profile.system_prompt.clone()
                         },
                         role: None,
-                        mcp_servers: BTreeMap::new(),
+                        mcp_servers: Vec::new(),
                         tool_policy: Default::default(),
                         skills: Vec::new(),
                         capabilities: BTreeMap::new(),
