@@ -1951,6 +1951,51 @@ thinking...
     }
 
     #[test]
+    fn cron_matches_exact_expression() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        assert!(cron_matches("30 12 4 3 3", now));
+        assert!(!cron_matches("31 12 4 3 4", now));
+    }
+
+    #[test]
+    fn cron_matches_with_wildcards() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:00:00Z".parse().expect("timestamp should parse");
+        assert!(cron_matches("* * * * *", now));
+        assert!(cron_matches("0 * * * *", now));
+    }
+
+    #[test]
+    fn cron_matches_shortcut_expressions() {
+        let sunday_midnight: chrono::DateTime<chrono::Utc> =
+            "2026-03-01T00:00:00Z".parse().expect("timestamp should parse");
+        let quarter_hour: chrono::DateTime<chrono::Utc> =
+            "2026-03-01T12:15:00Z".parse().expect("timestamp should parse");
+        assert!(cron_matches("@weekly", sunday_midnight));
+        assert!(cron_matches("@monthly", sunday_midnight));
+        assert!(!cron_matches("@hourly", quarter_hour));
+    }
+
+    #[test]
+    fn evaluate_schedules_skips_disabled_schedules() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "disabled".to_string(),
+            cron: "30 12 * * *".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: false,
+        }];
+        let state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now);
+
+        assert!(due.is_empty());
+    }
+
+    #[test]
     fn evaluate_schedules_matches_five_field_expression() {
         let now: chrono::DateTime<chrono::Utc> =
             "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");

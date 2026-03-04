@@ -140,3 +140,69 @@ impl ProcessManager {
         self.processes.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::test_utils::EnvVarGuard;
+    use std::env;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn new_process_manager_starts_empty() {
+        let manager = ProcessManager::new();
+        assert_eq!(manager.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn spawn_workflow_runner_tracks_active_processes() {
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+
+        let temp_dir = TempDir::new().expect("temp directory should be created");
+        let runner_path = {
+            #[cfg(unix)]
+            let path = temp_dir.path().join("ao-workflow-runner");
+            #[cfg(not(unix))]
+            let path = temp_dir.path().join("ao-workflow-runner.exe");
+            path
+        };
+
+        #[cfg(unix)]
+        let runner_payload = "#!/bin/sh\nexit 0\n";
+        #[cfg(not(unix))]
+        let runner_payload = "@echo off\r\nexit /B 0\r\n";
+
+        fs::write(&runner_path, runner_payload).expect("mock runner should be written");
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&runner_path)
+                .expect("mock runner metadata should be available")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&runner_path, permissions)
+                .expect("mock runner should be executable");
+        }
+
+        let original_path = env::var_os("PATH").unwrap_or_default();
+        let mut paths = env::split_paths(&original_path).collect::<Vec<_>>();
+        paths.insert(0, temp_dir.path().to_path_buf());
+        let candidate_path = env::join_paths(paths).expect("path list should join");
+        let candidate_path = candidate_path.to_string_lossy();
+        let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
+
+        let mut manager = ProcessManager::new();
+        let process =
+            manager
+                .spawn_workflow_runner("task-123", "standard", temp_dir.path().to_string_lossy().as_ref())
+                .expect("mock runner should be discovered from PATH and spawned");
+        assert_eq!(process.task_id, "task-123");
+        assert_eq!(manager.active_count(), 1);
+        let _ = manager.check_running();
+
+        drop(process);
+    }
+}
