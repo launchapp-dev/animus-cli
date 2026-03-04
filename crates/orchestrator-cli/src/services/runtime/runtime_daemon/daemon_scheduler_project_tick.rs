@@ -1,3 +1,4 @@
+use chrono::{Datelike, Timelike};
 use super::*;
 use crate::services::runtime::stale_in_progress_summary;
 use crate::services::runtime::runtime_daemon::daemon_process_manager::{CompletedProcess, ProcessManager};
@@ -42,8 +43,106 @@ fn completion_reason(completion: &CompletedProcess) -> String {
         .unwrap_or_else(|| format!("workflow runner exited with status {:?}", completion.exit_code))
 }
 
+fn evaluate_schedules(
+    schedules: &[orchestrator_core::workflow_config::WorkflowSchedule],
+    state: &orchestrator_core::ScheduleState,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
+    let mut due = Vec::new();
+    for schedule in schedules {
+        if !schedule.enabled || !cron_matches(&schedule.cron, now) {
+            continue;
+        }
+
+        if let Some(run_state) = state.schedules.get(&schedule.id) {
+            if let Some(last_run) = run_state.last_run {
+                if last_run.year() == now.year()
+                    && last_run.month() == now.month()
+                    && last_run.day() == now.day()
+                    && last_run.hour() == now.hour()
+                    && last_run.minute() == now.minute()
+                {
+                    continue;
+                }
+            }
+        }
+
+        due.push(schedule.id.clone());
+    }
+
+    due
+}
+
+fn cron_matches(expression: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let expression = expression.trim().to_ascii_lowercase();
+    if expression.is_empty() {
+        return false;
+    }
+
+    if expression.starts_with('@') {
+        return match expression.as_str() {
+            "@hourly" => now.minute() == 0,
+            "@daily" => now.hour() == 0 && now.minute() == 0,
+            "@weekly" => {
+                now.weekday().num_days_from_sunday() == 0 && now.hour() == 0 && now.minute() == 0
+            }
+            "@monthly" => now.day() == 1 && now.hour() == 0 && now.minute() == 0,
+            _ => false,
+        };
+    }
+
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    if fields.len() != 5 {
+        return false;
+    }
+
+    let current_weekday = now.weekday().num_days_from_sunday();
+    field_matches(fields[0], now.minute(), 0, 59)
+        && field_matches(fields[1], now.hour(), 0, 23)
+        && field_matches(fields[2], now.day(), 1, 31)
+        && field_matches(fields[3], now.month(), 1, 12)
+        && field_matches(fields[4], current_weekday, 0, 7)
+}
+
+fn field_matches(raw_field: &str, value: u32, min: u32, max: u32) -> bool {
+    if raw_field == "*" {
+        return true;
+    }
+    let parsed = match raw_field.parse::<u32>() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    if parsed < min || parsed > max {
+        return false;
+    }
+    let normalized = if max == 7 && parsed == 7 { 0 } else { parsed };
+    normalized == value
+}
+
+fn process_due_schedules(project_root: &str, now: chrono::DateTime<chrono::Utc>) {
+    let config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
+    let mut state = orchestrator_core::load_schedule_state(std::path::Path::new(project_root))
+        .unwrap_or_default();
+    let due = evaluate_schedules(&config.config.schedules, &state, now);
+    if due.is_empty() {
+        return;
+    }
+
+    for schedule_id in due {
+        let entry = state
+            .schedules
+            .entry(schedule_id)
+            .or_insert_with(orchestrator_core::ScheduleRunState::default);
+        entry.last_run = Some(now);
+        entry.last_status = "evaluated".to_string();
+        entry.run_count = entry.run_count.saturating_add(1);
+    }
+    let _ = orchestrator_core::save_schedule_state(std::path::Path::new(project_root), &state);
+}
+
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
+    process_due_schedules(&root, Utc::now());
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = git_ops::flush_git_integration_outbox(&root);
     let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
@@ -201,6 +300,7 @@ pub(super) async fn slim_daemon_tick(
     process_manager: &mut ProcessManager,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
+    process_due_schedules(&root, Utc::now());
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = git_ops::flush_git_integration_outbox(&root);
     let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
@@ -1848,5 +1948,85 @@ thinking...
         );
 
         clear_running_workflow_phase_pool(project_root);
+    }
+
+    #[test]
+    fn evaluate_schedules_matches_five_field_expression() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "midday".to_string(),
+            cron: "30 12 * * *".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now);
+
+        assert_eq!(due, vec!["midday".to_string()]);
+    }
+
+    #[test]
+    fn evaluate_schedules_matches_shortcut_expression() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T00:00:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "daily".to_string(),
+            cron: "@daily".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now);
+
+        assert_eq!(due, vec!["daily".to_string()]);
+    }
+
+    #[test]
+    fn evaluate_schedules_skips_invalid_expression() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "broken".to_string(),
+            cron: "30 12".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now);
+
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn evaluate_schedules_skips_already_ran_this_minute() {
+        let now: chrono::DateTime<chrono::Utc> =
+            "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "recent".to_string(),
+            cron: "30 12 * * *".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let mut state = orchestrator_core::ScheduleState::default();
+        state.schedules.insert(
+            "recent".to_string(),
+            orchestrator_core::ScheduleRunState {
+                last_run: Some(now),
+                last_status: "evaluated".to_string(),
+                run_count: 1,
+            },
+        );
+        let due = evaluate_schedules(&schedules, &state, now);
+
+        assert!(due.is_empty());
     }
 }

@@ -52,8 +52,9 @@ pub use runtime_contract::{
 };
 pub use services::{
     evaluate_task_priority_policy, plan_task_priority_rebalance, DaemonServiceApi, FileServiceHub,
-    InMemoryServiceHub, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ServiceHub,
-    TaskServiceApi, WorkflowServiceApi,
+    InMemoryServiceHub, load_schedule_state, save_schedule_state, PlanningServiceApi,
+    ProjectServiceApi, ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub, TaskServiceApi,
+    WorkflowServiceApi,
 };
 pub use state_machines::{
     load_state_machines_for_project, state_machines_path, write_state_machines_document,
@@ -98,7 +99,8 @@ pub use workflow_config::{
     workflow_config_path, write_workflow_config, yaml_workflows_dir, CompileYamlResult,
     LoadedWorkflowConfig, PhaseTransitionConfig, PhaseUiDefinition, PipelineDefinition,
     PipelinePhaseConfig, PipelinePhaseEntry, SubPipelineRef, WorkflowCheckpointRetentionConfig,
-    WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource, WORKFLOW_CONFIG_FILE_NAME,
+    WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource, WorkflowSchedule,
+    WORKFLOW_CONFIG_FILE_NAME,
     WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
 pub use model_quality::{

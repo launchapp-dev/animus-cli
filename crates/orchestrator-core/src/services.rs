@@ -36,6 +36,7 @@ use crate::workflow::{
 mod daemon_impl;
 mod planning_impl;
 mod planning_shared;
+mod schedule_state;
 mod planning_utils;
 mod project_impl;
 mod project_shared;
@@ -51,6 +52,9 @@ use runner_helpers::*;
 use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
 use task_shared::*;
 pub use task_shared::task_matches_filter;
+pub use schedule_state::{
+    load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState,
+};
 
 pub fn evaluate_task_priority_policy(
     tasks: &[OrchestratorTask],

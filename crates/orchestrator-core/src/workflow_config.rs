@@ -267,9 +267,69 @@ pub struct WorkflowSchedule {
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
-    pub input: Option<BTreeMap<String, Value>>,
-    #[serde(default)]
+    pub input: Option<Value>,
+    #[serde(default = "default_schedule_enabled")]
     pub enabled: bool,
+}
+
+fn default_schedule_enabled() -> bool {
+    true
+}
+
+fn validate_cron_field(value: &str, name: &str, min: i32, max: i32) -> Result<()> {
+    if value == "*" {
+        return Ok(());
+    }
+
+    let parsed = value
+        .parse::<i32>()
+        .with_context(|| format!("{} '{}' is not a valid cron number", name, value))?;
+    if !(min..=max).contains(&parsed) {
+        anyhow::bail!(
+            "{} '{}' is out of range (expected {}-{})",
+            name,
+            parsed,
+            min,
+            max
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_cron_expression(expression: &str) -> Result<()> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        anyhow::bail!("cron expression must not be empty");
+    }
+
+    if expression.starts_with('@') {
+        match expression.to_ascii_lowercase().as_str() {
+            "@hourly" | "@daily" | "@weekly" | "@monthly" => Ok(()),
+            _ => anyhow::bail!("unsupported cron shortcut '{}'", expression),
+        }
+    } else {
+        let fields: Vec<&str> = expression.split_whitespace().collect();
+        if fields.len() != 5 {
+            anyhow::bail!(
+                "cron expression '{}' must have 5 space-separated fields",
+                expression
+            );
+        }
+        validate_cron_field(fields[0], "minute", 0, 59)?;
+        validate_cron_field(fields[1], "hour", 0, 23)?;
+        validate_cron_field(fields[2], "day-of-month", 1, 31)?;
+        validate_cron_field(fields[3], "month", 1, 12)?;
+        validate_cron_field(fields[4], "day-of-week", 0, 7)?;
+        Ok(())
+    }
+}
+
+fn is_supported_shortcut_cron(expression: &str) -> bool {
+    matches!(
+        expression,
+        "@hourly" | "@daily" | "@weekly" | "@monthly"
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1146,11 +1206,20 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                 schedule_id
             ));
         }
-        if schedule.pipeline.is_none() && schedule.command.is_none() {
-            errors.push(format!(
-                "schedules['{}'] must define a pipeline or command",
-                schedule_id
-            ));
+        match (schedule.pipeline.as_deref(), schedule.command.as_deref()) {
+            (Some(_), Some(_)) => {
+                errors.push(format!(
+                    "schedules['{}'] must define only one of pipeline or command",
+                    schedule_id
+                ));
+            }
+            (None, None) => {
+                errors.push(format!(
+                    "schedules['{}'] must define a pipeline or command",
+                    schedule_id
+                ));
+            }
+            _ => {}
         }
         if let Some(pipeline) = schedule.pipeline.as_deref() {
             if pipeline.trim().is_empty() {
@@ -1174,6 +1243,20 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                 errors.push(format!(
                     "schedules['{}'].command must not be empty",
                     schedule_id
+                ));
+            }
+        }
+        if let Err(error) = validate_cron_expression(schedule.cron.as_str()) {
+            errors.push(format!(
+                "schedules['{}'].cron is not valid: {}",
+                schedule_id, error
+            ));
+        } else if schedule.cron.trim().starts_with('@') {
+            let shortcut = schedule.cron.trim().to_ascii_lowercase();
+            if !is_supported_shortcut_cron(shortcut.as_str()) {
+                errors.push(format!(
+                    "schedules['{}'].cron shortcut '{}' is not supported",
+                    schedule_id, schedule.cron
                 ));
             }
         }
@@ -3236,8 +3319,8 @@ pipelines:
             cron: "".to_string(),
             pipeline: None,
             command: None,
-            input: None,
             enabled: true,
+            input: None,
         });
         config.tools.insert(
             "cli-gpt".to_string(),
@@ -3292,6 +3375,71 @@ pipelines:
             "error should mention MCP command: {}",
             message
         );
+    }
+
+    #[test]
+    fn validate_rejects_schedule_with_both_pipeline_and_command() {
+        let mut config = builtin_workflow_config();
+        config.schedules.push(WorkflowSchedule {
+            id: "conflicting-schedule".to_string(),
+            cron: "0 * * * *".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: Some("echo conflict".to_string()),
+            input: None,
+            enabled: true,
+        });
+        let err = validate_workflow_config(&config).expect_err(
+            "schedules defining both pipeline and command should be rejected",
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("must define only one of pipeline or command"),
+            "error should mention schedule target exclusivity: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_cron_expression() {
+        let mut config = builtin_workflow_config();
+        config.schedules.push(WorkflowSchedule {
+            id: "bad-cron".to_string(),
+            cron: "0 0 0".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        });
+        let err = validate_workflow_config(&config)
+            .expect_err("schedules with malformed cron should fail validation");
+        let message = err.to_string();
+        assert!(
+            message.contains("schedules['bad-cron'].cron is not valid"),
+            "error should mention invalid cron expression: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn workflow_schedule_input_defaults_to_none_and_enabled_defaults_to_true() {
+        let yaml = r#"
+schedules:
+  - id: nightly
+    cron: "0 2 * * *"
+    pipeline: "standard"
+
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse");
+        let schedule = &config.schedules[0];
+        assert!(schedule.enabled);
+        assert!(schedule.input.is_none());
     }
 
     #[test]
