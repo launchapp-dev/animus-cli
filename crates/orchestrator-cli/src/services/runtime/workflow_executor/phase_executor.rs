@@ -1801,7 +1801,7 @@ pub(crate) async fn run_workflow_phase(
     }
 }
 
-const MAX_PRIOR_CONTEXT_CHARS: usize = 4000;
+const MAX_PRIOR_CONTEXT_CHARS: usize = 8000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PersistedPhaseOutput {
@@ -1815,6 +1815,10 @@ pub(crate) struct PersistedPhaseOutput {
     pub(crate) reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) commit_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) evidence: Vec<orchestrator_core::PhaseEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) guardrail_violations: Vec<String>,
 }
 
 pub(crate) fn phase_output_dir(project_root: &str, workflow_id: &str) -> PathBuf {
@@ -1835,38 +1839,51 @@ pub(crate) fn persist_phase_output(
     let dir = phase_output_dir(project_root, workflow_id);
     std::fs::create_dir_all(&dir)?;
 
-    let (verdict, confidence, reason, commit_message) = match outcome {
-        PhaseExecutionOutcome::Completed {
-            commit_message,
-            phase_decision,
-        } => {
-            let (v, c, r) = match phase_decision {
-                Some(decision) => (
-                    Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
-                    Some(decision.confidence),
-                    if decision.reason.is_empty() {
-                        None
-                    } else {
-                        Some(decision.reason.clone())
-                    },
-                ),
-                None => (Some("advance".to_string()), None, None),
-            };
-            (v, c, r, commit_message.clone())
-        }
-        PhaseExecutionOutcome::NeedsResearch { reason } => (
-            Some("rework".to_string()),
-            None,
-            Some(format!("Needs research: {reason}")),
-            None,
-        ),
-        PhaseExecutionOutcome::ManualPending { instructions, .. } => (
-            Some("manual_pending".to_string()),
-            None,
-            Some(instructions.clone()),
-            None,
-        ),
-    };
+    let (verdict, confidence, reason, commit_message, evidence, guardrail_violations) =
+        match outcome {
+            PhaseExecutionOutcome::Completed {
+                commit_message,
+                phase_decision,
+            } => {
+                let (v, c, r, ev, gv) = match phase_decision {
+                    Some(decision) => (
+                        Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
+                        Some(decision.confidence),
+                        if decision.reason.is_empty() {
+                            None
+                        } else {
+                            Some(decision.reason.clone())
+                        },
+                        decision.evidence.clone(),
+                        decision.guardrail_violations.clone(),
+                    ),
+                    None => (
+                        Some("advance".to_string()),
+                        None,
+                        None,
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                };
+                (v, c, r, commit_message.clone(), ev, gv)
+            }
+            PhaseExecutionOutcome::NeedsResearch { reason } => (
+                Some("rework".to_string()),
+                None,
+                Some(format!("Needs research: {reason}")),
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+            PhaseExecutionOutcome::ManualPending { instructions, .. } => (
+                Some("manual_pending".to_string()),
+                None,
+                Some(instructions.clone()),
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+        };
 
     let output = PersistedPhaseOutput {
         phase_id: phase_id.to_string(),
@@ -1875,6 +1892,8 @@ pub(crate) fn persist_phase_output(
         confidence,
         reason,
         commit_message,
+        evidence,
+        guardrail_violations,
     };
 
     let payload = serde_json::to_string_pretty(&output)?;
@@ -1930,6 +1949,23 @@ pub(crate) fn format_prior_phase_outputs(outputs: &[PersistedPhaseOutput]) -> St
         }
         if let Some(ref cm) = output.commit_message {
             section.push_str(&format!("\nCommit: {cm}"));
+        }
+        if !output.evidence.is_empty() {
+            section.push_str("\nEvidence:");
+            for ev in &output.evidence {
+                let kind = format!("{:?}", ev.kind).to_ascii_lowercase();
+                if let Some(ref fp) = ev.file_path {
+                    section.push_str(&format!("\n- [{kind}] {} ({})", ev.description, fp));
+                } else {
+                    section.push_str(&format!("\n- [{kind}] {}", ev.description));
+                }
+            }
+        }
+        if !output.guardrail_violations.is_empty() {
+            section.push_str("\nGuardrail violations:");
+            for v in &output.guardrail_violations {
+                section.push_str(&format!("\n- {v}"));
+            }
         }
         sections.push(section);
     }
@@ -2277,6 +2313,8 @@ mod tests {
                 confidence: Some(0.9),
                 reason: Some("Found patterns".to_string()),
                 commit_message: None,
+                evidence: vec![],
+                guardrail_violations: vec![],
             },
             PersistedPhaseOutput {
                 phase_id: "implementation".to_string(),
@@ -2285,6 +2323,8 @@ mod tests {
                 confidence: Some(0.95),
                 reason: Some("Implemented".to_string()),
                 commit_message: Some("feat: add feature".to_string()),
+                evidence: vec![],
+                guardrail_violations: vec![],
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
@@ -2299,7 +2339,7 @@ mod tests {
 
     #[test]
     fn test_format_prior_phase_outputs_truncation() {
-        let long_reason = "x".repeat(3000);
+        let long_reason = "x".repeat(6000);
         let outputs = vec![
             PersistedPhaseOutput {
                 phase_id: "early".to_string(),
@@ -2308,6 +2348,8 @@ mod tests {
                 confidence: None,
                 reason: Some(long_reason),
                 commit_message: None,
+                evidence: vec![],
+                guardrail_violations: vec![],
             },
             PersistedPhaseOutput {
                 phase_id: "recent".to_string(),
@@ -2316,6 +2358,8 @@ mod tests {
                 confidence: Some(0.9),
                 reason: Some("Recent work".to_string()),
                 commit_message: None,
+                evidence: vec![],
+                guardrail_violations: vec![],
             },
         ];
         let result = format_prior_phase_outputs(&outputs);

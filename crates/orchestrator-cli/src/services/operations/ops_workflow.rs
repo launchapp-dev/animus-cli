@@ -1458,6 +1458,12 @@ async fn handle_workflow_execute(
                             let _ = hub.tasks().replace(task).await;
                         }
 
+                        let _ = crate::services::runtime::persist_phase_output(
+                            project_root,
+                            &workflow.id,
+                            phase_id,
+                            &result.outcome,
+                        );
                         trace_workflow_execute(&format!(
                             "phase {} skip -> closing task as {:?}: {}",
                             phase_id, target_status, decision.reason
@@ -1526,6 +1532,12 @@ async fn handle_workflow_execute(
                 }
 
                 if !routed_back {
+                    let _ = crate::services::runtime::persist_phase_output(
+                        project_root,
+                        &workflow.id,
+                        phase_id,
+                        &result.outcome,
+                    );
                     trace_workflow_execute(&format!("phase {} completed", phase_id));
                     emit_phase_footer(phase_id, phase_elapsed, true, json);
                     results.push(serde_json::json!({

@@ -34,3 +34,6 @@ crates/orchestrator-web-server/web-ui/.smoke-artifacts/
 # AO — everything except declarative workflow config
 .ao/*
 !.ao/workflows/
+
+# Claude Code worktrees
+.claude/worktrees/
