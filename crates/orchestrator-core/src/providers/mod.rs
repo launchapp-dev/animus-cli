@@ -73,9 +73,13 @@ pub trait RequirementsProvider: Send + Sync {
 }
 
 pub mod builtin;
+#[cfg(feature = "jira")]
+pub mod jira;
 pub mod git;
 
 pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
+#[cfg(feature = "jira")]
+pub use jira::JiraTaskProvider;
 pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult,
     PullRequestInfo, WorktreeInfo,
