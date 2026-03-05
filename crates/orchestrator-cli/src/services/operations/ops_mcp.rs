@@ -309,14 +309,6 @@ struct AgentStatusInput {
     project_root: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-struct RunnerScopeInput {
-    #[serde(default)]
-    runner_scope: Option<String>,
-    #[serde(default)]
-    project_root: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 struct RunIdInput {
     run_id: String,
@@ -1335,22 +1327,6 @@ impl AoMcpServer {
         ];
         push_opt(&mut args, "--runner-scope", input.runner_scope);
         self.run_tool("ao.agent.status", args, input.project_root)
-            .await
-    }
-
-    #[tool(
-        name = "ao.agent.runner-status",
-        description = "Get agent runner process status. Purpose: Check runner health and capacity for agent execution. Prerequisites: None. Example: {} or {\"runner_scope\": \"project\"}. Sequencing: Use ao.runner.health for more details, or before ao.agent.run to ensure runner is ready.",
-        input_schema = ao_schema_for_type::<RunnerScopeInput>()
-    )]
-    async fn ao_agent_runner_status(
-        &self,
-        params: Parameters<RunnerScopeInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["agent".to_string(), "runner-status".to_string()];
-        push_opt(&mut args, "--runner-scope", input.runner_scope);
-        self.run_tool("ao.agent.runner-status", args, input.project_root)
             .await
     }
 

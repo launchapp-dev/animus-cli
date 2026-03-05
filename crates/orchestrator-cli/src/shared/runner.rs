@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{
-    AgentControlAction, AgentRunEvent, IpcAuthRequest, IpcAuthResult, ModelStatus,
-    OutputStreamType, RunId, MAX_UNIX_SOCKET_PATH_LEN,
+    AgentControlAction, AgentRunEvent, IpcAuthRequest, IpcAuthResult, OutputStreamType, RunId,
+    MAX_UNIX_SOCKET_PATH_LEN,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -745,28 +745,6 @@ pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool) -> Result<()>
     }
 
     Ok(())
-}
-
-pub(crate) fn print_model_status(status: ModelStatus) {
-    let availability = serde_json::to_string(&status.availability)
-        .unwrap_or_else(|_| "unknown".to_string())
-        .trim_matches('"')
-        .to_string();
-    if let Some(details) = status.details {
-        println!("{}: {} ({})", status.model.0, availability, details);
-    } else {
-        println!("{}: {}", status.model.0, availability);
-    }
-}
-
-pub(crate) fn default_model_status_targets() -> Vec<String> {
-    let mut tools: Vec<String> = protocol::default_model_specs()
-        .into_iter()
-        .map(|(_, tool)| tool)
-        .collect();
-    tools.sort();
-    tools.dedup();
-    tools
 }
 
 pub(crate) fn event_matches_run(event: &AgentRunEvent, run_id: &RunId) -> bool {

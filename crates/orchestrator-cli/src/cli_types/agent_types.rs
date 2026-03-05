@@ -10,10 +10,6 @@ pub(crate) enum AgentCommand {
     Control(AgentControlArgs),
     /// Read status for a run id.
     Status(AgentStatusArgs),
-    /// Check model availability/status through the runner.
-    ModelStatus(AgentModelStatusArgs),
-    /// Inspect runner process availability.
-    RunnerStatus(AgentRunnerStatusArgs),
 }
 
 #[derive(Debug, Args)]
@@ -142,46 +138,6 @@ pub(crate) struct AgentStatusArgs {
         help = "Override the base directory used to read persisted run logs."
     )]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Start the runner automatically when required."
-    )]
-    pub(crate) start_runner: bool,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct AgentModelStatusArgs {
-    #[arg(
-        long = "model",
-        value_name = "MODEL_ID",
-        help = "Model identifier to check. Repeat to query multiple models."
-    )]
-    pub(crate) models: Vec<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Start the runner automatically when required."
-    )]
-    pub(crate) start_runner: bool,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct AgentRunnerStatusArgs {
     #[arg(
         long,
         default_value_t = false,

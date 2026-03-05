@@ -11,8 +11,7 @@ mod status;
 
 use run::handle_agent_run;
 use status::{
-    handle_agent_control, handle_agent_model_status, handle_agent_runner_status,
-    handle_agent_status,
+    handle_agent_control, handle_agent_status,
 };
 
 pub(crate) async fn handle_agent(
@@ -33,14 +32,6 @@ pub(crate) async fn handle_agent(
         AgentCommand::Status(args) => {
             let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
             handle_agent_status(args, hub, project_root, json).await
-        }
-        AgentCommand::ModelStatus(args) => {
-            let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
-            handle_agent_model_status(args, hub, project_root, json).await
-        }
-        AgentCommand::RunnerStatus(args) => {
-            let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
-            handle_agent_runner_status(args, hub, project_root, json).await
         }
     }
 }

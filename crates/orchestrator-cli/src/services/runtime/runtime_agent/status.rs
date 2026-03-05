@@ -4,15 +4,13 @@ use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
 use protocol::{
     AgentControlRequest, AgentControlResponse, AgentStatusErrorCode, AgentStatusQueryResponse,
-    AgentStatusRequest, AgentStatusResponse, ModelId, ModelStatusRequest, ModelStatusResponse,
-    RunId, RunnerStatusRequest, RunnerStatusResponse,
+    AgentStatusRequest, AgentStatusResponse, RunId, RunnerStatusResponse,
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
-    default_model_status_targets, internal_error, not_found_error, print_model_status, print_value,
-    read_agent_status, write_json_line, AgentControlArgs, AgentModelStatusArgs,
-    AgentRunnerStatusArgs, AgentStatusArgs,
+    internal_error, not_found_error, print_value, read_agent_status, write_json_line,
+    AgentControlArgs, AgentStatusArgs,
 };
 
 use super::connection::connect_runner_for_agent_command;
@@ -65,73 +63,6 @@ pub(super) async fn handle_agent_control(
     }
 
     Err(anyhow!("no control response received from runner"))
-}
-
-pub(super) async fn handle_agent_model_status(
-    args: AgentModelStatusArgs,
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
-    let stream = connect_runner_for_agent_command(&hub, project_root, args.start_runner).await?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-
-    let models = if args.models.is_empty() {
-        default_model_status_targets()
-            .into_iter()
-            .map(ModelId)
-            .collect()
-    } else {
-        args.models.into_iter().map(ModelId).collect()
-    };
-
-    write_json_line(&mut write_half, &ModelStatusRequest { models }).await?;
-
-    let mut lines = BufReader::new(read_half).lines();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Ok(response) = serde_json::from_str::<ModelStatusResponse>(line) {
-            if json {
-                return print_value(response, true);
-            }
-            for status in response.statuses {
-                print_model_status(status);
-            }
-            return Ok(());
-        }
-    }
-
-    Err(anyhow!("no model status response received from runner"))
-}
-
-pub(super) async fn handle_agent_runner_status(
-    args: AgentRunnerStatusArgs,
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
-    let stream = connect_runner_for_agent_command(&hub, project_root, args.start_runner).await?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-
-    write_json_line(&mut write_half, &RunnerStatusRequest::default()).await?;
-
-    let mut lines = BufReader::new(read_half).lines();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Ok(response) = serde_json::from_str::<RunnerStatusResponse>(line) {
-            return print_value(response, json);
-        }
-    }
-
-    Err(anyhow!("no runner status response received from runner"))
 }
 
 pub(super) async fn handle_agent_status(
