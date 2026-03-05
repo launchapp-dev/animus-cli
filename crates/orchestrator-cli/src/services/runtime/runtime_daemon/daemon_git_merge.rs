@@ -258,8 +258,8 @@ pub async fn post_success_merge_push_and_cleanup(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task: &orchestrator_core::OrchestratorTask,
+    cfg: &PostSuccessGitConfig,
 ) -> Result<PostMergeOutcome> {
-    let cfg = load_post_success_git_config(project_root);
     if !is_git_repo(project_root) {
         return Ok(PostMergeOutcome::Skipped);
     }
@@ -542,6 +542,7 @@ pub async fn finalize_merge_conflict_resolution(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task: &orchestrator_core::OrchestratorTask,
+    cfg: &PostSuccessGitConfig,
     context: &MergeConflictContext,
 ) -> Result<()> {
     if !Path::new(context.merge_worktree_path.as_str()).exists() {
@@ -584,7 +585,6 @@ pub async fn finalize_merge_conflict_resolution(
     persist_merge_result_and_push(project_root, context)?;
     remove_worktree_path(project_root, context.merge_worktree_path.as_str());
 
-    let cfg = load_post_success_git_config(project_root);
     cleanup_task_worktree_if_enabled(hub.clone(), project_root, task, &cfg).await?;
     let _ = auto_prune_completed_task_worktrees_after_merge(hub.clone(), project_root, &cfg).await;
     let _ = refresh_runtime_binaries_if_main_advanced(

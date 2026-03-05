@@ -251,6 +251,70 @@ pub fn active_workflow_task_ids(
         .collect()
 }
 
+fn resolve_workflow_pipeline_definition<'a>(
+    config: &'a orchestrator_core::WorkflowConfig,
+    pipeline_id: &str,
+) -> Option<&'a orchestrator_core::workflow_config::PipelineDefinition> {
+    config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id.eq_ignore_ascii_case(pipeline_id))
+}
+
+fn effective_post_success_git_config(
+    project_root: &str,
+    workflow: Option<&orchestrator_core::OrchestratorWorkflow>,
+) -> git_ops::PostSuccessGitConfig {
+    let mut cfg = git_ops::load_post_success_git_config(project_root);
+
+    let workflow = match workflow {
+        Some(workflow) => workflow,
+        None => return cfg,
+    };
+    let workflow_config = match orchestrator_core::load_workflow_config(Path::new(project_root)) {
+        Ok(config) => config,
+        Err(_) => return cfg,
+    };
+
+    let requested_pipeline_id = workflow
+        .pipeline_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .unwrap_or_else(|| workflow_config.default_pipeline_id.as_str());
+    let Some(pipeline) = resolve_workflow_pipeline_definition(&workflow_config, requested_pipeline_id)
+        .or_else(|| {
+            resolve_workflow_pipeline_definition(
+                &workflow_config,
+                workflow_config.default_pipeline_id.as_str(),
+            )
+        })
+        .or_else(|| {
+            resolve_workflow_pipeline_definition(&workflow_config, orchestrator_core::STANDARD_PIPELINE_ID)
+        }) else {
+        return cfg;
+    };
+
+    let Some(merge_cfg) = pipeline
+        .post_success
+        .as_ref()
+        .and_then(|post_success| post_success.merge.as_ref())
+    else {
+        eprintln!(
+            "warning: using daemon post-success merge flags (`--auto-merge`, `--auto-pr`) because workflow pipeline `{}` is missing `post_success.merge`; prefer configuring it in `.ao/workflows.yaml` (or `.ao/state/workflow-config.v2.json`) for deprecation-safe behavior",
+            pipeline.id
+        );
+        return cfg;
+    };
+
+    cfg.auto_merge_enabled = merge_cfg.auto_merge;
+    cfg.auto_pr_enabled = merge_cfg.create_pr;
+    if let Some(target_branch) = Some(merge_cfg.target_branch.trim()).filter(|v| !v.is_empty()) {
+        cfg.auto_merge_target_branch = target_branch.to_string();
+    }
+    cfg
+}
+
 pub fn workflow_current_phase_id(workflow: &orchestrator_core::OrchestratorWorkflow) -> Option<String> {
     workflow
         .current_phase
@@ -370,14 +434,27 @@ pub async fn sync_task_status_for_workflow_result(
             if let Some(wf_id) = workflow_id {
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "completed").await;
             }
+            let workflow = if let Some(wf_id) = workflow_id {
+                hub.workflows().get(wf_id).await.ok()
+            } else {
+                None
+            };
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let task = hub.tasks().get(task_id).await;
             let Ok(task) = task else {
                 let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
                 return;
             };
+            let cfg = effective_post_success_git_config(project_root, workflow.as_ref());
 
-            match git_ops::post_success_merge_push_and_cleanup(hub.clone(), project_root, &task).await {
+            match git_ops::post_success_merge_push_and_cleanup(
+                hub.clone(),
+                project_root,
+                &task,
+                &cfg,
+            )
+            .await
+            {
                 Ok(git_ops::PostMergeOutcome::Completed) => {
                     let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
                     return;
@@ -419,6 +496,7 @@ pub async fn sync_task_status_for_workflow_result(
                         hub.clone(),
                         project_root,
                         &task,
+                        &cfg,
                         &context,
                     )
                     .await
