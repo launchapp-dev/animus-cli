@@ -263,6 +263,8 @@ fn parse_codex_mcp_server_names(payload: &str) -> Vec<String> {
 fn discover_codex_mcp_server_names() -> Vec<String> {
     let output = match std::process::Command::new("codex")
         .args(["mcp", "list", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()
     {
         Ok(output) => output,
