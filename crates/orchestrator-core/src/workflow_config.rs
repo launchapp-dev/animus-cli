@@ -113,6 +113,54 @@ pub struct PipelineDefinition {
     pub description: String,
     #[serde(default)]
     pub phases: Vec<PipelinePhaseEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_success: Option<PostSuccessConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeStrategy {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl Default for MergeStrategy {
+    fn default() -> Self {
+        Self::Merge
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeConfig {
+    #[serde(default)]
+    pub strategy: MergeStrategy,
+    #[serde(default = "default_target_branch")]
+    pub target_branch: String,
+    #[serde(default)]
+    pub create_pr: bool,
+    #[serde(default)]
+    pub auto_merge: bool,
+    #[serde(default)]
+    pub cleanup_worktree: bool,
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            strategy: MergeStrategy::default(),
+            target_branch: default_target_branch(),
+            create_pr: false,
+            auto_merge: false,
+            cleanup_worktree: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PostSuccessConfig {
+    #[serde(default)]
+    pub merge: Option<MergeConfig>,
 }
 
 impl PipelineDefinition {
@@ -274,6 +322,10 @@ pub struct WorkflowSchedule {
 
 fn default_schedule_enabled() -> bool {
     true
+}
+
+fn default_target_branch() -> String {
+    "main".to_string()
 }
 
 fn validate_cron_field(value: &str, name: &str, min: i32, max: i32) -> Result<()> {
@@ -532,6 +584,7 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
                         "code-review".to_string().into(),
                         "testing".to_string().into(),
                     ],
+                    post_success: None,
                 },
                 PipelineDefinition {
                     id: "ui-ux-standard".to_string(),
@@ -548,6 +601,7 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
                         "code-review".to_string().into(),
                         "testing".to_string().into(),
                     ],
+                    post_success: None,
                 },
             ],
             phase_definitions: BTreeMap::new(),
@@ -985,6 +1039,24 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             }
         }
 
+        if let Some(post_success) = &pipeline.post_success {
+            if let Some(merge) = &post_success.merge {
+                if merge.target_branch.trim().is_empty() {
+                    errors.push(format!(
+                        "pipeline '{}' post_success.merge.target_branch must not be empty",
+                        pipeline_id
+                    ));
+                }
+
+                if !merge_strategy_is_valid(&merge.strategy) {
+                    errors.push(format!(
+                        "pipeline '{}' post_success.merge.strategy is not supported",
+                        pipeline_id
+                    ));
+                }
+            }
+        }
+
         match expand_pipeline_phases(&config.pipelines, pipeline_id) {
             Ok(expanded) => {
                 if expanded.is_empty() {
@@ -1341,6 +1413,10 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
 
 pub const YAML_WORKFLOWS_DIR: &str = "workflows";
 
+fn merge_strategy_is_valid(strategy: &MergeStrategy) -> bool {
+    matches!(strategy, MergeStrategy::Squash | MergeStrategy::Merge | MergeStrategy::Rebase)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct YamlPhaseRichConfig {
     #[serde(default)]
@@ -1372,6 +1448,28 @@ struct YamlPipelineDefinition {
     description: Option<String>,
     #[serde(default)]
     phases: Vec<YamlPhaseEntry>,
+    #[serde(default)]
+    post_success: Option<YamlPostSuccessConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct YamlPostSuccessConfig {
+    #[serde(default)]
+    merge: Option<YamlMergeConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct YamlMergeConfig {
+    #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default = "default_target_branch")]
+    target_branch: String,
+    #[serde(default)]
+    create_pr: bool,
+    #[serde(default)]
+    auto_merge: bool,
+    #[serde(default)]
+    cleanup_worktree: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1417,6 +1515,18 @@ fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
         "task_root" => Ok(CommandCwdMode::TaskRoot),
         "path" => Ok(CommandCwdMode::Path),
         other => Err(anyhow!("unknown cwd_mode '{}' (expected project_root, task_root, or path)", other)),
+    }
+}
+
+fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
+    match value.to_ascii_lowercase().as_str() {
+        "squash" => Ok(MergeStrategy::Squash),
+        "merge" => Ok(MergeStrategy::Merge),
+        "rebase" => Ok(MergeStrategy::Rebase),
+        _ => Err(anyhow!(
+            "phases['merge'].strategy must be one of: squash, merge, rebase (got '{}')",
+            value
+        )),
     }
 }
 
@@ -1583,6 +1693,11 @@ fn yaml_phase_entry_to_pipeline_phase_entry(entry: YamlPhaseEntry) -> Result<Pip
 fn yaml_pipeline_to_pipeline_definition(
     yaml: YamlPipelineDefinition,
 ) -> Result<PipelineDefinition> {
+    let post_success = match yaml.post_success {
+        Some(post_success) => Some(yaml_post_success_to_post_success_config(post_success)?),
+        None => None,
+    };
+
     let phases = yaml
         .phases
         .into_iter()
@@ -1593,6 +1708,32 @@ fn yaml_pipeline_to_pipeline_definition(
         name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
         description: yaml.description.unwrap_or_default(),
         phases,
+        post_success,
+    })
+}
+
+fn yaml_post_success_to_post_success_config(
+    yaml: YamlPostSuccessConfig,
+) -> Result<PostSuccessConfig> {
+    let merge = match yaml.merge {
+        Some(merge) => Some(yaml_merge_to_merge_config(merge)?),
+        None => None,
+    };
+    Ok(PostSuccessConfig { merge })
+}
+
+fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeConfig> {
+    Ok(MergeConfig {
+        strategy: yaml
+            .strategy
+            .as_deref()
+            .map(parse_merge_strategy)
+            .transpose()?
+            .unwrap_or_default(),
+        target_branch: yaml.target_branch,
+        create_pr: yaml.create_pr,
+        auto_merge: yaml.auto_merge,
+        cleanup_worktree: yaml.cleanup_worktree,
     })
 }
 
@@ -2183,6 +2324,70 @@ pipelines:
     }
 
     #[test]
+    fn yaml_parses_post_success_merge_block() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+    post_success:
+      merge:
+        strategy: rebase
+        target_branch: release
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: false
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with post_success");
+        let standard = config
+            .pipelines
+            .iter()
+            .find(|p| p.id == "standard")
+            .expect("pipeline");
+        let post_success = standard
+            .post_success
+            .as_ref()
+            .expect("post_success should be present");
+        let merge = post_success
+            .merge
+            .as_ref()
+            .expect("merge config should be present");
+        assert_eq!(merge.strategy, MergeStrategy::Rebase);
+        assert_eq!(merge.target_branch, "release");
+        assert!(merge.create_pr);
+        assert!(merge.auto_merge);
+        assert!(!merge.cleanup_worktree);
+    }
+
+    #[test]
+    fn yaml_parses_invalid_merge_strategy() {
+        let yaml = r#"
+pipelines:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+    post_success:
+      merge:
+        strategy: invalid
+        target_branch: main
+"#;
+        let err = parse_yaml_workflow_config(yaml)
+            .expect_err("invalid merge strategy should fail parsing");
+        let message = err.to_string();
+        assert!(
+            message.contains("strategy must be one of"),
+            "error should mention supported strategies: {}",
+            message
+        );
+    }
+
+    #[test]
     fn yaml_merge_replaces_pipeline_by_id() {
         let base = builtin_workflow_config();
         let yaml = r#"
@@ -2385,6 +2590,7 @@ pipelines:
             name: id.to_string(),
             description: String::new(),
             phases,
+            post_success: None,
         }
     }
 
@@ -2633,6 +2839,7 @@ pipelines:
                 PipelinePhaseEntry::Simple("code-review".into()),
                 PipelinePhaseEntry::Simple("testing".into()),
             ],
+            post_success: None,
         });
 
         let standard = config
@@ -2682,6 +2889,31 @@ pipelines:
     }
 
     #[test]
+    fn validate_rejects_empty_post_success_target_branch() {
+        let mut config = builtin_workflow_config();
+        let standard = config
+            .pipelines
+            .iter_mut()
+            .find(|p| p.id == "standard")
+            .expect("standard pipeline");
+        standard.post_success = Some(PostSuccessConfig {
+            merge: Some(MergeConfig {
+                target_branch: "".to_string(),
+                ..MergeConfig::default()
+            }),
+        });
+
+        let err = validate_workflow_config(&config)
+            .expect_err("empty post_success target branch should be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("post_success.merge.target_branch must not be empty"),
+            "error should mention post_success target branch validation: {}",
+            message
+        );
+    }
+
+    #[test]
     fn validate_rejects_circular_sub_pipeline() {
         let mut config = builtin_workflow_config();
         config.pipelines = vec![
@@ -2692,6 +2924,7 @@ pipelines:
                 phases: vec![PipelinePhaseEntry::SubPipeline(SubPipelineRef {
                     pipeline: "review".into(),
                 })],
+                post_success: None,
             },
             PipelineDefinition {
                 id: "review".into(),
@@ -2700,6 +2933,7 @@ pipelines:
                 phases: vec![PipelinePhaseEntry::SubPipeline(SubPipelineRef {
                     pipeline: "standard".into(),
                 })],
+                post_success: None,
             },
         ];
 

@@ -504,6 +504,7 @@ fn migrate_v1_to_v2(project_root: &str) -> Result<Value> {
                 .filter(|phase| !phase.is_empty())
                 .map(|phase| orchestrator_core::PipelinePhaseEntry::Simple(phase.to_owned()))
                 .collect(),
+            post_success: None,
         })
         .collect();
 
@@ -1179,6 +1180,7 @@ pub(crate) async fn handle_workflow(
                         .into_iter()
                         .map(orchestrator_core::PipelinePhaseEntry::Simple)
                         .collect(),
+                    post_success: None,
                 })
             })?;
             print_value(upsert_pipeline(project_root, pipeline)?, json)

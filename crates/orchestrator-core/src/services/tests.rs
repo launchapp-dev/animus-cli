@@ -989,6 +989,7 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
             "testing".to_string().into(),
             "implementation".to_string().into(),
         ],
+        post_success: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
 
