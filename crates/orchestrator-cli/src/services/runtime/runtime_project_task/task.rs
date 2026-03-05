@@ -84,8 +84,9 @@ async fn set_task_status_with_assignee_inference(
     task_id: &str,
     status: orchestrator_core::TaskStatus,
     project_root: &Path,
+    validate: bool,
 ) -> Result<orchestrator_core::OrchestratorTask> {
-    let status_updated = tasks.set_status(task_id, status).await?;
+    let status_updated = tasks.set_status(task_id, status, validate).await?;
     if status == orchestrator_core::TaskStatus::InProgress {
         if let Some(user_id) = infer_human_assignee_identity(project_root) {
             if let Ok(updated) = tasks.assign_human(task_id, user_id.clone(), user_id).await {
@@ -365,6 +366,7 @@ pub(crate) async fn handle_task(
                     &args.id,
                     status,
                     Path::new(project_root),
+                    true, // validate: true for CLI commands
                 )
                 .await?,
                 json,
@@ -468,6 +470,40 @@ pub(crate) async fn handle_task(
                 serde_json::json!({
                     "success": true,
                     "message": format!("task {} cancelled", args.task_id),
+                }),
+                json,
+            )
+        }
+        TaskCommand::Reopen(args) => {
+            let mut task = tasks.get(&args.task_id).await.map_err(classify_task_service_error)?;
+            if !task.status.is_terminal() {
+                return print_value(
+                    serde_json::json!({
+                        "success": false,
+                        "message": "task is not in a terminal state (done or cancelled)",
+                        "task_id": args.task_id,
+                        "current_status": task.status.to_string(),
+                    }),
+                    json,
+                );
+            }
+            ensure_destructive_confirmation(
+                args.confirm.as_deref(),
+                &args.task_id,
+                "task reopen",
+                "--task-id",
+            )?;
+            // Reopen bypasses terminal state validation by using validate: false
+            // and explicitly setting status to Backlog
+            task.status = TaskStatus::Backlog;
+            task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
+            // Clear terminal state metadata
+            task.cancelled = false;
+            tasks.replace(task).await?;
+            print_value(
+                serde_json::json!({
+                    "success": true,
+                    "message": format!("task {} reopened to backlog", args.task_id),
                 }),
                 json,
             )

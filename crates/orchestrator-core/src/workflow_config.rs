@@ -130,7 +130,7 @@ pub struct PipelineDefinition {
     pub post_success: Option<PostSuccessConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeStrategy {
     Squash,
@@ -2046,7 +2046,9 @@ pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<Co
         return Ok(None);
     }
 
-    let existing_config = load_workflow_config(project_root).ok();
+    let existing_config = load_workflow_config(project_root)
+        .ok()
+        .or_else(|| Some(builtin_workflow_config()));
     let yaml_config = compile_yaml_workflow_files(project_root)?
         .ok_or_else(|| anyhow!("no YAML workflow files found"))?;
 

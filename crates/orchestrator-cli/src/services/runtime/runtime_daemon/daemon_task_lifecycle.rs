@@ -243,7 +243,7 @@ pub async fn promote_backlog_tasks_to_ready(
             continue;
         }
 
-        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready).await;
+        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await;
         promoted = promoted.saturating_add(1);
     }
 
@@ -309,7 +309,7 @@ pub async fn retry_failed_task_workflows(hub: Arc<dyn ServiceHub>) -> Result<usi
             }
         }
 
-        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready).await;
+        let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await;
         retried = retried.saturating_add(1);
     }
 

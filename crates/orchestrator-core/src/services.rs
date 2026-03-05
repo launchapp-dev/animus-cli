@@ -127,7 +127,7 @@ pub trait TaskServiceApi: Send + Sync {
         user_id: String,
         updated_by: String,
     ) -> Result<OrchestratorTask>;
-    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<OrchestratorTask>;
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask>;
     async fn add_checklist_item(
         &self,
         id: &str,

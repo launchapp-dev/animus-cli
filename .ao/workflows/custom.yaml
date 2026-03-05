@@ -9,11 +9,76 @@ agents:
       Your job is to verify that ALL acceptance criteria and requirements
       from the original task are fully met by the implementation.
       You must be thorough and check every requirement, not just a sample.
+
+      When sending work back for rework, you MUST update the task via AO MCP tools:
+      - Use ao.task.checklist-update to mark verified criteria as complete
+      - Use ao.task.update to append specific implementation notes describing
+        exactly what needs to change, which files, and expected behavior
+      - Add new checklist items via ao.task.checklist-add for any gaps discovered
+
+      The implementation agent reads the task description and checklist to know
+      what to fix — if you don't update the task, the rework will be blind.
     model: claude-sonnet-4-6
     tool: claude
-    skills: []
-    capabilities:
-      code_execution: false
+
+  requirements-refiner:
+    system_prompt: |
+      You are a requirements analyst for the ao-cli Rust workspace.
+      Your job is to take a task with a vague or incomplete description and
+      refine it into a well-specified task with clear, testable acceptance criteria.
+
+      For each task you MUST:
+      1. Read the task description using ao.task.get
+      2. Search the codebase to understand the relevant code, patterns, and constraints
+      3. Identify the specific files, modules, and interfaces involved
+      4. Write clear acceptance criteria that an implementation agent can verify
+      5. Update the task description using ao.task.update with:
+         - A refined description that includes context, scope, and approach
+         - Numbered acceptance criteria (AC1, AC2, ...) that are concrete and testable
+         - Any relevant file paths or code references discovered
+         - Edge cases and constraints to consider
+      6. Add checklist items using ao.task.checklist-add for each acceptance criterion
+
+      Do NOT change the task title. Focus on making the description implementation-ready.
+      If the task is already well-specified, leave it unchanged and note that.
+    model: claude-sonnet-4-6
+    tool: claude
+
+  triager:
+    system_prompt: |
+      You are a task triager for the ao-cli Rust workspace.
+      Your job is to evaluate whether a task is still valid, already completed,
+      outdated, or a duplicate given the current state of the codebase.
+
+      For each task, you MUST output exactly one verdict:
+      - KEEP: Task is still valid and worth doing — leave status unchanged
+      - DONE: Already implemented — use ao.task.status to set status to 'done'
+      - OBSOLETE: No longer relevant — use ao.task.status to set status to 'cancelled'
+      - DUPLICATE: Duplicates another task — use ao.task.status to set status to 'cancelled'
+
+      You MUST use the AO MCP tools (ao.task.status) to update the task status
+      for DONE/OBSOLETE/DUPLICATE verdicts. For KEEP, leave the status unchanged.
+      Search the codebase thoroughly before making your verdict.
+      Be concise: one verdict line, then 1-2 sentences of justification.
+    model: claude-sonnet-4-6
+    tool: claude
+
+phase_catalog:
+  po-review:
+    label: "PO Review"
+    description: "Product Owner sign-off on completed work"
+    category: review
+    tags: [review, sign-off]
+  triage:
+    label: "Triage"
+    description: "Evaluate whether a task is still valid, already done, or obsolete"
+    category: planning
+    tags: [triage, planning]
+  refine-requirements:
+    label: "Refine Requirements"
+    description: "Refine vague task descriptions into well-specified acceptance criteria"
+    category: planning
+    tags: [requirements, planning]
 
 phases:
   unit-test:
@@ -33,6 +98,49 @@ phases:
       timeout_secs: 120
 
 pipelines:
+  - id: triage
+    name: "Task Triage"
+    description: "Single-phase pipeline that evaluates whether a task is still valid"
+    phases:
+      - triage
+
+  - id: refine
+    name: "Refine Requirements"
+    description: "Single-phase pipeline that refines task descriptions into implementation-ready specs"
+    phases:
+      - refine-requirements
+
+  - id: full
+    name: "Full Lifecycle"
+    description: "End-to-end: triage, refine requirements, implement, test/lint gates, code review, PO sign-off, merge"
+    phases:
+      - triage
+      - refine-requirements
+      - implementation
+      - unit-test:
+          on_verdict:
+            rework:
+              target: implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: implementation
+      - code-review:
+          on_verdict:
+            rework:
+              target: implementation
+      - po-review:
+          on_verdict:
+            rework:
+              target: implementation
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: main
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
   - id: review-cycle
     name: "Review Cycle"
     description: "Reusable code review and testing sequence"

@@ -442,7 +442,7 @@ pub async fn sync_task_status_for_workflow_result(
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let task = hub.tasks().get(task_id).await;
             let Ok(task) = task else {
-                let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                let _ = hub.tasks().set_status(task_id, TaskStatus::Done, false).await;
                 return;
             };
             let cfg = effective_post_success_git_config(project_root, workflow.as_ref());
@@ -456,7 +456,7 @@ pub async fn sync_task_status_for_workflow_result(
             .await
             {
                 Ok(git_ops::PostMergeOutcome::Completed) => {
-                    let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                    let _ = hub.tasks().set_status(task_id, TaskStatus::Done, false).await;
                     return;
                 }
                 Ok(git_ops::PostMergeOutcome::Skipped) => {}
@@ -505,7 +505,7 @@ pub async fn sync_task_status_for_workflow_result(
                             if let Some(workflow_id) = workflow_id {
                                 let _ = hub.workflows().resolve_merge_conflict(workflow_id).await;
                             }
-                            let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                            let _ = hub.tasks().set_status(task_id, TaskStatus::Done, false).await;
                         }
                         Err(error) => {
                             git_ops::cleanup_merge_conflict_worktree(project_root, &context);
@@ -546,13 +546,13 @@ pub async fn sync_task_status_for_workflow_result(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             else {
-                let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                let _ = hub.tasks().set_status(task_id, TaskStatus::Done, false).await;
                 return;
             };
 
             match git_ops::is_branch_merged(project_root, branch_name) {
                 Ok(Some(true)) | Ok(None) => {
-                    let _ = hub.tasks().set_status(task_id, TaskStatus::Done).await;
+                    let _ = hub.tasks().set_status(task_id, TaskStatus::Done, false).await;
                 }
                 Ok(Some(false)) => {
                     let _ = set_task_blocked_with_reason(
@@ -591,10 +591,10 @@ pub async fn sync_task_status_for_workflow_result(
                     let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
                 } else {
                     let _ = hub.tasks().replace(task).await;
-                    let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+                    let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked, false).await;
                 }
             } else {
-                let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+                let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked, false).await;
             }
         }
         WorkflowStatus::Escalated => {
@@ -602,19 +602,19 @@ pub async fn sync_task_status_for_workflow_result(
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "escalated").await;
             }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
-            let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked).await;
+            let _ = hub.tasks().set_status(task_id, TaskStatus::Blocked, false).await;
         }
         WorkflowStatus::Cancelled => {
             if let Some(wf_id) = workflow_id {
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "cancelled").await;
             }
             remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
-            let _ = hub.tasks().set_status(task_id, TaskStatus::Cancelled).await;
+            let _ = hub.tasks().set_status(task_id, TaskStatus::Cancelled, false).await;
         }
         WorkflowStatus::Paused | WorkflowStatus::Running | WorkflowStatus::Pending => {
             let _ = hub
                 .tasks()
-                .set_status(task_id, TaskStatus::InProgress)
+                .set_status(task_id, TaskStatus::InProgress, false)
                 .await;
         }
     }
@@ -695,7 +695,7 @@ pub async fn run_ready_task_workflows_for_project(
                     continue;
                 }
                 if completed_task_ids.contains(&task.id) {
-                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
+                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Done, false).await;
                     continue;
                 }
                 let dependency_issues =
@@ -736,7 +736,7 @@ pub async fn run_ready_task_workflows_for_project(
                 continue;
             }
             if completed_task_ids.contains(&task.id) {
-                let _ = hub.tasks().set_status(&task.id, TaskStatus::Done).await;
+                let _ = hub.tasks().set_status(&task.id, TaskStatus::Done, false).await;
                 continue;
             }
             let dependency_issues =

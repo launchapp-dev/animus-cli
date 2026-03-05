@@ -93,7 +93,14 @@
       "mcp__ao__ao_output_tail",
       "mcp__ao__ao_workflow_get",
       "Bash(done)",
-      "Bash(xxd:*)"
+      "Bash(xxd:*)",
+      "Bash(codex exec:*)",
+      "Bash(/opt/homebrew/bin/git:*)",
+      "Bash(cargo search:*)",
+      "Bash(GIT_EDITOR=true /opt/homebrew/bin/git rebase:*)",
+      "mcp__ao__ao_workflow_config_get",
+      "mcp__ao__ao_workflow_pipelines_list",
+      "mcp__ao__ao_daemon_config"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -45,6 +45,8 @@ pub(crate) enum TaskCommand {
     Resume(TaskIdArgs),
     /// Cancel a task (confirmation required).
     Cancel(TaskCancelArgs),
+    /// Reopen a task from terminal state (Done/Cancelled) back to Backlog.
+    Reopen(TaskReopenArgs),
     /// Set task priority.
     SetPriority(TaskSetPriorityArgs),
     /// Set or clear task deadline.
@@ -69,6 +71,18 @@ pub(crate) struct TaskCancelArgs {
         help = "Preview cancellation payload without mutating task state."
     )]
     pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TaskReopenArgs {
+    #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
+    pub(crate) task_id: String,
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Confirmation token; must match --task-id."
+    )]
+    pub(crate) confirm: Option<String>,
 }
 
 #[derive(Debug, Args)]

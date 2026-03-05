@@ -139,7 +139,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, status)
+            .set_status(&task.id, status, false)
             .await
             .expect("task status should be updated");
 
@@ -333,7 +333,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::Done)
+            .set_status(&task.id, TaskStatus::Done, false)
             .await
             .expect("task status should be updated");
 

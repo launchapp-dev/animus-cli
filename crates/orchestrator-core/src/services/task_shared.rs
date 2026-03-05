@@ -24,6 +24,28 @@ pub(super) fn validate_task_status_transition(
     if current == target {
         return Ok(());
     }
+    // AC1: Done requires InProgress as prior state
+    if target == TaskStatus::Done && current != TaskStatus::InProgress {
+        return Err(anyhow!(
+            "cannot transition to done from {} — task must be in-progress first",
+            serde_json::to_value(current)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", current)),
+        ));
+    }
+    // AC2: InProgress requires Ready or Backlog as prior state
+    if target == TaskStatus::InProgress
+        && !matches!(current, TaskStatus::Ready | TaskStatus::Backlog)
+    {
+        return Err(anyhow!(
+            "cannot transition to in-progress from {} — task must be ready or backlog first",
+            serde_json::to_value(current)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", current)),
+        ));
+    }
     match current {
         TaskStatus::Done | TaskStatus::Cancelled => {
             Err(anyhow!(
@@ -629,8 +651,12 @@ pub(super) fn set_status_in_state(
     state: &mut super::state_store::CoreState,
     id: &str,
     status: TaskStatus,
+    validate: bool,
 ) -> Result<OrchestratorTask> {
     let task = get_task_mut(state, id)?;
+    if validate {
+        validate_task_status_transition(task.status, status)?;
+    }
     apply_task_status(task, status);
     task.metadata.updated_at = Utc::now();
     task.metadata.version = task.metadata.version.saturating_add(1);

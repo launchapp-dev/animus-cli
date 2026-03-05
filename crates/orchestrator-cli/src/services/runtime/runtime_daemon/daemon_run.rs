@@ -966,7 +966,7 @@ mod tests {
 
         primary_hub
             .tasks()
-            .set_status(&task.id, orchestrator_core::TaskStatus::InProgress)
+            .set_status(&task.id, orchestrator_core::TaskStatus::InProgress, false)
             .await
             .expect("task should be stale in-progress");
 
@@ -1078,7 +1078,7 @@ mod tests {
             .expect("task should be created");
         primary_hub
             .tasks()
-            .set_status(&task.id, orchestrator_core::TaskStatus::Ready)
+            .set_status(&task.id, orchestrator_core::TaskStatus::Ready, false)
             .await
             .expect("task should be ready");
 

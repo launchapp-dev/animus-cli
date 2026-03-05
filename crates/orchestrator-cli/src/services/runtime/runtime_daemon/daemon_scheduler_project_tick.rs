@@ -356,7 +356,7 @@ pub(super) async fn slim_daemon_tick(
             remove_terminal_em_work_queue_entry_non_fatal(&root, &completed.task_id, None);
             let _ = hub
                 .tasks()
-                .set_status(&completed.task_id, TaskStatus::Done)
+                .set_status(&completed.task_id, TaskStatus::Done, false, false)
                 .await;
             executed_workflow_phases = executed_workflow_phases.saturating_add(1);
             continue;
@@ -374,7 +374,7 @@ pub(super) async fn slim_daemon_tick(
         } else {
             let _ = hub
                 .tasks()
-                .set_status(&completed.task_id, TaskStatus::Blocked)
+                .set_status(&completed.task_id, TaskStatus::Blocked, false, false)
                 .await;
         }
         failed_workflow_phases = failed_workflow_phases.saturating_add(1);
@@ -442,7 +442,7 @@ pub(super) async fn slim_daemon_tick(
                 Ok(_) => {
                     let _ = hub
                         .tasks()
-                        .set_status(&task.id, TaskStatus::InProgress)
+                        .set_status(&task.id, TaskStatus::InProgress, false, false)
                         .await;
                     ready_workflows_started.push(ReadyTaskWorkflowStart {
                         task_id: task.id.clone(),
@@ -644,7 +644,7 @@ mod tests {
             .await
             .expect("fallback task should be created");
         hub.tasks()
-            .set_status(&fallback_task.id, TaskStatus::Ready)
+            .set_status(&fallback_task.id, TaskStatus::Ready, false, false)
             .await
             .expect("fallback task should be ready");
 
@@ -663,7 +663,7 @@ mod tests {
             .await
             .expect("queue task should be created");
         hub.tasks()
-            .set_status(&queue_task.id, TaskStatus::Ready)
+            .set_status(&queue_task.id, TaskStatus::Ready, false, false)
             .await
             .expect("queue task should be ready");
 
@@ -749,7 +749,7 @@ mod tests {
             .await
             .expect("first queue task should be created");
         hub.tasks()
-            .set_status(&queue_task_one.id, TaskStatus::Ready)
+            .set_status(&queue_task_one.id, TaskStatus::Ready, false, false)
             .await
             .expect("first queue task should be ready");
 
@@ -768,7 +768,7 @@ mod tests {
             .await
             .expect("second queue task should be created");
         hub.tasks()
-            .set_status(&queue_task_two.id, TaskStatus::Ready)
+            .set_status(&queue_task_two.id, TaskStatus::Ready, false, false)
             .await
             .expect("second queue task should be ready");
 
@@ -787,7 +787,7 @@ mod tests {
             .await
             .expect("fallback task should be created");
         hub.tasks()
-            .set_status(&fallback_task.id, TaskStatus::Ready)
+            .set_status(&fallback_task.id, TaskStatus::Ready, false, false)
             .await
             .expect("fallback task should be ready");
 
@@ -894,7 +894,7 @@ mod tests {
             .await
             .expect("fallback task should be created");
         hub.tasks()
-            .set_status(&fallback_ready_task.id, TaskStatus::Ready)
+            .set_status(&fallback_ready_task.id, TaskStatus::Ready, false)
             .await
             .expect("fallback task should be ready");
 
@@ -953,7 +953,7 @@ mod tests {
             .await
             .expect("fallback task should be created");
         hub.tasks()
-            .set_status(&fallback_ready_task.id, TaskStatus::Ready)
+            .set_status(&fallback_ready_task.id, TaskStatus::Ready, false)
             .await
             .expect("fallback task should be ready");
 
@@ -1003,7 +1003,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should be in-progress");
 
@@ -1076,7 +1076,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should be in-progress");
 
@@ -1147,7 +1147,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should be in-progress");
 
@@ -1225,7 +1225,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should be in-progress");
 
@@ -1735,7 +1735,7 @@ thinking...
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&low_task.id, TaskStatus::Ready)
+            .set_status(&low_task.id, TaskStatus::Ready, false)
             .await
             .expect("task should be ready");
 
@@ -1754,7 +1754,7 @@ thinking...
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&high_task.id, TaskStatus::Ready)
+            .set_status(&high_task.id, TaskStatus::Ready, false)
             .await
             .expect("task should be ready");
 

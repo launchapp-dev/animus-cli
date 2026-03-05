@@ -1138,11 +1138,11 @@ mod tests {
             .expect("blocked task should be created");
 
         hub.tasks()
-            .set_status(&dependency.id, TaskStatus::Ready)
+            .set_status(&dependency.id, TaskStatus::Ready, false)
             .await
             .expect("dependency should become ready");
         hub.tasks()
-            .set_status(&blocked.id, TaskStatus::Ready)
+            .set_status(&blocked.id, TaskStatus::Ready, false)
             .await
             .expect("blocked task should become ready");
         hub.tasks()
@@ -1175,7 +1175,7 @@ mod tests {
             .starts_with(DEPENDENCY_GATE_PREFIX));
 
         hub.tasks()
-            .set_status(&dependency.id, TaskStatus::Done)
+            .set_status(&dependency.id, TaskStatus::Done, false)
             .await
             .expect("dependency should become done");
 
@@ -1250,7 +1250,7 @@ mod tests {
             .await
             .expect("task should be created");
         hub.tasks()
-            .set_status(&task.id, TaskStatus::Ready)
+            .set_status(&task.id, TaskStatus::Ready, false)
             .await
             .expect("task should be ready");
 
@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(workflow_state.status, WorkflowStatus::Completed);
 
         hub.tasks()
-            .set_status(&task.id, TaskStatus::Ready)
+            .set_status(&task.id, TaskStatus::Ready, false)
             .await
             .expect("task should be forced to ready");
 
@@ -1427,7 +1427,7 @@ mod tests {
         assert!(conflicted.completed_at.is_none());
 
         hub.tasks()
-            .set_status(&task.id, TaskStatus::Ready)
+            .set_status(&task.id, TaskStatus::Ready, false)
             .await
             .expect("task should become ready");
 
@@ -1495,7 +1495,7 @@ mod tests {
         assert_eq!(workflow_state.status, WorkflowStatus::Completed);
 
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should become in-progress");
 
@@ -1568,7 +1568,7 @@ mod tests {
         assert!(conflicted.completed_at.is_none());
 
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should become in-progress");
 
@@ -1757,7 +1757,7 @@ mod tests {
         assert_eq!(state.status, WorkflowStatus::Completed);
 
         hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress)
+            .set_status(&task.id, TaskStatus::InProgress, false)
             .await
             .expect("task should be marked stale");
 

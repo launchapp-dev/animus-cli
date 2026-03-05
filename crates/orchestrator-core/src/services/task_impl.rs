@@ -86,8 +86,8 @@ impl TaskServiceApi for InMemoryServiceHub {
         assign_human_in_state(&mut *self.state.write().await, id, user_id, updated_by)
     }
 
-    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<OrchestratorTask> {
-        set_status_in_state(&mut *self.state.write().await, id, status)
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask> {
+        set_status_in_state(&mut *self.state.write().await, id, status, validate)
     }
 
     async fn add_checklist_item(
@@ -248,9 +248,9 @@ impl TaskServiceApi for FileServiceHub {
         Ok(task)
     }
 
-    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<OrchestratorTask> {
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask> {
         let (task, _) = self
-            .mutate_persistent_state(|state| set_status_in_state(state, id, status))
+            .mutate_persistent_state(|state| set_status_in_state(state, id, status, validate))
             .await?;
         Ok(task)
     }
