@@ -2328,6 +2328,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "orchestrator-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "orchestrator-core"
 version = "0.1.0"
 dependencies = [
@@ -2338,6 +2352,7 @@ dependencies = [
  "fs2",
  "libc",
  "llm-cli-wrapper",
+ "orchestrator-config",
  "orchestrator-providers",
  "orchestrator-store",
  "protocol",

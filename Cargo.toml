@@ -3,6 +3,7 @@ members = [
   "crates/agent-runner",
   "crates/protocol",
   "crates/llm-cli-wrapper",
+  "crates/orchestrator-config",
   "crates/orchestrator-core",
   "crates/orchestrator-store",
   "crates/orchestrator-cli",
@@ -24,6 +25,7 @@ resolver = "2"
 [workspace.dependencies]
 protocol = { path = "crates/protocol" }
 llm-cli-wrapper = { path = "crates/llm-cli-wrapper" }
+orchestrator-config = { path = "crates/orchestrator-config" }
 orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-providers = { path = "crates/orchestrator-providers" }
 orchestrator-store = { path = "crates/orchestrator-store" }

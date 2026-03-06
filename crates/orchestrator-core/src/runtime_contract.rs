@@ -104,17 +104,15 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
     }
 }
 
-impl CliToolConfig {
-    pub fn to_capabilities(&self) -> CliCapabilities {
-        CliCapabilities {
-            supports_file_editing: self.supports_file_editing.unwrap_or(false),
-            supports_streaming: self.supports_streaming.unwrap_or(false),
-            supports_tool_use: self.supports_tool_use.unwrap_or(false),
-            supports_vision: self.supports_vision.unwrap_or(false),
-            supports_long_context: self.supports_long_context.unwrap_or(false),
-            max_context_tokens: self.max_context_tokens,
-            supports_mcp: self.supports_mcp.unwrap_or(false),
-        }
+fn cli_capabilities_from_tool_config(config: &CliToolConfig) -> CliCapabilities {
+    CliCapabilities {
+        supports_file_editing: config.supports_file_editing.unwrap_or(false),
+        supports_streaming: config.supports_streaming.unwrap_or(false),
+        supports_tool_use: config.supports_tool_use.unwrap_or(false),
+        supports_vision: config.supports_vision.unwrap_or(false),
+        supports_long_context: config.supports_long_context.unwrap_or(false),
+        max_context_tokens: config.max_context_tokens,
+        supports_mcp: config.supports_mcp.unwrap_or(false),
     }
 }
 
@@ -126,7 +124,7 @@ pub fn cli_capabilities_from_config(
     config
         .cli_tools
         .get(&normalized)
-        .map(|tc| tc.to_capabilities())
+        .map(cli_capabilities_from_tool_config)
         .or_else(|| cli_capabilities_for_tool(&normalized))
 }
 
