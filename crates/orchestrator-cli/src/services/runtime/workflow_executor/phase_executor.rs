@@ -501,14 +501,26 @@ fn inject_workflow_mcp_servers(
     if config.config.mcp_servers.is_empty() {
         return;
     }
-    let agent_id = load_agent_runtime_config(project_root)
+    let agent_runtime_config = load_agent_runtime_config(project_root);
+    let agent_id = agent_runtime_config
         .phase_agent_id(phase_id)
         .map(ToOwned::to_owned);
-    let allowed_servers: Option<&[String]> = agent_id
+    let workflow_profile_servers: Option<&[String]> = agent_id
         .as_deref()
         .and_then(|id| config.config.agent_profiles.get(id))
         .map(|profile| profile.mcp_servers.as_slice())
         .filter(|servers| !servers.is_empty());
+    let runtime_profile_servers: Option<Vec<String>> = if workflow_profile_servers.is_none() {
+        agent_id
+            .as_deref()
+            .and_then(|id| agent_runtime_config.agent_profile(id))
+            .map(|profile| profile.mcp_servers.clone())
+            .filter(|servers| !servers.is_empty())
+    } else {
+        None
+    };
+    let allowed_servers: Option<&[String]> = workflow_profile_servers
+        .or_else(|| runtime_profile_servers.as_deref());
 
     let existing = runtime_contract
         .pointer("/mcp/additional_servers")
@@ -2696,6 +2708,14 @@ mod tests {
                     .collect(),
             },
         );
+        let agent_id = load_agent_runtime_config(project_root)
+            .phase_agent_id("implementation")
+            .unwrap_or("swe")
+            .to_owned();
+        let mut profile: orchestrator_core::AgentProfile =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        profile.mcp_servers = vec!["custom-server".to_string()];
+        config.agent_profiles.insert(agent_id, profile);
         orchestrator_core::write_workflow_config(Path::new(project_root), &config).unwrap();
 
         let mut contract = serde_json::json!({
@@ -2739,6 +2759,14 @@ mod tests {
                 env: Default::default(),
             },
         );
+        let agent_id = load_agent_runtime_config(project_root)
+            .phase_agent_id("implementation")
+            .unwrap_or("swe")
+            .to_owned();
+        let mut profile: orchestrator_core::AgentProfile =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        profile.mcp_servers = vec!["workflow-server".to_string()];
+        config.agent_profiles.insert(agent_id, profile);
         orchestrator_core::write_workflow_config(Path::new(project_root), &config).unwrap();
 
         let mut contract = serde_json::json!({
@@ -2826,6 +2854,56 @@ mod tests {
             !servers.contains_key("blocked-server"),
             "server not listed in agent profile should be filtered out"
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn inject_workflow_mcp_servers_falls_back_to_runtime_config_profile() {
+        let tmp = std::env::temp_dir()
+            .join(format!("ao-test-wf-mcp-rt-fallback-{}", Uuid::new_v4()));
+        let project_root = tmp.to_str().unwrap();
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let runtime_config = load_agent_runtime_config(project_root);
+        let agent_id = runtime_config
+            .phase_agent_id("implementation")
+            .unwrap_or("swe");
+        let runtime_allowed: Vec<String> = runtime_config
+            .agent_profile(agent_id)
+            .map(|p| p.mcp_servers.clone())
+            .unwrap_or_default();
+
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.mcp_servers.insert(
+            "unlisted-server".to_string(),
+            orchestrator_core::workflow_config::McpServerDefinition {
+                command: "unlisted".to_string(),
+                args: vec![],
+                transport: None,
+                config: Default::default(),
+                tools: vec![],
+                env: Default::default(),
+            },
+        );
+        orchestrator_core::write_workflow_config(Path::new(project_root), &config).unwrap();
+
+        let mut contract = serde_json::json!({
+            "mcp": { "stdio": { "command": "ao" } }
+        });
+        inject_workflow_mcp_servers(&mut contract, project_root, "implementation");
+
+        if !runtime_allowed.is_empty() {
+            let injected_unlisted = contract
+                .pointer("/mcp/additional_servers")
+                .and_then(Value::as_object)
+                .is_some_and(|s| s.contains_key("unlisted-server"));
+            assert!(
+                !injected_unlisted,
+                "server not in runtime profile mcp_servers ({:?}) should be filtered out",
+                runtime_allowed
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
