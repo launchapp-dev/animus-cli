@@ -1,72 +1,12 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use anyhow::Result;
+pub use orchestrator_store::{
+    project_state_dir, read_json_or_default, write_json_atomic, write_json_pretty,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
-
-pub fn project_state_dir(project_root: &str) -> PathBuf {
-    if let Some(scoped) = protocol::scoped_state_root(Path::new(project_root)) {
-        return scoped.join("state");
-    }
-    Path::new(project_root).join(".ao").join("state")
-}
-
-pub fn read_json_or_default<T>(path: &Path) -> Result<T>
-where
-    T: Default + DeserializeOwned,
-{
-    if !path.exists() {
-        return Ok(T::default());
-    }
-    let content = std::fs::read_to_string(path)?;
-    let parsed = serde_json::from_str::<T>(&content)?;
-    Ok(parsed)
-}
-
-/// Atomically write JSON to a file using the temp file + rename pattern.
-/// This ensures that readers never see partially-written JSON.
-pub fn write_json_pretty<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("state.json");
-    let tmp_path = path.with_file_name(format!("{file_name}.{}.tmp", Uuid::new_v4()));
-    let payload = serde_json::to_string_pretty(value)?;
-
-    std::fs::write(&tmp_path, payload)?;
-    match std::fs::rename(&tmp_path, path) {
-        Ok(()) => Ok(()),
-        Err(original_error) => {
-            if path.exists() {
-                std::fs::remove_file(path).with_context(|| {
-                    format!("failed to replace {} after rename failure", path.display())
-                })?;
-                std::fs::rename(&tmp_path, path).with_context(|| {
-                    format!(
-                        "failed to atomically move temp file {} to {}",
-                        tmp_path.display(),
-                        path.display()
-                    )
-                })?;
-                Ok(())
-            } else {
-                Err(original_error).with_context(|| {
-                    format!(
-                        "failed to atomically move temp file {} to {}",
-                        tmp_path.display(),
-                        path.display()
-                    )
-                })
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -38,10 +38,10 @@ pub use domain_state::{
     parse_review_decision, parse_review_entity_type, parse_reviewer_role, project_state_dir,
     qa_approvals_path, qa_results_path, read_json_or_default, reviews_path, save_errors,
     save_handoffs, save_history_store, save_qa_approvals, save_qa_results, save_reviews,
-    write_json_pretty, EntityReviewStatus, ErrorRecord, ErrorStore, HandoffRecord, HandoffStore,
-    HistoryExecutionRecord, HistoryStore, QaGateResultRecord, QaPhaseGateResult, QaResultsStore,
-    QaReviewApprovalRecord, QaReviewApprovalStore, ReviewDecision, ReviewEntityType, ReviewRecord,
-    ReviewStore, ReviewerRole,
+    write_json_atomic, write_json_pretty, EntityReviewStatus, ErrorRecord, ErrorStore, HandoffRecord,
+    HandoffStore, HistoryExecutionRecord, HistoryStore, QaGateResultRecord, QaPhaseGateResult,
+    QaResultsStore, QaReviewApprovalRecord, QaReviewApprovalStore, ReviewDecision, ReviewEntityType,
+    ReviewRecord, ReviewStore, ReviewerRole,
 };
 pub use events::{OrchestratorEvent, OrchestratorEventKind};
 pub use runtime::{EventSink, OrchestratorRuntime, RuntimeHandle};
