@@ -79,8 +79,54 @@ phase_catalog:
     description: "Refine vague task descriptions into well-specified acceptance criteria"
     category: planning
     tags: [requirements, planning]
+  implementation:
+    label: "Implementation"
+    description: "Implement production-quality code changes"
+    category: development
+    tags: [coding, implementation]
+  code-review:
+    label: "Code Review"
+    description: "Review implementation for defects and maintainability"
+    category: review
+    tags: [review, quality]
+  testing:
+    label: "Testing"
+    description: "Validate implementation by running test suite"
+    category: verification
+    tags: [testing, quality]
+  requirements:
+    label: "Requirements"
+    description: "Validate and refine task requirements before implementation"
+    category: planning
+    tags: [requirements, planning]
+  brain-requirement-scan:
+    label: "Brain Requirement Scan"
+    description: "List requirement candidates that still need planning work"
+    category: planning
+    tags: [brain, planning, requirements]
+  brain-task-next:
+    label: "Brain Task Selection"
+    description: "Select the next task candidate to execute"
+    category: planning
+    tags: [brain, planning, tasks]
 
 phases:
+  brain-requirement-scan:
+    mode: command
+    directive: "List top requirement candidates that need work"
+    command:
+      program: cargo
+      args: ["run", "-p", "orchestrator-cli", "--", "--project-root", ".", "requirements", "list", "--json", "--limit", "10"]
+      timeout_secs: 300
+
+  brain-task-next:
+    mode: command
+    directive: "Pick the next highest-priority task candidate"
+    command:
+      program: cargo
+      args: ["run", "-p", "orchestrator-cli", "--", "--project-root", ".", "task", "next", "--json"]
+      timeout_secs: 300
+
   unit-test:
     mode: command
     directive: "Run the workspace test suite"
@@ -187,3 +233,12 @@ pipelines:
             rework:
               target: implementation
       - po-review
+
+  - id: brain
+    name: "Brain Planner"
+    description: "Planning workflow that triages and refines current work, then surfaces next requirement and task candidates"
+    phases:
+      - triage
+      - refine-requirements
+      - brain-requirement-scan
+      - brain-task-next

@@ -52,6 +52,9 @@ enum Commands {
         #[arg(long)]
         mcp_config: Option<String>,
 
+        #[arg(long)]
+        session_id: Option<String>,
+
         prompt: String,
     },
 }
@@ -73,6 +76,7 @@ async fn main() -> Result<()> {
             response_schema,
             read_only,
             mcp_config,
+            session_id,
             prompt,
         } => {
             let working_dir = working_dir
@@ -132,6 +136,7 @@ async fn main() -> Result<()> {
                 &mut output,
                 parsed_schema.as_ref(),
                 &mcp_clients,
+                session_id.as_deref(),
             )
             .await
             {

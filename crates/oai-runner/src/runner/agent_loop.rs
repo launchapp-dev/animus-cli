@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::api::client::ApiClient;
 use crate::api::types::*;
@@ -9,6 +9,38 @@ use crate::tools::{executor, mcp_client};
 use super::output::OutputFormatter;
 
 const SCHEMA_RETRY_LIMIT: usize = 3;
+
+fn config_dir() -> PathBuf {
+    let dir = std::env::var("AO_CONFIG_DIR")
+        .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.ao", h)))
+        .unwrap_or_else(|_| ".ao".to_string());
+    PathBuf::from(dir)
+}
+
+fn session_file_path_in(base: &Path, session_id: &str) -> PathBuf {
+    base.join("sessions").join(format!("{}.json", session_id))
+}
+
+fn load_session_messages_from(base: &Path, session_id: &str) -> Vec<ChatMessage> {
+    let path = session_file_path_in(base, session_id);
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessage]) -> Result<()> {
+    let path = session_file_path_in(base, session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = serde_json::to_string_pretty(messages)?;
+    std::fs::write(&path, data)?;
+    Ok(())
+}
 
 pub async fn run_agent_loop(
     client: &ApiClient,
@@ -21,10 +53,19 @@ pub async fn run_agent_loop(
     output: &mut OutputFormatter,
     response_schema: Option<&Value>,
     mcp_clients: &[mcp_client::McpClient],
+    session_id: Option<&str>,
 ) -> Result<()> {
     let mut messages: Vec<ChatMessage> = Vec::new();
 
-    if !system_prompt.is_empty() {
+    if let Some(sid) = session_id {
+        let prior = load_session_messages_from(&config_dir(), sid);
+        if !prior.is_empty() {
+            eprintln!("[oai-runner] Resuming session {} ({} prior messages)", sid, prior.len());
+            messages.extend(prior);
+        }
+    }
+
+    if messages.is_empty() && !system_prompt.is_empty() {
         messages.push(ChatMessage {
             role: "system".to_string(),
             content: Some(system_prompt.to_string()),
@@ -68,6 +109,7 @@ pub async fn run_agent_loop(
         messages.push(assistant_msg.clone());
 
         if !has_tool_calls {
+            output.flush_result();
             if let Some(schema) = response_schema {
                 let content = assistant_msg.content.as_deref().unwrap_or("");
                 if let Err(errors) = validate_output_against_schema(content, schema) {
@@ -78,6 +120,11 @@ pub async fn run_agent_loop(
                     if !corrected {
                         eprintln!("Warning: schema validation failed after {} retries", SCHEMA_RETRY_LIMIT);
                     }
+                }
+            }
+            if let Some(sid) = session_id {
+                if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
+                    eprintln!("[oai-runner] Warning: failed to save session {}: {}", sid, e);
                 }
             }
             output.newline();
@@ -131,6 +178,12 @@ pub async fn run_agent_loop(
         }
     }
 
+    if let Some(sid) = session_id {
+        if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
+            eprintln!("[oai-runner] Warning: failed to save session {}: {}", sid, e);
+        }
+    }
+    output.flush_result();
     output.newline();
     Ok(())
 }
@@ -436,5 +489,47 @@ mod tests {
         let content = "This is just plain text with no JSON at all.";
         let err = validate_output_against_schema(content, &schema).unwrap_err();
         assert!(err.contains("does not contain valid JSON"));
+    }
+
+    #[test]
+    fn session_save_and_load_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+
+        let sid = "test-session-round-trip";
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: Some("You are helpful.".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: Some("Hello".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: Some("Hi there!".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        save_session_messages_to(base, sid, &messages).unwrap();
+        let loaded = load_session_messages_from(base, sid);
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].role, "system");
+        assert_eq!(loaded[1].content.as_deref(), Some("Hello"));
+        assert_eq!(loaded[2].content.as_deref(), Some("Hi there!"));
+    }
+
+    #[test]
+    fn load_nonexistent_session_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = load_session_messages_from(dir.path(), "nonexistent-session-id");
+        assert!(loaded.is_empty());
     }
 }

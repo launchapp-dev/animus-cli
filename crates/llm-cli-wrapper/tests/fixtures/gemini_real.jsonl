@@ -1,0 +1,34 @@
+{
+  "session_id": "fa5a8103-ddbd-4dd7-8677-4cd4b0d14c2e",
+  "response": "PINEAPPLE_42",
+  "stats": {
+    "models": {
+      "gemini-2.5-flash": {
+        "api": {
+          "totalRequests": 1,
+          "totalErrors": 0,
+          "totalLatencyMs": 1778
+        },
+        "tokens": {
+          "input": 8409,
+          "prompt": 8409,
+          "candidates": 6,
+          "total": 8453,
+          "cached": 0,
+          "thoughts": 38,
+          "tool": 0
+        }
+      }
+    },
+    "tools": {
+      "totalCalls": 0,
+      "totalSuccess": 0,
+      "totalFail": 0,
+      "totalDurationMs": 0
+    },
+    "files": {
+      "totalLinesAdded": 0,
+      "totalLinesRemoved": 0
+    }
+  }
+}

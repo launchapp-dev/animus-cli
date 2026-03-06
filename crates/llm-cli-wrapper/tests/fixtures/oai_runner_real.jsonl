@@ -1,0 +1,3 @@
+{"text":"<think>\nThe user","type":"text_chunk"}
+{"text":" is asking me to reply with exactly \"PINEAPPLE_42\" and nothing else. This is a simple request that doesn't require any tools.\n</think>\n\nPINEAPPLE_42","type":"text_chunk"}
+{"text":"<think>\nThe user is asking me to reply with exactly \"PINEAPPLE_42\" and nothing else. This is a simple request that doesn't require any tools.\n</think>\n\nPINEAPPLE_42","type":"result"}

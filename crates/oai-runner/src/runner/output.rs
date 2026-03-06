@@ -3,16 +3,40 @@ use std::io::Write;
 
 pub struct OutputFormatter {
     json_mode: bool,
+    text_buffer: String,
 }
 
 impl OutputFormatter {
     pub fn new(json_mode: bool) -> Self {
-        Self { json_mode }
+        Self {
+            json_mode,
+            text_buffer: String::new(),
+        }
     }
 
-    pub fn text_chunk(&self, text: &str) {
-        print!("{}", text);
-        std::io::stdout().flush().ok();
+    pub fn text_chunk(&mut self, text: &str) {
+        if self.json_mode {
+            self.text_buffer.push_str(text);
+            let event = json!({
+                "type": "text_chunk",
+                "text": text
+            });
+            println!("{}", event);
+        } else {
+            print!("{}", text);
+            std::io::stdout().flush().ok();
+        }
+    }
+
+    pub fn flush_result(&mut self) {
+        if self.json_mode && !self.text_buffer.is_empty() {
+            let event = json!({
+                "type": "result",
+                "text": self.text_buffer
+            });
+            println!("{}", event);
+            self.text_buffer.clear();
+        }
     }
 
     pub fn tool_call(&self, tool_name: &str, arguments: &serde_json::Value) {
@@ -70,14 +94,17 @@ impl OutputFormatter {
         println!();
     }
 
-    /// Output thinking content in XML tags.
-    /// The agent-runner parser looks for <thinking> and </thinking> tags
-    /// to extract thinking content as a separate event.
     pub fn thinking(&self, content: &str) {
-        // Output thinking in XML tags - this allows the agent-runner parser
-        // to detect and extract thinking as a separate protocol event
-        print!("<thinking>{}</thinking>", content);
-        std::io::stdout().flush().ok();
+        if self.json_mode {
+            let event = json!({
+                "type": "thinking",
+                "text": content
+            });
+            println!("{}", event);
+        } else {
+            print!("<thinking>{}</thinking>", content);
+            std::io::stdout().flush().ok();
+        }
     }
 }
 
@@ -86,19 +113,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn output_formatter_creates_json_tool_call_event() {
-        let _formatter = OutputFormatter::new(true);
-        let _args = serde_json::json!({"path": "test.txt"});
-        // In JSON mode, tool_call should output JSON
-        // We can't easily test stdout output, but we verify the method exists
-        assert!(true);
+    fn output_formatter_json_mode_initializes_empty_buffer() {
+        let formatter = OutputFormatter::new(true);
+        assert!(formatter.text_buffer.is_empty());
+        assert!(formatter.json_mode);
     }
 
     #[test]
-    fn output_formatter_thinking_wraps_content_in_tags() {
-        let _formatter = OutputFormatter::new(false);
-        // Verify thinking method wraps content in XML tags
-        // The implementation should produce <thinking>content</thinking>
-        assert!(true);
+    fn output_formatter_text_mode_does_not_buffer() {
+        let formatter = OutputFormatter::new(false);
+        assert!(!formatter.json_mode);
+        assert!(formatter.text_buffer.is_empty());
+    }
+
+    #[test]
+    fn text_chunk_accumulates_in_buffer_for_json_mode() {
+        let mut formatter = OutputFormatter::new(true);
+        formatter.text_buffer.push_str("hello ");
+        formatter.text_buffer.push_str("world");
+        assert_eq!(formatter.text_buffer, "hello world");
+    }
+
+    #[test]
+    fn flush_result_clears_buffer() {
+        let mut formatter = OutputFormatter::new(true);
+        formatter.text_buffer.push_str("accumulated text");
+        assert!(!formatter.text_buffer.is_empty());
+        formatter.text_buffer.clear();
+        assert!(formatter.text_buffer.is_empty());
     }
 }

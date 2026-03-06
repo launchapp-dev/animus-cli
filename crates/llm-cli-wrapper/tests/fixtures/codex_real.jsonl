@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"019cc0ed-d204-7d53-a3b2-12d6cbecf85d"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Confirming exact response**"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"PINEAPPLE_42"}}
+{"type":"turn.completed","usage":{"input_tokens":25279,"cached_input_tokens":3456,"output_tokens":36}}

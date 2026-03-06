@@ -79,7 +79,7 @@ pub(super) async fn handle_agent_run(
         }
 
         if args.stream || json {
-            print_agent_event(&event, json)?;
+            print_agent_event(&event, json, &args.tool)?;
         }
 
         match event {

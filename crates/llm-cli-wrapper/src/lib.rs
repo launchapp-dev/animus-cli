@@ -48,6 +48,6 @@ pub use cli::{
 };
 pub use config::Config;
 pub use error::{Error, Result};
-pub use parser::{OutputParser, ParsedOutput};
+pub use parser::{NormalizedTextEvent, extract_text_from_line};
 pub use tester::{CliTester, TestResult, TestSuite};
 pub use validator::{CliValidator, ValidationResult};

@@ -80,7 +80,7 @@ pub(crate) async fn run_agent_session(
             let formatted = if print_mode {
                 line.trim().to_string()
             } else if envelope_json {
-                format_agent_line(&line)
+                format_agent_line(&line, &tool)
             } else {
                 line.trim().to_string()
             };
@@ -156,7 +156,9 @@ fn build_agent_run_args(
     args
 }
 
-fn format_agent_line(line: &str) -> String {
+fn format_agent_line(line: &str, tool: &str) -> String {
+    use cli_wrapper::{NormalizedTextEvent, extract_text_from_line};
+
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -176,7 +178,16 @@ fn format_agent_line(line: &str) -> String {
                 if let Some((event_name, payload)) = object.iter().next() {
                     if event_name == "OutputChunk" {
                         if let Some(text) = payload.get("text").and_then(Value::as_str) {
-                            return text.trim().to_string();
+                            match extract_text_from_line(text, tool) {
+                                NormalizedTextEvent::TextChunk { text: t }
+                                | NormalizedTextEvent::FinalResult { text: t } => return t,
+                                NormalizedTextEvent::Ignored => {
+                                    if !text.trim_start().starts_with('{') {
+                                        return text.trim().to_string();
+                                    }
+                                    return String::new();
+                                }
+                            }
                         }
                     }
                     return format!("{event_name}: {}", short_payload(payload));

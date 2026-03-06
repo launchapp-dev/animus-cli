@@ -875,7 +875,8 @@ pub async fn spawn_cli_process(
     let (output_tx, mut output_rx) = mpsc::channel::<AgentRunEvent>(100);
     let (wait_tx, mut wait_rx) = tokio::sync::oneshot::channel();
 
-    spawn_stream_forwarders(stdout, stderr, run_id.clone(), output_tx.clone());
+    let cli_tool = canonical_cli_name(&invocation.command);
+    spawn_stream_forwarders(stdout, stderr, run_id.clone(), cli_tool, output_tx.clone());
 
     drop(output_tx);
 

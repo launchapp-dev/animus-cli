@@ -4712,11 +4712,11 @@ name = "workflow-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
+ "assert_cmd",
  "clap",
- "orchestrator-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

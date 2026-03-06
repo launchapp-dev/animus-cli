@@ -1,0 +1,5 @@
+{"type":"system","subtype":"hook_started","hook_id":"343b2d8b-5960-4463-a51d-30d15e4577c4","hook_name":"SessionStart:startup","hook_event":"SessionStart","uuid":"4814a885-dd2a-4b26-8f44-52207fce2499","session_id":"d881d2c9-baf7-4f8d-95b8-6956c18e34b8"}
+{"type":"system","subtype":"init","cwd":"/Users/samishukri/ao-cli","session_id":"d881d2c9-baf7-4f8d-95b8-6956c18e34b8","model":"claude-sonnet-4-6","permissionMode":"bypassPermissions"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","id":"msg_01JN44WRDEHnuY8Lg9wWyhq9","type":"message","role":"assistant","content":[{"type":"text","text":"PINEAPPLE_42"}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":8}},"parent_tool_use_id":null,"session_id":"d881d2c9-baf7-4f8d-95b8-6956c18e34b8"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"d881d2c9-baf7-4f8d-95b8-6956c18e34b8"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":2213,"result":"PINEAPPLE_42","session_id":"d881d2c9-baf7-4f8d-95b8-6956c18e34b8"}

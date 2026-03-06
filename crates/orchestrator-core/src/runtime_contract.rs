@@ -267,6 +267,12 @@ pub fn build_cli_launch_contract(
             args.push(model_id.to_string());
             args.push("--format".to_string());
             args.push("json".to_string());
+            if matches!(resume_mode, CliSessionResumeMode::NativeId) {
+                if let Some(session_id) = resume_id.clone() {
+                    args.push("--session-id".to_string());
+                    args.push(session_id);
+                }
+            }
             args.push(prompt.to_string());
             args
         }

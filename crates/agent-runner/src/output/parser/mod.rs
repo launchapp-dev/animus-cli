@@ -12,7 +12,7 @@ mod tests {
 
     #[test]
     fn parses_json_tool_call_event() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"tool_call","tool_name":"phase_transition","arguments":{"target_phase":"implement","reason":"fix review issues"}}"#,
         );
@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn parses_wrapped_tool_call_event() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"assistant","tool_call":{"type":"tool_call","function":{"name":"phase_transition","arguments":"{\"target_phase\":\"design\"}"}}}"#,
         );
@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn parses_item_wrapped_mcp_tool_call_event() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"item.started","item":{"id":"item_7","type":"mcp_tool_call","server":"shortcut","tool":"documents-search","arguments":{"title":"REQ-021"}}}"#,
         );
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn parses_phase_transition_json_fallback_signal() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"phase-transition","target_phase":"design","reason":"clarify product gap"}"#,
         );
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn ignores_placeholder_phase_transition_json_fallback_signal() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"phase-transition","target_phase":"VALID_PHASE_ID","reason":"short plain-text reason"}"#,
         );
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn strips_placeholder_reason_from_phase_transition_tool_call() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(
             r#"{"type":"tool_call","function":{"name":"phase_transition","arguments":"{\"target_phase\":\"implement\",\"reason\":\"short plain-text reason\"}"}}"#,
         );
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn parses_xml_tool_call_parameters() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("claude");
         let _ = parser.parse_line("<function_calls>");
         let _ = parser.parse_line(r#"<invoke name="phase_transition">"#);
         let events = parser.parse_line(
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn does_not_emit_terminal_error_event_from_plain_output_text() {
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new("codex");
         let events = parser.parse_line(
             r#"{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"error: linter warning","exit_code":0,"status":"completed"}}"#,
         );
@@ -220,7 +220,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, ParsedEvent::Output)),
+                .any(|event| matches!(event, ParsedEvent::Output { .. })),
             "expected output event for plain text line"
         );
     }

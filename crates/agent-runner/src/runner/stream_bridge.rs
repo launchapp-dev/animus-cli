@@ -10,21 +10,23 @@ pub(super) fn spawn_stream_forwarders(
     stdout: ChildStdout,
     stderr: ChildStderr,
     run_id: RunId,
+    tool: String,
     output_tx: mpsc::Sender<AgentRunEvent>,
 ) {
-    spawn_stdout_forwarder(stdout, run_id.clone(), output_tx.clone());
+    spawn_stdout_forwarder(stdout, run_id.clone(), tool, output_tx.clone());
     spawn_stderr_forwarder(stderr, run_id, output_tx);
 }
 
 fn spawn_stdout_forwarder(
     stdout: ChildStdout,
     run_id: RunId,
+    tool: String,
     output_tx: mpsc::Sender<AgentRunEvent>,
 ) {
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
-        let mut parser = OutputParser::new();
+        let mut parser = OutputParser::new(&tool);
 
         loop {
             match lines.next_line().await {
@@ -58,7 +60,7 @@ fn spawn_stdout_forwarder(
                                 run_id: run_id.clone(),
                                 content,
                             }),
-                            ParsedEvent::Output => None,
+                            ParsedEvent::Output { .. } => None,
                         };
 
                         if let Some(evt) = event {

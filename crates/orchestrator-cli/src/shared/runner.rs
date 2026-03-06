@@ -13,6 +13,8 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
 
+use cli_wrapper::{NormalizedTextEvent, extract_text_from_line};
+
 use crate::{unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
 
 impl From<AgentControlActionArg> for AgentControlAction {
@@ -683,7 +685,7 @@ fn inject_cli_launch_overrides_from_env(runtime_contract: &mut Value, tool: &str
     inject_cli_extra_args_from_env(runtime_contract, tool);
 }
 
-pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool) -> Result<()> {
+pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool, tool: &str) -> Result<()> {
     if json {
         println!(
             "{}",
@@ -704,7 +706,32 @@ pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool) -> Result<()>
             stream_type, text, ..
         } => match stream_type {
             OutputStreamType::Stderr => eprintln!("{text}"),
-            OutputStreamType::Stdout | OutputStreamType::System => println!("{text}"),
+            OutputStreamType::Stdout | OutputStreamType::System => {
+                let trimmed = text.trim_start();
+                if trimmed.starts_with('{') {
+                    if let Ok(obj) = serde_json::from_str::<Value>(trimmed) {
+                        if obj.get("type").and_then(|v| v.as_str()) == Some("result") {
+                            return Ok(());
+                        }
+                    }
+                }
+                match extract_text_from_line(text, tool) {
+                    NormalizedTextEvent::TextChunk { text: t }
+                    | NormalizedTextEvent::FinalResult { text: t } => {
+                        use std::io::IsTerminal;
+                        if std::io::stdout().is_terminal() {
+                            print!("{}", termimad::text(&t));
+                        } else {
+                            print!("{t}");
+                        }
+                    }
+                    NormalizedTextEvent::Ignored => {
+                        if !trimmed.starts_with('{') {
+                            println!("{text}");
+                        }
+                    }
+                }
+            }
         },
         AgentRunEvent::Metadata {
             run_id,

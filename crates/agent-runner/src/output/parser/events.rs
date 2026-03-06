@@ -3,7 +3,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub enum ParsedEvent {
-    Output,
+    Output { text: String },
     ToolCall {
         tool_name: String,
         parameters: Value,
