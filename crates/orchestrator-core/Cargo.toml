@@ -19,6 +19,7 @@ fs2 = "0.4"
 sha2 = "0.10"
 protocol = { path = "../protocol" }
 orchestrator-providers = { workspace = true }
+orchestrator-store = { workspace = true }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 
 [features]

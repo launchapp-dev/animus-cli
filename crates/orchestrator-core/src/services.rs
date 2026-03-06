@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use fs2::FileExt;
+use orchestrator_store::{write_json_if_missing, write_json_pretty};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
@@ -622,13 +623,13 @@ impl FileServiceHub {
     }
 
     fn persist_snapshot(path: &Path, snapshot: &CoreState) -> Result<()> {
-        crate::domain_state::write_json_pretty(path, snapshot)?;
+        write_json_pretty(path, snapshot)?;
         Self::persist_structured_artifacts(path, snapshot)?;
         Ok(())
     }
 
     fn persist_and_clear_dirty(path: &Path, state: &mut CoreState) -> Result<()> {
-        crate::domain_state::write_json_pretty(path, &*state)?;
+        write_json_pretty(path, &*state)?;
 
         if let Some(docs_dir) = Self::docs_dir_for_state_file(path) {
             std::fs::create_dir_all(&docs_dir)?;
@@ -669,19 +670,6 @@ impl FileServiceHub {
         state.dirty_requirements.clear();
         state.all_tasks_dirty = false;
         state.all_requirements_dirty = false;
-        Ok(())
-    }
-
-    fn write_json_if_missing<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
-        if path.exists() {
-            return Ok(());
-        }
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        std::fs::write(path, serde_json::to_string_pretty(value)?)?;
         Ok(())
     }
 
@@ -835,7 +823,7 @@ impl FileServiceHub {
             }
         }
 
-        Self::write_json_if_missing(
+        write_json_if_missing(
             &scoped_root.join("resume-config.json"),
             &ResumeConfig::default(),
         )?;

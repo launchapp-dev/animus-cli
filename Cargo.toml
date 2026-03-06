@@ -4,6 +4,7 @@ members = [
   "crates/protocol",
   "crates/llm-cli-wrapper",
   "crates/orchestrator-core",
+  "crates/orchestrator-store",
   "crates/orchestrator-cli",
   "crates/orchestrator-web-contracts",
   "crates/orchestrator-web-api",
@@ -25,6 +26,7 @@ protocol = { path = "crates/protocol" }
 llm-cli-wrapper = { path = "crates/llm-cli-wrapper" }
 orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-providers = { path = "crates/orchestrator-providers" }
+orchestrator-store = { path = "crates/orchestrator-store" }
 orchestrator-web-contracts = { path = "crates/orchestrator-web-contracts" }
 orchestrator-web-api = { path = "crates/orchestrator-web-api" }
 orchestrator-web-server = { path = "crates/orchestrator-web-server" }
