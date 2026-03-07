@@ -1,6 +1,5 @@
 use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
-use crate::services::runtime::runtime_daemon::append_daemon_event_fire_and_forget;
 use crate::services::runtime::runtime_daemon::daemon_process_manager::ProcessManager;
 use crate::shared::{ensure_ai_generated_tasks_for_requirements, requirement_has_active_tasks};
 use anyhow::{anyhow, Context, Result};
@@ -15,14 +14,11 @@ pub(super) use orchestrator_daemon_runtime::{
     ProjectTickRunMode, ProjectTickSummary,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 use uuid::Uuid;
 #[path = "daemon_scheduler_frontend_gate.rs"]
 mod frontend_phase_gate;
@@ -31,9 +27,7 @@ mod git_ops;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
-use ::workflow_runner::executor::{
-    PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionRunResult,
-};
+use ::workflow_runner::executor::PhaseExecutionOutcome;
 pub(crate) use ::workflow_runner::phase_failover;
 pub(crate) use ::workflow_runner::phase_targets;
 pub(crate) use ::workflow_runner::runtime_support;
@@ -41,18 +35,13 @@ use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
 #[cfg(test)]
+use serde_json::Value;
+#[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]
 use runtime_support::WorkflowPipelineRuntimeRecord;
 #[cfg(test)]
 use runtime_support::WorkflowRuntimeConfigLite;
-
-use ::workflow_runner::executor::PhaseExecutionEvent;
-
-#[cfg(test)]
-fn load_workflow_runtime_config(project_root: &str) -> WorkflowRuntimeConfigLite {
-    runtime_support::load_workflow_runtime_config(project_root)
-}
 
 #[cfg(test)]
 fn resolve_phase_runtime_settings(
@@ -146,34 +135,6 @@ fn parse_commit_message_from_text(text: &str) -> Option<String> {
 #[cfg(test)]
 fn fallback_implementation_commit_message(task_id: &str, task_title: &str) -> String {
     ::workflow_runner::executor::fallback_implementation_commit_message(task_id, task_title)
-}
-
-#[cfg(test)]
-async fn run_workflow_phase_with_agent_legacy(
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    task_id: &str,
-    task_title: &str,
-    task_description: &str,
-    task_complexity: Option<orchestrator_core::Complexity>,
-    phase_id: &str,
-    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
-) -> Result<PhaseExecutionOutcome> {
-    ::workflow_runner::executor::run_workflow_phase_with_agent(
-        project_root,
-        execution_cwd,
-        workflow_id,
-        task_id,
-        task_title,
-        task_description,
-        task_complexity,
-        phase_id,
-        phase_runtime_settings,
-        None,
-        None,
-    )
-    .await
 }
 
 #[cfg(test)]
@@ -1933,10 +1894,6 @@ fn persist_phase_output(
 ) -> Result<()> {
     ::workflow_runner::executor::persist_phase_output(project_root, workflow_id, phase_id, outcome)
 }
-
-use ::workflow_runner::executor::{
-    task_requires_research, workflow_has_active_research, workflow_has_completed_research,
-};
 
 const DEPENDENCY_GATE_PREFIX: &str = "dependency gate:";
 const MERGE_GATE_PREFIX: &str = "merge gate:";

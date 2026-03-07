@@ -17,8 +17,8 @@ use crate::{
 
 mod daemon_events;
 mod daemon_notifications;
-mod daemon_run;
 pub mod daemon_process_manager;
+mod daemon_run;
 pub(crate) mod daemon_scheduler;
 
 use daemon_events::handle_daemon_events_impl;
@@ -30,8 +30,7 @@ use daemon_notifications::{
 use daemon_run::handle_daemon_run;
 
 pub(crate) use daemon_events::{
-    append_daemon_event_fire_and_forget, daemon_events_log_path, poll_daemon_events,
-    DaemonEventRecord,
+    daemon_events_log_path, poll_daemon_events, DaemonEventRecord,
 };
 
 use protocol::{is_process_alive, terminate_process};
@@ -325,9 +324,10 @@ fn autonomous_startup_failure_error(
         "log_path": log_path.display().to_string(),
     });
     if let Some(tail) = log_tail {
-        details["startup_log_tail"] = serde_json::Value::String(
-            truncate_from_end(&tail, AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS),
-        );
+        details["startup_log_tail"] = serde_json::Value::String(truncate_from_end(
+            &tail,
+            AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS,
+        ));
     }
     if let Some(status) = exit_status {
         details["exit_code"] = serde_json::json!(status.code());
@@ -767,8 +767,8 @@ async fn handle_daemon_stop(
         if is_process_alive(pid) {
             let _ = set_shutdown_requested(project_root, true, Some(args.shutdown_timeout_secs));
 
-            let deadline = tokio::time::Instant::now()
-                + Duration::from_secs(args.shutdown_timeout_secs);
+            let deadline =
+                tokio::time::Instant::now() + Duration::from_secs(args.shutdown_timeout_secs);
 
             loop {
                 if !is_process_alive(pid) {
@@ -838,9 +838,11 @@ fn handle_daemon_logs(
             return Ok(());
         }
         Err(err) => {
-            return Err(
-                anyhow!("failed to read daemon log at {}: {}", log_path.display(), err),
-            );
+            return Err(anyhow!(
+                "failed to read daemon log at {}: {}",
+                log_path.display(),
+                err
+            ));
         }
     };
 
@@ -941,14 +943,15 @@ mod tests {
     fn autonomous_startup_failure_error_includes_structured_details() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let log_path = temp.path().join("daemon.log");
-        fs::write(&log_path, "startup line\nerror: crashed\n")
-            .expect("log file should be written");
+        fs::write(&log_path, "startup line\nerror: crashed\n").expect("log file should be written");
 
         let error = autonomous_startup_failure_error(9999, None, log_path.as_path(), 0);
-        let details = crate::extract_cli_error_details(&error)
-            .expect("structured details should be present");
+        let details =
+            crate::extract_cli_error_details(&error).expect("structured details should be present");
         assert_eq!(
-            details.get("daemon_pid").and_then(serde_json::Value::as_u64),
+            details
+                .get("daemon_pid")
+                .and_then(serde_json::Value::as_u64),
             Some(9999)
         );
         assert!(details

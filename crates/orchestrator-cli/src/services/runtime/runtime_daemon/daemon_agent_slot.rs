@@ -1,7 +1,8 @@
 //! DEPRECATED: Agent lifecycle now owned by workflow-runner.
 use super::*;
 use ::workflow_runner::executor::{
-    phase_execution_events_from_signals, AiRecoveryAction, AI_RECOVERY_MARKER,
+    phase_execution_events_from_signals, AiRecoveryAction, PhaseExecutionEvent,
+    PhaseExecutionMetadata, PhaseExecutionRunResult, AI_RECOVERY_MARKER,
 };
 #[derive(Debug)]
 pub struct AgentSlotResult {
