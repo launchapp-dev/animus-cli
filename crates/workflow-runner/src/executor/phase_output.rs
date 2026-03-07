@@ -219,8 +219,6 @@ pub(super) fn pipeline_phase_order_for_workflow(project_root: &str, workflow_id:
 }
 
 pub(super) fn format_output_chunk_for_display(text: &str, _verbose: bool, use_colors: bool, tool: &str) -> Option<String> {
-    use cli_wrapper::{NormalizedTextEvent, extract_text_from_line};
-
     let trimmed = text.trim_start();
     if !trimmed.starts_with('{') {
         return Some(text.to_string());
@@ -245,8 +243,8 @@ pub(super) fn format_output_chunk_for_display(text: &str, _verbose: bool, use_co
         }
     }
 
-    match extract_text_from_line(text, tool) {
-        NormalizedTextEvent::TextChunk { text: t } | NormalizedTextEvent::FinalResult { text: t } => {
+    match extract_display_text(text, tool) {
+        Some(t) => {
             let mut out = if use_colors {
                 termimad::text(&t).to_string()
             } else {
@@ -257,8 +255,95 @@ pub(super) fn format_output_chunk_for_display(text: &str, _verbose: bool, use_co
             }
             Some(out)
         }
-        NormalizedTextEvent::Ignored => None,
+        None => None,
     }
+}
+
+fn extract_display_text(line: &str, tool: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let obj: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let tool_lower = tool.to_ascii_lowercase();
+    match tool_lower.as_str() {
+        t if t.contains("claude") => extract_claude_text(&obj),
+        t if t.contains("codex") => extract_codex_text(&obj),
+        t if t.contains("gemini") => extract_gemini_text(&obj),
+        t if t.contains("oai-runner") || t.contains("oai_runner") => extract_oai_runner_text(&obj),
+        t if t.contains("opencode") => extract_opencode_text(&obj),
+        _ => extract_generic_text(&obj),
+    }
+}
+
+fn extract_claude_text(obj: &serde_json::Value) -> Option<String> {
+    let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match event_type {
+        "content_block_delta" => obj.pointer("/delta/text").and_then(|v| v.as_str()).map(str::to_string),
+        "result" => obj.get("result").and_then(|v| v.as_str()).map(str::to_string)
+            .or_else(|| obj.pointer("/result/text").and_then(|v| v.as_str()).map(str::to_string)),
+        "assistant" => {
+            let content = obj.pointer("/message/content").and_then(|v| v.as_array())?;
+            let text: String = content.iter()
+                .filter(|b| b.get("type").and_then(|v| v.as_str()) == Some("text"))
+                .filter_map(|b| b.get("text").and_then(|v| v.as_str()))
+                .collect();
+            (!text.is_empty()).then_some(text)
+        }
+        "content_block_start" => obj.pointer("/content_block/text")
+            .and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(str::to_string),
+        _ => obj.get("content").and_then(|v| v.as_str()).map(str::to_string),
+    }
+}
+
+fn extract_codex_text(obj: &serde_json::Value) -> Option<String> {
+    let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if !matches!(event_type, "item.completed" | "item.started" | "") { return None; }
+    let item = obj.get("item")?;
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if !matches!(item_type, "agent_message" | "message" | "") { return None; }
+    if let Some(text) = item.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+        return Some(text.to_string());
+    }
+    let content = item.get("content").and_then(|v| v.as_array())?;
+    let text: String = content.iter()
+        .filter(|b| matches!(b.get("type").and_then(|v| v.as_str()).unwrap_or(""), "output_text" | "text" | ""))
+        .filter_map(|b| b.get("text").and_then(|v| v.as_str()))
+        .collect();
+    (!text.is_empty()).then_some(text)
+}
+
+fn extract_gemini_text(obj: &serde_json::Value) -> Option<String> {
+    let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if event_type == "partialResult" {
+        if let Some(t) = obj.pointer("/partialResult/text").and_then(|v| v.as_str()) {
+            return Some(t.to_string());
+        }
+    }
+    if let Some(t) = obj.get("text").and_then(|v| v.as_str()) { return Some(t.to_string()); }
+    if let Some(t) = obj.get("response").and_then(|v| v.as_str()) { return Some(t.to_string()); }
+    if let Some(t) = obj.pointer("/content/text").and_then(|v| v.as_str()) { return Some(t.to_string()); }
+    let parts = obj.pointer("/content/parts").and_then(|v| v.as_array())
+        .or_else(|| obj.get("candidates").and_then(|v| v.as_array())
+            .and_then(|c| c.first()).and_then(|c| c.pointer("/content/parts")).and_then(|v| v.as_array()));
+    let text: String = parts?.iter().filter_map(|p| p.get("text").and_then(|v| v.as_str())).collect();
+    (!text.is_empty()).then_some(text)
+}
+
+fn extract_oai_runner_text(obj: &serde_json::Value) -> Option<String> {
+    match obj.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        "text_chunk" | "result" => obj.get("text").and_then(|v| v.as_str()).map(str::to_string),
+        _ => None,
+    }
+}
+
+fn extract_opencode_text(obj: &serde_json::Value) -> Option<String> {
+    if obj.get("type").and_then(|v| v.as_str()) == Some("text") {
+        return obj.get("text").and_then(|v| v.as_str()).map(str::to_string);
+    }
+    obj.get("content").and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn extract_generic_text(obj: &serde_json::Value) -> Option<String> {
+    obj.get("text").and_then(|v| v.as_str()).map(str::to_string)
+        .or_else(|| obj.get("content").and_then(|v| v.as_str()).map(str::to_string))
 }
 
 

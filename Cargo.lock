@@ -4879,7 +4879,6 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
- "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",
  "protocol",

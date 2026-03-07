@@ -26,7 +26,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 protocol = { path = "../protocol" }
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-config = { workspace = true }
-cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 termimad = "0.30"
 
 [dev-dependencies]

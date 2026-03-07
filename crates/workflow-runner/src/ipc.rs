@@ -323,19 +323,40 @@ fn parse_env_string_list_json(
 }
 
 fn codex_exec_insert_index(args: &[Value]) -> usize {
-    cli_wrapper::codex_exec_insert_index_json(args)
+    args.iter()
+        .position(|item| item.as_str().is_some_and(|v| v == "exec"))
+        .unwrap_or(0)
 }
 
 fn launch_prompt_insert_index(args: &[Value]) -> usize {
-    cli_wrapper::launch_prompt_insert_index_json(args)
+    args.len().saturating_sub(1)
 }
 
 fn ensure_flag_value_if_missing(args: &mut Vec<Value>, flag: &str, value: &str, insert_at: usize) {
-    cli_wrapper::ensure_flag_value_json(args, flag, value, insert_at);
+    if args.iter().any(|item| item.as_str().is_some_and(|v| v == flag)) {
+        return;
+    }
+    let insert_at = insert_at.min(args.len());
+    args.insert(insert_at, Value::String(flag.to_string()));
+    args.insert((insert_at + 1).min(args.len()), Value::String(value.to_string()));
 }
 
 fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
-    cli_wrapper::ensure_codex_config_override_json(args, key, value_expr);
+    let key_prefix = format!("{key}=");
+    let target = format!("{key}={value_expr}");
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        let flag = args[index].as_str().unwrap_or_default();
+        let value = args.get(index + 1).and_then(Value::as_str).unwrap_or_default();
+        if (flag == "-c" || flag == "--config") && value.starts_with(&key_prefix) {
+            args[index + 1] = Value::String(target);
+            return;
+        }
+        index += 1;
+    }
+    let insert_at = codex_exec_insert_index(args);
+    args.insert(insert_at, Value::String("-c".to_string()));
+    args.insert(insert_at + 1, Value::String(target));
 }
 
 fn parse_codex_override_entry(entry: &str) -> Option<(String, String)> {
