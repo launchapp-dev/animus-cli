@@ -13,8 +13,7 @@ use tokio::time::sleep;
 use super::daemon_events::{emit_daemon_event, next_daemon_event};
 use super::daemon_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use super::daemon_scheduler::{
-    clear_running_workflow_phase_pool, slim_project_tick,
-    recover_orphaned_running_workflows_on_startup,
+    slim_project_tick, recover_orphaned_running_workflows_on_startup,
 };
 use super::{
     canonicalize_lossy, get_daemon_pid, is_shutdown_requested, set_daemon_pid, set_runtime_paused,
@@ -542,7 +541,6 @@ pub(super) async fn handle_daemon_run(
             }
 
             if externally_paused {
-                clear_running_workflow_phase_pool(project_root);
                 break;
             }
 
@@ -565,7 +563,6 @@ pub(super) async fn handle_daemon_run(
             }
 
             if args.once {
-                clear_running_workflow_phase_pool(project_root);
                 break;
             }
 
@@ -582,7 +579,6 @@ pub(super) async fn handle_daemon_run(
                     json,
                     notification_runtime.as_mut(),
                 )?;
-                clear_running_workflow_phase_pool(project_root);
                 let _ = set_shutdown_requested(project_root, false, None);
                 break;
             }
@@ -597,7 +593,6 @@ pub(super) async fn handle_daemon_run(
                         json,
                         notification_runtime.as_mut(),
                     )?;
-                    clear_running_workflow_phase_pool(project_root);
                     break;
                 }
                 _ = sigterm_stream.recv() => {
@@ -609,7 +604,6 @@ pub(super) async fn handle_daemon_run(
                         json,
                         notification_runtime.as_mut(),
                     )?;
-                    clear_running_workflow_phase_pool(project_root);
                     break;
                 }
                 _ = sleep(interval) => {}
