@@ -49,6 +49,33 @@ fn reactive_phase_pools() -> &'static Mutex<HashMap<String, ReactivePhasePoolSta
     POOLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+async fn run_workflow_phase_with_agent(
+    project_root: &str,
+    execution_cwd: &str,
+    workflow_id: &str,
+    subject_id: &str,
+    subject_title: &str,
+    subject_description: &str,
+    task_complexity: Option<orchestrator_core::Complexity>,
+    phase_id: &str,
+    phase_attempt: u32,
+) -> Result<PhaseExecutionRunResult> {
+    ::workflow_runner::executor::run_workflow_phase(
+        project_root,
+        execution_cwd,
+        workflow_id,
+        subject_id,
+        subject_title,
+        subject_description,
+        task_complexity,
+        phase_id,
+        phase_attempt,
+        None,
+        None,
+    )
+    .await
+}
+
 fn phase_completion_wake_sender() -> &'static broadcast::Sender<String> {
     static WAKE: OnceLock<broadcast::Sender<String>> = OnceLock::new();
     WAKE.get_or_init(|| {
