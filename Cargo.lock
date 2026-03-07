@@ -741,6 +741,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa42bcd3d846ebf66e15bd528d1087f75d1c6c1c66ebff626178a106353c576"
+dependencies = [
+ "chrono",
+ "derive_builder",
+ "strum 0.27.2",
+]
+
+[[package]]
 name = "crossbeam"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2343,6 +2354,7 @@ name = "orchestrator-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "croner",
  "protocol",
  "serde",
  "serde_json",
@@ -2384,6 +2396,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "croner",
  "orchestrator-core",
  "protocol",
  "serde",

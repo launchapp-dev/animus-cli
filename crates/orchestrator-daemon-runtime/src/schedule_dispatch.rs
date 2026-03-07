@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{Datelike, Timelike};
+use croner::parser::{CronParser, Seconds, Year};
 
 pub struct ScheduleDispatch;
 
@@ -109,8 +110,23 @@ fn evaluate_schedules(
 ) -> Vec<String> {
     let mut due = Vec::new();
     for schedule in schedules {
-        if !schedule.enabled || !cron_matches(&schedule.cron, now) {
+        if !schedule.enabled {
             continue;
+        }
+
+        match cron_matches(&schedule.cron, now) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                eprintln!(
+                    "{}: schedule '{}' has invalid cron '{}': {}",
+                    protocol::ACTOR_DAEMON,
+                    schedule.id,
+                    schedule.cron,
+                    error
+                );
+                continue;
+            }
         }
 
         if let Some(run_state) = state.schedules.get(&schedule.id) {
@@ -132,50 +148,26 @@ fn evaluate_schedules(
     due
 }
 
-fn cron_matches(expression: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
-    let expression = expression.trim().to_ascii_lowercase();
+fn cron_matches(expression: &str, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+    let expression = expression.trim();
     if expression.is_empty() {
-        return false;
+        return Ok(false);
     }
 
-    if expression.starts_with('@') {
-        return match expression.as_str() {
-            "@hourly" => now.minute() == 0,
-            "@daily" => now.hour() == 0 && now.minute() == 0,
-            "@weekly" => {
-                now.weekday().num_days_from_sunday() == 0 && now.hour() == 0 && now.minute() == 0
-            }
-            "@monthly" => now.day() == 1 && now.hour() == 0 && now.minute() == 0,
-            _ => false,
-        };
-    }
+    let parser = CronParser::builder()
+        .seconds(Seconds::Disallowed)
+        .year(Year::Disallowed)
+        .build();
+    let cron = parser
+        .parse(expression)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let normalized = now
+        .with_second(0)
+        .and_then(|value| value.with_nanosecond(0))
+        .expect("utc timestamps should support zero second normalization");
 
-    let fields: Vec<&str> = expression.split_whitespace().collect();
-    if fields.len() != 5 {
-        return false;
-    }
-
-    let current_weekday = now.weekday().num_days_from_sunday();
-    field_matches(fields[0], now.minute(), 0, 59)
-        && field_matches(fields[1], now.hour(), 0, 23)
-        && field_matches(fields[2], now.day(), 1, 31)
-        && field_matches(fields[3], now.month(), 1, 12)
-        && field_matches(fields[4], current_weekday, 0, 7)
-}
-
-fn field_matches(raw_field: &str, value: u32, min: u32, max: u32) -> bool {
-    if raw_field == "*" {
-        return true;
-    }
-    let parsed = match raw_field.parse::<u32>() {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    if parsed < min || parsed > max {
-        return false;
-    }
-    let normalized = if max == 7 && parsed == 7 { 0 } else { parsed };
-    normalized == value
+    cron.is_time_matching(&normalized)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 fn parse_active_hours(spec: &str) -> Option<(u32, u32)> {
@@ -219,8 +211,8 @@ mod tests {
         let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z"
             .parse()
             .expect("timestamp should parse");
-        assert!(cron_matches("30 12 4 3 3", now));
-        assert!(!cron_matches("31 12 4 3 4", now));
+        assert!(cron_matches("30 12 4 3 3", now).expect("cron should parse"));
+        assert!(!cron_matches("31 12 4 3 4", now).expect("cron should parse"));
     }
 
     #[test]
@@ -228,8 +220,8 @@ mod tests {
         let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:00:00Z"
             .parse()
             .expect("timestamp should parse");
-        assert!(cron_matches("* * * * *", now));
-        assert!(cron_matches("0 * * * *", now));
+        assert!(cron_matches("* * * * *", now).expect("cron should parse"));
+        assert!(cron_matches("0 * * * *", now).expect("cron should parse"));
     }
 
     #[test]
@@ -240,9 +232,35 @@ mod tests {
         let quarter_hour: chrono::DateTime<chrono::Utc> = "2026-03-01T12:15:00Z"
             .parse()
             .expect("timestamp should parse");
-        assert!(cron_matches("@weekly", sunday_midnight));
-        assert!(cron_matches("@monthly", sunday_midnight));
-        assert!(!cron_matches("@hourly", quarter_hour));
+        assert!(cron_matches("@weekly", sunday_midnight).expect("cron should parse"));
+        assert!(cron_matches("@monthly", sunday_midnight).expect("cron should parse"));
+        assert!(!cron_matches("@hourly", quarter_hour).expect("cron should parse"));
+    }
+
+    #[test]
+    fn cron_matches_lists_ranges_and_steps() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:42Z"
+            .parse()
+            .expect("timestamp should parse");
+
+        assert!(cron_matches("*/15 9-17 * * 1,3,5", now).expect("cron should parse"));
+        assert!(!cron_matches("*/20 9-17 * * 1,3,5", now).expect("cron should parse"));
+    }
+
+    #[test]
+    fn cron_matches_returns_error_for_invalid_expression() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z"
+            .parse()
+            .expect("timestamp should parse");
+
+        let error = cron_matches("*/0 * * * *", now).expect_err("invalid cron should fail");
+        let message = error.to_string().to_ascii_lowercase();
+        assert!(
+            message.contains("step")
+                || message.contains("invalid")
+                || message.contains("range"),
+            "unexpected invalid cron error: {error}"
+        );
     }
 
     #[test]
@@ -309,7 +327,7 @@ mod tests {
             .expect("timestamp should parse");
         let schedules = vec![orchestrator_core::WorkflowSchedule {
             id: "broken".to_string(),
-            cron: "30 12".to_string(),
+            cron: "*/0 * * * *".to_string(),
             pipeline: Some("standard".to_string()),
             command: None,
             input: None,

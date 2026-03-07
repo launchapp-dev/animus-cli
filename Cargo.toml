@@ -37,3 +37,4 @@ orchestrator-web-server = { path = "crates/orchestrator-web-server" }
 axum = "0.8"
 async-graphql = "7"
 async-graphql-axum = "7"
+croner = "3.0.1"

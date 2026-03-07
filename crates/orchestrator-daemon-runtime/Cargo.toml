@@ -11,6 +11,7 @@ path = "src/lib.rs"
 anyhow = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+croner = { workspace = true }
 orchestrator-core = { workspace = true }
 protocol = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
