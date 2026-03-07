@@ -64,16 +64,16 @@ pub(super) async fn slim_daemon_tick(
     root: &str,
     args: &DaemonRuntimeOptions,
     process_manager: &mut ProcessManager,
+    dispatch_paused: bool,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
-    let pool_draining = phase_pool::is_pool_draining(&root);
     let mode = ProjectTickRunMode::Slim {
         active_process_count: process_manager.active_count(),
     };
     let mut driver = SlimProjectTickDriver {
         process_manager,
     };
-    run_project_tick(&root, args, mode, pool_draining, &mut driver).await
+    run_project_tick(&root, args, mode, dispatch_paused, &mut driver).await
 }
 
 #[cfg(test)]

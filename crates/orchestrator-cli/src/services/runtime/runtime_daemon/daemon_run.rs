@@ -13,8 +13,8 @@ use tokio::time::sleep;
 use super::daemon_events::{emit_daemon_event, next_daemon_event};
 use super::daemon_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use super::daemon_scheduler::{
-    clear_running_workflow_phase_pool, is_pool_draining, slim_project_tick,
-    recover_orphaned_running_workflows_on_startup, set_pool_draining,
+    clear_running_workflow_phase_pool, slim_project_tick,
+    recover_orphaned_running_workflows_on_startup,
 };
 use super::{
     canonicalize_lossy, get_daemon_pid, is_shutdown_requested, set_daemon_pid, set_runtime_paused,
@@ -511,13 +511,9 @@ pub(super) async fn handle_daemon_run(
             let externally_paused = super::load_daemon_runtime_state(project_root)
                 .map(|state| state.runtime_paused)
                 .unwrap_or(false);
-            if externally_paused && !is_pool_draining(project_root) {
-                set_pool_draining(project_root, true);
-            } else if !externally_paused && is_pool_draining(project_root) {
-                set_pool_draining(project_root, false);
-            }
             let tick_result =
-                slim_project_tick(project_root, &args, &mut process_manager).await;
+                slim_project_tick(project_root, &args, &mut process_manager, externally_paused)
+                    .await;
             match tick_result {
                 Ok(summary) => {
                     if summary.started_daemon {
@@ -545,6 +541,11 @@ pub(super) async fn handle_daemon_run(
                 }
             }
 
+            if externally_paused {
+                clear_running_workflow_phase_pool(project_root);
+                break;
+            }
+
             if let Some(runtime) = notification_runtime.as_mut() {
                 match runtime.flush_due_deliveries().await {
                     Ok(lifecycle_events) => {
@@ -561,11 +562,6 @@ pub(super) async fn handle_daemon_run(
                         )?
                     }
                 }
-            }
-
-            if is_pool_draining(project_root) {
-                clear_running_workflow_phase_pool(project_root);
-                break;
             }
 
             if args.once {
@@ -601,8 +597,6 @@ pub(super) async fn handle_daemon_run(
                         json,
                         notification_runtime.as_mut(),
                     )?;
-                    set_pool_draining(project_root, true);
-                    set_pool_draining(project_root, false);
                     clear_running_workflow_phase_pool(project_root);
                     break;
                 }
@@ -615,8 +609,6 @@ pub(super) async fn handle_daemon_run(
                         json,
                         notification_runtime.as_mut(),
                     )?;
-                    set_pool_draining(project_root, true);
-                    set_pool_draining(project_root, false);
                     clear_running_workflow_phase_pool(project_root);
                     break;
                 }

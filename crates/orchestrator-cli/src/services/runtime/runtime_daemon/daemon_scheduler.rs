@@ -1966,40 +1966,8 @@ fn is_merge_gate_block(task: &orchestrator_core::OrchestratorTask) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
-pub(super) fn resume_running_workflow_phase_spawns(project_root: &str) {
-    project_tick_ops::phase_pool::resume_running_workflow_phase_spawns(project_root);
-}
-
-#[cfg(test)]
-pub(super) fn pause_running_workflow_phase_spawns(project_root: &str) {
-    project_tick_ops::phase_pool::pause_running_workflow_phase_spawns(project_root);
-}
-
-pub(super) fn set_pool_draining(project_root: &str, draining: bool) {
-    project_tick_ops::phase_pool::set_pool_draining(project_root, draining);
-}
-
-pub(super) fn is_pool_draining(project_root: &str) -> bool {
-    project_tick_ops::phase_pool::is_pool_draining(project_root)
-}
-
 pub(super) fn clear_running_workflow_phase_pool(project_root: &str) {
     project_tick_ops::phase_pool::clear_running_workflow_phase_pool(project_root);
-}
-
-#[cfg(test)]
-pub(super) async fn drain_running_workflow_phases_for_project(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    max_phases_per_tick: usize,
-) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
-    project_tick_ops::phase_pool::drain_running_workflow_phases_for_project(
-        hub,
-        project_root,
-        max_phases_per_tick,
-    )
-    .await
 }
 
 #[cfg(test)]
@@ -2011,8 +1979,15 @@ pub(super) async fn slim_project_tick(
     root: &str,
     args: &DaemonRunArgs,
     process_manager: &mut ProcessManager,
+    dispatch_paused: bool,
 ) -> Result<ProjectTickSummary> {
-    project_tick_ops::slim_daemon_tick(root, &runtime_options_from_cli(args), process_manager).await
+    project_tick_ops::slim_daemon_tick(
+        root,
+        &runtime_options_from_cli(args),
+        process_manager,
+        dispatch_paused,
+    )
+    .await
 }
 
 fn runtime_options_from_cli(args: &DaemonRunArgs) -> DaemonRuntimeOptions {
