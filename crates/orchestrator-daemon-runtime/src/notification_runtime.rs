@@ -1,7 +1,6 @@
-use super::canonicalize_lossy;
-use super::daemon_events::DaemonEventRecord;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use protocol::DaemonEventRecord;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -13,21 +12,21 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-pub(super) const NOTIFICATION_CONFIG_SCHEMA: &str = "ao.daemon-notification-config.v1";
+pub const NOTIFICATION_CONFIG_SCHEMA: &str = "ao.daemon-notification-config.v1";
 const NOTIFICATION_CONFIG_VERSION: u32 = 1;
 const NOTIFICATION_CONFIG_PM_KEY: &str = "notification_config";
 const DEFAULT_CONNECTOR_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_MAX_DELIVERIES_PER_TICK: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct NotificationLifecycleEvent {
-    pub(super) event_type: String,
-    pub(super) project_root: Option<String>,
-    pub(super) data: Value,
+pub struct NotificationLifecycleEvent {
+    pub event_type: String,
+    pub project_root: Option<String>,
+    pub data: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct NotificationConfig {
+pub struct NotificationConfig {
     #[serde(default = "default_notification_config_schema")]
     schema: String,
     #[serde(default = "default_notification_config_version")]
@@ -192,7 +191,7 @@ struct EventContext<'a> {
     source_connector_id: Option<&'a str>,
 }
 
-pub(super) struct DaemonNotificationRuntime {
+pub struct DaemonNotificationRuntime {
     project_root: String,
     config: NotificationConfig,
     client: Client,
@@ -272,7 +271,7 @@ impl NotificationSubscription {
 }
 
 impl DaemonNotificationRuntime {
-    pub(super) fn new(project_root: &str) -> Result<Self> {
+    pub fn new(project_root: &str) -> Result<Self> {
         let project_root = canonicalize_lossy(project_root);
         let config = load_notification_config(&project_root)?;
         let client = Client::builder()
@@ -291,7 +290,7 @@ impl DaemonNotificationRuntime {
         Ok(())
     }
 
-    pub(super) fn enqueue_for_event(
+    pub fn enqueue_for_event(
         &mut self,
         event: &DaemonEventRecord,
     ) -> Result<Vec<NotificationLifecycleEvent>> {
@@ -379,7 +378,7 @@ impl DaemonNotificationRuntime {
         Ok(lifecycle_events)
     }
 
-    pub(super) async fn flush_due_deliveries(&mut self) -> Result<Vec<NotificationLifecycleEvent>> {
+    pub async fn flush_due_deliveries(&mut self) -> Result<Vec<NotificationLifecycleEvent>> {
         self.refresh_config()?;
 
         let entries = load_notification_outbox(&self.project_root)?;
@@ -604,26 +603,24 @@ impl DaemonNotificationRuntime {
     }
 }
 
-pub(super) fn read_notification_config_from_pm_config(
-    pm_config: &Value,
-) -> Result<NotificationConfig> {
+pub fn read_notification_config_from_pm_config(pm_config: &Value) -> Result<NotificationConfig> {
     let Some(config_value) = pm_config.get(NOTIFICATION_CONFIG_PM_KEY) else {
         return Ok(NotificationConfig::default());
     };
     parse_notification_config_value(config_value)
 }
 
-pub(super) fn parse_notification_config_value(value: &Value) -> Result<NotificationConfig> {
+pub fn parse_notification_config_value(value: &Value) -> Result<NotificationConfig> {
     let parsed: NotificationConfig = serde_json::from_value(value.clone())
         .context("invalid daemon notification config payload")?;
     normalize_notification_config(parsed)
 }
 
-pub(super) fn serialize_notification_config(config: &NotificationConfig) -> Result<Value> {
+pub fn serialize_notification_config(config: &NotificationConfig) -> Result<Value> {
     Ok(serde_json::to_value(config).context("failed to serialize daemon notification config")?)
 }
 
-pub(super) fn clear_notification_config(pm_config: &mut Value) {
+pub fn clear_notification_config(pm_config: &mut Value) {
     if let Some(config_obj) = pm_config.as_object_mut() {
         config_obj.remove(NOTIFICATION_CONFIG_PM_KEY);
     }
@@ -1206,6 +1203,15 @@ fn repo_scope(project_root: &str) -> String {
     protocol::repository_scope_for_path(Path::new(project_root))
 }
 
+fn canonicalize_lossy(path: &str) -> String {
+    let candidate = PathBuf::from(path);
+    candidate
+        .canonicalize()
+        .unwrap_or(candidate)
+        .to_string_lossy()
+        .to_string()
+}
+
 fn hex_from_digest(digest: impl AsRef<[u8]>) -> String {
     let bytes = digest.as_ref();
     let mut text = String::with_capacity(bytes.len() * 2);
@@ -1218,12 +1224,12 @@ fn hex_from_digest(digest: impl AsRef<[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use tempfile::TempDir;
-
-    use protocol::test_utils::EnvVarGuard;
 
     #[derive(Debug)]
     struct TestHttpServer {
@@ -1255,6 +1261,36 @@ mod tests {
             Self {
                 url,
                 join_handle: Some(join_handle),
+            }
+        }
+    }
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let original = env::var(key).ok();
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_deref() {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
             }
         }
     }
@@ -1421,7 +1457,9 @@ mod tests {
 
     #[tokio::test]
     async fn flush_budget_limits_processing_per_tick() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1484,7 +1522,9 @@ mod tests {
 
     #[tokio::test]
     async fn enqueue_retry_then_success_clears_outbox() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1539,7 +1579,9 @@ mod tests {
 
     #[tokio::test]
     async fn permanent_failure_moves_delivery_to_dead_letter() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1583,7 +1625,9 @@ mod tests {
 
     #[tokio::test]
     async fn missing_credentials_are_redacted_and_dead_lettered() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1622,7 +1666,9 @@ mod tests {
 
     #[test]
     fn enqueue_global_event_uses_runtime_project_root_and_context() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1669,7 +1715,9 @@ mod tests {
 
     #[tokio::test]
     async fn pre_exhausted_entries_are_dead_lettered_without_another_attempt() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
@@ -1723,7 +1771,9 @@ mod tests {
 
     #[test]
     fn redact_error_message_masks_configured_secret_values() {
-        let _guard = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _guard = test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _url_guard = EnvVarGuard::set(
             "AO_NOTIFY_TEST_WEBHOOK_URL",
             Some("https://hooks.example.invalid/secret-hook-token"),

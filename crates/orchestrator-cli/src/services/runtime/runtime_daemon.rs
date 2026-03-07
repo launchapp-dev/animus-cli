@@ -16,17 +16,16 @@ use crate::{
 };
 
 mod daemon_events;
-mod daemon_notifications;
 mod daemon_run;
 pub(crate) mod daemon_scheduler;
 
 use daemon_events::handle_daemon_events_impl;
-use daemon_notifications::{
+use daemon_run::handle_daemon_run;
+use orchestrator_daemon_runtime::{
     clear_notification_config, parse_notification_config_value,
     read_notification_config_from_pm_config, serialize_notification_config,
     NOTIFICATION_CONFIG_SCHEMA,
 };
-use daemon_run::handle_daemon_run;
 
 pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
 

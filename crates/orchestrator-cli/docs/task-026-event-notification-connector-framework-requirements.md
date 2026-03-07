@@ -15,10 +15,10 @@ current codebase, and define the remaining delta needed to fully satisfy
 
 | Surface | Current location | Current status |
 | --- | --- | --- |
-| Connector framework | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_notifications.rs` | Implemented with typed adapters and routing runtime |
-| Built-in connectors | `daemon_notifications.rs` | Implemented: `webhook`, `slack_webhook` |
+| Connector framework | `crates/orchestrator-daemon-runtime/src/notification_runtime.rs` | Implemented with typed adapters and routing runtime |
+| Built-in connectors | `notification_runtime.rs` | Implemented: `webhook`, `slack_webhook` |
 | Subscription filtering | `NotificationSubscription::matches` | Implemented with event type wildcard support and optional project/workflow/task filters |
-| Retry + dead-letter | `daemon_notifications.rs` outbox/dead-letter paths | Implemented with bounded exponential backoff and durable JSONL state |
+| Retry + dead-letter | `notification_runtime.rs` outbox/dead-letter paths | Implemented with bounded exponential backoff and durable JSONL state |
 | Lifecycle observability | `notification-delivery-*` event emissions | Implemented and emitted through daemon event stream |
 | Daemon config wiring | `runtime_daemon.rs`, `cli_types.rs` | Implemented via `ao daemon config --notification-config-{json,file}` and clear flag |
 | Operator docs | `crates/orchestrator-cli/docs/task-026-notification-operator-guide.md` | Implemented |

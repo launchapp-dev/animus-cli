@@ -2,8 +2,9 @@
 
 ## Purpose
 Define the concrete implementation delta needed to complete TASK-026 based on
-what already exists in `daemon_notifications.rs` and related daemon runtime
-plumbing.
+what already exists in
+`crates/orchestrator-daemon-runtime/src/notification_runtime.rs` and related
+daemon runtime plumbing.
 
 ## Current State Summary
 Already implemented in code:

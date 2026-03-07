@@ -2396,12 +2396,17 @@ dependencies = [
  "async-trait",
  "chrono",
  "croner",
+ "dirs",
+ "fs2",
  "orchestrator-core",
  "protocol",
+ "reqwest 0.11.27",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "uuid",
  "workflow-runner",
 ]
 
