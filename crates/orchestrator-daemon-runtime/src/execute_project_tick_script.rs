@@ -62,13 +62,6 @@ mod tests {
                         },
                     }
                 }
-                ProjectTickAction::ExecuteRunningWorkflowPhases { limit } => {
-                    ProjectTickActionEffect::ExecutedRunningWorkflowPhases {
-                        executed_workflow_phases: *limit,
-                        failed_workflow_phases: 0,
-                        phase_execution_events: Vec::new(),
-                    }
-                }
                 _ => ProjectTickActionEffect::Noop,
             })
         }
@@ -102,6 +95,6 @@ mod tests {
         assert_eq!(outcome.cleaned_stale_workflows, 2);
         assert_eq!(outcome.resumed_workflows, 1);
         assert_eq!(outcome.ready_workflow_starts.started, 1);
-        assert_eq!(outcome.executed_workflow_phases, 3);
+        assert_eq!(outcome.executed_workflow_phases, 0);
     }
 }

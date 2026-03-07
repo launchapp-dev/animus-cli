@@ -12,5 +12,4 @@ pub enum ProjectTickAction {
     PromoteBacklogTasksToReady,
     DispatchReadyTasks { limit: usize },
     RefreshRuntimeBinaries,
-    ExecuteRunningWorkflowPhases { limit: usize },
 }

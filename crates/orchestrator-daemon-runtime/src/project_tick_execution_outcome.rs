@@ -61,15 +61,6 @@ impl ProjectTickExecutionOutcome {
             ProjectTickActionEffect::ReadyWorkflowStarts { summary } => {
                 self.ready_workflow_starts = summary;
             }
-            ProjectTickActionEffect::ExecutedRunningWorkflowPhases {
-                executed_workflow_phases,
-                failed_workflow_phases,
-                phase_execution_events,
-            } => {
-                self.executed_workflow_phases = executed_workflow_phases;
-                self.failed_workflow_phases = failed_workflow_phases;
-                self.phase_execution_events = phase_execution_events;
-            }
         }
     }
 }

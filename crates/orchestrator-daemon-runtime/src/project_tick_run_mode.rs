@@ -63,6 +63,7 @@ impl ProjectTickRunMode {
     }
 
     pub fn include_phase_execution_events(self) -> bool {
-        matches!(self, Self::Full)
+        let _ = self;
+        false
     }
 }

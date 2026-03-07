@@ -1,5 +1,3 @@
-use workflow_runner::executor::PhaseExecutionEvent;
-
 use crate::ReadyTaskWorkflowStartSummary;
 
 #[derive(Debug, Clone)]
@@ -24,10 +22,5 @@ pub enum ProjectTickActionEffect {
     },
     ReadyWorkflowStarts {
         summary: ReadyTaskWorkflowStartSummary,
-    },
-    ExecutedRunningWorkflowPhases {
-        executed_workflow_phases: usize,
-        failed_workflow_phases: usize,
-        phase_execution_events: Vec<PhaseExecutionEvent>,
     },
 }

@@ -1,10 +1,8 @@
-use anyhow::Result;
-use workflow_runner::executor::PhaseExecutionEvent;
-
 use crate::{
     DaemonRuntimeOptions, ProjectTickAction, ProjectTickActionEffect, ProjectTickActionExecutor,
     ReadyTaskWorkflowStartSummary,
 };
+use anyhow::Result;
 
 #[async_trait::async_trait(?Send)]
 pub trait ProjectTickOperations {
@@ -52,19 +50,15 @@ pub trait ProjectTickOperations {
         Ok(())
     }
 
-    async fn dispatch_ready_tasks(&mut self, _limit: usize) -> Result<ReadyTaskWorkflowStartSummary> {
+    async fn dispatch_ready_tasks(
+        &mut self,
+        _limit: usize,
+    ) -> Result<ReadyTaskWorkflowStartSummary> {
         Ok(ReadyTaskWorkflowStartSummary::default())
     }
 
     async fn refresh_runtime_binaries(&mut self) -> Result<()> {
         Ok(())
-    }
-
-    async fn execute_running_workflow_phases(
-        &mut self,
-        _limit: usize,
-    ) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
-        Ok((0, 0, Vec::new()))
     }
 }
 
@@ -155,15 +149,6 @@ where
             ProjectTickAction::RefreshRuntimeBinaries => {
                 self.operations.refresh_runtime_binaries().await?;
                 Ok(ProjectTickActionEffect::Noop)
-            }
-            ProjectTickAction::ExecuteRunningWorkflowPhases { limit } => {
-                let (executed_workflow_phases, failed_workflow_phases, phase_execution_events) =
-                    self.operations.execute_running_workflow_phases(*limit).await?;
-                Ok(ProjectTickActionEffect::ExecutedRunningWorkflowPhases {
-                    executed_workflow_phases,
-                    failed_workflow_phases,
-                    phase_execution_events,
-                })
             }
         }
     }

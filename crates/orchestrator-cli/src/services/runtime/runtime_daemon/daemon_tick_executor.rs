@@ -159,7 +159,10 @@ impl ProjectTickOperations for FullProjectTickOperations<'_> {
         Ok(())
     }
 
-    async fn dispatch_ready_tasks(&mut self, limit: usize) -> Result<ReadyTaskWorkflowStartSummary> {
+    async fn dispatch_ready_tasks(
+        &mut self,
+        limit: usize,
+    ) -> Result<ReadyTaskWorkflowStartSummary> {
         run_ready_task_workflows_for_project(self.hub.clone(), self.root, limit).await
     }
 
@@ -171,13 +174,6 @@ impl ProjectTickOperations for FullProjectTickOperations<'_> {
         )
         .await;
         Ok(())
-    }
-
-    async fn execute_running_workflow_phases(
-        &mut self,
-        limit: usize,
-    ) -> Result<(usize, usize, Vec<PhaseExecutionEvent>)> {
-        execute_running_workflow_phases_for_project(self.hub.clone(), self.root, limit).await
     }
 }
 
@@ -282,7 +278,10 @@ impl ProjectTickOperations for SlimProjectTickOperations<'_> {
         Ok(())
     }
 
-    async fn dispatch_ready_tasks(&mut self, limit: usize) -> Result<ReadyTaskWorkflowStartSummary> {
+    async fn dispatch_ready_tasks(
+        &mut self,
+        limit: usize,
+    ) -> Result<ReadyTaskWorkflowStartSummary> {
         dispatch_ready_tasks_via_runner(self.hub.clone(), self.root, self.process_manager, limit)
             .await
     }

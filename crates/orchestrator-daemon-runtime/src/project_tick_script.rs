@@ -46,12 +46,6 @@ impl ProjectTickScript {
 
         actions.push(ProjectTickAction::RefreshRuntimeBinaries);
 
-        if mode == ProjectTickMode::Full {
-            actions.push(ProjectTickAction::ExecuteRunningWorkflowPhases {
-                limit: options.max_tasks_per_tick,
-            });
-        }
-
         Self { actions }
     }
 
@@ -100,7 +94,6 @@ mod tests {
                 ProjectTickAction::PromoteBacklogTasksToReady,
                 ProjectTickAction::DispatchReadyTasks { limit: 2 },
                 ProjectTickAction::RefreshRuntimeBinaries,
-                ProjectTickAction::ExecuteRunningWorkflowPhases { limit: 3 },
             ]
         );
     }

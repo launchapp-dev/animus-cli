@@ -122,7 +122,6 @@ mod tests {
                 ProjectTickAction::PromoteBacklogTasksToReady,
                 ProjectTickAction::DispatchReadyTasks { limit: 1 },
                 ProjectTickAction::RefreshRuntimeBinaries,
-                ProjectTickAction::ExecuteRunningWorkflowPhases { limit: 5 },
             ]
         );
     }
