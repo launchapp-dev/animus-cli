@@ -56,23 +56,12 @@ pub(super) async fn project_tick(
     args: &DaemonRuntimeOptions,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
-    let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(&root));
+    let now = chrono::Local::now().time();
     let mut schedule_pm = ProcessManager::new();
-    let wf_config = orchestrator_core::load_workflow_config_or_default(Path::new(&root));
-    let active_hours = wf_config
-        .config
-        .daemon
-        .as_ref()
-        .and_then(|daemon| daemon.active_hours.as_deref());
     let pool_draining = phase_pool::is_pool_draining(&root);
-    let initial_preparation = ProjectTickPreparation::for_project_tick(
-        args,
-        active_hours,
-        chrono::Local::now().time(),
-        pool_draining,
-        None,
-    );
-    if initial_preparation
+    let context = ProjectTickContext::load_for_project_tick(&root, args, now, pool_draining);
+    if context
+        .initial_preparation
         .schedule_plan
         .should_process_due_schedules
     {
@@ -81,13 +70,8 @@ pub(super) async fn project_tick(
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = git_ops::flush_git_integration_outbox(&root);
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
-    let preparation = ProjectTickPreparation::for_project_tick(
-        args,
-        active_hours,
-        chrono::Local::now().time(),
-        pool_draining,
-        snapshot.daemon_health.as_ref(),
-    );
+    let preparation =
+        context.build_project_tick_preparation(args, now, pool_draining, snapshot.daemon_health.as_ref());
     let mut executor = FullProjectTickExecutor {
         hub: hub.clone(),
         root: &root,
@@ -108,34 +92,17 @@ pub(super) async fn slim_daemon_tick(
     process_manager: &mut ProcessManager,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
-    let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(&root));
-
-    let workflow_config = orchestrator_core::load_workflow_config_or_default(Path::new(&root));
-    let active_hours = workflow_config
-        .config
-        .daemon
-        .as_ref()
-        .and_then(|d| d.active_hours.clone());
+    let now = chrono::Local::now().time();
     let pool_draining = phase_pool::is_pool_draining(&root);
-    let initial_preparation = ProjectTickPreparation::for_slim_tick(
-        args,
-        active_hours.as_deref(),
-        chrono::Local::now().time(),
-        pool_draining,
-        None,
-        0,
-    );
-    if !initial_preparation.schedule_plan.within_active_hours {
-        if let Some(spec) = active_hours.as_deref() {
-            eprintln!(
-                "{}: outside active_hours ({}), skipping schedule dispatch",
-                protocol::ACTOR_DAEMON,
-                spec
-            );
+    let context = ProjectTickContext::load_for_slim_tick(&root, args, now, pool_draining);
+    if !context.initial_preparation.schedule_plan.within_active_hours {
+        if let Some(message) = context.active_hours_skip_message() {
+            eprintln!("{}", message);
         }
     }
 
-    if initial_preparation
+    if context
+        .initial_preparation
         .schedule_plan
         .should_process_due_schedules
     {
@@ -144,10 +111,9 @@ pub(super) async fn slim_daemon_tick(
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = git_ops::flush_git_integration_outbox(&root);
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
-    let preparation = ProjectTickPreparation::for_slim_tick(
+    let preparation = context.build_slim_tick_preparation(
         args,
-        active_hours.as_deref(),
-        chrono::Local::now().time(),
+        now,
         pool_draining,
         snapshot.daemon_health.as_ref().and_then(|health| health.max_agents),
         process_manager.active_count(),

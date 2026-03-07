@@ -7,6 +7,7 @@ mod em_work_queue_state;
 mod execute_project_tick_script;
 mod project_tick_action;
 mod project_tick_action_effect;
+mod project_tick_context;
 mod project_tick_action_executor;
 mod project_tick_execution_outcome;
 mod project_tick_mode;
@@ -40,6 +41,7 @@ pub use em_work_queue_state::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQu
 pub use execute_project_tick_script::execute_project_tick_script;
 pub use project_tick_action::ProjectTickAction;
 pub use project_tick_action_effect::ProjectTickActionEffect;
+pub use project_tick_context::ProjectTickContext;
 pub use project_tick_action_executor::ProjectTickActionExecutor;
 pub use project_tick_execution_outcome::ProjectTickExecutionOutcome;
 pub use project_tick_mode::ProjectTickMode;
