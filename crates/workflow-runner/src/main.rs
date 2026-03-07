@@ -1,9 +1,9 @@
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
-use tokio::process::Command as TokioCommand;
+
+use workflow_runner::workflow_execute::{execute_workflow, WorkflowExecuteParams};
 
 #[derive(Parser)]
 #[command(name = "ao-workflow-runner", about = "Standalone workflow phase runner")]
@@ -60,21 +60,6 @@ struct RunnerEvent {
     exit_code: Option<i32>,
 }
 
-fn resolve_ao_binary() -> String {
-    if let Ok(path) = std::env::var("AO_BIN") {
-        return path;
-    }
-    if let Ok(current) = std::env::current_exe() {
-        if let Some(dir) = current.parent() {
-            let candidate = dir.join("ao");
-            if candidate.is_file() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-    "ao".to_string()
-}
-
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = WorkflowRunnerCli::parse();
@@ -90,13 +75,14 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_execute(args: WorkflowExecuteArgs) -> Result<u8> {
+async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let subject_id = args
         .task_id
-        .clone()
-        .or_else(|| args.requirement_id.clone())
-        .or_else(|| args.title.clone())
-        .unwrap_or_else(|| "unknown".to_string());
+        .as_deref()
+        .or(args.requirement_id.as_deref())
+        .or(args.title.as_deref())
+        .unwrap_or("unknown")
+        .to_string();
 
     let startup = RunnerEvent {
         event: "runner_start",
@@ -106,49 +92,25 @@ async fn run_execute(args: WorkflowExecuteArgs) -> Result<u8> {
     };
     eprintln!("{}", serde_json::to_string(&startup).unwrap_or_default());
 
-    let ao_bin = resolve_ao_binary();
-    let mut command = TokioCommand::new(&ao_bin);
-    command
-        .arg("--project-root")
-        .arg(&args.project_root)
-        .arg("workflow")
-        .arg("execute")
-        .arg("--quiet");
+    let params = WorkflowExecuteParams {
+        project_root: args.project_root,
+        task_id: args.task_id,
+        requirement_id: args.requirement_id,
+        title: args.title,
+        description: args.description,
+        pipeline_id: args.pipeline.clone(),
+        model: args.model,
+        tool: args.tool,
+        phase_timeout_secs: args.phase_timeout_secs,
+    };
 
-    if let Some(ref task_id) = args.task_id {
-        command.arg("--task-id").arg(task_id);
-    }
-    if let Some(ref requirement_id) = args.requirement_id {
-        command.arg("--requirement-id").arg(requirement_id);
-    }
-    if let Some(ref title) = args.title {
-        command.arg("--title").arg(title);
-    }
-    if let Some(ref description) = args.description {
-        command.arg("--description").arg(description);
-    }
-    if let Some(ref pipeline) = args.pipeline {
-        command.arg("--pipeline-id").arg(pipeline);
-    }
-    if let Some(ref model) = args.model {
-        command.arg("--model").arg(model);
-    }
-    if let Some(ref tool) = args.tool {
-        command.arg("--tool").arg(tool);
-    }
-    if let Some(timeout) = args.phase_timeout_secs {
-        command.arg("--phase-timeout-secs").arg(timeout.to_string());
-    }
+    let result = execute_workflow(params).await;
 
-    command.stdout(std::process::Stdio::inherit());
-    command.stderr(std::process::Stdio::inherit());
-
-    let status = command
-        .status()
-        .await
-        .with_context(|| format!("failed to spawn ao binary at '{ao_bin}'"))?;
-
-    let exit_code = status.code().unwrap_or(1);
+    let exit_code: i32 = match &result {
+        Ok(r) if r.success => 0,
+        Ok(_) => 1,
+        Err(_) => 1,
+    };
 
     let completion = RunnerEvent {
         event: "runner_complete",
@@ -160,6 +122,10 @@ async fn run_execute(args: WorkflowExecuteArgs) -> Result<u8> {
         "{}",
         serde_json::to_string(&completion).unwrap_or_default()
     );
+
+    if let Err(ref error) = result {
+        eprintln!("workflow execution failed: {error}");
+    }
 
     Ok(clamp_exit_code(exit_code))
 }
@@ -206,32 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_ao_binary_respects_env() {
-        std::env::set_var("AO_BIN", "/custom/path/ao");
-        let result = resolve_ao_binary();
-        std::env::remove_var("AO_BIN");
-        assert_eq!(result, "/custom/path/ao");
-    }
-
-    #[test]
-    fn resolve_ao_binary_falls_back_to_path() {
-        std::env::remove_var("AO_BIN");
-        let result = resolve_ao_binary();
-        assert!(!result.is_empty());
-    }
-
-    #[test]
-    fn source_contains_no_stub_executor() {
-        let source = include_str!("main.rs");
-        let marker = format!("{}PhaseExecutor", "Stub");
-        let count = source.matches(&marker).count();
-        assert_eq!(
-            count, 0,
-            "workflow-runner must not contain {marker} (found {count} occurrences)"
-        );
-    }
-
-    #[test]
     fn runner_event_serialization() {
         let event = RunnerEvent {
             event: "runner_start",
@@ -254,5 +194,20 @@ mod tests {
         assert!(json.contains("runner_complete"));
         assert!(json.contains("\"exit_code\":0"));
         assert!(!json.contains("pipeline"));
+    }
+
+    #[test]
+    fn source_contains_no_subprocess_delegation() {
+        let source = include_str!("main.rs");
+        let marker_command = format!("{}Command", "Tokio");
+        let marker_resolve = format!("{}ao_binary", "resolve_");
+        assert!(
+            source.matches(&marker_command).count() == 0,
+            "main.rs must not delegate to subprocess"
+        );
+        assert!(
+            source.matches(&marker_resolve).count() == 0,
+            "main.rs must not contain proxy logic"
+        );
     }
 }
