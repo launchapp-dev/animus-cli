@@ -970,9 +970,19 @@ mod tests {
             "token should be preserved on second startup"
         );
 
+        let original_runner_config_dir3 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
+        std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
+
         let stopped = stop_agent_runner_process(&project_root)
             .await
             .expect("stop runner should succeed");
+
+        if let Some(val) = original_runner_config_dir3 {
+            std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
+        } else {
+            std::env::remove_var("AO_RUNNER_CONFIG_DIR");
+        }
+
         assert!(stopped, "runner should be stopped");
 
         assert!(

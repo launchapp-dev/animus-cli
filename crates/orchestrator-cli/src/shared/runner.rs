@@ -1,21 +1,25 @@
-#[cfg(unix)]
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use orchestrator_core::runtime_contract;
-use protocol::{
-    AgentControlAction, AgentRunEvent, IpcAuthRequest, IpcAuthResult, OutputStreamType, RunId,
-    MAX_UNIX_SOCKET_PATH_LEN,
-};
+use protocol::{AgentRunEvent, OutputStreamType, RunId};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::time::Duration;
 
 use cli_wrapper::{NormalizedTextEvent, extract_text_from_line};
 
-use crate::{unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
+use crate::{invalid_input_error, unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
+use protocol::AgentControlAction;
+
+pub(crate) use workflow_runner::ipc::{
+    build_runtime_contract, build_runtime_contract_with_resume, collect_json_payload_lines,
+    connect_runner, event_matches_run, runner_config_dir, write_json_line,
+    run_dir, append_line,
+};
+
+pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
+    workflow_runner::ipc::ensure_safe_run_id(run_id)
+        .map_err(|e| invalid_input_error(e.to_string()))
+}
 
 impl From<AgentControlActionArg> for AgentControlAction {
     fn from(value: AgentControlActionArg) -> Self {
@@ -71,14 +75,6 @@ fn runner_scope_label(scope: &RunnerScopeArg) -> &'static str {
     }
 }
 
-fn runner_scope_from_env() -> String {
-    std::env::var("AO_RUNNER_SCOPE")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "project".to_string())
-}
-
 fn canonicalize_cwd_in_project(path: &str, project_root: &str) -> Result<String> {
     let root = PathBuf::from(project_root);
     let root_canonical = root
@@ -106,53 +102,6 @@ fn canonicalize_cwd_in_project(path: &str, project_root: &str) -> Result<String>
     Ok(candidate_canonical.to_string_lossy().to_string())
 }
 
-fn default_global_config_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.launchpad.agent-orchestrator")
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.launchpad.agent-orchestrator")
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("agent-orchestrator")
-    }
-}
-
-pub(crate) fn runner_config_dir(project_root: &Path) -> PathBuf {
-    let config_dir = if let Some(override_path) = std::env::var("AO_RUNNER_CONFIG_DIR")
-        .ok()
-        .or_else(|| std::env::var("AO_CONFIG_DIR").ok())
-        .or_else(|| std::env::var("AGENT_ORCHESTRATOR_CONFIG_DIR").ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        PathBuf::from(override_path)
-    } else if runner_scope_from_env() == "global" {
-        default_global_config_dir()
-    } else {
-        scoped_ao_root(project_root)
-            .unwrap_or_else(|| project_root.join(".ao"))
-            .join("runner")
-    };
-
-    normalize_runner_config_dir(config_dir)
-}
-
-fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
-    protocol::scoped_state_root(project_root)
-}
-
 fn is_managed_worktree_for_project(candidate_cwd: &Path, project_root: &Path) -> bool {
     let mut cursor = candidate_cwd.parent();
     while let Some(path) = cursor {
@@ -176,168 +125,6 @@ fn is_managed_worktree_for_project(candidate_cwd: &Path, project_root: &Path) ->
         cursor = path.parent();
     }
     false
-}
-
-fn normalize_runner_config_dir(config_dir: PathBuf) -> PathBuf {
-    #[cfg(unix)]
-    {
-        shorten_runner_config_dir_if_needed(config_dir)
-    }
-
-    #[cfg(not(unix))]
-    {
-        config_dir
-    }
-}
-
-#[cfg(unix)]
-fn shorten_runner_config_dir_if_needed(config_dir: PathBuf) -> PathBuf {
-    let socket_path = config_dir.join("agent-runner.sock");
-    let socket_len = socket_path.as_os_str().to_string_lossy().len();
-    if socket_len <= MAX_UNIX_SOCKET_PATH_LEN {
-        return config_dir;
-    }
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    config_dir.to_string_lossy().hash(&mut hasher);
-    let digest = hasher.finish();
-    let shortened = std::env::temp_dir()
-        .join("ao-runner")
-        .join(format!("{digest:016x}"));
-    let _ = std::fs::create_dir_all(&shortened);
-    let _ = std::fs::write(
-        shortened.join("origin-path.txt"),
-        config_dir.to_string_lossy().as_bytes(),
-    );
-    shortened
-}
-
-#[cfg(unix)]
-pub(crate) async fn connect_runner(config_dir: &Path) -> Result<tokio::net::UnixStream> {
-    let socket_path = config_dir.join("agent-runner.sock");
-    let connect_timeout_secs = std::env::var("AO_RUNNER_CONNECT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|secs| secs.clamp(1, 30))
-        .unwrap_or(5);
-    let connect_future = tokio::net::UnixStream::connect(&socket_path);
-    match tokio::time::timeout(Duration::from_secs(connect_timeout_secs), connect_future).await {
-        Ok(Ok(mut stream)) => {
-            authenticate_runner_stream(&mut stream, config_dir)
-                .await
-                .map_err(|error| {
-                    unavailable_error(format!(
-                        "failed to authenticate runner connection at {}: {error}",
-                        socket_path.display()
-                    ))
-                })?;
-            Ok(stream)
-        }
-        Ok(Err(error)) => {
-            let base_message = format!(
-                "failed to connect to runner socket at {} (timeout={}s)",
-                socket_path.display(),
-                connect_timeout_secs
-            );
-            let hint = if socket_path.exists() {
-                format!("{base_message}. socket file exists and may be stale")
-            } else {
-                base_message
-            };
-            Err(unavailable_error(format!("{hint}: {error}")))
-        }
-        Err(_) => Err(unavailable_error(format!(
-            "timed out connecting to runner socket at {} after {}s; if no runner is active, remove stale socket and restart runner",
-            socket_path.display(),
-            connect_timeout_secs
-        ))),
-    }
-}
-
-#[cfg(not(unix))]
-pub(crate) async fn connect_runner(config_dir: &Path) -> Result<tokio::net::TcpStream> {
-    let mut stream = tokio::net::TcpStream::connect("127.0.0.1:9001")
-        .await
-        .map_err(|error| {
-            unavailable_error(format!(
-                "failed to connect to runner at 127.0.0.1:9001: {error}"
-            ))
-        })?;
-    authenticate_runner_stream(&mut stream, config_dir)
-        .await
-        .map_err(|error| {
-            unavailable_error(format!(
-                "failed to authenticate runner connection at 127.0.0.1:9001: {error}"
-            ))
-        })?;
-    Ok(stream)
-}
-
-async fn authenticate_runner_stream<S>(stream: &mut S, config_dir: &Path) -> Result<()>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let token = protocol::Config::load_from_dir(config_dir)
-        .map_err(|error| {
-            unavailable_error(format!(
-                "failed to load runner config for authentication from {}: {error}",
-                config_dir.display()
-            ))
-        })?
-        .get_token()
-        .map_err(|error| {
-            format!(
-                "agent runner token unavailable; set AGENT_RUNNER_TOKEN or configure agent_runner_token: {error}"
-            )
-        })
-        .map_err(unavailable_error)?;
-
-    write_json_line(stream, &IpcAuthRequest::new(token))
-        .await
-        .map_err(|error| {
-            unavailable_error(format!("failed to send runner auth payload: {error}"))
-        })?;
-
-    let mut line = String::new();
-    let read_len = tokio::time::timeout(Duration::from_secs(2), async {
-        let mut reader = BufReader::new(stream);
-        reader.read_line(&mut line).await
-    })
-    .await
-    .map_err(|_| unavailable_error("timed out waiting for runner auth response"))?
-    .map_err(|error| unavailable_error(format!("failed to read runner auth response: {error}")))?;
-
-    if read_len == 0 {
-        return Err(unavailable_error(
-            "runner closed connection before auth completed",
-        ));
-    }
-
-    let response: IpcAuthResult = serde_json::from_str(line.trim()).map_err(|error| {
-        unavailable_error(format!("received malformed runner auth response: {error}"))
-    })?;
-    if response.ok {
-        return Ok(());
-    }
-
-    let failure_code = response.code.map(|code| code.as_str()).unwrap_or("unknown");
-    let message = response
-        .message
-        .unwrap_or_else(|| "unauthorized".to_string());
-    Err(unavailable_error(format!(
-        "runner authentication failed ({failure_code}): {message}"
-    )))
-}
-
-pub(crate) async fn write_json_line<W: AsyncWrite + Unpin, T: serde::Serialize>(
-    writer: &mut W,
-    payload: &T,
-) -> Result<()> {
-    let json = serde_json::to_string(payload)?;
-    writer.write_all(json.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await?;
-    Ok(())
 }
 
 pub(crate) fn build_agent_context(args: &AgentRunArgs, project_root: &str) -> Result<Value> {
@@ -400,289 +187,6 @@ pub(crate) fn build_agent_context(args: &AgentRunArgs, project_root: &str) -> Re
     }
 
     Ok(context)
-}
-
-pub(crate) fn build_runtime_contract(tool: &str, model: &str, prompt: &str) -> Option<Value> {
-    build_runtime_contract_with_resume(tool, model, prompt, None)
-}
-
-pub(crate) fn build_runtime_contract_with_resume(
-    tool: &str,
-    model: &str,
-    prompt: &str,
-    resume_plan: Option<&orchestrator_core::runtime_contract::CliSessionResumePlan>,
-) -> Option<Value> {
-    let mcp_endpoint = std::env::var("AO_MCP_ENDPOINT")
-        .ok()
-        .or_else(|| std::env::var("MCP_ENDPOINT").ok())
-        .or_else(|| std::env::var("OPENCODE_MCP_ENDPOINT").ok());
-    let mcp_agent_id = std::env::var("AO_MCP_AGENT_ID").ok();
-
-    let mut runtime_contract = runtime_contract::build_runtime_contract(
-        tool,
-        model,
-        prompt,
-        resume_plan,
-        None,
-        mcp_endpoint.as_deref(),
-        mcp_agent_id.as_deref(),
-    )?;
-    inject_cli_launch_overrides_from_env(&mut runtime_contract, tool);
-    Some(runtime_contract)
-}
-
-fn codex_web_search_enabled() -> bool {
-    protocol::parse_env_bool_opt("AO_CODEX_WEB_SEARCH").unwrap_or(true)
-}
-
-fn codex_network_access_enabled() -> bool {
-    protocol::parse_env_bool_opt("AO_CODEX_NETWORK_ACCESS").unwrap_or(true)
-}
-
-fn claude_bypass_permissions_enabled() -> bool {
-    protocol::parse_env_bool("AO_CLAUDE_BYPASS_PERMISSIONS")
-}
-
-fn env_codex_reasoning_effort_override() -> Option<String> {
-    std::env::var("AO_CODEX_REASONING_EFFORT")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn parse_env_string_list_json(
-    key: &str,
-    fallback_key: Option<&str>,
-    split_by_semicolon: bool,
-) -> Vec<String> {
-    let parse_json = |raw: &str| {
-        serde_json::from_str::<Vec<String>>(raw)
-            .ok()
-            .unwrap_or_default()
-    };
-    let normalize = |items: Vec<String>| {
-        items
-            .into_iter()
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>()
-    };
-
-    if let Ok(raw) = std::env::var(key) {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return normalize(parse_json(trimmed));
-        }
-    }
-
-    let Some(fallback_key) = fallback_key else {
-        return Vec::new();
-    };
-    let Ok(raw) = std::env::var(fallback_key) else {
-        return Vec::new();
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Vec::new();
-    }
-
-    if split_by_semicolon {
-        return normalize(trimmed.split(';').map(ToOwned::to_owned).collect());
-    }
-
-    normalize(trimmed.split_whitespace().map(ToOwned::to_owned).collect())
-}
-
-fn codex_exec_insert_index(args: &[Value]) -> usize {
-    cli_wrapper::codex_exec_insert_index_json(args)
-}
-
-fn launch_prompt_insert_index(args: &[Value]) -> usize {
-    cli_wrapper::launch_prompt_insert_index_json(args)
-}
-
-fn ensure_flag_value_if_missing(args: &mut Vec<Value>, flag: &str, value: &str, insert_at: usize) {
-    cli_wrapper::ensure_flag_value_json(args, flag, value, insert_at);
-}
-
-fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
-    cli_wrapper::ensure_codex_config_override_json(args, key, value_expr);
-}
-
-fn parse_codex_override_entry(entry: &str) -> Option<(String, String)> {
-    let trimmed = entry.trim();
-    let (key, value_expr) = trimmed.split_once('=')?;
-    let key = key.trim();
-    let value_expr = value_expr.trim();
-    if key.is_empty() || value_expr.is_empty() {
-        return None;
-    }
-    Some((key.to_string(), value_expr.to_string()))
-}
-
-fn resolved_codex_extra_overrides() -> Vec<(String, String)> {
-    parse_env_string_list_json(
-        "AO_CODEX_EXTRA_CONFIG_OVERRIDES_JSON",
-        Some("AO_CODEX_EXTRA_CONFIG_OVERRIDES"),
-        true,
-    )
-    .iter()
-    .filter_map(|entry| parse_codex_override_entry(entry))
-    .collect()
-}
-
-fn cli_tool_extra_args_env_keys(tool: &str) -> Option<(&'static str, &'static str)> {
-    match tool.trim().to_ascii_lowercase().as_str() {
-        "codex" => Some(("AO_CODEX_EXTRA_ARGS_JSON", "AO_CODEX_EXTRA_ARGS")),
-        "claude" => Some(("AO_CLAUDE_EXTRA_ARGS_JSON", "AO_CLAUDE_EXTRA_ARGS")),
-        "gemini" => Some(("AO_GEMINI_EXTRA_ARGS_JSON", "AO_GEMINI_EXTRA_ARGS")),
-        "opencode" | "open-code" => Some(("AO_OPENCODE_EXTRA_ARGS_JSON", "AO_OPENCODE_EXTRA_ARGS")),
-        _ => None,
-    }
-}
-
-fn resolved_extra_args(tool: &str) -> Vec<String> {
-    let mut args = parse_env_string_list_json(
-        "AO_AI_CLI_EXTRA_ARGS_JSON",
-        Some("AO_AI_CLI_EXTRA_ARGS"),
-        false,
-    );
-    if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool) {
-        args.extend(parse_env_string_list_json(json_key, Some(plain_key), false));
-    }
-    args
-}
-
-fn inject_codex_search_launch_flag(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("codex") || !codex_web_search_enabled() {
-        return;
-    }
-
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        let has_search_flag = args
-            .iter()
-            .any(|item| item.as_str().is_some_and(|value| value == "--search"));
-        if !has_search_flag {
-            let insert_at = codex_exec_insert_index(args);
-            args.insert(insert_at, Value::String("--search".to_string()));
-        }
-    }
-
-    if let Some(capabilities) = runtime_contract
-        .pointer_mut("/cli/capabilities")
-        .and_then(Value::as_object_mut)
-    {
-        capabilities.insert("supports_web_search".to_string(), Value::Bool(true));
-    }
-}
-
-fn inject_codex_reasoning_effort_override(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("codex") {
-        return;
-    }
-    let Some(effort) = env_codex_reasoning_effort_override() else {
-        return;
-    };
-    let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-
-    let mut index = 0usize;
-    while index + 1 < args.len() {
-        let flag = args[index].as_str().unwrap_or_default();
-        let value = args[index + 1].as_str().unwrap_or_default();
-        if flag == "-c" && value.starts_with("model_reasoning_effort=") {
-            args[index + 1] = Value::String(format!("model_reasoning_effort={effort}"));
-            return;
-        }
-        index += 1;
-    }
-
-    let insert_at = codex_exec_insert_index(args);
-    args.insert(insert_at, Value::String("-c".to_string()));
-    args.insert(
-        insert_at + 1,
-        Value::String(format!("model_reasoning_effort={effort}")),
-    );
-}
-
-fn inject_codex_network_access_override(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("codex") {
-        return;
-    }
-    let value_expr = if codex_network_access_enabled() {
-        "true"
-    } else {
-        "false"
-    };
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        ensure_codex_config_override(args, "sandbox_workspace_write.network_access", value_expr);
-    }
-}
-
-fn inject_codex_extra_config_overrides(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("codex") {
-        return;
-    }
-    let overrides = resolved_codex_extra_overrides();
-    if overrides.is_empty() {
-        return;
-    }
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        for (key, value_expr) in overrides {
-            ensure_codex_config_override(args, &key, &value_expr);
-        }
-    }
-}
-
-fn inject_claude_permission_mode_override(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("claude") || !claude_bypass_permissions_enabled() {
-        return;
-    }
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        ensure_flag_value_if_missing(args, "--permission-mode", "bypassPermissions", 0);
-    }
-}
-
-fn inject_cli_extra_args_from_env(runtime_contract: &mut Value, tool: &str) {
-    let extra_args = resolved_extra_args(tool);
-    if extra_args.is_empty() {
-        return;
-    }
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        let mut insert_at = launch_prompt_insert_index(args);
-        for extra_arg in extra_args {
-            args.insert(insert_at, Value::String(extra_arg));
-            insert_at += 1;
-        }
-    }
-}
-
-fn inject_cli_launch_overrides_from_env(runtime_contract: &mut Value, tool: &str) {
-    inject_codex_search_launch_flag(runtime_contract, tool);
-    inject_codex_reasoning_effort_override(runtime_contract, tool);
-    inject_codex_network_access_override(runtime_contract, tool);
-    inject_claude_permission_mode_override(runtime_contract, tool);
-    inject_codex_extra_config_overrides(runtime_contract, tool);
-    inject_cli_extra_args_from_env(runtime_contract, tool);
 }
 
 pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool, tool: &str) -> Result<()> {
@@ -783,66 +287,6 @@ pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool, tool: &str) -
     Ok(())
 }
 
-pub(crate) fn event_matches_run(event: &AgentRunEvent, run_id: &RunId) -> bool {
-    match event {
-        AgentRunEvent::Started {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::OutputChunk {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Metadata {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Error {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Finished {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::ToolCall {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::ToolResult {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Artifact {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Thinking {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-    }
-}
-
-pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
-    if run_id.trim().is_empty() {
-        return Err(crate::invalid_input_error("run_id is required"));
-    }
-    if run_id.contains('/') || run_id.contains('\\') || run_id.contains("..") {
-        return Err(crate::invalid_input_error(format!("invalid run_id: {run_id}")));
-    }
-    Ok(())
-}
-
-pub(crate) fn run_dir(project_root: &str, run_id: &RunId, base_override: Option<&str>) -> PathBuf {
-    let base = base_override.map(PathBuf::from).unwrap_or_else(|| {
-        scoped_ao_root(Path::new(project_root))
-            .unwrap_or_else(|| Path::new(project_root).join(".ao"))
-            .join("runs")
-    });
-    base.join(&run_id.0)
-}
-
 pub(crate) fn persist_agent_event(run_dir: &Path, event: &AgentRunEvent) -> Result<()> {
     let path = run_dir.join("events.jsonl");
     let line = serde_json::to_string(event)?;
@@ -879,35 +323,6 @@ fn stream_type_label(stream_type: OutputStreamType) -> &'static str {
     }
 }
 
-pub(crate) fn collect_json_payload_lines(text: &str) -> Vec<(String, Value)> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            let parsed = serde_json::from_str::<Value>(trimmed).ok()?;
-            if parsed.is_object() || parsed.is_array() {
-                Some((trimmed.to_string(), parsed))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn append_line(path: &Path, line: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    writeln!(file, "{line}")?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -917,6 +332,7 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     use protocol::test_utils::EnvVarGuard;
+    use protocol::IpcAuthRequest;
 
     fn write_config(dir: &Path, token: Option<&str>) {
         let payload = serde_json::json!({ "agent_runner_token": token });
@@ -928,106 +344,237 @@ mod tests {
     }
 
     #[test]
-    fn authenticate_runner_stream_uses_scoped_config_dir_token() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
-        let global_dir = TempDir::new().expect("global temp dir");
-        let scoped_dir = TempDir::new().expect("scoped temp dir");
-        write_config(global_dir.path(), Some("global-token"));
-        write_config(scoped_dir.path(), Some("scoped-token"));
+    fn runner_config_dir_defaults_to_project_scope() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
+        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
+        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
 
-        let global_override = global_dir.path().to_string_lossy().to_string();
-        let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(&global_override));
-        let _legacy_config =
-            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&global_override));
-        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        runtime.block_on(async {
-            let (mut client, server) = tokio::io::duplex(1024);
-            let server_task = tokio::spawn(async move {
-                let mut reader = BufReader::new(server);
-                let mut line = String::new();
-                let read_len = reader
-                    .read_line(&mut line)
-                    .await
-                    .expect("read auth request");
-                assert!(read_len > 0, "expected auth request line");
-
-                let request: IpcAuthRequest =
-                    serde_json::from_str(line.trim()).expect("parse auth request");
-                assert_eq!(request.token, "scoped-token");
-
-                let mut server = reader.into_inner();
-                write_json_line(&mut server, &IpcAuthResult::ok())
-                    .await
-                    .expect("write auth response");
-            });
-
-            authenticate_runner_stream(&mut client, scoped_dir.path())
-                .await
-                .expect("authenticate runner stream");
-
-            server_task.await.expect("join server task");
-        });
+        let project_root = Path::new("/tmp/project-root");
+        let resolved = runner_config_dir(project_root);
+        let resolved_str = resolved.to_string_lossy();
+        assert!(
+            resolved_str.contains("runner"),
+            "expected runner suffix in resolved config dir: {resolved_str}"
+        );
     }
 
     #[test]
-    fn authenticate_runner_stream_fails_when_scoped_token_missing() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
-        let scoped_dir = TempDir::new().expect("scoped temp dir");
-        write_config(scoped_dir.path(), None);
-        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+    fn runner_config_dir_prefers_explicit_override() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let _config = EnvVarGuard::set("AO_CONFIG_DIR", Some("/custom/override"));
+        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
+        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
 
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        runtime.block_on(async {
-            let (mut client, _server) = tokio::io::duplex(256);
-            let error = authenticate_runner_stream(&mut client, scoped_dir.path())
-                .await
-                .expect_err("authentication should fail without runner token");
-            assert!(
-                error.to_string().contains("agent runner token unavailable"),
-                "error should mention missing runner token: {error}"
-            );
-        });
+        let project_root = Path::new("/tmp/project-root");
+        let resolved = runner_config_dir(project_root);
+        assert_eq!(resolved, PathBuf::from("/custom/override"));
+    }
+
+    #[test]
+    fn runner_config_dir_shortens_long_unix_socket_paths() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let long_root = Path::new("/tmp").join("a".repeat(120));
+        let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
+        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
+        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
+
+        let resolved = runner_config_dir(&long_root);
+        let socket_path = resolved.join("agent-runner.sock");
+        assert!(
+            socket_path.to_string_lossy().len() <= protocol::MAX_UNIX_SOCKET_PATH_LEN,
+            "socket path should be shortened: {}",
+            socket_path.display()
+        );
+    }
+
+    #[test]
+    fn build_agent_context_accepts_managed_worktree_cwd() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
+        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
+        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+
+        let tmp = TempDir::new().expect("temp dir");
+        let project_root = tmp.path().join("repo");
+        let managed_ao = tmp.path().join("ao-scope");
+        let worktree = managed_ao.join("worktrees").join("task-42");
+        std::fs::create_dir_all(&worktree).expect("create worktree");
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        let canonical_root = project_root.canonicalize().expect("canonicalize root");
+        std::fs::write(
+            managed_ao.join(".project-root"),
+            canonical_root.to_string_lossy().as_bytes(),
+        )
+        .expect("write marker");
+
+        let args = AgentRunArgs {
+            run_id: None,
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: Some("hello".to_string()),
+            cwd: Some(worktree.to_string_lossy().to_string()),
+            context_json: None,
+            timeout_secs: None,
+            runtime_contract_json: None,
+            detach: false,
+            stream: true,
+            save_jsonl: false,
+            jsonl_dir: None,
+            start_runner: false,
+            runner_scope: None,
+        };
+
+        let context =
+            build_agent_context(&args, &canonical_root.to_string_lossy()).expect("build context");
+        let cwd = context["cwd"].as_str().expect("cwd should be present");
+        assert!(
+            cwd.contains("worktrees/task-42"),
+            "cwd should point to worktree: {cwd}"
+        );
+    }
+
+    #[test]
+    fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
+        let project_root = "/tmp/project-root";
+        let run_id = RunId("run-1234".to_string());
+        let dir = run_dir(project_root, &run_id, None);
+        let dir_str = dir.to_string_lossy();
+        assert!(
+            dir_str.contains("run-1234"),
+            "run dir should contain run_id: {dir_str}"
+        );
+    }
+
+    #[test]
+    fn collect_json_payload_lines_parses_mixed_output() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let input = "plain text\n{\"key\":\"value\"}\nmore text\n[1,2,3]\n42\n";
+        let rows = collect_json_payload_lines(input);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn build_runtime_contract_honors_codex_reasoning_override_env() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
+        let _effort = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("low"));
+        let _search = EnvVarGuard::set("AO_CODEX_WEB_SEARCH", Some("false"));
+        let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
+
+        let contract = build_runtime_contract(
+            "codex",
+            protocol::default_model_for_tool("codex").unwrap_or("gpt-4.1"),
+            "hello world",
+        )
+        .expect("runtime contract should build");
+
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == "-c" && window[1] == "model_reasoning_effort=low"),
+            "codex reasoning effort override should be injected: {args:?}"
+        );
     }
 
     #[test]
     fn claude_bypass_permissions_is_disabled_by_default() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
-        assert!(!claude_bypass_permissions_enabled());
+        let contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--permission-mode"));
+        assert!(!args.contains(&"bypassPermissions"));
     }
 
     #[test]
     fn claude_bypass_permissions_respects_enable_toggle() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
-        assert!(claude_bypass_permissions_enabled());
+        let contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--permission-mode"));
+        assert!(args.contains(&"bypassPermissions"));
     }
 
     #[test]
     fn claude_bypass_permissions_respects_disable_toggle() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
-        assert!(!claude_bypass_permissions_enabled());
+        let contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--permission-mode"));
+        assert!(!args.contains(&"bypassPermissions"));
     }
 
     #[test]
     fn claude_bypass_permissions_treats_empty_value_as_disabled() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
-        assert!(!claude_bypass_permissions_enabled());
+        let contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+            .expect("runtime contract should build");
+        let args = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch args should be present")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--permission-mode"));
+        assert!(!args.contains(&"bypassPermissions"));
     }
 
     #[test]
     fn inject_claude_permission_mode_override_is_disabled_by_default() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
-        let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
+        let contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
-
-        inject_claude_permission_mode_override(&mut contract, "claude");
-
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -1045,9 +592,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
-
-        inject_claude_permission_mode_override(&mut contract, "claude");
-
+        workflow_runner::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -1065,9 +610,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
-
-        inject_claude_permission_mode_override(&mut contract, "claude");
-
+        workflow_runner::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -1085,9 +628,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
-
-        inject_claude_permission_mode_override(&mut contract, "claude");
-
+        workflow_runner::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -1121,16 +662,10 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        assert!(
-            args.contains(&"--session-id"),
-            "claude contract should include --session-id flag"
-        );
-        assert!(
-            args.contains(&"session-abc-123"),
-            "claude contract should include session id value"
-        );
+        assert!(args.contains(&"--session-id"));
+        assert!(args.contains(&"session-abc-123"));
         let session = contract.pointer("/cli/session");
-        assert!(session.is_some(), "session metadata should be present");
+        assert!(session.is_some());
         assert_eq!(
             session
                 .and_then(|s| s.get("session_key"))
@@ -1166,14 +701,8 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        assert!(
-            args.contains(&"--resume"),
-            "gemini contract should include --resume flag"
-        );
-        assert!(
-            args.contains(&"session-def-456"),
-            "gemini contract should include session id value"
-        );
+        assert!(args.contains(&"--resume"));
+        assert!(args.contains(&"session-def-456"));
     }
 
     #[test]
@@ -1201,18 +730,9 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        assert!(
-            args.contains(&"resume"),
-            "codex reused contract should include resume subcommand"
-        );
-        assert!(
-            args.contains(&"--last"),
-            "codex reused contract should include --last flag"
-        );
-        assert!(
-            !args.contains(&"--session-id"),
-            "codex contract should NOT include --session-id"
-        );
+        assert!(args.contains(&"resume"));
+        assert!(args.contains(&"--last"));
+        assert!(!args.contains(&"--session-id"));
     }
 
     #[test]
@@ -1222,10 +742,7 @@ mod tests {
             build_runtime_contract("claude", "claude-sonnet-4-6", "hello")
                 .expect("runtime contract should build");
         let session = contract.pointer("/cli/session");
-        assert!(
-            session.is_none(),
-            "contract without resume plan should have no session metadata"
-        );
+        assert!(session.is_none());
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -1233,9 +750,70 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        assert!(
-            !args.contains(&"--session-id"),
-            "contract without resume should not include --session-id"
-        );
+        assert!(!args.contains(&"--session-id"));
+    }
+
+    #[test]
+    fn authenticate_runner_stream_uses_scoped_config_dir_token() {
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let global_dir = TempDir::new().expect("global temp dir");
+        let scoped_dir = TempDir::new().expect("scoped temp dir");
+        write_config(global_dir.path(), Some("global-token"));
+        write_config(scoped_dir.path(), Some("scoped-token"));
+
+        let global_override = global_dir.path().to_string_lossy().to_string();
+        let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(&global_override));
+        let _legacy_config =
+            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&global_override));
+        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let (mut client, server) = tokio::io::duplex(1024);
+            let server_task = tokio::spawn(async move {
+                let mut reader = BufReader::new(server);
+                let mut line = String::new();
+                let read_len = reader
+                    .read_line(&mut line)
+                    .await
+                    .expect("read auth request");
+                assert!(read_len > 0, "expected auth request line");
+
+                let request: IpcAuthRequest =
+                    serde_json::from_str(line.trim()).expect("parse auth request");
+                assert_eq!(request.token, "scoped-token");
+
+                let mut server = reader.into_inner();
+                write_json_line(&mut server, &protocol::IpcAuthResult::ok())
+                    .await
+                    .expect("write auth response");
+            });
+
+            workflow_runner::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
+                .await
+                .expect("authenticate runner stream");
+
+            server_task.await.expect("join server task");
+        });
+    }
+
+    #[test]
+    fn authenticate_runner_stream_fails_when_scoped_token_missing() {
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let scoped_dir = TempDir::new().expect("scoped temp dir");
+        write_config(scoped_dir.path(), None);
+        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let (mut client, _server) = tokio::io::duplex(256);
+            let error = workflow_runner::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
+                .await
+                .expect_err("authentication should fail without runner token");
+            assert!(
+                error.to_string().contains("agent runner token unavailable"),
+                "error should mention missing runner token: {error}"
+            );
+        });
     }
 }

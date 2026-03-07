@@ -1,4 +1,4 @@
-use crate::shared::{
+use crate::ipc::{
     build_runtime_contract_with_resume, collect_json_payload_lines,
     connect_runner, event_matches_run, runner_config_dir, write_json_line,
 };
@@ -23,8 +23,8 @@ use super::phase_git::commit_implementation_changes;
 use super::phase_output::{format_output_chunk_for_display, format_tool_call_for_display};
 use super::phase_prompt::{phase_requires_commit_message_with_config, phase_result_kind_for};
 
-pub(crate) use super::phase_output::persist_phase_output;
-pub(crate) use super::phase_prompt::build_phase_prompt;
+pub use super::phase_output::persist_phase_output;
+pub use super::phase_prompt::build_phase_prompt;
 use super::runtime_contract_builder::{
     inject_agent_tool_policy, inject_default_stdio_mcp, inject_project_mcp_servers,
     inject_read_only_flag, inject_response_schema_into_launch_args,
@@ -32,22 +32,22 @@ use super::runtime_contract_builder::{
     phase_decision_contract_for, phase_fallback_models_for, phase_model_override_for,
     phase_output_contract_for, phase_output_json_schema_for, phase_tool_override_for,
 };
-use crate::services::runtime::runtime_daemon::daemon_scheduler::phase_failover::PhaseFailureClassifier;
-use crate::services::runtime::runtime_daemon::daemon_scheduler::phase_targets::PhaseTargetPlanner;
-use crate::services::runtime::runtime_daemon::daemon_scheduler::runtime_support::{
+use crate::phase_failover::PhaseFailureClassifier;
+use crate::phase_targets::PhaseTargetPlanner;
+use crate::runtime_support::{
     inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts,
     phase_timeout_secs, WorkflowPhaseRuntimeSettings,
 };
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PhaseExecuteOverrides {
-    pub(crate) tool: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) rework_context: Option<String>,
+pub struct PhaseExecuteOverrides {
+    pub tool: Option<String>,
+    pub model: Option<String>,
+    pub rework_context: Option<String>,
 }
 
 #[derive(Default)]
-pub(crate) struct CliPhaseExecutor;
+pub struct CliPhaseExecutor;
 
 #[async_trait]
 impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
@@ -240,41 +240,41 @@ fn hash_serializable<T: Serialize>(value: &T) -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PhaseExecutionMetadata {
-    pub(crate) phase_id: String,
-    pub(crate) phase_mode: String,
-    pub(crate) phase_definition_hash: String,
-    pub(crate) agent_runtime_config_hash: String,
-    pub(crate) agent_runtime_schema: String,
-    pub(crate) agent_runtime_version: u32,
-    pub(crate) agent_runtime_source: String,
+pub struct PhaseExecutionMetadata {
+    pub phase_id: String,
+    pub phase_mode: String,
+    pub phase_definition_hash: String,
+    pub agent_runtime_config_hash: String,
+    pub agent_runtime_schema: String,
+    pub agent_runtime_version: u32,
+    pub agent_runtime_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) agent_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) agent_profile_hash: Option<String>,
+    pub agent_profile_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) selected_tool: Option<String>,
+    pub selected_tool: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) selected_model: Option<String>,
+    pub selected_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PhaseExecutionSignal {
-    pub(crate) event_type: String,
-    pub(crate) payload: Value,
+pub struct PhaseExecutionSignal {
+    pub event_type: String,
+    pub payload: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PhaseExecutionRunResult {
-    pub(crate) outcome: PhaseExecutionOutcome,
-    pub(crate) metadata: PhaseExecutionMetadata,
+pub struct PhaseExecutionRunResult {
+    pub outcome: PhaseExecutionOutcome,
+    pub metadata: PhaseExecutionMetadata,
     #[serde(default)]
-    pub(crate) signals: Vec<PhaseExecutionSignal>,
+    pub signals: Vec<PhaseExecutionSignal>,
 }
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum PhaseExecutionOutcome {
+pub enum PhaseExecutionOutcome {
     Completed {
         commit_message: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -289,7 +289,7 @@ pub(crate) enum PhaseExecutionOutcome {
     },
 }
 
-pub(crate) fn parse_research_reason_from_payload(payload: &Value) -> Option<String> {
+pub fn parse_research_reason_from_payload(payload: &Value) -> Option<String> {
     match payload {
         Value::Array(items) => items.iter().find_map(parse_research_reason_from_payload),
         Value::Object(object) => {
@@ -351,7 +351,7 @@ pub(crate) fn parse_research_reason_from_payload(payload: &Value) -> Option<Stri
     }
 }
 
-pub(crate) fn parse_research_reason_from_text(text: &str) -> Option<String> {
+pub fn parse_research_reason_from_text(text: &str) -> Option<String> {
     for (_raw, payload) in collect_json_payload_lines(text) {
         if let Some(reason) = parse_research_reason_from_payload(&payload) {
             return Some(reason);
@@ -411,7 +411,7 @@ fn parse_phase_decision_from_payload(payload: &Value) -> Option<orchestrator_cor
     }
 }
 
-pub(crate) fn parse_phase_decision_from_text(
+pub fn parse_phase_decision_from_text(
     text: &str,
 ) -> Option<orchestrator_core::PhaseDecision> {
     for (_raw, payload) in collect_json_payload_lines(text) {
@@ -475,7 +475,7 @@ fn parse_commit_message_from_payload_for_kind(
 }
 
 #[cfg(test)]
-pub(crate) fn parse_commit_message_from_payload(payload: &Value) -> Option<String> {
+pub fn parse_commit_message_from_payload(payload: &Value) -> Option<String> {
     parse_commit_message_from_payload_for_kind(payload, "implementation_result")
 }
 
@@ -492,11 +492,11 @@ fn parse_commit_message_from_text_for_kind(text: &str, expected_kind: &str) -> O
 }
 
 #[cfg(test)]
-pub(crate) fn parse_commit_message_from_text(text: &str) -> Option<String> {
+pub fn parse_commit_message_from_text(text: &str) -> Option<String> {
     parse_commit_message_from_text_for_kind(text, "implementation_result")
 }
 
-pub(crate) fn fallback_implementation_commit_message(task_id: &str, task_title: &str) -> String {
+pub fn fallback_implementation_commit_message(task_id: &str, task_title: &str) -> String {
     let scope = task_id.trim().to_ascii_lowercase();
     let summary = task_title
         .split_whitespace()
@@ -523,7 +523,7 @@ fn routing_complexity(
     })
 }
 
-pub(crate) async fn run_workflow_phase_attempt(
+pub async fn run_workflow_phase_attempt(
     project_root: &str,
     workflow_id: &str,
     phase_id: &str,
@@ -748,7 +748,7 @@ pub(crate) async fn run_workflow_phase_attempt(
     ))
 }
 
-pub(crate) async fn run_workflow_phase_with_agent(
+pub async fn run_workflow_phase_with_agent(
     project_root: &str,
     execution_cwd: &str,
     workflow_id: &str,
@@ -1400,7 +1400,7 @@ fn to_mode_string(mode: &orchestrator_core::PhaseExecutionMode) -> String {
     }
 }
 
-pub(crate) async fn run_workflow_phase(
+pub async fn run_workflow_phase(
     project_root: &str,
     execution_cwd: &str,
     workflow_id: &str,
