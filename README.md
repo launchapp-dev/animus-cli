@@ -45,6 +45,29 @@ cargo test --workspace       # Run all tests
 cargo test -p <crate-name>   # Run tests for a specific crate
 ```
 
+## Build Footprint
+
+Prefer narrow commands while iterating:
+
+```bash
+cargo ao-bin-check
+cargo test -p orchestrator-cli --test cli_smoke
+```
+
+Workspace-wide debug and integration-test builds accumulate large `target/debug`
+artifacts. The repo now uses leaner dev/test debuginfo settings to keep future
+builds smaller, and includes a cleanup helper:
+
+```bash
+scripts/cleanup-build-targets.sh --report
+scripts/cleanup-build-targets.sh
+scripts/cleanup-build-targets.sh --debug
+scripts/cleanup-build-targets.sh --worktrees --days 7
+```
+
+`ao git worktree prune` remains the right command for pruning managed git
+worktree metadata; the cleanup script above only removes Rust build artifacts.
+
 ## Command Overview
 
 See `docs/cli-command-surface.md` for the full command tree with all flags.

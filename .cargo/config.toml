@@ -10,7 +10,24 @@
 # if building in multiple worktrees simultaneously.
 
 # For now, keeping separate targets per worktree.
-# Use scripts/cleanup-worktree-builds.sh regularly to prevent buildup.
+# Use scripts/cleanup-build-targets.sh regularly to prevent buildup.
+
+[profile.dev]
+# Keep backtraces and line info for local debugging without full symbol bloat.
+debug = 1
+
+[profile.dev.package."*"]
+# Dependency debuginfo dominates target size and is rarely what we step through.
+debug = 0
+
+[profile.test]
+# Integration tests create many one-off crates; disable incremental to avoid
+# leaving a large trail of stale test caches behind.
+debug = 1
+incremental = false
+
+[profile.test.package."*"]
+debug = 0
 
 [alias]
 # Useful aliases for worktree development
