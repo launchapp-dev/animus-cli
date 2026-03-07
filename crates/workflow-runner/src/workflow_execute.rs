@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
@@ -20,6 +21,23 @@ use crate::executor::{
     persist_phase_output, run_workflow_phase, PhaseExecuteOverrides, PhaseExecutionOutcome,
 };
 
+pub enum PhaseEvent<'a> {
+    Started {
+        phase_id: &'a str,
+        phase_index: usize,
+        total_phases: usize,
+    },
+    Decision {
+        phase_id: &'a str,
+        decision: &'a orchestrator_core::PhaseDecision,
+    },
+    Completed {
+        phase_id: &'a str,
+        duration: Duration,
+        success: bool,
+    },
+}
+
 pub struct WorkflowExecuteParams {
     pub project_root: String,
     pub task_id: Option<String>,
@@ -30,13 +48,21 @@ pub struct WorkflowExecuteParams {
     pub model: Option<String>,
     pub tool: Option<String>,
     pub phase_timeout_secs: Option<u64>,
+    pub phase_filter: Option<String>,
+    pub stream_level: Option<String>,
+    pub on_phase_event: Option<Box<dyn Fn(PhaseEvent<'_>) + Send + Sync>>,
+    pub hub: Option<Arc<dyn ServiceHub>>,
 }
 
 pub struct WorkflowExecuteResult {
     pub success: bool,
     pub workflow_id: String,
+    pub subject_id: String,
+    pub execution_cwd: String,
+    pub phases_requested: Vec<String>,
     pub phases_completed: usize,
     pub phases_total: usize,
+    pub total_duration: Duration,
     pub phase_results: Vec<Value>,
     pub post_success: Value,
 }
@@ -45,19 +71,23 @@ const DEFAULT_PHASE_REWORK_ATTEMPTS: u32 = 3;
 const DEFAULT_REWORK_TARGET_PHASE: &str = "implementation";
 
 pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
-    std::env::set_var("AO_STREAM_PHASE_OUTPUT", "quiet");
+    let stream_level = params.stream_level.as_deref().unwrap_or("quiet");
+    std::env::set_var("AO_STREAM_PHASE_OUTPUT", stream_level);
 
     if let Some(timeout) = params.phase_timeout_secs {
         std::env::set_var("AO_PHASE_TIMEOUT_SECS", timeout.to_string());
     }
 
-    let hub: Arc<dyn ServiceHub> = Arc::new(
-        FileServiceHub::new(&params.project_root)
-            .context("failed to create service hub for project")?,
-    );
-
     let input = resolve_input(&params)?;
     let subject = input.subject().clone();
+
+    let hub: Arc<dyn ServiceHub> = match params.hub {
+        Some(h) => h,
+        None => Arc::new(
+            FileServiceHub::new(&params.project_root)
+                .context("failed to create service hub for project")?,
+        ),
+    };
 
     let task = if let WorkflowSubject::Task { ref id } = subject {
         Some(
@@ -71,7 +101,10 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     };
 
     let subject_id = subject.id().to_string();
-    let workflow = hub.workflows().run(input).await.or_else(|_| {
+    let workflow = hub.workflows().run(input).await.or_else(|run_err| {
+        if matches!(subject, WorkflowSubject::Custom { .. }) {
+            return Err(run_err);
+        }
         let all = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(hub.workflows().list())
         })?;
@@ -87,11 +120,15 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         .unwrap_or(&params.project_root)
         .to_string();
 
-    let phases_to_run: Vec<String> = workflow
-        .phases
-        .iter()
-        .map(|p| p.phase_id.clone())
-        .collect();
+    let phases_to_run: Vec<String> = if let Some(ref phase_filter) = params.phase_filter {
+        vec![phase_filter.clone()]
+    } else {
+        workflow
+            .phases
+            .iter()
+            .map(|p| p.phase_id.clone())
+            .collect()
+    };
 
     if phases_to_run.is_empty() {
         return Err(anyhow!("workflow has no phases to execute"));
@@ -129,6 +166,13 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     let mut rework_context: Option<String> = None;
     let mut results = Vec::new();
     let total_phases = phases_to_run.len();
+    let workflow_start = Instant::now();
+
+    let emit = |event: PhaseEvent<'_>| {
+        if let Some(ref cb) = params.on_phase_event {
+            cb(event);
+        }
+    };
 
     let mut phase_idx: usize = 0;
     while phase_idx < phases_to_run.len() {
@@ -139,6 +183,13 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
             .find(|p| &p.phase_id == phase_id)
             .map(|p| p.attempt)
             .unwrap_or(0);
+
+        emit(PhaseEvent::Started {
+            phase_id,
+            phase_index: phase_idx,
+            total_phases,
+        });
+        let phase_start = Instant::now();
 
         let phase_overrides = PhaseExecuteOverrides {
             tool: params.tool.clone(),
@@ -160,6 +211,8 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         )
         .await;
 
+        let phase_elapsed = phase_start.elapsed();
+
         match run_result {
             Ok(result) => {
                 let mut routed_back = false;
@@ -169,6 +222,11 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                     ..
                 } = result.outcome
                 {
+                    emit(PhaseEvent::Decision {
+                        phase_id,
+                        decision,
+                    });
+
                     if decision.verdict == PhaseDecisionVerdict::Skip {
                         let close_reason = decision.reason.trim().to_lowercase();
                         let target_status = if close_reason.contains("already_done") {
@@ -193,11 +251,19 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                             phase_id,
                             &result.outcome,
                         );
+                        emit(PhaseEvent::Completed {
+                            phase_id,
+                            duration: phase_elapsed,
+                            success: true,
+                        });
                         results.push(serde_json::json!({
                             "phase_id": phase_id,
                             "status": "closed",
                             "close_reason": decision.reason,
                             "task_status": format!("{:?}", target_status).to_lowercase(),
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
                         }));
                         break;
                     }
@@ -224,10 +290,18 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         );
 
                         if target.is_none() {
+                            emit(PhaseEvent::Completed {
+                                phase_id,
+                                duration: phase_elapsed,
+                                success: false,
+                            });
                             results.push(serde_json::json!({
                                 "phase_id": phase_id,
                                 "status": "failed",
+                                "duration_secs": phase_elapsed.as_secs(),
                                 "error": format!("rework target for phase '{}' not configured", phase_id),
+                                "outcome": result.outcome,
+                                "metadata": result.metadata,
                             }));
                             break;
                         }
@@ -235,11 +309,19 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         if *count < max_attempts {
                             *count += 1;
                             let target = target.expect("rework target");
+                            emit(PhaseEvent::Completed {
+                                phase_id,
+                                duration: phase_elapsed,
+                                success: false,
+                            });
                             results.push(serde_json::json!({
                                 "phase_id": phase_id,
                                 "status": "rework",
                                 "rework_target": target,
                                 "rework_attempt": *count,
+                                "duration_secs": phase_elapsed.as_secs(),
+                                "outcome": result.outcome,
+                                "metadata": result.metadata,
                             }));
 
                             rework_context = maybe_context;
@@ -253,15 +335,24 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                                 results.push(serde_json::json!({
                                     "phase_id": phase_id,
                                     "status": "failed",
+                                    "duration_secs": phase_elapsed.as_secs(),
                                     "error": format!("rework target '{}' not found in phases", target),
                                 }));
                                 break;
                             }
                         } else {
+                            emit(PhaseEvent::Completed {
+                                phase_id,
+                                duration: phase_elapsed,
+                                success: false,
+                            });
                             results.push(serde_json::json!({
                                 "phase_id": phase_id,
                                 "status": "failed",
+                                "duration_secs": phase_elapsed.as_secs(),
                                 "error": format!("rework budget exhausted after {} attempts", max_attempts),
+                                "outcome": result.outcome,
+                                "metadata": result.metadata,
                             }));
                             break;
                         }
@@ -275,17 +366,31 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         phase_id,
                         &result.outcome,
                     );
+                    emit(PhaseEvent::Completed {
+                        phase_id,
+                        duration: phase_elapsed,
+                        success: true,
+                    });
                     results.push(serde_json::json!({
                         "phase_id": phase_id,
                         "status": "completed",
+                        "duration_secs": phase_elapsed.as_secs(),
+                        "outcome": result.outcome,
+                        "metadata": result.metadata,
                     }));
                     phase_idx += 1;
                 }
             }
             Err(err) => {
+                emit(PhaseEvent::Completed {
+                    phase_id,
+                    duration: phase_elapsed,
+                    success: false,
+                });
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "failed",
+                    "duration_secs": phase_elapsed.as_secs(),
                     "error": err.to_string(),
                 }));
                 break;
@@ -293,6 +398,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         }
     }
 
+    let total_duration = workflow_start.elapsed();
     let all_phases_completed = phase_idx >= phases_to_run.len();
     let post_success = if all_phases_completed {
         if let Some(ref t) = task {
@@ -320,8 +426,12 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     Ok(WorkflowExecuteResult {
         success: all_phases_completed,
         workflow_id: workflow.id.clone(),
+        subject_id: subject_id_str,
+        execution_cwd,
+        phases_requested: phases_to_run,
         phases_completed: phase_idx.min(total_phases),
         phases_total: total_phases,
+        total_duration,
         phase_results: results,
         post_success,
     })

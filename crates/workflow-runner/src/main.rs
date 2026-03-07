@@ -102,6 +102,10 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         model: args.model,
         tool: args.tool,
         phase_timeout_secs: args.phase_timeout_secs,
+        phase_filter: None,
+        stream_level: None,
+        on_phase_event: None,
+        hub: None,
     };
 
     let result = execute_workflow(params).await;
