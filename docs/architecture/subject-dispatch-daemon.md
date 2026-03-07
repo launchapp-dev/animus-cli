@@ -206,3 +206,8 @@ The architecture is correct when:
 - manual starts, schedules, queue dispatch, git triggers, and heartbeat rules
   all share the same dispatch contract
 - `workflow-runner` remains the only workflow execution host
+
+See also:
+
+- `docs/architecture/tool-driven-mutation-surfaces.md` for the command and MCP
+  mutation model that should sit on top of this runtime architecture.
