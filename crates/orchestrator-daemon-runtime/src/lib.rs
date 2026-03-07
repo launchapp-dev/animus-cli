@@ -14,6 +14,7 @@ mod project_tick_plan;
 mod project_tick_preparation;
 mod project_tick_script;
 mod project_tick_summary;
+mod project_tick_summary_input;
 mod ready_task_dispatch_plan;
 mod ready_task_dispatch_support;
 mod ready_task_workflow_start;
@@ -45,6 +46,7 @@ pub use project_tick_plan::ProjectTickPlan;
 pub use project_tick_preparation::ProjectTickPreparation;
 pub use project_tick_script::ProjectTickScript;
 pub use project_tick_summary::ProjectTickSummary;
+pub use project_tick_summary_input::ProjectTickSummaryInput;
 pub use ready_task_dispatch_plan::{
     plan_ready_task_dispatch, PlannedReadyTaskStart, ReadyTaskDispatchPlan,
 };

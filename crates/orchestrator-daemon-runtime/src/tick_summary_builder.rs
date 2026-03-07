@@ -1,38 +1,20 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use orchestrator_core::{
-    services::ServiceHub, OrchestratorTask, RequirementItem, TaskStatus, WorkflowStatus,
-};
-use workflow_runner::executor::PhaseExecutionEvent;
+use orchestrator_core::{services::ServiceHub, OrchestratorTask, TaskStatus, WorkflowStatus};
 
 use crate::{
     collect_requirement_lifecycle_transitions, collect_task_state_transitions,
-    DaemonRuntimeOptions, ProjectTickSummary, ReadyTaskWorkflowStart,
+    DaemonRuntimeOptions, ProjectTickSummary, ProjectTickSummaryInput,
 };
 
 pub struct TickSummaryBuilder;
 
 impl TickSummaryBuilder {
-    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         hub: Arc<dyn ServiceHub>,
         args: &DaemonRuntimeOptions,
-        project_root: String,
-        started_daemon: bool,
-        health: serde_json::Value,
-        requirements_before: &[RequirementItem],
-        tasks_before: &[OrchestratorTask],
-        resumed_workflows: usize,
-        cleaned_stale_workflows: usize,
-        reconciled_stale_tasks: usize,
-        reconciled_dependency_tasks: usize,
-        reconciled_merge_tasks: usize,
-        ready_started_count: usize,
-        ready_started_workflows: &[ReadyTaskWorkflowStart],
-        executed_workflow_phases: usize,
-        failed_workflow_phases: usize,
-        phase_execution_events: Vec<PhaseExecutionEvent>,
+        input: ProjectTickSummaryInput,
     ) -> Result<ProjectTickSummary> {
         let tasks = hub.tasks().list().await?;
         let workflows = hub.workflows().list().await.unwrap_or_default();
@@ -72,20 +54,22 @@ impl TickSummaryBuilder {
             .filter(|workflow| workflow.status == WorkflowStatus::Failed)
             .count();
         let requirements_after = hub.planning().list_requirements().await.unwrap_or_default();
-        let requirement_lifecycle_transitions =
-            collect_requirement_lifecycle_transitions(requirements_before, &requirements_after);
+        let requirement_lifecycle_transitions = collect_requirement_lifecycle_transitions(
+            &input.requirements_before,
+            &requirements_after,
+        );
         let task_state_transitions = collect_task_state_transitions(
-            tasks_before,
+            &input.tasks_before,
             &tasks,
             &workflows,
-            &phase_execution_events,
-            ready_started_workflows,
+            &input.phase_execution_events,
+            &input.ready_started_workflows,
         );
 
         Ok(ProjectTickSummary {
-            project_root,
-            started_daemon,
-            health,
+            project_root: input.project_root,
+            started_daemon: input.started_daemon,
+            health: input.health,
             tasks_total,
             tasks_ready,
             tasks_in_progress,
@@ -97,15 +81,16 @@ impl TickSummaryBuilder {
             workflows_running,
             workflows_completed,
             workflows_failed,
-            resumed_workflows,
-            cleaned_stale_workflows,
-            reconciled_stale_tasks: reconciled_stale_tasks
-                .saturating_add(reconciled_dependency_tasks)
-                .saturating_add(reconciled_merge_tasks),
-            started_ready_workflows: ready_started_count,
-            executed_workflow_phases,
-            failed_workflow_phases,
-            phase_execution_events,
+            resumed_workflows: input.resumed_workflows,
+            cleaned_stale_workflows: input.cleaned_stale_workflows,
+            reconciled_stale_tasks: input
+                .reconciled_stale_tasks
+                .saturating_add(input.reconciled_dependency_tasks)
+                .saturating_add(input.reconciled_merge_tasks),
+            started_ready_workflows: input.ready_started_count,
+            executed_workflow_phases: input.executed_workflow_phases,
+            failed_workflow_phases: input.failed_workflow_phases,
+            phase_execution_events: input.phase_execution_events,
             requirement_lifecycle_transitions,
             task_state_transitions,
         })

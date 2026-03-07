@@ -110,26 +110,24 @@ pub(super) async fn project_tick(
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 
     let health = serde_json::to_value(daemon.health().await?)?;
-    TickSummaryBuilder::build(
-        hub.clone(),
-        args,
-        root,
+    let summary_input = ProjectTickSummaryInput {
+        project_root: root,
         started_daemon,
         health,
-        &requirements_before,
-        &tasks_before,
-        execution_outcome.resumed_workflows,
-        execution_outcome.cleaned_stale_workflows,
-        execution_outcome.reconciled_stale_tasks,
-        execution_outcome.reconciled_dependency_tasks,
-        execution_outcome.reconciled_merge_tasks,
-        execution_outcome.ready_workflow_starts.started,
-        &execution_outcome.ready_workflow_starts.started_workflows,
-        execution_outcome.executed_workflow_phases,
-        execution_outcome.failed_workflow_phases,
-        execution_outcome.phase_execution_events,
-    )
-    .await
+        requirements_before,
+        tasks_before,
+        resumed_workflows: execution_outcome.resumed_workflows,
+        cleaned_stale_workflows: execution_outcome.cleaned_stale_workflows,
+        reconciled_stale_tasks: execution_outcome.reconciled_stale_tasks,
+        reconciled_dependency_tasks: execution_outcome.reconciled_dependency_tasks,
+        reconciled_merge_tasks: execution_outcome.reconciled_merge_tasks,
+        ready_started_count: execution_outcome.ready_workflow_starts.started,
+        ready_started_workflows: execution_outcome.ready_workflow_starts.started_workflows,
+        executed_workflow_phases: execution_outcome.executed_workflow_phases,
+        failed_workflow_phases: execution_outcome.failed_workflow_phases,
+        phase_execution_events: execution_outcome.phase_execution_events,
+    };
+    TickSummaryBuilder::build(hub.clone(), args, summary_input).await
 }
 
 pub(super) async fn slim_daemon_tick(
@@ -205,26 +203,24 @@ pub(super) async fn slim_daemon_tick(
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 
     let health = serde_json::to_value(daemon.health().await?)?;
-    TickSummaryBuilder::build(
-        hub.clone(),
-        args,
-        root,
+    let summary_input = ProjectTickSummaryInput {
+        project_root: root,
         started_daemon,
         health,
-        &requirements_before,
-        &tasks_before,
-        execution_outcome.resumed_workflows,
-        execution_outcome.cleaned_stale_workflows,
-        execution_outcome.reconciled_stale_tasks,
-        execution_outcome.reconciled_dependency_tasks,
-        execution_outcome.reconciled_merge_tasks,
-        execution_outcome.ready_workflow_starts.started,
-        &execution_outcome.ready_workflow_starts.started_workflows,
-        execution_outcome.executed_workflow_phases,
-        execution_outcome.failed_workflow_phases,
-        Vec::new(),
-    )
-    .await
+        requirements_before,
+        tasks_before,
+        resumed_workflows: execution_outcome.resumed_workflows,
+        cleaned_stale_workflows: execution_outcome.cleaned_stale_workflows,
+        reconciled_stale_tasks: execution_outcome.reconciled_stale_tasks,
+        reconciled_dependency_tasks: execution_outcome.reconciled_dependency_tasks,
+        reconciled_merge_tasks: execution_outcome.reconciled_merge_tasks,
+        ready_started_count: execution_outcome.ready_workflow_starts.started,
+        ready_started_workflows: execution_outcome.ready_workflow_starts.started_workflows,
+        executed_workflow_phases: execution_outcome.executed_workflow_phases,
+        failed_workflow_phases: execution_outcome.failed_workflow_phases,
+        phase_execution_events: Vec::new(),
+    };
+    TickSummaryBuilder::build(hub.clone(), args, summary_input).await
 }
 
 #[cfg(test)]
