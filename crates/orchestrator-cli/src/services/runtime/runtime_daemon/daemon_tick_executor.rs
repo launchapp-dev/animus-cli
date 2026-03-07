@@ -86,6 +86,10 @@ impl ProjectTickDriver for FullProjectTickDriver {
     where
         Self: 'a;
 
+    fn build_hub(&mut self, root: &str) -> Result<Arc<dyn ServiceHub>> {
+        Ok(Arc::new(FileServiceHub::new(root)?))
+    }
+
     fn process_due_schedules(&mut self, root: &str, now: chrono::DateTime<chrono::Utc>) {
         ScheduleDispatch::process_due_schedules(&mut self.schedule_process_manager, root, now);
     }
@@ -192,6 +196,10 @@ impl ProjectTickDriver for SlimProjectTickDriver<'_> {
         = SlimProjectTickOperations<'a>
     where
         Self: 'a;
+
+    fn build_hub(&mut self, root: &str) -> Result<Arc<dyn ServiceHub>> {
+        Ok(Arc::new(FileServiceHub::new(root)?))
+    }
 
     fn process_due_schedules(&mut self, root: &str, now: chrono::DateTime<chrono::Utc>) {
         ScheduleDispatch::process_due_schedules(self.process_manager, root, now);

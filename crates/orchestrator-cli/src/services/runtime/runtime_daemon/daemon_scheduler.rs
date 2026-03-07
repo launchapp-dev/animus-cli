@@ -8,7 +8,7 @@ use chrono::Utc;
 use orchestrator_core::{
     services::ServiceHub, DependencyType, RequirementItem, RequirementStatus, RequirementsDraftInput,
     RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput, TaskStatus, TaskType,
-    WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
+    WorkflowResumeManager, WorkflowRunInput, WorkflowStatus, FileServiceHub,
 };
 pub(super) use orchestrator_daemon_runtime::{
     run_project_tick, DaemonRuntimeOptions, ProjectTickDriver, ProjectTickOperations,
@@ -24,9 +24,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
-#[cfg(test)]
-use orchestrator_core::FileServiceHub;
-
 #[path = "daemon_scheduler_frontend_gate.rs"]
 mod frontend_phase_gate;
 #[path = "daemon_scheduler_git_ops.rs"]

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{Local, Utc};
-use orchestrator_core::{services::ServiceHub, FileServiceHub};
+use orchestrator_core::services::ServiceHub;
 
 use crate::{
     execute_project_tick_script, DaemonRuntimeOptions, ProjectTickDriver,
@@ -37,7 +37,7 @@ where
         driver.process_due_schedules(root, Utc::now());
     }
 
-    let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+    let hub: Arc<dyn ServiceHub> = driver.build_hub(root)?;
     driver.flush_git_outbox(root);
 
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
