@@ -75,6 +75,35 @@ pub(super) struct FullProjectTickOperations<'a> {
 }
 
 #[cfg(test)]
+pub(super) struct FullProjectTickDriver {
+    pub(super) schedule_process_manager: ProcessManager,
+}
+
+#[cfg(test)]
+impl ProjectTickDriver for FullProjectTickDriver {
+    type Operations<'a>
+        = FullProjectTickOperations<'a>
+    where
+        Self: 'a;
+
+    fn process_due_schedules(&mut self, root: &str, now: chrono::DateTime<chrono::Utc>) {
+        ScheduleDispatch::process_due_schedules(&mut self.schedule_process_manager, root, now);
+    }
+
+    fn flush_git_outbox(&mut self, root: &str) {
+        let _ = git_ops::flush_git_integration_outbox(root);
+    }
+
+    fn build_operations<'a>(
+        &'a mut self,
+        hub: Arc<dyn ServiceHub>,
+        root: &'a str,
+    ) -> Self::Operations<'a> {
+        FullProjectTickOperations { hub, root }
+    }
+}
+
+#[cfg(test)]
 #[async_trait::async_trait(?Send)]
 impl ProjectTickOperations for FullProjectTickOperations<'_> {
     async fn bootstrap_from_vision(
@@ -152,6 +181,41 @@ pub(super) struct SlimProjectTickOperations<'a> {
     pub(super) hub: Arc<dyn ServiceHub>,
     pub(super) root: &'a str,
     pub(super) process_manager: &'a mut ProcessManager,
+}
+
+pub(super) struct SlimProjectTickDriver<'a> {
+    pub(super) process_manager: &'a mut ProcessManager,
+}
+
+impl ProjectTickDriver for SlimProjectTickDriver<'_> {
+    type Operations<'a>
+        = SlimProjectTickOperations<'a>
+    where
+        Self: 'a;
+
+    fn process_due_schedules(&mut self, root: &str, now: chrono::DateTime<chrono::Utc>) {
+        ScheduleDispatch::process_due_schedules(self.process_manager, root, now);
+    }
+
+    fn flush_git_outbox(&mut self, root: &str) {
+        let _ = git_ops::flush_git_integration_outbox(root);
+    }
+
+    fn emit_notice(&mut self, message: &str) {
+        eprintln!("{}", message);
+    }
+
+    fn build_operations<'a>(
+        &'a mut self,
+        hub: Arc<dyn ServiceHub>,
+        root: &'a str,
+    ) -> Self::Operations<'a> {
+        SlimProjectTickOperations {
+            hub,
+            root,
+            process_manager: self.process_manager,
+        }
+    }
 }
 
 #[async_trait::async_trait(?Send)]

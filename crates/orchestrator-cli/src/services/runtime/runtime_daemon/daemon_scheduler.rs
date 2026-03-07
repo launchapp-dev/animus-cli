@@ -6,14 +6,13 @@ use crate::shared::{ensure_ai_generated_tasks_for_requirements, requirement_has_
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    services::ServiceHub, DependencyType, FileServiceHub, RequirementItem, RequirementStatus,
-    RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput,
-    TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
+    services::ServiceHub, DependencyType, RequirementItem, RequirementStatus, RequirementsDraftInput,
+    RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput, TaskStatus, TaskType,
+    WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
 pub(super) use orchestrator_daemon_runtime::{
-    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickContext,
-    ProjectTickOperationExecutor, ProjectTickOperations, ProjectTickSnapshot,
-    ProjectTickSummary,
+    run_project_tick, DaemonRuntimeOptions, ProjectTickDriver, ProjectTickOperations,
+    ProjectTickRunMode, ProjectTickSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +24,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
+#[cfg(test)]
+use orchestrator_core::FileServiceHub;
 
 #[path = "daemon_scheduler_frontend_gate.rs"]
 mod frontend_phase_gate;

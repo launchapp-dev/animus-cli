@@ -26,8 +26,6 @@ pub(super) mod completion_reconciliation;
 pub(super) mod schedule_dispatch;
 #[path = "daemon_tick_executor.rs"]
 mod tick_executor;
-#[path = "daemon_tick_summary.rs"]
-pub(super) mod tick_summary;
 
 use agent_slot::*;
 use bootstrap::*;
@@ -38,9 +36,8 @@ use schedule_dispatch::ScheduleDispatch;
 use task_dispatch::*;
 use task_lifecycle::*;
 #[cfg(test)]
-use tick_executor::FullProjectTickOperations;
-use tick_executor::SlimProjectTickOperations;
-use tick_summary::TickSummaryBuilder;
+use tick_executor::FullProjectTickDriver;
+use tick_executor::SlimProjectTickDriver;
 
 fn pipeline_for_task(task: &orchestrator_core::OrchestratorTask) -> String {
     if task.is_frontend_related() {
@@ -56,34 +53,11 @@ pub(super) async fn project_tick(
     args: &DaemonRuntimeOptions,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
-    let now = chrono::Local::now().time();
-    let mut schedule_pm = ProcessManager::new();
     let pool_draining = phase_pool::is_pool_draining(&root);
-    let context = ProjectTickContext::load_for_project_tick(&root, args, now, pool_draining);
-    if context
-        .initial_preparation
-        .schedule_plan
-        .should_process_due_schedules
-    {
-        ScheduleDispatch::process_due_schedules(&mut schedule_pm, &root, Utc::now());
-    }
-    let hub = Arc::new(FileServiceHub::new(&root)?);
-    let _ = git_ops::flush_git_integration_outbox(&root);
-    let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
-    let preparation =
-        context.build_project_tick_preparation(args, now, pool_draining, snapshot.daemon_health.as_ref());
-    let mut operations = FullProjectTickOperations {
-        hub: hub.clone(),
-        root: &root,
+    let mut driver = FullProjectTickDriver {
+        schedule_process_manager: ProcessManager::new(),
     };
-    let mut executor = ProjectTickOperationExecutor::new(args, &mut operations);
-    let execution_outcome =
-        execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
-
-    let health = serde_json::to_value(hub.daemon().health().await?)?;
-    let summary_input =
-        snapshot.into_summary_input(root, health, execution_outcome, true);
-    TickSummaryBuilder::build(hub.clone(), args, summary_input).await
+    run_project_tick(&root, args, ProjectTickRunMode::Full, pool_draining, &mut driver).await
 }
 
 pub(super) async fn slim_daemon_tick(
@@ -92,45 +66,14 @@ pub(super) async fn slim_daemon_tick(
     process_manager: &mut ProcessManager,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
-    let now = chrono::Local::now().time();
     let pool_draining = phase_pool::is_pool_draining(&root);
-    let context = ProjectTickContext::load_for_slim_tick(&root, args, now, pool_draining);
-    if !context.initial_preparation.schedule_plan.within_active_hours {
-        if let Some(message) = context.active_hours_skip_message() {
-            eprintln!("{}", message);
-        }
-    }
-
-    if context
-        .initial_preparation
-        .schedule_plan
-        .should_process_due_schedules
-    {
-        ScheduleDispatch::process_due_schedules(process_manager, &root, Utc::now());
-    }
-    let hub = Arc::new(FileServiceHub::new(&root)?);
-    let _ = git_ops::flush_git_integration_outbox(&root);
-    let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
-    let preparation = context.build_slim_tick_preparation(
-        args,
-        now,
-        pool_draining,
-        snapshot.daemon_health.as_ref().and_then(|health| health.max_agents),
-        process_manager.active_count(),
-    );
-    let mut operations = SlimProjectTickOperations {
-        hub: hub.clone(),
-        root: &root,
+    let mode = ProjectTickRunMode::Slim {
+        active_process_count: process_manager.active_count(),
+    };
+    let mut driver = SlimProjectTickDriver {
         process_manager,
     };
-    let mut executor = ProjectTickOperationExecutor::new(args, &mut operations);
-    let execution_outcome =
-        execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
-
-    let health = serde_json::to_value(hub.daemon().health().await?)?;
-    let summary_input =
-        snapshot.into_summary_input(root, health, execution_outcome, false);
-    TickSummaryBuilder::build(hub.clone(), args, summary_input).await
+    run_project_tick(&root, args, mode, pool_draining, &mut driver).await
 }
 
 #[cfg(test)]
