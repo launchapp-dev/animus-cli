@@ -48,6 +48,7 @@ impl ProjectTickContext {
             now,
             pool_draining,
             None,
+            None,
             0,
         );
 
@@ -79,6 +80,7 @@ impl ProjectTickContext {
         now: NaiveTime,
         pool_draining: bool,
         daemon_max_agents: Option<usize>,
+        daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> ProjectTickPreparation {
         ProjectTickPreparation::for_slim_tick(
@@ -87,6 +89,7 @@ impl ProjectTickContext {
             now,
             pool_draining,
             daemon_max_agents,
+            daemon_pool_size,
             active_process_count,
         )
     }

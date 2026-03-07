@@ -5,15 +5,52 @@ use orchestrator_core::{
     Complexity, DaemonHealth, OrchestratorTask, OrchestratorWorkflow, WorkflowStatus,
 };
 
+use crate::DaemonRuntimeOptions;
+
 pub fn ready_task_dispatch_limit(max_tasks_per_tick: usize, health: &DaemonHealth) -> usize {
+    dispatch_headroom(
+        max_tasks_per_tick,
+        health.active_agents,
+        effective_capacity_limit(&[
+            health.max_agents,
+            health.pool_size.map(|value| value as usize),
+        ]),
+    )
+}
+
+pub fn ready_task_dispatch_limit_for_options(
+    options: &DaemonRuntimeOptions,
+    active_agents: usize,
+    observed_max_agents: Option<usize>,
+    observed_pool_size: Option<usize>,
+) -> usize {
+    dispatch_headroom(
+        options.max_tasks_per_tick,
+        active_agents,
+        effective_capacity_limit(&[
+            options.pool_size,
+            options.max_agents,
+            observed_max_agents,
+            observed_pool_size,
+        ]),
+    )
+}
+
+fn effective_capacity_limit(candidates: &[Option<usize>]) -> Option<usize> {
+    candidates.iter().flatten().copied().min()
+}
+
+fn dispatch_headroom(
+    max_tasks_per_tick: usize,
+    active_agents: usize,
+    capacity_limit: Option<usize>,
+) -> usize {
     if max_tasks_per_tick == 0 {
         return 0;
     }
-    match health.max_agents {
-        Some(max_agents) => {
-            let available_agent_slots = max_agents.saturating_sub(health.active_agents);
-            max_tasks_per_tick.min(available_agent_slots)
-        }
+
+    match capacity_limit {
+        Some(limit) => max_tasks_per_tick.min(limit.saturating_sub(active_agents)),
         None => max_tasks_per_tick,
     }
 }
@@ -86,4 +123,63 @@ pub fn should_skip_dispatch(task: &OrchestratorTask) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use orchestrator_core::{DaemonHealth, DaemonStatus};
+
+    use super::{ready_task_dispatch_limit, ready_task_dispatch_limit_for_options};
+    use crate::DaemonRuntimeOptions;
+
+    #[test]
+    fn ready_task_dispatch_limit_uses_smallest_observed_capacity() {
+        let health = DaemonHealth {
+            healthy: true,
+            status: DaemonStatus::Running,
+            runner_connected: true,
+            runner_pid: Some(42),
+            active_agents: 1,
+            max_agents: Some(5),
+            project_root: Some("/tmp/project".to_string()),
+            daemon_pid: Some(24),
+            process_alive: Some(true),
+            pool_size: Some(3),
+            pool_utilization_percent: Some(33.0),
+            queued_tasks: Some(0),
+            total_agents_spawned: Some(1),
+            total_agents_completed: Some(0),
+            total_agents_failed: Some(0),
+        };
+
+        assert_eq!(ready_task_dispatch_limit(10, &health), 2);
+    }
+
+    #[test]
+    fn ready_task_dispatch_limit_for_options_uses_smallest_available_capacity() {
+        let options = DaemonRuntimeOptions {
+            pool_size: Some(6),
+            max_agents: Some(2),
+            max_tasks_per_tick: 5,
+            ..DaemonRuntimeOptions::default()
+        };
+
+        assert_eq!(
+            ready_task_dispatch_limit_for_options(&options, 1, Some(4), Some(3)),
+            1
+        );
+    }
+
+    #[test]
+    fn ready_task_dispatch_limit_for_options_returns_max_tasks_when_uncapped() {
+        let options = DaemonRuntimeOptions {
+            max_tasks_per_tick: 4,
+            ..DaemonRuntimeOptions::default()
+        };
+
+        assert_eq!(
+            ready_task_dispatch_limit_for_options(&options, 2, None, None),
+            4
+        );
+    }
 }

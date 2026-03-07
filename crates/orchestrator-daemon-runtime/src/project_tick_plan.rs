@@ -1,7 +1,7 @@
 use chrono::NaiveTime;
 use orchestrator_core::DaemonHealth;
 
-use crate::{ready_task_dispatch_limit, DaemonRuntimeOptions, ScheduleDispatch};
+use crate::{ready_task_dispatch_limit_for_options, DaemonRuntimeOptions, ScheduleDispatch};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickPlan {
@@ -44,7 +44,14 @@ impl ProjectTickPlan {
         daemon_health: Option<&DaemonHealth>,
     ) -> Self {
         let requested_ready_dispatch_limit = daemon_health
-            .map(|health| ready_task_dispatch_limit(options.max_tasks_per_tick, health))
+            .map(|health| {
+                ready_task_dispatch_limit_for_options(
+                    options,
+                    health.active_agents,
+                    health.max_agents,
+                    health.pool_size.map(|value| value as usize),
+                )
+            })
             .unwrap_or(options.max_tasks_per_tick);
 
         Self::build(
@@ -62,15 +69,15 @@ impl ProjectTickPlan {
         now: NaiveTime,
         pool_draining: bool,
         daemon_max_agents: Option<usize>,
+        daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
-        let requested_ready_dispatch_limit = options
-            .pool_size
-            .or(options.max_agents)
-            .or(daemon_max_agents)
-            .unwrap_or(options.max_tasks_per_tick)
-            .saturating_sub(active_process_count)
-            .min(options.max_tasks_per_tick);
+        let requested_ready_dispatch_limit = ready_task_dispatch_limit_for_options(
+            options,
+            active_process_count,
+            daemon_max_agents,
+            daemon_pool_size,
+        );
 
         Self::build(
             options,
@@ -185,7 +192,28 @@ mod tests {
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
             Some(8),
+            None,
             3,
+        );
+
+        assert_eq!(plan.ready_dispatch_limit, 1);
+    }
+
+    #[test]
+    fn slim_tick_uses_smallest_capacity_across_pool_and_max_agents() {
+        let plan = ProjectTickPlan::for_slim_tick(
+            &DaemonRuntimeOptions {
+                pool_size: Some(6),
+                max_agents: Some(2),
+                max_tasks_per_tick: 5,
+                ..DaemonRuntimeOptions::default()
+            },
+            None,
+            NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
+            false,
+            Some(4),
+            Some(3),
+            1,
         );
 
         assert_eq!(plan.ready_dispatch_limit, 1);

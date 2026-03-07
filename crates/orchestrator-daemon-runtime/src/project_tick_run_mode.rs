@@ -49,7 +49,14 @@ impl ProjectTickRunMode {
                 options,
                 now,
                 pool_draining,
-                snapshot.daemon_health.as_ref().and_then(|health| health.max_agents),
+                snapshot
+                    .daemon_health
+                    .as_ref()
+                    .and_then(|health| health.max_agents),
+                snapshot
+                    .daemon_health
+                    .as_ref()
+                    .and_then(|health| health.pool_size.map(|value| value as usize)),
                 active_process_count,
             ),
         }

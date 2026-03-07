@@ -40,16 +40,25 @@ impl ProjectTickPreparation {
         now: NaiveTime,
         pool_draining: bool,
         daemon_max_agents: Option<usize>,
+        daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
-        let schedule_plan =
-            ProjectTickPlan::for_slim_tick(options, active_hours, now, pool_draining, None, 0);
+        let schedule_plan = ProjectTickPlan::for_slim_tick(
+            options,
+            active_hours,
+            now,
+            pool_draining,
+            None,
+            None,
+            0,
+        );
         let tick_plan = ProjectTickPlan::for_slim_tick(
             options,
             active_hours,
             now,
             pool_draining,
             daemon_max_agents,
+            daemon_pool_size,
             active_process_count,
         );
         let tick_script = ProjectTickScript::build(ProjectTickMode::Slim, options, &tick_plan);
