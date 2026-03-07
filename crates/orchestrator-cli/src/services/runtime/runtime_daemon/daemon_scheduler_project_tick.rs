@@ -26,7 +26,6 @@ mod tick_executor;
 use bootstrap::*;
 use completion_reconciliation::CompletionReconciler;
 use reconciliation::*;
-use schedule_dispatch::ScheduleDispatch;
 use task_dispatch::*;
 use task_lifecycle::*;
 #[cfg(test)]

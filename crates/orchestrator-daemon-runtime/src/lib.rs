@@ -10,6 +10,7 @@ mod daemon_run_hooks;
 mod daemon_runtime_options;
 mod daemon_runtime_state;
 mod default_daemon_run_host;
+mod default_project_tick_driver;
 mod em_work_queue_state;
 mod execute_project_tick_script;
 mod hook_backed_project_tick_driver;
@@ -62,6 +63,10 @@ pub use daemon_run_hooks::DaemonRunHooks;
 pub use daemon_runtime_options::DaemonRuntimeOptions;
 pub use daemon_runtime_state::DaemonRuntimeState;
 pub use default_daemon_run_host::DefaultDaemonRunHost;
+pub use default_project_tick_driver::{
+    default_full_project_tick_driver, default_slim_project_tick_driver,
+    DefaultFullProjectTickDriver, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
+};
 pub use em_work_queue_state::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQueueState};
 pub use execute_project_tick_script::execute_project_tick_script;
 pub use hook_backed_project_tick_driver::HookBackedProjectTickDriver;

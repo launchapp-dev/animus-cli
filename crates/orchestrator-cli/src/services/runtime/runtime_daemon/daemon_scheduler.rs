@@ -4,13 +4,13 @@ use crate::shared::{ensure_ai_generated_tasks_for_requirements, requirement_has_
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    services::ServiceHub, DependencyType, FileServiceHub, RequirementItem, RequirementStatus,
+    services::ServiceHub, DependencyType, RequirementItem, RequirementStatus,
     RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput,
     TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
 pub(super) use orchestrator_daemon_runtime::{
-    run_project_tick_at, DaemonRuntimeOptions, HookBackedProjectTickDriver, ProcessManager,
-    ProjectTickHooks, ProjectTickRunMode, ProjectTickSummary, ProjectTickTime,
+    run_project_tick_at, DaemonRuntimeOptions, ProcessManager, ProjectTickRunMode,
+    ProjectTickSummary, ProjectTickTime,
 };
 pub(crate) use project_tick_ops::slim_project_tick_driver;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ pub(crate) use ::workflow_runner::runtime_support;
 use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
+#[cfg(test)]
+use orchestrator_core::FileServiceHub;
 #[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]
