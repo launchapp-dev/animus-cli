@@ -96,3 +96,110 @@ fn spawn_schedule_command(project_root: &str, schedule_id: &str, command: &str) 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use orchestrator_core::{
+        load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState,
+    };
+    use tempfile::tempdir;
+
+    use super::{spawn_schedule_command, ScheduleDispatch};
+
+    async fn wait_for_schedule_status(project_root: &std::path::Path, schedule_id: &str) -> String {
+        for _ in 0..50 {
+            let state = load_schedule_state(project_root).expect("schedule state should load");
+            if let Some(entry) = state.schedules.get(schedule_id) {
+                if entry.last_status != "dispatched" {
+                    return entry.last_status.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        load_schedule_state(project_root)
+            .expect("schedule state should load")
+            .schedules
+            .get(schedule_id)
+            .map(|entry| entry.last_status.clone())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn schedule_command_updates_completion_state_on_success() {
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let mut state = ScheduleState::default();
+        state.schedules.insert(
+            "nightly".to_string(),
+            ScheduleRunState {
+                last_run: Some(chrono::Utc::now()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+            },
+        );
+        save_schedule_state(project_root, &state).expect("initial schedule state should save");
+
+        spawn_schedule_command(project_root.to_string_lossy().as_ref(), "nightly", "exit 0")
+            .expect("command schedule should spawn");
+
+        let status = wait_for_schedule_status(project_root, "nightly").await;
+        assert_eq!(status, "completed");
+    }
+
+    #[tokio::test]
+    async fn schedule_command_updates_completion_state_on_failure() {
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let mut state = ScheduleState::default();
+        state.schedules.insert(
+            "nightly".to_string(),
+            ScheduleRunState {
+                last_run: Some(chrono::Utc::now()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+            },
+        );
+        save_schedule_state(project_root, &state).expect("initial schedule state should save");
+
+        spawn_schedule_command(project_root.to_string_lossy().as_ref(), "nightly", "exit 1")
+            .expect("command schedule should spawn");
+
+        let status = wait_for_schedule_status(project_root, "nightly").await;
+        assert_eq!(status, "failed");
+    }
+
+    #[test]
+    fn update_completion_state_overwrites_existing_status() {
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let mut state = ScheduleState::default();
+        state.schedules.insert(
+            "nightly".to_string(),
+            ScheduleRunState {
+                last_run: Some(chrono::Utc::now()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+            },
+        );
+        save_schedule_state(project_root, &state).expect("initial schedule state should save");
+
+        ScheduleDispatch::update_completion_state(
+            project_root.to_string_lossy().as_ref(),
+            "nightly",
+            "completed",
+        );
+
+        let loaded = load_schedule_state(project_root).expect("schedule state should load");
+        assert_eq!(
+            loaded
+                .schedules
+                .get("nightly")
+                .expect("nightly state should exist")
+                .last_status,
+            "completed"
+        );
+    }
+}

@@ -204,6 +204,11 @@ fn is_within_active_hours(active_hours: &str, now: chrono::NaiveTime) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::json;
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -256,9 +261,7 @@ mod tests {
         let error = cron_matches("*/0 * * * *", now).expect_err("invalid cron should fail");
         let message = error.to_string().to_ascii_lowercase();
         assert!(
-            message.contains("step")
-                || message.contains("invalid")
-                || message.contains("range"),
+            message.contains("step") || message.contains("invalid") || message.contains("range"),
             "unexpected invalid cron error: {error}"
         );
     }
@@ -364,6 +367,112 @@ mod tests {
         let due = evaluate_schedules(&schedules, &state, now);
 
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn process_due_schedules_records_pipeline_dispatch_and_input() {
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z"
+            .parse()
+            .expect("timestamp should parse");
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.schedules.push(orchestrator_core::WorkflowSchedule {
+            id: "nightly".to_string(),
+            cron: "30 12 * * *".to_string(),
+            pipeline: Some("standard".to_string()),
+            command: None,
+            input: Some(json!({"scope":"nightly"})),
+            enabled: true,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config)
+            .expect("workflow config should be written");
+
+        let pipeline_calls = Arc::new(Mutex::new(Vec::new()));
+        let pipeline_calls_ref = pipeline_calls.clone();
+
+        ScheduleDispatch::process_due_schedules(
+            project_root.to_string_lossy().as_ref(),
+            now,
+            move |schedule_id, pipeline_id, input_json| {
+                pipeline_calls_ref.lock().expect("pipeline lock").push((
+                    schedule_id.to_string(),
+                    pipeline_id.to_string(),
+                    input_json.map(str::to_string),
+                ));
+                Ok(())
+            },
+            |_schedule_id, _command| unreachable!("command schedule should not run"),
+        );
+
+        let calls = pipeline_calls.lock().expect("pipeline lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "nightly");
+        assert_eq!(calls[0].1, "standard");
+        assert_eq!(calls[0].2.as_deref(), Some(r#"{"scope":"nightly"}"#));
+
+        let state =
+            orchestrator_core::load_schedule_state(project_root).expect("schedule state loads");
+        let entry = state
+            .schedules
+            .get("nightly")
+            .expect("nightly schedule state should exist");
+        assert_eq!(entry.last_status, "dispatched");
+        assert_eq!(entry.run_count, 1);
+        assert_eq!(entry.last_run, Some(now));
+    }
+
+    #[test]
+    fn process_due_schedules_records_command_dispatch() {
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z"
+            .parse()
+            .expect("timestamp should parse");
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.schedules.push(orchestrator_core::WorkflowSchedule {
+            id: "cleanup".to_string(),
+            cron: "30 12 * * *".to_string(),
+            pipeline: None,
+            command: Some("echo cleanup".to_string()),
+            input: None,
+            enabled: true,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config)
+            .expect("workflow config should be written");
+
+        let command_calls = Arc::new(Mutex::new(Vec::new()));
+        let command_calls_ref = command_calls.clone();
+
+        ScheduleDispatch::process_due_schedules(
+            project_root.to_string_lossy().as_ref(),
+            now,
+            |_schedule_id, _pipeline_id, _input_json| {
+                unreachable!("pipeline schedule should not run")
+            },
+            move |schedule_id, command| {
+                command_calls_ref
+                    .lock()
+                    .expect("command lock")
+                    .push((schedule_id.to_string(), command.to_string()));
+                Ok(())
+            },
+        );
+
+        let calls = command_calls.lock().expect("command lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "cleanup");
+        assert_eq!(calls[0].1, "echo cleanup");
+
+        let state =
+            orchestrator_core::load_schedule_state(project_root).expect("schedule state loads");
+        let entry = state
+            .schedules
+            .get("cleanup")
+            .expect("cleanup schedule state should exist");
+        assert_eq!(entry.last_status, "dispatched");
+        assert_eq!(entry.run_count, 1);
+        assert_eq!(entry.last_run, Some(now));
     }
 
     #[test]

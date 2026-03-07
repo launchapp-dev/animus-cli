@@ -19,4 +19,5 @@ serde_json = "1.0"
 workflow-runner = { path = "../workflow-runner" }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
