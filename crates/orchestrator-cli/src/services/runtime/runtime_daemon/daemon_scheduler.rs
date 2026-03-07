@@ -2,11 +2,12 @@ use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
 use crate::services::runtime::runtime_daemon::append_daemon_event_fire_and_forget;
 use crate::services::runtime::runtime_daemon::daemon_process_manager::ProcessManager;
-use crate::shared::{
-    ensure_ai_generated_tasks_for_requirements, requirement_has_active_tasks,
-};
+use crate::shared::{ensure_ai_generated_tasks_for_requirements, requirement_has_active_tasks};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+pub(super) use orchestrator_daemon_runtime::{
+    DaemonRuntimeOptions, ProjectTickSummary, RequirementLifecycleTransition, TaskStateTransition,
+};
 use orchestrator_core::{
     services::ServiceHub, DependencyType, FileServiceHub, RequirementItem, RequirementStatus,
     RequirementsDraftInput, RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput,
@@ -30,12 +31,12 @@ mod git_ops;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
-pub(crate) use ::workflow_runner::phase_failover;
-pub(crate) use ::workflow_runner::phase_targets;
-pub(crate) use ::workflow_runner::runtime_support;
 use ::workflow_runner::executor::{
     PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionRunResult,
 };
+pub(crate) use ::workflow_runner::phase_failover;
+pub(crate) use ::workflow_runner::phase_targets;
+pub(crate) use ::workflow_runner::runtime_support;
 use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
@@ -46,59 +47,7 @@ use runtime_support::WorkflowPipelineRuntimeRecord;
 #[cfg(test)]
 use runtime_support::WorkflowRuntimeConfigLite;
 
-#[derive(Debug, Clone)]
-pub(super) struct ProjectTickSummary {
-    pub(super) project_root: String,
-    pub(super) started_daemon: bool,
-    pub(super) health: Value,
-    pub(super) tasks_total: usize,
-    pub(super) tasks_ready: usize,
-    pub(super) tasks_in_progress: usize,
-    pub(super) tasks_blocked: usize,
-    pub(super) tasks_done: usize,
-    pub(super) stale_in_progress_count: usize,
-    pub(super) stale_in_progress_threshold_hours: u64,
-    pub(super) stale_in_progress_task_ids: Vec<String>,
-    pub(super) workflows_running: usize,
-    pub(super) workflows_completed: usize,
-    pub(super) workflows_failed: usize,
-    pub(super) resumed_workflows: usize,
-    pub(super) cleaned_stale_workflows: usize,
-    pub(super) reconciled_stale_tasks: usize,
-    pub(super) started_ready_workflows: usize,
-    pub(super) executed_workflow_phases: usize,
-    pub(super) failed_workflow_phases: usize,
-    pub(super) phase_execution_events: Vec<PhaseExecutionEvent>,
-    pub(super) requirement_lifecycle_transitions: Vec<RequirementLifecycleTransition>,
-    pub(super) task_state_transitions: Vec<TaskStateTransition>,
-}
-
 use ::workflow_runner::executor::PhaseExecutionEvent;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RequirementLifecycleTransition {
-    pub(super) requirement_id: String,
-    pub(super) requirement_title: String,
-    pub(super) phase: String,
-    pub(super) status: String,
-    pub(super) transition_at: String,
-    #[serde(default)]
-    pub(super) comment: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct TaskStateTransition {
-    pub(super) task_id: String,
-    pub(super) from_status: String,
-    pub(super) to_status: String,
-    pub(super) changed_at: String,
-    #[serde(default)]
-    pub(super) workflow_id: Option<String>,
-    #[serde(default)]
-    pub(super) phase_id: Option<String>,
-    #[serde(default)]
-    pub(super) selection_source: Option<String>,
-}
 
 #[cfg(test)]
 fn load_workflow_runtime_config(project_root: &str) -> WorkflowRuntimeConfigLite {
@@ -283,7 +232,11 @@ mod tests {
         hub: Arc<dyn ServiceHub>,
         project_root: &str,
     ) -> Result<usize> {
-        project_tick_ops::reconciliation::reconcile_dependency_gate_tasks_for_project(hub, project_root).await
+        project_tick_ops::reconciliation::reconcile_dependency_gate_tasks_for_project(
+            hub,
+            project_root,
+        )
+        .await
     }
 
     async fn reconcile_stale_in_progress_tasks_for_project(
@@ -291,7 +244,12 @@ mod tests {
         project_root: &str,
         stale_threshold_hours: u64,
     ) -> Result<usize> {
-        project_tick_ops::reconciliation::reconcile_stale_in_progress_tasks_for_project(hub, project_root, stale_threshold_hours).await
+        project_tick_ops::reconciliation::reconcile_stale_in_progress_tasks_for_project(
+            hub,
+            project_root,
+            stale_threshold_hours,
+        )
+        .await
     }
 
     async fn run_ready_task_workflows_for_project(
@@ -299,9 +257,13 @@ mod tests {
         project_root: &str,
         max_tasks_per_tick: usize,
     ) -> Result<usize> {
-        project_tick_ops::task_dispatch::run_ready_task_workflows_for_project(hub, project_root, max_tasks_per_tick)
-            .await
-            .map(|summary| summary.started)
+        project_tick_ops::task_dispatch::run_ready_task_workflows_for_project(
+            hub,
+            project_root,
+            max_tasks_per_tick,
+        )
+        .await
+        .map(|summary| summary.started)
     }
 
     use protocol::test_utils::EnvVarGuard;
@@ -378,7 +340,10 @@ mod tests {
             PhaseTargetPlanner::tool_for_model_id("opencode-x"),
             "opencode"
         );
-        assert_eq!(PhaseTargetPlanner::tool_for_model_id("glm-4.5"), "oai-runner");
+        assert_eq!(
+            PhaseTargetPlanner::tool_for_model_id("glm-4.5"),
+            "oai-runner"
+        );
         assert_eq!(
             PhaseTargetPlanner::tool_for_model_id("minimax-m1"),
             "oai-runner"
@@ -391,7 +356,9 @@ mod tests {
 
     #[test]
     fn phase_tool_defaults_to_model_provider() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
         let _global = EnvVarGuard::set("AO_PHASE_TOOL", None);
         let _phase = EnvVarGuard::set("AO_PHASE_TOOL_RESEARCH", None);
@@ -419,7 +386,9 @@ mod tests {
 
     #[test]
     fn phase_tool_respects_phase_override_precedence() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
         let _global = EnvVarGuard::set("AO_PHASE_TOOL", Some("claude"));
         let _research = EnvVarGuard::set("AO_PHASE_TOOL_RESEARCH", Some("gemini"));
@@ -447,7 +416,9 @@ mod tests {
 
     #[test]
     fn resolve_phase_execution_target_falls_back_to_write_capable_tool() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", None);
         let _fallback_model = EnvVarGuard::set("AO_PHASE_MODEL_FILE_EDIT", None);
         let _fallback_tool = EnvVarGuard::set("AO_PHASE_TOOL_FILE_EDIT", None);
@@ -459,8 +430,13 @@ mod tests {
             is_ui_ux: true,
             ..Default::default()
         };
-        let (tool, model) =
-            PhaseTargetPlanner::resolve_phase_execution_target("wireframe", None, None, None, &write_caps);
+        let (tool, model) = PhaseTargetPlanner::resolve_phase_execution_target(
+            "wireframe",
+            None,
+            None,
+            None,
+            &write_caps,
+        );
         assert!(
             protocol::tool_supports_repository_writes(&tool),
             "write phase should get a write-capable tool, got: {tool}"
@@ -470,22 +446,31 @@ mod tests {
 
     #[test]
     fn resolve_phase_execution_target_skips_write_enforcement_for_read_only_phase() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", None);
         let _phase_model = EnvVarGuard::set("AO_PHASE_MODEL_UI_UX", Some("gemini-2.5-pro"));
         let _fallback_model = EnvVarGuard::set("AO_PHASE_MODEL_FILE_EDIT", None);
         let _fallback_tool = EnvVarGuard::set("AO_PHASE_TOOL_FILE_EDIT", None);
 
         let caps = PhaseCapabilities::defaults_for_phase("ux-research");
-        let (tool, model) =
-            PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None, &caps);
+        let (tool, model) = PhaseTargetPlanner::resolve_phase_execution_target(
+            "ux-research",
+            None,
+            None,
+            None,
+            &caps,
+        );
         assert_eq!(tool, "gemini");
         assert_eq!(model, "gemini-2.5-pro");
     }
 
     #[test]
     fn resolve_phase_execution_target_prefers_runtime_overrides() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
         let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
         let (tool, model) = PhaseTargetPlanner::resolve_phase_execution_target(
@@ -501,7 +486,9 @@ mod tests {
 
     #[test]
     fn resolve_phase_execution_target_uses_complexity_for_review_model() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
         let _phase_model = EnvVarGuard::set("AO_PHASE_MODEL_CODE_REVIEW", None);
         let _global_model = EnvVarGuard::set("AO_PHASE_MODEL", None);
@@ -528,21 +515,27 @@ mod tests {
 
     #[test]
     fn bootstrap_max_requirements_defaults_to_uncapped() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _max_requirements = EnvVarGuard::set("AO_BOOTSTRAP_MAX_REQUIREMENTS", None);
         assert_eq!(bootstrap_max_requirements(), usize::MAX);
     }
 
     #[test]
     fn bootstrap_max_requirements_accepts_explicit_cap() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _max_requirements = EnvVarGuard::set("AO_BOOTSTRAP_MAX_REQUIREMENTS", Some("12"));
         assert_eq!(bootstrap_max_requirements(), 12);
     }
 
     #[test]
     fn phase_runner_attempts_defaults_and_clamps() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
 
         {
             let _attempts = EnvVarGuard::set("AO_PHASE_RUN_ATTEMPTS", None);
@@ -567,7 +560,9 @@ mod tests {
 
     #[test]
     fn phase_max_continuations_defaults_and_clamps() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
 
         {
             let _env = EnvVarGuard::set("AO_PHASE_MAX_CONTINUATIONS", None);
@@ -639,7 +634,9 @@ mod tests {
 
     #[test]
     fn build_phase_execution_targets_respects_fallback_models() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _allow = EnvVarGuard::set("AO_ALLOW_NON_EDITING_PHASE_TOOL", Some("true"));
         let _global_fallback = EnvVarGuard::set(
             "AO_PHASE_FALLBACK_MODELS",
@@ -770,10 +767,11 @@ mod tests {
 
     #[test]
     fn inject_codex_search_launch_flag_enabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _search = EnvVarGuard::set("AO_CODEX_WEB_SEARCH", None);
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_search_launch_flag(&mut contract, "codex", None);
         let args = contract
@@ -794,10 +792,11 @@ mod tests {
 
     #[test]
     fn inject_codex_search_launch_flag_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _search = EnvVarGuard::set("AO_CODEX_WEB_SEARCH", Some("false"));
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_search_launch_flag(&mut contract, "codex", None);
         let args = contract
@@ -811,10 +810,11 @@ mod tests {
 
     #[test]
     fn inject_codex_reasoning_effort_override() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _effort = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("xhigh"));
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_reasoning_effort(&mut contract, "codex", None);
         let args = contract
@@ -830,10 +830,11 @@ mod tests {
 
     #[test]
     fn inject_codex_reasoning_effort_does_not_duplicate_existing_override() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _effort = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("xhigh"));
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_reasoning_effort(&mut contract, "codex", None);
         inject_codex_reasoning_effort(&mut contract, "codex", None);
@@ -853,10 +854,11 @@ mod tests {
 
     #[test]
     fn inject_codex_network_access_enabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _network = EnvVarGuard::set("AO_CODEX_NETWORK_ACCESS", None);
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_network_access(&mut contract, "codex", None);
         let args = contract
@@ -872,10 +874,11 @@ mod tests {
 
     #[test]
     fn inject_codex_network_access_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _network = EnvVarGuard::set("AO_CODEX_NETWORK_ACCESS", Some("false"));
-        let mut contract =
-            build_runtime_contract("codex", default_codex_model(), "hello")
+        let mut contract = build_runtime_contract("codex", default_codex_model(), "hello")
             .expect("runtime contract should build");
         inject_codex_network_access(&mut contract, "codex", None);
         let args = contract
@@ -890,7 +893,9 @@ mod tests {
 
     #[test]
     fn inject_cli_launch_overrides_disables_claude_bypass_permissions_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
@@ -908,7 +913,9 @@ mod tests {
 
     #[test]
     fn inject_cli_launch_overrides_respects_claude_bypass_enable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
@@ -926,7 +933,9 @@ mod tests {
 
     #[test]
     fn inject_cli_launch_overrides_respects_claude_bypass_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
@@ -944,7 +953,9 @@ mod tests {
 
     #[test]
     fn inject_cli_launch_overrides_treats_empty_claude_bypass_value_as_disabled() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
         let mut contract = build_runtime_contract("claude", "claude-opus-4-1", "hello")
             .expect("runtime contract should build");
@@ -962,7 +973,9 @@ mod tests {
 
     #[test]
     fn inject_cli_launch_overrides_applies_claude_extra_args_from_env() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _extra_args = EnvVarGuard::set(
             "AO_CLAUDE_EXTRA_ARGS_JSON",
             Some("[\"--max-turns\", \"2\"]"),
@@ -1077,7 +1090,9 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_from_vision_materializes_requirements_and_tasks() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _max_requirements = EnvVarGuard::set("AO_BOOTSTRAP_MAX_REQUIREMENTS", Some("4"));
         let hub = Arc::new(InMemoryServiceHub::new());
         hub.planning()
@@ -1631,10 +1646,13 @@ mod tests {
             .await
             .expect("task should be created");
 
-        let execution_cwd =
-            git_ops::ensure_task_execution_cwd(hub.clone() as Arc<dyn ServiceHub>, &project_root, &task)
-                .await
-                .expect("execution cwd should be provisioned");
+        let execution_cwd = git_ops::ensure_task_execution_cwd(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root,
+            &task,
+        )
+        .await
+        .expect("execution cwd should be provisioned");
 
         assert!(execution_cwd.contains("/.ao/"));
         assert!(execution_cwd.contains("/worktrees/"));
@@ -1839,7 +1857,9 @@ mod tests {
 
     #[tokio::test]
     async fn project_tick_reports_requirement_lifecycle_transitions() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
 
         let temp = TempDir::new().expect("temp dir");
@@ -2013,7 +2033,7 @@ pub(super) async fn drain_running_workflow_phases_for_project(
 
 #[cfg(test)]
 pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
-    project_tick_ops::project_tick(root, args).await
+    project_tick_ops::project_tick(root, &runtime_options_from_cli(args)).await
 }
 
 pub(super) async fn slim_project_tick(
@@ -2021,7 +2041,29 @@ pub(super) async fn slim_project_tick(
     args: &DaemonRunArgs,
     process_manager: &mut ProcessManager,
 ) -> Result<ProjectTickSummary> {
-    project_tick_ops::slim_daemon_tick(root, args, process_manager).await
+    project_tick_ops::slim_daemon_tick(root, &runtime_options_from_cli(args), process_manager).await
+}
+
+fn runtime_options_from_cli(args: &DaemonRunArgs) -> DaemonRuntimeOptions {
+    DaemonRuntimeOptions {
+        pool_size: args.pool_size,
+        max_agents: args.max_agents,
+        interval_secs: args.interval_secs,
+        ai_task_generation: args.ai_task_generation,
+        auto_run_ready: args.auto_run_ready,
+        auto_merge: args.auto_merge,
+        auto_pr: args.auto_pr,
+        auto_commit_before_merge: args.auto_commit_before_merge,
+        auto_prune_worktrees_after_merge: args.auto_prune_worktrees_after_merge,
+        startup_cleanup: args.startup_cleanup,
+        resume_interrupted: args.resume_interrupted,
+        reconcile_stale: args.reconcile_stale,
+        stale_threshold_hours: args.stale_threshold_hours,
+        max_tasks_per_tick: args.max_tasks_per_tick,
+        phase_timeout_secs: args.phase_timeout_secs,
+        idle_timeout_secs: args.idle_timeout_secs,
+        once: args.once,
+    }
 }
 
 pub(super) async fn recover_orphaned_running_workflows_on_startup(

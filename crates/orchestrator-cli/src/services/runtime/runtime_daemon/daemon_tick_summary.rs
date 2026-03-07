@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use orchestrator_daemon_runtime::{DaemonRuntimeOptions, ProjectTickSummary};
 use orchestrator_core::{services::ServiceHub, OrchestratorTask, RequirementItem, WorkflowStatus};
 
 use super::{
     collect_requirement_lifecycle_transitions, collect_task_state_transitions,
-    is_terminally_completed_workflow, ProjectTickSummary, ReadyTaskWorkflowStart,
+    is_terminally_completed_workflow, ReadyTaskWorkflowStart,
 };
-use crate::cli_types::DaemonRunArgs;
 use crate::services::runtime::stale_in_progress_summary;
 use workflow_runner::executor::PhaseExecutionEvent;
 
@@ -17,7 +17,7 @@ impl TickSummaryBuilder {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn build(
         hub: Arc<dyn ServiceHub>,
-        args: &DaemonRunArgs,
+        args: &DaemonRuntimeOptions,
         project_root: String,
         started_daemon: bool,
         health: serde_json::Value,

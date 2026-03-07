@@ -57,7 +57,10 @@ fn completion_reason(completion: &CompletedProcess) -> String {
 }
 
 #[cfg(test)]
-pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
+pub(super) async fn project_tick(
+    root: &str,
+    args: &DaemonRuntimeOptions,
+) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
     let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(&root));
     let mut schedule_pm = ProcessManager::new();
@@ -176,7 +179,7 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
 
 pub(super) async fn slim_daemon_tick(
     root: &str,
-    args: &DaemonRunArgs,
+    args: &DaemonRuntimeOptions,
     process_manager: &mut ProcessManager,
 ) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);

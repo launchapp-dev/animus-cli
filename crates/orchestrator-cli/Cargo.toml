@@ -21,6 +21,7 @@ orchestrator-web-contracts = { path = "../orchestrator-web-contracts" }
 orchestrator-web-server = { path = "../orchestrator-web-server", features = ["graphql"] }
 protocol = { path = "../protocol" }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
+orchestrator-daemon-runtime = { workspace = true }
 workflow-runner = { path = "../workflow-runner" }
 dirs = "5.0"
 uuid = { version = "1", features = ["v4"] }

@@ -1,0 +1,46 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonRuntimeOptions {
+    pub pool_size: Option<usize>,
+    pub max_agents: Option<usize>,
+    pub interval_secs: u64,
+    pub ai_task_generation: bool,
+    pub auto_run_ready: bool,
+    pub auto_merge: Option<bool>,
+    pub auto_pr: Option<bool>,
+    pub auto_commit_before_merge: Option<bool>,
+    pub auto_prune_worktrees_after_merge: Option<bool>,
+    pub startup_cleanup: bool,
+    pub resume_interrupted: bool,
+    pub reconcile_stale: bool,
+    pub stale_threshold_hours: u64,
+    pub max_tasks_per_tick: usize,
+    pub phase_timeout_secs: Option<u64>,
+    pub idle_timeout_secs: Option<u64>,
+    pub once: bool,
+}
+
+impl Default for DaemonRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            pool_size: None,
+            max_agents: None,
+            interval_secs: 5,
+            ai_task_generation: true,
+            auto_run_ready: true,
+            auto_merge: None,
+            auto_pr: None,
+            auto_commit_before_merge: None,
+            auto_prune_worktrees_after_merge: None,
+            startup_cleanup: true,
+            resume_interrupted: true,
+            reconcile_stale: true,
+            stale_threshold_hours: 24,
+            max_tasks_per_tick: 2,
+            phase_timeout_secs: None,
+            idle_timeout_secs: None,
+            once: false,
+        }
+    }
+}
