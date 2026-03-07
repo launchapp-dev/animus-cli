@@ -238,6 +238,38 @@ fn spawn_schedule_command(
     Ok(())
 }
 
+fn parse_active_hours(spec: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = spec.trim().split('-').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let parse_minutes = |s: &str| -> Option<u32> {
+        let hm: Vec<&str> = s.trim().split(':').collect();
+        if hm.len() != 2 {
+            return None;
+        }
+        let h: u32 = hm[0].parse().ok()?;
+        let m: u32 = hm[1].parse().ok()?;
+        if h >= 24 || m >= 60 {
+            return None;
+        }
+        Some(h * 60 + m)
+    };
+    Some((parse_minutes(parts[0])?, parse_minutes(parts[1])?))
+}
+
+fn is_within_active_hours(active_hours: &str, now: chrono::NaiveTime) -> bool {
+    let Some((start, end)) = parse_active_hours(active_hours) else {
+        return true;
+    };
+    let now_minutes = now.hour() * 60 + now.minute();
+    if start <= end {
+        now_minutes >= start && now_minutes < end
+    } else {
+        now_minutes >= start || now_minutes < end
+    }
+}
+
 fn update_schedule_completion_state(project_root: &str, schedule_id: &str, status: &str) {
     let path = std::path::Path::new(project_root);
     let mut state = orchestrator_core::load_schedule_state(path).unwrap_or_default();
@@ -518,7 +550,24 @@ pub(super) async fn slim_daemon_tick(
         }
     }
 
-    if !pool_draining && args.auto_run_ready {
+    let workflow_config = orchestrator_core::load_workflow_config_or_default(Path::new(&root));
+    let active_hours = workflow_config.config.daemon.as_ref().and_then(|d| d.active_hours.clone());
+    let within_active_hours = match active_hours.as_deref() {
+        Some(spec) => {
+            let now = chrono::Local::now().time();
+            let active = is_within_active_hours(spec, now);
+            if !active {
+                eprintln!(
+                    "{}: outside active_hours ({}), skipping workflow dispatch",
+                    protocol::ACTOR_DAEMON, spec
+                );
+            }
+            active
+        }
+        None => true,
+    };
+
+    if !pool_draining && args.auto_run_ready && within_active_hours {
         let _ = retry_failed_task_workflows(hub.clone()).await;
         let _ = promote_backlog_tasks_to_ready(hub.clone(), &root).await;
     }
@@ -529,7 +578,7 @@ pub(super) async fn slim_daemon_tick(
         .or(args.max_agents)
         .or_else(|| daemon_health.and_then(|health| health.max_agents))
         .unwrap_or(args.max_tasks_per_tick);
-    let ready_dispatch_limit = if !pool_draining && args.auto_run_ready {
+    let ready_dispatch_limit = if !pool_draining && args.auto_run_ready && within_active_hours {
         configured_max_agents
             .saturating_sub(process_manager.active_count())
             .min(args.max_tasks_per_tick)
@@ -2174,5 +2223,50 @@ thinking...
         let due = evaluate_schedules(&schedules, &state, now);
 
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn active_hours_normal_range() {
+        let t = |h, m| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert!(is_within_active_hours("09:00-17:00", t(9, 0)));
+        assert!(is_within_active_hours("09:00-17:00", t(12, 30)));
+        assert!(is_within_active_hours("09:00-17:00", t(16, 59)));
+        assert!(!is_within_active_hours("09:00-17:00", t(17, 0)));
+        assert!(!is_within_active_hours("09:00-17:00", t(8, 59)));
+        assert!(!is_within_active_hours("09:00-17:00", t(0, 0)));
+    }
+
+    #[test]
+    fn active_hours_wrap_around() {
+        let t = |h, m| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert!(is_within_active_hours("22:00-06:00", t(22, 0)));
+        assert!(is_within_active_hours("22:00-06:00", t(23, 59)));
+        assert!(is_within_active_hours("22:00-06:00", t(0, 0)));
+        assert!(is_within_active_hours("22:00-06:00", t(5, 59)));
+        assert!(!is_within_active_hours("22:00-06:00", t(6, 0)));
+        assert!(!is_within_active_hours("22:00-06:00", t(12, 0)));
+        assert!(!is_within_active_hours("22:00-06:00", t(21, 59)));
+    }
+
+    #[test]
+    fn active_hours_invalid_returns_true() {
+        let t = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        assert!(is_within_active_hours("invalid", t));
+        assert!(is_within_active_hours("", t));
+        assert!(is_within_active_hours("25:00-06:00", t));
+    }
+
+    #[test]
+    fn parse_active_hours_valid() {
+        assert_eq!(parse_active_hours("09:00-17:00"), Some((540, 1020)));
+        assert_eq!(parse_active_hours("00:00-06:00"), Some((0, 360)));
+        assert_eq!(parse_active_hours("22:00-06:00"), Some((1320, 360)));
+    }
+
+    #[test]
+    fn parse_active_hours_invalid() {
+        assert_eq!(parse_active_hours("invalid"), None);
+        assert_eq!(parse_active_hours("25:00-06:00"), None);
+        assert_eq!(parse_active_hours("09:00"), None);
     }
 }
