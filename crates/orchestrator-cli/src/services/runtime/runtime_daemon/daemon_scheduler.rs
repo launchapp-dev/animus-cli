@@ -9,17 +9,14 @@ use orchestrator_core::DependencyType;
 use orchestrator_core::{
     services::ServiceHub, RequirementItem, RequirementStatus, RequirementsDraftInput,
     RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput, TaskStatus, TaskType,
-    WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
 pub(super) use orchestrator_daemon_runtime::{
-    dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
-    is_merge_gate_block, merge_blocked_reason, run_project_tick_at, set_task_blocked_with_reason,
-    DaemonRuntimeOptions, ProcessManager, ProjectTickRunMode, ProjectTickSummary, ProjectTickTime,
-    MERGE_GATE_PREFIX,
+    dependency_blocked_reason, dependency_gate_issues_for_task, run_project_tick_at,
+    set_task_blocked_with_reason, sync_task_status_for_workflow_result, DaemonRuntimeOptions,
+    ProcessManager, ProjectTickRunMode, ProjectTickSummary, ProjectTickTime,
 };
 pub(crate) use project_tick_ops::slim_project_tick_driver;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,6 +42,10 @@ use phase_targets::PhaseTargetPlanner;
 #[cfg(test)]
 use orchestrator_core::FileServiceHub;
 #[cfg(test)]
+use orchestrator_daemon_runtime::is_dependency_gate_block;
+#[cfg(test)]
+use orchestrator_core::{WorkflowRunInput, WorkflowStatus};
+#[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]
 use runtime_support::WorkflowPipelineRuntimeRecord;
@@ -52,6 +53,8 @@ use runtime_support::WorkflowPipelineRuntimeRecord;
 use runtime_support::WorkflowRuntimeConfigLite;
 #[cfg(test)]
 use serde_json::Value;
+#[cfg(test)]
+use std::collections::HashSet;
 
 #[cfg(test)]
 fn resolve_phase_runtime_settings(

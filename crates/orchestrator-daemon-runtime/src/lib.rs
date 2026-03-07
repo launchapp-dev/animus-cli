@@ -51,11 +51,13 @@ mod runner_event;
 mod runner_ready_dispatch;
 mod schedule_dispatch;
 mod subject_execution_fact;
+mod sync_task_status_for_workflow_result;
 mod task_blocking;
 mod task_lifecycle_support;
 mod task_selection_source;
 mod task_state_transition;
 mod tick_summary_builder;
+mod workflow_state_reconciler;
 
 pub use collect_requirement_lifecycle_transitions::collect_requirement_lifecycle_transitions;
 pub use collect_task_state_transitions::collect_task_state_transitions;
@@ -128,6 +130,7 @@ pub use runner_ready_dispatch::dispatch_ready_tasks_via_runner;
 pub use schedule_dispatch::ScheduleDispatch;
 pub use protocol::SubjectDispatch;
 pub use subject_execution_fact::SubjectExecutionFact;
+pub use sync_task_status_for_workflow_result::sync_task_status_for_workflow_result;
 pub use task_blocking::{
     dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
     is_merge_gate_block, merge_blocked_reason, set_task_blocked_with_reason,
@@ -137,3 +140,4 @@ pub use task_lifecycle_support::{promote_backlog_tasks_to_ready, retry_failed_ta
 pub use task_selection_source::TaskSelectionSource;
 pub use task_state_transition::TaskStateTransition;
 pub use tick_summary_builder::TickSummaryBuilder;
+pub use workflow_state_reconciler::WorkflowStateReconciler;
