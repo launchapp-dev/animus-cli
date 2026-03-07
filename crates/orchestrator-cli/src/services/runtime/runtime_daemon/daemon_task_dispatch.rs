@@ -1,44 +1,13 @@
 use super::*;
 pub use orchestrator_daemon_runtime::{
-    active_workflow_task_ids, is_terminally_completed_workflow, routing_complexity_for_task,
-    should_skip_dispatch, workflow_current_phase_id, ReadyTaskWorkflowStart,
+    active_workflow_task_ids, is_terminally_completed_workflow, plan_ready_task_dispatch,
+    routing_complexity_for_task, should_skip_dispatch, workflow_current_phase_id, EmWorkQueueEntry,
+    EmWorkQueueEntryStatus, EmWorkQueueState, ReadyTaskWorkflowStart,
     ReadyTaskWorkflowStartSummary, TaskSelectionSource,
 };
 
 const EM_WORK_QUEUE_STATE_FILE: &str = "em-work-queue.json";
 const MAX_DISPATCH_RETRIES: u32 = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EmWorkQueueEntryStatus {
-    Pending,
-    Assigned,
-    #[serde(other)]
-    Unknown,
-}
-
-impl Default for EmWorkQueueEntryStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmWorkQueueEntry {
-    pub task_id: String,
-    #[serde(default)]
-    pub status: EmWorkQueueEntryStatus,
-    #[serde(default)]
-    pub workflow_id: Option<String>,
-    #[serde(default)]
-    pub assigned_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct EmWorkQueueState {
-    #[serde(default)]
-    pub entries: Vec<EmWorkQueueEntry>,
-}
 
 pub fn em_work_queue_state_path(project_root: &str) -> Result<PathBuf> {
     Ok(git_ops::daemon_repo_runtime_root(project_root)?
@@ -579,13 +548,6 @@ pub async fn run_ready_task_workflows_for_project(
     }
 
     let workflows = hub.workflows().list().await.unwrap_or_default();
-    let mut active_task_ids = active_workflow_task_ids(&workflows);
-    let completed_task_ids: HashSet<String> = workflows
-        .iter()
-        .filter(|workflow| is_terminally_completed_workflow(workflow))
-        .map(|workflow| workflow.task_id.clone())
-        .collect();
-
     let candidates = hub.tasks().list_prioritized().await?;
     let task_lookup: std::collections::HashMap<String, orchestrator_core::OrchestratorTask> =
         candidates
@@ -593,108 +555,43 @@ pub async fn run_ready_task_workflows_for_project(
             .cloned()
             .map(|task| (task.id.clone(), task))
             .collect();
-
-    let mut selected_for_start: Vec<(orchestrator_core::OrchestratorTask, TaskSelectionSource)> =
-        Vec::new();
-    let mut selected_task_ids: HashSet<String> = HashSet::new();
-
-    match load_em_work_queue_state(project_root) {
-        Ok(Some(queue_state)) => {
-            for entry in queue_state.entries {
-                if selected_for_start.len() >= max_tasks_per_tick {
-                    break;
-                }
-                if entry.status != EmWorkQueueEntryStatus::Pending {
-                    continue;
-                }
-
-                let Some(task) = task_lookup.get(entry.task_id.as_str()).cloned() else {
-                    continue;
-                };
-                if !selected_task_ids.insert(task.id.clone()) {
-                    continue;
-                }
-                if task.paused || task.cancelled {
-                    continue;
-                }
-                if task.status != TaskStatus::Ready {
-                    continue;
-                }
-                if active_task_ids.contains(&task.id) {
-                    continue;
-                }
-                if should_skip_dispatch(&task) {
-                    continue;
-                }
-                if completed_task_ids.contains(&task.id) {
-                    let _ = hub
-                        .tasks()
-                        .set_status(&task.id, TaskStatus::Done, false)
-                        .await;
-                    continue;
-                }
-                let dependency_issues =
-                    dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-                if !dependency_issues.is_empty() {
-                    let reason = dependency_blocked_reason(&dependency_issues);
-                    let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
-                    continue;
-                }
-
-                selected_for_start.push((task, TaskSelectionSource::EmQueue));
-            }
-        }
-        Ok(None) => {}
+    let queue_state = match load_em_work_queue_state(project_root) {
+        Ok(state) => state,
         Err(error) => {
             eprintln!(
                 "{}: failed to load EM work queue state: {}",
                 protocol::ACTOR_DAEMON,
                 error
             );
+            None
         }
-    }
+    };
+    let plan = plan_ready_task_dispatch(&candidates, &workflows, queue_state.as_ref());
 
-    if selected_for_start.is_empty() {
-        for task in candidates {
-            if selected_for_start.len() >= max_tasks_per_tick {
-                break;
-            }
-            if !selected_task_ids.insert(task.id.clone()) {
-                continue;
-            }
-            if task.paused || task.cancelled {
-                continue;
-            }
-            if task.status != TaskStatus::Ready {
-                continue;
-            }
-            if active_task_ids.contains(&task.id) {
-                continue;
-            }
-            if should_skip_dispatch(&task) {
-                continue;
-            }
-            if completed_task_ids.contains(&task.id) {
-                let _ = hub
-                    .tasks()
-                    .set_status(&task.id, TaskStatus::Done, false)
-                    .await;
-                continue;
-            }
-            let dependency_issues =
-                dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-            if !dependency_issues.is_empty() {
-                let reason = dependency_blocked_reason(&dependency_issues);
-                let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
-                continue;
-            }
-
-            selected_for_start.push((task, TaskSelectionSource::FallbackPicker));
-        }
+    for task_id in &plan.completed_task_ids {
+        let _ = hub
+            .tasks()
+            .set_status(task_id, TaskStatus::Done, false)
+            .await;
     }
 
     let mut started_workflows = Vec::new();
-    for (task, selection_source) in selected_for_start {
+    for planned_start in plan.ordered_starts {
+        if started_workflows.len() >= max_tasks_per_tick {
+            break;
+        }
+
+        let Some(task) = task_lookup.get(planned_start.task_id.as_str()).cloned() else {
+            continue;
+        };
+        let dependency_issues =
+            dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+        if !dependency_issues.is_empty() {
+            let reason = dependency_blocked_reason(&dependency_issues);
+            let _ = set_task_blocked_with_reason(hub.clone(), &task, reason, None).await;
+            continue;
+        }
+
         let workflow = hub
             .workflows()
             .run(WorkflowRunInput::for_task(
@@ -702,7 +599,7 @@ pub async fn run_ready_task_workflows_for_project(
                 Some(pipeline_for_task(&task)),
             ))
             .await?;
-        if selection_source == TaskSelectionSource::EmQueue {
+        if planned_start.selection_source == TaskSelectionSource::EmQueue {
             if let Err(error) =
                 mark_em_work_queue_entry_assigned(project_root, &task.id, workflow.id.as_str())
             {
@@ -723,11 +620,10 @@ pub async fn run_ready_task_workflows_for_project(
             Some(workflow.id.as_str()),
         )
         .await;
-        active_task_ids.insert(task.id.clone());
         started_workflows.push(ReadyTaskWorkflowStart {
             task_id: task.id.clone(),
             workflow_id: workflow.id.clone(),
-            selection_source,
+            selection_source: planned_start.selection_source,
         });
     }
 

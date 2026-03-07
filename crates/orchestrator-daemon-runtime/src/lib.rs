@@ -3,7 +3,9 @@ mod collect_task_state_transitions;
 mod completed_process;
 mod completion_reconciliation_plan;
 mod daemon_runtime_options;
+mod em_work_queue_state;
 mod project_tick_summary;
+mod ready_task_dispatch_plan;
 mod ready_task_dispatch_support;
 mod ready_task_workflow_start;
 mod ready_task_workflow_start_summary;
@@ -23,7 +25,11 @@ pub use completion_reconciliation_plan::{
     CompletionReconciliationPlan, ScheduleCompletionUpdate, TaskCompletionAction,
 };
 pub use daemon_runtime_options::DaemonRuntimeOptions;
+pub use em_work_queue_state::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQueueState};
 pub use project_tick_summary::ProjectTickSummary;
+pub use ready_task_dispatch_plan::{
+    plan_ready_task_dispatch, PlannedReadyTaskStart, ReadyTaskDispatchPlan,
+};
 pub use ready_task_dispatch_support::{
     active_workflow_task_ids, is_terminally_completed_workflow, ready_task_dispatch_limit,
     routing_complexity_for_task, should_skip_dispatch, workflow_current_phase_id,
