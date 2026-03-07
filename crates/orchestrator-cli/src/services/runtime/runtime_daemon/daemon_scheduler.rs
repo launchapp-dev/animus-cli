@@ -1966,10 +1966,12 @@ fn is_merge_gate_block(task: &orchestrator_core::OrchestratorTask) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(super) fn resume_running_workflow_phase_spawns(project_root: &str) {
     project_tick_ops::phase_pool::resume_running_workflow_phase_spawns(project_root);
 }
 
+#[cfg(test)]
 pub(super) fn pause_running_workflow_phase_spawns(project_root: &str) {
     project_tick_ops::phase_pool::pause_running_workflow_phase_spawns(project_root);
 }
@@ -1986,6 +1988,7 @@ pub(super) fn clear_running_workflow_phase_pool(project_root: &str) {
     project_tick_ops::phase_pool::clear_running_workflow_phase_pool(project_root);
 }
 
+#[cfg(test)]
 pub(super) async fn drain_running_workflow_phases_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,

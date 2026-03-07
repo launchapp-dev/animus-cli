@@ -13,10 +13,8 @@ use tokio::time::sleep;
 use super::daemon_events::{emit_daemon_event, next_daemon_event};
 use super::daemon_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use super::daemon_scheduler::{
-    clear_running_workflow_phase_pool, drain_running_workflow_phases_for_project,
-    is_pool_draining, pause_running_workflow_phase_spawns, slim_project_tick,
-    recover_orphaned_running_workflows_on_startup, resume_running_workflow_phase_spawns,
-    set_pool_draining,
+    clear_running_workflow_phase_pool, is_pool_draining, slim_project_tick,
+    recover_orphaned_running_workflows_on_startup, set_pool_draining,
 };
 use super::{
     canonicalize_lossy, get_daemon_pid, is_shutdown_requested, set_daemon_pid, set_runtime_paused,
@@ -517,9 +515,6 @@ pub(super) async fn handle_daemon_run(
                 set_pool_draining(project_root, true);
             } else if !externally_paused && is_pool_draining(project_root) {
                 set_pool_draining(project_root, false);
-                resume_running_workflow_phase_spawns(project_root);
-            } else if !is_pool_draining(project_root) {
-                resume_running_workflow_phase_spawns(project_root);
             }
             let tick_result =
                 slim_project_tick(project_root, &args, &mut process_manager).await;
@@ -574,29 +569,6 @@ pub(super) async fn handle_daemon_run(
             }
 
             if args.once {
-                pause_running_workflow_phase_spawns(project_root);
-                if let Err(error) = drain_running_workflow_phases_for_project(
-                    hub.clone(),
-                    project_root,
-                    args.max_tasks_per_tick,
-                )
-                .await
-                {
-                    emit_daemon_event_with_notifications(
-                        &mut seq,
-                        "log",
-                        Some(primary_root.clone()),
-                        serde_json::json!({
-                            "level": "error",
-                            "message": format!(
-                                "failed draining in-flight workflow phases during once execution: {}",
-                                error
-                            ),
-                        }),
-                        json,
-                        notification_runtime.as_mut(),
-                    )?;
-                }
                 clear_running_workflow_phase_pool(project_root);
                 break;
             }
@@ -614,29 +586,6 @@ pub(super) async fn handle_daemon_run(
                     json,
                     notification_runtime.as_mut(),
                 )?;
-                pause_running_workflow_phase_spawns(project_root);
-                if let Err(error) = drain_running_workflow_phases_for_project(
-                    hub.clone(),
-                    project_root,
-                    args.max_tasks_per_tick,
-                )
-                .await
-                {
-                    emit_daemon_event_with_notifications(
-                        &mut seq,
-                        "log",
-                        Some(primary_root.clone()),
-                        serde_json::json!({
-                            "level": "error",
-                            "message": format!(
-                                "failed draining in-flight workflow phases during graceful shutdown: {}",
-                                error
-                            ),
-                        }),
-                        json,
-                        notification_runtime.as_mut(),
-                    )?;
-                }
                 clear_running_workflow_phase_pool(project_root);
                 let _ = set_shutdown_requested(project_root, false, None);
                 break;
@@ -653,28 +602,6 @@ pub(super) async fn handle_daemon_run(
                         notification_runtime.as_mut(),
                     )?;
                     set_pool_draining(project_root, true);
-                    if let Err(error) = drain_running_workflow_phases_for_project(
-                        hub.clone(),
-                        project_root,
-                        args.max_tasks_per_tick,
-                    )
-                    .await
-                    {
-                        emit_daemon_event_with_notifications(
-                            &mut seq,
-                            "log",
-                            Some(primary_root.clone()),
-                            serde_json::json!({
-                                "level": "error",
-                                "message": format!(
-                                    "failed draining in-flight workflow phases during shutdown: {}",
-                                    error
-                                ),
-                            }),
-                            json,
-                            notification_runtime.as_mut(),
-                        )?;
-                    }
                     set_pool_draining(project_root, false);
                     clear_running_workflow_phase_pool(project_root);
                     break;
@@ -689,28 +616,6 @@ pub(super) async fn handle_daemon_run(
                         notification_runtime.as_mut(),
                     )?;
                     set_pool_draining(project_root, true);
-                    if let Err(error) = drain_running_workflow_phases_for_project(
-                        hub.clone(),
-                        project_root,
-                        args.max_tasks_per_tick,
-                    )
-                    .await
-                    {
-                        emit_daemon_event_with_notifications(
-                            &mut seq,
-                            "log",
-                            Some(primary_root.clone()),
-                            serde_json::json!({
-                                "level": "error",
-                                "message": format!(
-                                    "failed draining in-flight workflow phases during SIGTERM shutdown: {}",
-                                    error
-                                ),
-                            }),
-                            json,
-                            notification_runtime.as_mut(),
-                        )?;
-                    }
                     set_pool_draining(project_root, false);
                     clear_running_workflow_phase_pool(project_root);
                     break;
