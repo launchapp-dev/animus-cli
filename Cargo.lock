@@ -2315,6 +2315,7 @@ dependencies = [
  "fs2",
  "llm-cli-wrapper",
  "orchestrator-core",
+ "orchestrator-daemon-runtime",
  "orchestrator-web-api",
  "orchestrator-web-contracts",
  "orchestrator-web-server",
@@ -2374,6 +2375,19 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "orchestrator-daemon-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "orchestrator-core",
+ "protocol",
+ "serde",
+ "serde_json",
+ "workflow-runner",
 ]
 
 [[package]]

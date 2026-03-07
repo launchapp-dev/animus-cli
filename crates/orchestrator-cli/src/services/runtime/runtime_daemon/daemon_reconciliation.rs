@@ -43,8 +43,7 @@ pub async fn dependency_gate_issues_for_task(
         if dependency_task.status != TaskStatus::Done {
             issues.push(format!(
                 "dependency {} is {}",
-                dependency.task_id,
-                dependency_task.status
+                dependency.task_id, dependency_task.status
             ));
             continue;
         }
@@ -94,7 +93,9 @@ pub async fn reconcile_dependency_gate_tasks_for_project(
             dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
         if dependency_issues.is_empty() {
             if task.status == TaskStatus::Blocked && is_dependency_gate_block(&task) {
-                hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await?;
+                hub.tasks()
+                    .set_status(&task.id, TaskStatus::Ready, false)
+                    .await?;
                 changed = changed.saturating_add(1);
             }
             continue;
@@ -139,14 +140,18 @@ pub async fn reconcile_merge_gate_tasks_for_project(
             .map(str::trim)
             .filter(|value| !value.is_empty())
         else {
-            hub.tasks().set_status(&task.id, TaskStatus::Done, false).await?;
+            hub.tasks()
+                .set_status(&task.id, TaskStatus::Done, false)
+                .await?;
             resolved = resolved.saturating_add(1);
             continue;
         };
 
         match git_ops::is_branch_merged(project_root, branch_name) {
             Ok(Some(true)) | Ok(None) => {
-                hub.tasks().set_status(&task.id, TaskStatus::Done, false).await?;
+                hub.tasks()
+                    .set_status(&task.id, TaskStatus::Done, false)
+                    .await?;
                 resolved = resolved.saturating_add(1);
             }
             Ok(Some(false)) | Err(_) => {}
@@ -233,7 +238,9 @@ pub async fn reconcile_stale_in_progress_tasks_for_project(
         if age_minutes < threshold_minutes {
             continue;
         }
-        hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await?;
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::Ready, false)
+            .await?;
         reconciled = reconciled.saturating_add(1);
     }
     Ok(reconciled)

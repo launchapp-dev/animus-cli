@@ -418,7 +418,8 @@ mod tests {
         assert!(!due.is_empty(), "schedule should be due at this time");
 
         let outside_hours = chrono::NaiveTime::from_hms_opt(14, 0, 0).unwrap();
-        let within = ScheduleDispatch::allows_proactive_dispatch(Some("22:00-06:00"), outside_hours);
+        let within =
+            ScheduleDispatch::allows_proactive_dispatch(Some("22:00-06:00"), outside_hours);
         assert!(!within, "14:00 is outside 22:00-06:00");
     }
 

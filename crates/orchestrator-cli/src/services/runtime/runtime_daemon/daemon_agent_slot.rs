@@ -32,19 +32,16 @@ pub async fn process_agent_result(
 
     match run_result {
         Ok(run) => {
-            result.phase_events.extend(phase_execution_events_from_signals(
-                project_root,
-                &workflow,
-                &run.metadata,
-                &run.signals,
-            ));
+            result
+                .phase_events
+                .extend(phase_execution_events_from_signals(
+                    project_root,
+                    &workflow,
+                    &run.metadata,
+                    &run.signals,
+                ));
 
-            let _ = persist_phase_output(
-                project_root,
-                &workflow.id,
-                &phase_id,
-                &run.outcome,
-            );
+            let _ = persist_phase_output(project_root, &workflow.id, &phase_id, &run.outcome);
 
             match run.outcome {
                 PhaseExecutionOutcome::Completed { phase_decision, .. } => {
