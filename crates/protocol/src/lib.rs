@@ -10,6 +10,7 @@ pub mod common;
 pub mod config;
 pub mod credentials;
 pub mod daemon;
+pub mod daemon_event_record;
 pub mod error_classification;
 pub mod errors;
 pub mod model_routing;
@@ -28,6 +29,7 @@ pub use config::{
     parse_env_bool_opt, Config, ProjectMcpServerEntry,
 };
 pub use daemon::*;
+pub use daemon_event_record::*;
 pub use error_classification::*;
 pub use errors::*;
 pub use model_routing::*;

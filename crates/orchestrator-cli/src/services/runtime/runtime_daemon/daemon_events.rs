@@ -1,30 +1,17 @@
+#[cfg(test)]
+use super::canonicalize_lossy;
 use crate::cli_types::DaemonEventsArgs;
 use crate::print_value;
-use crate::shared::append_line;
 use anyhow::Result;
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use orchestrator_daemon_runtime::{DaemonEventLog, DaemonEventsPollResponse};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::sleep;
-use uuid::Uuid;
 
-use super::canonicalize_lossy;
-
-// Re-export DaemonEventRecord from web-contracts for internal use
-pub(crate) use orchestrator_web_contracts::DaemonEventRecord;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DaemonEventsPollResponse {
-    pub(crate) schema: String,
-    pub(crate) events_path: String,
-    pub(crate) count: usize,
-    pub(crate) events: Vec<DaemonEventRecord>,
-}
+pub(crate) use protocol::DaemonEventRecord;
 
 pub(crate) fn daemon_events_log_path() -> PathBuf {
-    protocol::daemon_events_log_path()
+    DaemonEventLog::log_path()
 }
 
 fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {
@@ -67,92 +54,31 @@ fn read_nonempty_lines_since(path: &Path, offset: &mut u64) -> Result<Vec<String
         .collect())
 }
 
-fn normalize_project_root_filter(filter: Option<&str>) -> Option<String> {
-    filter
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(canonicalize_lossy)
-}
-
-fn matches_project_root_filter(record: &DaemonEventRecord, canonical_filter: Option<&str>) -> bool {
-    let Some(filter) = canonical_filter else {
-        return true;
-    };
-    let Some(record_project_root) = record.project_root.as_deref() else {
-        return false;
-    };
-    canonicalize_lossy(record_project_root) == filter
-}
-
-fn apply_event_limit(
-    mut events: Vec<DaemonEventRecord>,
-    limit: Option<usize>,
-) -> Vec<DaemonEventRecord> {
-    if let Some(limit) = limit {
-        if limit == 0 {
-            return Vec::new();
-        }
-        if events.len() > limit {
-            events = events.split_off(events.len() - limit);
-        }
-    }
-    events
-}
-
 pub(crate) fn read_daemon_event_records(
     limit: Option<usize>,
     project_root_filter: Option<&str>,
 ) -> Result<Vec<DaemonEventRecord>> {
-    let path = daemon_events_log_path();
-    let canonical_project_root_filter = normalize_project_root_filter(project_root_filter);
-    let events = read_all_nonempty_lines(&path)?
-        .into_iter()
-        .filter_map(|line| serde_json::from_str::<DaemonEventRecord>(&line).ok())
-        .filter(|record| {
-            matches_project_root_filter(record, canonical_project_root_filter.as_deref())
-        })
-        .collect();
-    Ok(apply_event_limit(events, limit))
+    DaemonEventLog::read_records(limit, project_root_filter)
 }
 
 pub(crate) fn poll_daemon_events(
     limit: Option<usize>,
     project_root_filter: Option<&str>,
 ) -> Result<DaemonEventsPollResponse> {
-    let path = daemon_events_log_path();
-    let events = read_daemon_event_records(limit, project_root_filter)?;
-    Ok(DaemonEventsPollResponse {
-        schema: "ao.daemon.events.poll.v1".to_string(),
-        events_path: path.to_string_lossy().to_string(),
-        count: events.len(),
-        events,
-    })
+    DaemonEventLog::poll(limit, project_root_filter)
 }
 
 pub(super) fn next_daemon_event(
     seq: &mut u64,
     event_type: &str,
     project_root: Option<String>,
-    data: Value,
+    data: serde_json::Value,
 ) -> DaemonEventRecord {
-    *seq = seq.saturating_add(1);
-    DaemonEventRecord {
-        schema: "ao.daemon.event.v1".to_string(),
-        id: Uuid::new_v4().to_string(),
-        seq: *seq,
-        timestamp: Utc::now().to_rfc3339(),
-        event_type: event_type.to_string(),
-        project_root,
-        data,
-    }
+    DaemonEventLog::next_event(seq, event_type, project_root, data)
 }
 
 pub(crate) fn append_daemon_event(record: &DaemonEventRecord) -> Result<()> {
-    let path = daemon_events_log_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    append_line(&path, &serde_json::to_string(record)?)
+    DaemonEventLog::append(record)
 }
 
 pub(crate) fn append_daemon_event_fire_and_forget(
@@ -160,16 +86,7 @@ pub(crate) fn append_daemon_event_fire_and_forget(
     project_root: Option<String>,
     data: serde_json::Value,
 ) {
-    let record = DaemonEventRecord {
-        schema: "ao.daemon.event.v1".to_string(),
-        id: Uuid::new_v4().to_string(),
-        seq: 0,
-        timestamp: Utc::now().to_rfc3339(),
-        event_type: event_type.to_string(),
-        project_root,
-        data,
-    };
-    let _ = append_daemon_event(&record);
+    DaemonEventLog::append_fire_and_forget(event_type, project_root, data);
 }
 
 pub(super) fn emit_daemon_event(record: &DaemonEventRecord, json: bool) -> Result<()> {
@@ -219,7 +136,9 @@ mod tests {
 
     #[test]
     fn read_daemon_event_records_returns_ordered_tail_and_skips_invalid_lines() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set(
             "AO_CONFIG_DIR",
@@ -256,7 +175,9 @@ mod tests {
 
     #[test]
     fn read_daemon_event_records_filters_by_project_root() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set(
             "AO_CONFIG_DIR",
@@ -306,7 +227,9 @@ mod tests {
 
     #[test]
     fn poll_daemon_events_returns_metadata_and_count() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set(
             "AO_CONFIG_DIR",
