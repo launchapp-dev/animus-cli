@@ -28,7 +28,7 @@ use crate::types::{
     TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
     TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
     TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
-    WorkflowMetadata, WorkflowRunInput,
+    WorkflowMetadata, WorkflowRunInput, WorkflowSubject,
 };
 use crate::providers::{BuiltinGitProvider, GitProvider};
 use crate::workflow::{

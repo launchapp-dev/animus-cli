@@ -1419,7 +1419,7 @@ async fn handle_workflow_execute(
             tokio::runtime::Handle::current().block_on(workflows.list())
         })?;
         all.into_iter()
-            .find(|w| w.task_id == subject_id)
+            .find(|w| w.subject.id() == subject_id || w.task_id == subject_id)
             .ok_or_else(|| anyhow!("no workflow found for subject '{}'", subject_id))
     })?;
 

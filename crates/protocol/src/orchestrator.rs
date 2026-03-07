@@ -1554,4 +1554,9 @@ impl WorkflowRunInput {
     pub fn subject_id(&self) -> &str {
         self.subject.id()
     }
+
+    pub fn with_pipeline(mut self, pipeline_id: String) -> Self {
+        self.pipeline_id = Some(pipeline_id);
+        self
+    }
 }

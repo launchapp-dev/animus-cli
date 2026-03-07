@@ -113,7 +113,11 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let id = Uuid::new_v4().to_string();
         let workflow = {
             let mut lock = self.state.write().await;
-            let task = lock.tasks.get(&input.task_id).cloned();
+            let task = if let WorkflowSubject::Task { ref id } = input.subject {
+                lock.tasks.get(id).cloned()
+            } else {
+                None
+            };
             let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_pipeline(
                 None,
@@ -121,7 +125,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
             )?);
             let workflow = executor.bootstrap(
                 id.clone(),
-                WorkflowRunInput::for_task(input.task_id, Some(pipeline_id)),
+                input.with_pipeline(pipeline_id),
             );
             lock.workflows.insert(id.clone(), workflow.clone());
             workflow
@@ -273,7 +277,11 @@ impl WorkflowServiceApi for FileServiceHub {
         let id = Uuid::new_v4().to_string();
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let retry_configs = load_phase_retry_configs(self.project_root.as_path());
-        let task = self.state.read().await.tasks.get(&input.task_id).cloned();
+        let task = if let WorkflowSubject::Task { ref id } = input.subject {
+            self.state.read().await.tasks.get(id).cloned()
+        } else {
+            None
+        };
         let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
         let workflow_config =
             crate::load_workflow_config_or_default(self.project_root.as_path());
@@ -292,7 +300,7 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_skip_guards(skip_guards);
         let mut workflow = executor.bootstrap(
             id.clone(),
-            WorkflowRunInput::for_task(input.task_id, Some(pipeline_id)),
+            input.with_pipeline(pipeline_id),
         );
         if let Some(ref task) = task {
             executor.skip_guarded_phases(&mut workflow, task);
@@ -431,7 +439,12 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision);
-        if let Some(task) = self.state.read().await.tasks.get(&workflow.task_id).cloned() {
+        let task_id = if let WorkflowSubject::Task { ref id } = workflow.subject {
+            id.clone()
+        } else {
+            workflow.task_id.clone()
+        };
+        if let Some(task) = self.state.read().await.tasks.get(&task_id).cloned() {
             executor.skip_guarded_phases(&mut workflow, &task);
         }
         manager.save(&workflow)?;
