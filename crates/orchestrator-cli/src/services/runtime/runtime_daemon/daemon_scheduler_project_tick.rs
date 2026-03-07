@@ -30,10 +30,10 @@ use schedule_dispatch::ScheduleDispatch;
 use task_dispatch::*;
 use task_lifecycle::*;
 #[cfg(test)]
-use tick_executor::FullProjectTickDriver;
-#[cfg(test)]
 use tick_executor::full_project_tick_driver;
 use tick_executor::slim_project_tick_driver;
+#[cfg(test)]
+use tick_executor::FullProjectTickDriver;
 use tick_executor::SlimProjectTickDriver;
 
 fn pipeline_for_task(task: &orchestrator_core::OrchestratorTask) -> String {
@@ -49,9 +49,26 @@ pub(super) async fn project_tick(
     root: &str,
     args: &DaemonRuntimeOptions,
 ) -> Result<ProjectTickSummary> {
+    project_tick_at(root, args, chrono::Utc::now()).await
+}
+
+#[cfg(test)]
+pub(super) async fn project_tick_at(
+    root: &str,
+    args: &DaemonRuntimeOptions,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
     let mut driver: FullProjectTickDriver = full_project_tick_driver();
-    run_project_tick(&root, args, ProjectTickRunMode::Full, false, &mut driver).await
+    run_project_tick_at(
+        &root,
+        args,
+        ProjectTickRunMode::Full,
+        false,
+        &mut driver,
+        ProjectTickTime::from_utc(now),
+    )
+    .await
 }
 
 pub(super) async fn slim_daemon_tick(
@@ -60,12 +77,37 @@ pub(super) async fn slim_daemon_tick(
     process_manager: &mut ProcessManager,
     dispatch_paused: bool,
 ) -> Result<ProjectTickSummary> {
+    slim_daemon_tick_at(
+        root,
+        args,
+        process_manager,
+        dispatch_paused,
+        chrono::Utc::now(),
+    )
+    .await
+}
+
+pub(super) async fn slim_daemon_tick_at(
+    root: &str,
+    args: &DaemonRuntimeOptions,
+    process_manager: &mut ProcessManager,
+    dispatch_paused: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<ProjectTickSummary> {
     let root = canonicalize_lossy(root);
     let mode = ProjectTickRunMode::Slim {
         active_process_count: process_manager.active_count(),
     };
     let mut driver: SlimProjectTickDriver<'_> = slim_project_tick_driver(process_manager);
-    run_project_tick(&root, args, mode, dispatch_paused, &mut driver).await
+    run_project_tick_at(
+        &root,
+        args,
+        mode,
+        dispatch_paused,
+        &mut driver,
+        ProjectTickTime::from_utc(now),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1076,5 +1118,4 @@ thinking...
             "high priority should start first"
         );
     }
-
 }

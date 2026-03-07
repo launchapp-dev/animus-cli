@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{Local, Utc};
 use orchestrator_core::services::ServiceHub;
 
 use crate::{
     execute_project_tick_script, DaemonRuntimeOptions, ProjectTickDriver,
     ProjectTickOperationExecutor, ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary,
-    TickSummaryBuilder,
+    ProjectTickTime, TickSummaryBuilder,
 };
 
 pub async fn run_project_tick<D>(
@@ -20,10 +19,36 @@ pub async fn run_project_tick<D>(
 where
     D: ProjectTickDriver,
 {
-    let now = Local::now().time();
+    run_project_tick_at(
+        root,
+        args,
+        mode,
+        pool_draining,
+        driver,
+        ProjectTickTime::now(),
+    )
+    .await
+}
+
+pub async fn run_project_tick_at<D>(
+    root: &str,
+    args: &DaemonRuntimeOptions,
+    mode: ProjectTickRunMode,
+    pool_draining: bool,
+    driver: &mut D,
+    tick_time: ProjectTickTime,
+) -> Result<ProjectTickSummary>
+where
+    D: ProjectTickDriver,
+{
+    let now = tick_time.local_time();
     let context = mode.load_context(root, args, now, pool_draining);
 
-    if !context.initial_preparation.schedule_plan.within_active_hours {
+    if !context
+        .initial_preparation
+        .schedule_plan
+        .within_active_hours
+    {
         if let Some(message) = context.active_hours_skip_message() {
             driver.emit_notice(&message);
         }
@@ -34,7 +59,7 @@ where
         .schedule_plan
         .should_process_due_schedules
     {
-        driver.process_due_schedules(root, Utc::now());
+        driver.process_due_schedules(root, tick_time.schedule_at());
     }
 
     let hub: Arc<dyn ServiceHub> = driver.build_hub(root)?;

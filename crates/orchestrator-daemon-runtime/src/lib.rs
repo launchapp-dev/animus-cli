@@ -12,8 +12,8 @@ mod project_tick_action_effect;
 mod project_tick_action_executor;
 mod project_tick_context;
 mod project_tick_driver;
-mod project_tick_hooks;
 mod project_tick_execution_outcome;
+mod project_tick_hooks;
 mod project_tick_mode;
 mod project_tick_operation_executor;
 mod project_tick_plan;
@@ -23,6 +23,7 @@ mod project_tick_script;
 mod project_tick_snapshot;
 mod project_tick_summary;
 mod project_tick_summary_input;
+mod project_tick_time;
 mod ready_task_dispatch_plan;
 mod ready_task_dispatch_support;
 mod ready_task_workflow_start;
@@ -64,6 +65,7 @@ pub use project_tick_script::ProjectTickScript;
 pub use project_tick_snapshot::ProjectTickSnapshot;
 pub use project_tick_summary::ProjectTickSummary;
 pub use project_tick_summary_input::ProjectTickSummaryInput;
+pub use project_tick_time::ProjectTickTime;
 pub use ready_task_dispatch_plan::{
     plan_ready_task_dispatch, PlannedReadyTaskStart, ReadyTaskDispatchPlan,
 };
@@ -75,7 +77,7 @@ pub use ready_task_dispatch_support::{
 pub use ready_task_workflow_start::ReadyTaskWorkflowStart;
 pub use ready_task_workflow_start_summary::ReadyTaskWorkflowStartSummary;
 pub use requirement_lifecycle_transition::RequirementLifecycleTransition;
-pub use run_project_tick::run_project_tick;
+pub use run_project_tick::{run_project_tick, run_project_tick_at};
 pub use runner_event::RunnerEvent;
 pub use schedule_dispatch::ScheduleDispatch;
 pub use task_selection_source::TaskSelectionSource;

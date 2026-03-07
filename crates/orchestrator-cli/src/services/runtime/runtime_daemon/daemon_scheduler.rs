@@ -10,8 +10,8 @@ use orchestrator_core::{
     TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
 pub(super) use orchestrator_daemon_runtime::{
-    run_project_tick, DaemonRuntimeOptions, HookBackedProjectTickDriver, ProjectTickHooks,
-    ProjectTickRunMode, ProjectTickSummary,
+    run_project_tick_at, DaemonRuntimeOptions, HookBackedProjectTickDriver, ProjectTickHooks,
+    ProjectTickRunMode, ProjectTickSummary, ProjectTickTime,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -24,6 +24,9 @@ use uuid::Uuid;
 mod frontend_phase_gate;
 #[path = "daemon_scheduler_git_ops.rs"]
 mod git_ops;
+#[cfg(test)]
+#[path = "daemon_scheduler_mock_runner_tests.rs"]
+mod mock_runner_tests;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
@@ -35,13 +38,13 @@ use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
 #[cfg(test)]
-use serde_json::Value;
-#[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]
 use runtime_support::WorkflowPipelineRuntimeRecord;
 #[cfg(test)]
 use runtime_support::WorkflowRuntimeConfigLite;
+#[cfg(test)]
+use serde_json::Value;
 
 #[cfg(test)]
 fn resolve_phase_runtime_settings(
@@ -1925,6 +1928,15 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     project_tick_ops::project_tick(root, &runtime_options_from_cli(args)).await
 }
 
+#[cfg(test)]
+pub(super) async fn project_tick_at(
+    root: &str,
+    args: &DaemonRunArgs,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<ProjectTickSummary> {
+    project_tick_ops::project_tick_at(root, &runtime_options_from_cli(args), now).await
+}
+
 pub(super) async fn slim_project_tick(
     root: &str,
     args: &DaemonRunArgs,
@@ -1936,6 +1948,24 @@ pub(super) async fn slim_project_tick(
         &runtime_options_from_cli(args),
         process_manager,
         dispatch_paused,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn slim_project_tick_at(
+    root: &str,
+    args: &DaemonRunArgs,
+    process_manager: &mut ProcessManager,
+    dispatch_paused: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<ProjectTickSummary> {
+    project_tick_ops::slim_daemon_tick_at(
+        root,
+        &runtime_options_from_cli(args),
+        process_manager,
+        dispatch_paused,
+        now,
     )
     .await
 }
