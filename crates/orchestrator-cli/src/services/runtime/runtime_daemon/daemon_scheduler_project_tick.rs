@@ -38,8 +38,8 @@ use schedule_dispatch::ScheduleDispatch;
 use task_dispatch::*;
 use task_lifecycle::*;
 #[cfg(test)]
-use tick_executor::FullProjectTickExecutor;
-use tick_executor::SlimProjectTickExecutor;
+use tick_executor::FullProjectTickOperations;
+use tick_executor::SlimProjectTickOperations;
 use tick_summary::TickSummaryBuilder;
 
 fn pipeline_for_task(task: &orchestrator_core::OrchestratorTask) -> String {
@@ -72,11 +72,11 @@ pub(super) async fn project_tick(
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
     let preparation =
         context.build_project_tick_preparation(args, now, pool_draining, snapshot.daemon_health.as_ref());
-    let mut executor = FullProjectTickExecutor {
+    let mut operations = FullProjectTickOperations {
         hub: hub.clone(),
         root: &root,
-        args,
     };
+    let mut executor = ProjectTickOperationExecutor::new(args, &mut operations);
     let execution_outcome =
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 
@@ -118,12 +118,12 @@ pub(super) async fn slim_daemon_tick(
         snapshot.daemon_health.as_ref().and_then(|health| health.max_agents),
         process_manager.active_count(),
     );
-    let mut executor = SlimProjectTickExecutor {
+    let mut operations = SlimProjectTickOperations {
         hub: hub.clone(),
         root: &root,
-        args,
         process_manager,
     };
+    let mut executor = ProjectTickOperationExecutor::new(args, &mut operations);
     let execution_outcome =
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 

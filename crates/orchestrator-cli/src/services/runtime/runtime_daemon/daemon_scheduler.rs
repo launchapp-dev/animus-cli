@@ -11,8 +11,9 @@ use orchestrator_core::{
     TaskStatus, TaskType, WorkflowResumeManager, WorkflowRunInput, WorkflowStatus,
 };
 pub(super) use orchestrator_daemon_runtime::{
-    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickAction, ProjectTickActionEffect,
-    ProjectTickActionExecutor, ProjectTickContext, ProjectTickSnapshot, ProjectTickSummary,
+    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickContext,
+    ProjectTickOperationExecutor, ProjectTickOperations, ProjectTickSnapshot,
+    ProjectTickSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
