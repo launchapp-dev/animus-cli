@@ -47,6 +47,7 @@ mod runner_event;
 mod runner_ready_dispatch;
 mod schedule_dispatch;
 mod task_blocking;
+mod task_lifecycle_support;
 mod task_selection_source;
 mod task_state_transition;
 mod tick_summary_builder;
@@ -125,6 +126,7 @@ pub use task_blocking::{
     is_merge_gate_block, merge_blocked_reason, set_task_blocked_with_reason,
     DEPENDENCY_GATE_PREFIX, MERGE_GATE_PREFIX,
 };
+pub use task_lifecycle_support::{promote_backlog_tasks_to_ready, retry_failed_task_workflows};
 pub use task_selection_source::TaskSelectionSource;
 pub use task_state_transition::TaskStateTransition;
 pub use tick_summary_builder::TickSummaryBuilder;
