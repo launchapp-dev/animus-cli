@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{
     AgentRunEvent, AgentRunRequest, IpcAuthRequest, IpcAuthResult, ModelId, RunId,

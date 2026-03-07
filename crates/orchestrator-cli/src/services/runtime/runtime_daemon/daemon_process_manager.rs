@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
@@ -20,15 +19,12 @@ pub struct RunnerEvent {
 pub struct WorkflowProcess {
     pub task_id: String,
     pub child: Arc<Mutex<Child>>,
-    pub started_at: DateTime<Utc>,
     pub stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Debug)]
 pub struct CompletedProcess {
     pub task_id: String,
-    pub started_at: DateTime<Utc>,
-    pub completed_at: DateTime<Utc>,
     pub exit_code: Option<i32>,
     pub success: bool,
     pub failure_reason: Option<String>,
@@ -85,7 +81,6 @@ impl ProcessManager {
         let process = WorkflowProcess {
             task_id: task_id.to_string(),
             child: Arc::new(Mutex::new(child)),
-            started_at: Utc::now(),
             stderr_lines,
         };
 
@@ -95,7 +90,6 @@ impl ProcessManager {
     }
 
     pub fn check_running(&mut self) -> Vec<CompletedProcess> {
-        let now = Utc::now();
         let mut completed = Vec::new();
         let mut active = Vec::with_capacity(self.processes.len());
 
@@ -106,8 +100,6 @@ impl ProcessManager {
                     Err(error) => {
                         completed.push(CompletedProcess {
                             task_id: process.task_id,
-                            started_at: process.started_at,
-                            completed_at: now,
                             exit_code: None,
                             success: false,
                             failure_reason: Some(format!(
@@ -142,8 +134,6 @@ impl ProcessManager {
 
                     completed.push(CompletedProcess {
                         task_id: process.task_id,
-                        started_at: process.started_at,
-                        completed_at: now,
                         exit_code,
                         success,
                         failure_reason,
@@ -156,8 +146,6 @@ impl ProcessManager {
                 Err(error) => {
                     completed.push(CompletedProcess {
                         task_id: process.task_id,
-                        started_at: process.started_at,
-                        completed_at: now,
                         exit_code: None,
                         success: false,
                         failure_reason: Some(format!("failed to probe workflow process status: {}", error)),

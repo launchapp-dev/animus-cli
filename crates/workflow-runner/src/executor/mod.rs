@@ -10,6 +10,5 @@ pub use phase_executor::*;
 pub use phase_git::*;
 pub use phase_output::*;
 pub use phase_prompt::*;
-pub use runtime_contract_builder::*;
 pub use workflow_merge_recovery::*;
 pub use workflow_runner::*;

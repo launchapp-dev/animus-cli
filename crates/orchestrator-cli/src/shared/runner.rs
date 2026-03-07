@@ -1,20 +1,22 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use protocol::{AgentRunEvent, OutputStreamType, RunId};
+use protocol::{AgentRunEvent, OutputStreamType};
+#[cfg(test)]
+use protocol::RunId;
 use serde_json::Value;
 
 use cli_wrapper::{NormalizedTextEvent, extract_text_from_line};
 
-use crate::{invalid_input_error, unavailable_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
+use crate::{invalid_input_error, AgentControlActionArg, AgentRunArgs, RunnerScopeArg};
 use protocol::AgentControlAction;
 
 pub(crate) use workflow_runner::ipc::{
-    build_runtime_contract, build_runtime_contract_with_resume, collect_json_payload_lines,
-    connect_runner, event_matches_run, runner_config_dir, write_json_line,
-    run_dir, append_line,
+    append_line, build_runtime_contract, collect_json_payload_lines, connect_runner,
+    event_matches_run, run_dir, runner_config_dir, write_json_line,
 };
+#[cfg(test)]
+pub(crate) use workflow_runner::ipc::build_runtime_contract_with_resume;
 
 pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
     workflow_runner::ipc::ensure_safe_run_id(run_id)

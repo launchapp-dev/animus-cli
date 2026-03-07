@@ -192,7 +192,6 @@ fn build_launch_args(
 struct AgentRunResult {
     exit_code: Option<i32>,
     agent_text: String,
-    raw_stdout: String,
     raw_stderr: String,
     success: bool,
 }
@@ -267,7 +266,6 @@ fn run_agent(
     Ok(AgentRunResult {
         exit_code,
         agent_text,
-        raw_stdout,
         raw_stderr,
         success,
     })

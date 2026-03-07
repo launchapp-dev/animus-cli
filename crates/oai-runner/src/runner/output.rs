@@ -93,19 +93,6 @@ impl OutputFormatter {
     pub fn newline(&self) {
         println!();
     }
-
-    pub fn thinking(&self, content: &str) {
-        if self.json_mode {
-            let event = json!({
-                "type": "thinking",
-                "text": content
-            });
-            println!("{}", event);
-        } else {
-            print!("<thinking>{}</thinking>", content);
-            std::io::stdout().flush().ok();
-        }
-    }
 }
 
 #[cfg(test)]

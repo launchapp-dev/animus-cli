@@ -51,12 +51,14 @@ pub struct StreamChunk {
 pub struct StreamChoice {
     pub delta: StreamDelta,
     #[serde(default)]
+    #[allow(dead_code)]
     pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 pub struct StreamDelta {
     #[serde(default)]
+    #[allow(dead_code)]
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
@@ -88,6 +90,7 @@ pub struct UsageInfo {
     #[serde(default)]
     pub completion_tokens: u64,
     #[serde(default)]
+    #[allow(dead_code)]
     pub total_tokens: u64,
 }
 

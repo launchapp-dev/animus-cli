@@ -3,7 +3,9 @@ use crate::{
     McpCommand,
 };
 use anyhow::{Context, Result};
-use orchestrator_core::{OrchestratorWorkflow, WorkflowStateManager, WorkflowStatus, WorkflowSubject};
+use orchestrator_core::{OrchestratorWorkflow, WorkflowStateManager, WorkflowStatus};
+#[cfg(test)]
+use orchestrator_core::WorkflowSubject;
 use protocol::{AgentRunEvent, OutputStreamType, RunId};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},

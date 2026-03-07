@@ -11,6 +11,7 @@ pub(crate) struct CliHarness {
     config_root: TempDir,
 }
 
+#[allow(dead_code)]
 impl CliHarness {
     pub(crate) fn new() -> Result<Self> {
         let binary_path = assert_cmd::cargo::cargo_bin!("ao").to_path_buf();

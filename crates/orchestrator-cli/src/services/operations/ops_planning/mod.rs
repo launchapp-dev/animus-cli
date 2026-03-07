@@ -11,14 +11,10 @@ mod types;
 
 use std::sync::Arc;
 
-
 use anyhow::Result;
-use orchestrator_core::{services::ServiceHub, RequirementsExecutionInput, VisionDraftInput};
+use orchestrator_core::{services::ServiceHub, VisionDraftInput};
 
-use crate::{
-    ensure_ai_generated_tasks_for_requirements, parse_input_json_or, print_value, ExecuteCommand,
-    VisionCommand,
-};
+use crate::{parse_input_json_or, print_value, VisionCommand};
 
 use self::draft_runtime::{draft_vision_with_ai_complexity, VisionDraftAiOptions};
 use self::refinement_runtime::run_vision_refine;
@@ -27,20 +23,6 @@ use self::types::VisionRefineInputPayload;
 pub(crate) use self::requirements_runtime::run_requirements_draft;
 pub(crate) use self::requirements_runtime::run_requirements_refine;
 pub(crate) use self::types::{RequirementsDraftInputPayload, RequirementsRefineInputPayload};
-
-async fn maybe_generate_ai_tasks_for_requirements(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    requirement_ids: &[String],
-    enabled: bool,
-) -> Result<()> {
-    if !enabled {
-        return Ok(());
-    }
-
-    ensure_ai_generated_tasks_for_requirements(hub, project_root, requirement_ids).await?;
-    Ok(())
-}
 
 pub(crate) async fn handle_vision(
     command: VisionCommand,
@@ -94,38 +76,6 @@ pub(crate) async fn handle_vision(
         VisionCommand::Get => print_value(planning.get_vision().await?, json),
     }
 }
-
-pub(crate) async fn handle_execute(
-    command: ExecuteCommand,
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
-    let planning = hub.planning();
-
-    let (args, start_workflows) = match command {
-        ExecuteCommand::Plan(args) => (args, false),
-        ExecuteCommand::Run(args) => (args, true),
-    };
-
-    let input = parse_input_json_or(args.input_json, || {
-        Ok(RequirementsExecutionInput {
-            requirement_ids: args.requirement_ids,
-            start_workflows,
-            pipeline_id: args.pipeline_id,
-            include_wont: args.include_wont,
-        })
-    })?;
-    maybe_generate_ai_tasks_for_requirements(
-        hub.clone(),
-        project_root,
-        &input.requirement_ids,
-        args.ai_task_generation,
-    )
-    .await?;
-    print_value(planning.execute_requirements(input).await?, json)
-}
-
 
 #[cfg(test)]
 mod tests {
