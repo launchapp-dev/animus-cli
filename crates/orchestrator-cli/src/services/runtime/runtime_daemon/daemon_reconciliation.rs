@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::phase_pool::with_reactive_phase_pool_state_mut;
 use super::*;
 
 pub async fn set_task_blocked_with_reason(
@@ -271,19 +269,6 @@ pub async fn resume_interrupted_workflows_for_project(
     }
 
     Ok((cleaned, resumed))
-}
-
-#[cfg(test)]
-pub async fn recover_orphaned_running_workflows(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-) -> usize {
-    let in_flight: std::collections::HashSet<String> =
-        with_reactive_phase_pool_state_mut(project_root, |state| {
-            state.in_flight_workflow_ids.clone()
-        });
-
-    recover_orphaned_running_workflows_with_active_ids(hub, project_root, &in_flight).await
 }
 
 pub async fn recover_orphaned_running_workflows_with_active_ids(

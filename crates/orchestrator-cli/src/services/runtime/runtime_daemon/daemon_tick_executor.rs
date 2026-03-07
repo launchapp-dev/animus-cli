@@ -128,7 +128,13 @@ impl ProjectTickOperations for FullProjectTickOperations<'_> {
     }
 
     async fn recover_orphaned_running_workflows(&mut self) -> Result<()> {
-        let _ = recover_orphaned_running_workflows(self.hub.clone(), self.root).await;
+        let active_subject_ids = std::collections::HashSet::new();
+        let _ = recover_orphaned_running_workflows_with_active_ids(
+            self.hub.clone(),
+            self.root,
+            &active_subject_ids,
+        )
+        .await;
         Ok(())
     }
 
