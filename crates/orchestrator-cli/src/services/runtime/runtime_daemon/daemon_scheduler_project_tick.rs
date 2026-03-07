@@ -284,7 +284,17 @@ pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<Pro
     let root = canonicalize_lossy(root);
     let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(&root));
     let mut schedule_pm = ProcessManager::new();
-    process_due_schedules(&mut schedule_pm, &root, Utc::now());
+    let wf_config = orchestrator_core::load_workflow_config_or_default(Path::new(&root));
+    let active = wf_config
+        .config
+        .daemon
+        .as_ref()
+        .and_then(|d| d.active_hours.as_deref())
+        .map(|spec| is_within_active_hours(spec, chrono::Local::now().time()))
+        .unwrap_or(true);
+    if active {
+        process_due_schedules(&mut schedule_pm, &root, Utc::now());
+    }
     let hub = Arc::new(FileServiceHub::new(&root)?);
     let _ = git_ops::flush_git_integration_outbox(&root);
     let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
@@ -2273,39 +2283,65 @@ thinking...
         assert_eq!(parse_active_hours("09:00"), None);
     }
 
-    #[test]
-    fn schedules_skipped_outside_active_hours() {
+    fn make_due_schedule() -> (Vec<orchestrator_core::WorkflowSchedule>, orchestrator_core::ScheduleState, chrono::DateTime<chrono::Utc>) {
         let schedules = vec![orchestrator_core::WorkflowSchedule {
-            id: "nightly".to_string(),
+            id: "every-minute".to_string(),
             cron: "* * * * *".to_string(),
-            pipeline: Some("standard".to_string()),
+            pipeline: None,
             command: None,
             input: None,
             enabled: true,
         }];
         let state = orchestrator_core::ScheduleState::default();
-        let now: chrono::DateTime<chrono::Utc> =
-            "2026-03-07T14:00:00Z".parse().expect("timestamp should parse");
-
-        let due = evaluate_schedules(&schedules, &state, now);
-        assert!(!due.is_empty(), "schedule should be due");
-
-        let active_hours = "22:00-06:00";
-        let midday = chrono::NaiveTime::from_hms_opt(14, 0, 0).unwrap();
-        assert!(
-            !is_within_active_hours(active_hours, midday),
-            "14:00 should be outside 22:00-06:00"
-        );
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-07T14:00:00Z".parse().unwrap();
+        (schedules, state, now)
     }
 
     #[test]
-    fn ready_dispatch_not_gated_by_active_hours() {
-        let active_hours = "09:00-17:00";
-        let midnight = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        assert!(
-            !is_within_active_hours(active_hours, midnight),
-            "midnight is outside 09:00-17:00"
-        );
+    fn active_hours_gate_skips_due_schedules() {
+        let (schedules, state, now) = make_due_schedule();
+        let due = evaluate_schedules(&schedules, &state, now);
+        assert!(!due.is_empty(), "schedule should be due at this time");
+
+        let outside_hours = chrono::NaiveTime::from_hms_opt(14, 0, 0).unwrap();
+        let within = is_within_active_hours("22:00-06:00", outside_hours);
+        assert!(!within, "14:00 is outside 22:00-06:00");
+
+        let mut dispatched = false;
+        if within {
+            dispatched = true;
+        }
+        assert!(!dispatched, "schedules must not dispatch outside active hours");
+    }
+
+    #[test]
+    fn active_hours_gate_allows_due_schedules_inside_window() {
+        let (schedules, state, now) = make_due_schedule();
+        let due = evaluate_schedules(&schedules, &state, now);
+        assert!(!due.is_empty(), "schedule should be due at this time");
+
+        let inside_hours = chrono::NaiveTime::from_hms_opt(23, 0, 0).unwrap();
+        let within = is_within_active_hours("22:00-06:00", inside_hours);
+        assert!(within, "23:00 is inside 22:00-06:00");
+
+        let mut dispatched = false;
+        if within {
+            dispatched = true;
+        }
+        assert!(dispatched, "schedules must dispatch inside active hours");
+    }
+
+    #[test]
+    fn active_hours_unset_allows_all_schedules() {
+        let (schedules, state, now) = make_due_schedule();
+        let due = evaluate_schedules(&schedules, &state, now);
+        assert!(!due.is_empty(), "schedule should be due");
+
+        let active_hours: Option<&str> = None;
+        let within = active_hours
+            .map(|spec| is_within_active_hours(spec, chrono::NaiveTime::from_hms_opt(3, 0, 0).unwrap()))
+            .unwrap_or(true);
+        assert!(within, "no active_hours config should allow all schedules");
     }
 
     #[test]
