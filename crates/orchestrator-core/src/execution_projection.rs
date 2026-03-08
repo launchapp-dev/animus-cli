@@ -7,7 +7,7 @@ use protocol::SubjectExecutionFact;
 
 use crate::{
     load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask,
-    ScheduleRunState, TaskStatus,
+    ScheduleRunState, TaskStatus, WorkflowStatus,
 };
 
 pub async fn project_task_status(
@@ -76,6 +76,21 @@ pub async fn project_task_execution_fact(
     let Some(task_id) = fact.task_id.as_deref() else {
         return;
     };
+
+    if let Some(status) = fact.workflow_status {
+        match status {
+            WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused => return,
+            WorkflowStatus::Completed => {
+                let _ = project_task_status(hub, task_id, TaskStatus::Done).await;
+                return;
+            }
+            WorkflowStatus::Cancelled => {
+                let _ = project_task_status(hub, task_id, TaskStatus::Cancelled).await;
+                return;
+            }
+            WorkflowStatus::Failed | WorkflowStatus::Escalated => {}
+        }
+    }
 
     if fact.success {
         let _ = project_task_status(hub, task_id, TaskStatus::Done).await;

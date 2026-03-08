@@ -47,7 +47,9 @@ pub(crate) async fn sync_task_status_for_workflow_result(
                 &SubjectExecutionFact {
                     subject_id: task_id.to_string(),
                     task_id: Some(task_id.to_string()),
+                    workflow_id: workflow_id.map(ToOwned::to_owned),
                     workflow_ref,
+                    workflow_status: Some(workflow_status),
                     schedule_id: None,
                     exit_code: Some(0),
                     success: true,
@@ -64,7 +66,9 @@ pub(crate) async fn sync_task_status_for_workflow_result(
                 &SubjectExecutionFact {
                     subject_id: task_id.to_string(),
                     task_id: Some(task_id.to_string()),
+                    workflow_id: workflow_id.map(ToOwned::to_owned),
                     workflow_ref,
+                    workflow_status: Some(workflow_status),
                     schedule_id: None,
                     exit_code: None,
                     success: false,

@@ -32,7 +32,7 @@ pub async fn reconcile_completed_processes(
             root,
             &fact.subject_id,
             fact.workflow_ref.as_deref(),
-            None,
+            fact.workflow_id.as_deref(),
         );
 
         if fact.task_id.is_some() {

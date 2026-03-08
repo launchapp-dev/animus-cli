@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
+use crate::services::runtime::sync_task_status_for_workflow_result;
 use crate::{print_value, WorkflowExecuteArgs};
 use ::workflow_runner::workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams};
 
@@ -20,6 +21,8 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         "normal"
     };
+    let task_id_for_sync = args.task_id.clone();
+    let phase_filter = args.phase.clone();
 
     let json_for_cb = json;
     let on_phase_event: Box<dyn Fn(PhaseEvent<'_>) + Send + Sync> =
@@ -56,10 +59,22 @@ pub(crate) async fn handle_workflow_execute(
         phase_filter: args.phase,
         stream_level: Some(stream_level.to_string()),
         on_phase_event: Some(on_phase_event),
-        hub: Some(hub),
+        hub: Some(hub.clone()),
     };
 
     let result = execute_workflow(params).await?;
+    if phase_filter.is_none() {
+        if let Some(task_id) = task_id_for_sync.as_deref() {
+            sync_task_status_for_workflow_result(
+                hub.clone(),
+                project_root,
+                task_id,
+                result.workflow_status,
+                Some(result.workflow_id.as_str()),
+            )
+            .await;
+        }
+    }
 
     emit_workflow_summary(&result.phase_results, result.total_duration, json);
 
@@ -67,6 +82,8 @@ pub(crate) async fn handle_workflow_execute(
         print_value(
             serde_json::json!({
                 "workflow_id": result.workflow_id,
+                "workflow_ref": result.workflow_ref,
+                "workflow_status": result.workflow_status,
                 "task_id": result.subject_id,
                 "execution_cwd": result.execution_cwd,
                 "phases_requested": result.phases_requested,
@@ -182,7 +199,10 @@ fn emit_workflow_summary(results: &[serde_json::Value], total_duration: Duration
         let dur_str = format_duration(Duration::from_secs(dur_secs));
         let (icon, clr) = match status {
             "completed" => ("ok", green),
+            "closed" => ("ok", green),
             "rework" => ("↻", dim),
+            "research_requested" => ("?", dim),
+            "manual_pending" => ("hold", dim),
             _ => ("FAIL", red),
         };
         let _ = writeln!(

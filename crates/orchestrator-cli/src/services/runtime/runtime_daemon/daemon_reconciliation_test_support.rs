@@ -7,6 +7,7 @@ use orchestrator_core::{
 };
 use orchestrator_daemon_runtime::{active_workflow_task_ids, is_terminally_completed_workflow};
 use orchestrator_git_ops::is_branch_merged;
+use std::path::Path;
 
 #[cfg(test)]
 pub async fn reconcile_dependency_gate_tasks_for_project(
@@ -220,6 +221,9 @@ pub async fn recover_orphaned_running_workflows_with_active_ids(
         if workflow.machine_state == WorkflowMachineState::MergeConflict {
             continue;
         }
+        if workflow_is_waiting_on_manual_phase(project_root, &workflow) {
+            continue;
+        }
         if active_ids.contains(&workflow.id)
             || active_ids.contains(workflow.subject.id())
             || (!workflow.task_id.is_empty() && active_ids.contains(&workflow.task_id))
@@ -251,14 +255,36 @@ pub async fn recover_orphaned_running_workflows_with_active_ids(
 }
 
 #[cfg(test)]
+fn workflow_is_waiting_on_manual_phase(
+    project_root: &str,
+    workflow: &orchestrator_core::OrchestratorWorkflow,
+) -> bool {
+    let Some(phase_id) = workflow
+        .current_phase
+        .clone()
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
+    else {
+        return false;
+    };
+
+    orchestrator_core::load_agent_runtime_config(Path::new(project_root))
+        .ok()
+        .and_then(|config| config.phase_execution(&phase_id).cloned())
+        .map(|definition| matches!(definition.mode, orchestrator_core::PhaseExecutionMode::Manual))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
 mod tests {
     use super::recover_orphaned_running_workflows_with_active_ids;
     use orchestrator_core::{
-        InMemoryServiceHub, ServiceHub, TaskCreateInput, TaskStatus, TaskType, WorkflowRunInput,
-        WorkflowStatus,
+        builtin_agent_runtime_config, write_agent_runtime_config, FileServiceHub, InMemoryServiceHub,
+        PhaseExecutionMode, PhaseManualDefinition, ServiceHub, TaskCreateInput, TaskStatus,
+        TaskType, WorkflowRunInput, WorkflowStatus,
     };
     use std::collections::HashSet;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn active_subject_ids_prevent_runner_backed_workflow_from_being_recovered() {
@@ -291,6 +317,71 @@ mod tests {
             hub.clone() as Arc<dyn ServiceHub>,
             "/tmp/project",
             &HashSet::from([task.id.clone()]),
+        )
+        .await;
+
+        assert_eq!(recovered, 0);
+        let workflow_state = hub
+            .workflows()
+            .get(&workflow.id)
+            .await
+            .expect("workflow should still be readable");
+        assert_eq!(workflow_state.status, WorkflowStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn manual_phase_workflows_are_not_recovered_as_orphans() {
+        let temp = TempDir::new().expect("temp dir");
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "manual-gate".to_string(),
+                description: "should survive without an active runner".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: None,
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::InProgress, false)
+            .await
+            .expect("task should be in progress");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+
+        let current_phase = workflow
+            .current_phase
+            .clone()
+            .expect("workflow should have current phase");
+        let mut runtime = builtin_agent_runtime_config();
+        let mut definition = runtime
+            .phase_execution(&current_phase)
+            .cloned()
+            .expect("current phase should exist in runtime config");
+        definition.mode = PhaseExecutionMode::Manual;
+        definition.agent_id = None;
+        definition.command = None;
+        definition.manual = Some(PhaseManualDefinition {
+            instructions: "Approve this step".to_string(),
+            approval_note_required: false,
+        });
+        runtime.phases.insert(current_phase.clone(), definition);
+        write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
+
+        let recovered = recover_orphaned_running_workflows_with_active_ids(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root,
+            &HashSet::new(),
         )
         .await;
 

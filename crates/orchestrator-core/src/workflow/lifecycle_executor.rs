@@ -907,6 +907,31 @@ impl WorkflowLifecycleExecutor {
         apply_transition_effects(&effect, workflow);
     }
 
+    pub fn mark_completed_failed(&self, workflow: &mut OrchestratorWorkflow, error: String) {
+        if workflow.status != WorkflowStatus::Completed {
+            return;
+        }
+
+        let phase_id = workflow
+            .phases
+            .last()
+            .map(|phase| phase.phase_id.clone())
+            .unwrap_or_else(|| "post-success".to_string());
+
+        workflow.machine_state = WorkflowMachineState::Failed;
+        workflow.sync_status();
+        workflow.failure_reason = Some(error.clone());
+        workflow.completed_at = Some(Utc::now());
+        workflow.decision_history.push(self.decision_record(
+            phase_id,
+            WorkflowDecisionAction::Fail,
+            None,
+            error,
+            1.0,
+            WorkflowDecisionRisk::High,
+        ));
+    }
+
     fn resolve_failure_transition(
         &self,
         current_phase_id: &str,

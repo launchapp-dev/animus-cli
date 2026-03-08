@@ -4,7 +4,7 @@ use super::task_dispatch::run_ready_task_workflows_for_project;
 use super::*;
 use chrono::Utc;
 use orchestrator_core::ServiceHub;
-use orchestrator_core::{Priority, TaskCreateInput, TaskType};
+use orchestrator_core::{Priority, TaskCreateInput, TaskType, WorkflowStatus};
 use orchestrator_daemon_runtime::{reconcile_completed_processes, CompletedProcess};
 use tempfile::TempDir;
 use workflow_runner::executor::parse_merge_conflict_recovery_response;
@@ -609,7 +609,9 @@ async fn reconcile_completed_processes_removes_assigned_queue_entries_on_complet
         vec![CompletedProcess {
             subject_id: dispatch.subject_id().to_string(),
             task_id: Some(task.id.clone()),
+            workflow_id: Some(workflow.id.clone()),
             workflow_ref: Some(dispatch.workflow_ref.clone()),
+            workflow_status: Some(WorkflowStatus::Completed),
             schedule_id: None,
             exit_code: Some(0),
             success: true,
@@ -691,7 +693,9 @@ async fn reconcile_completed_processes_removes_assigned_queue_entries_on_failure
         vec![CompletedProcess {
             subject_id: dispatch.subject_id().to_string(),
             task_id: Some(task.id.clone()),
+            workflow_id: Some(workflow.id.clone()),
             workflow_ref: Some(dispatch.workflow_ref.clone()),
+            workflow_status: Some(WorkflowStatus::Failed),
             schedule_id: None,
             exit_code: Some(1),
             success: false,

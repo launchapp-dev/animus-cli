@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,10 +10,9 @@ use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
     ensure_workflow_config_compiled, load_workflow_config,
     providers::{BuiltinGitProvider, GitProvider},
-    resolve_workflow_rework_attempts, resolve_workflow_verdict_routing,
     services::ServiceHub,
     FileServiceHub, OrchestratorTask, PhaseDecisionVerdict, TaskStatus, WorkflowRunInput,
-    WorkflowSubject,
+    WorkflowStatus, WorkflowSubject,
 };
 
 use crate::executor::{
@@ -58,6 +56,8 @@ pub struct WorkflowExecuteParams {
 pub struct WorkflowExecuteResult {
     pub success: bool,
     pub workflow_id: String,
+    pub workflow_ref: String,
+    pub workflow_status: WorkflowStatus,
     pub subject_id: String,
     pub execution_cwd: String,
     pub phases_requested: Vec<String>,
@@ -67,9 +67,6 @@ pub struct WorkflowExecuteResult {
     pub phase_results: Vec<Value>,
     pub post_success: Value,
 }
-
-const DEFAULT_PHASE_REWORK_ATTEMPTS: u32 = 3;
-const DEFAULT_REWORK_TARGET_PHASE: &str = "implementation";
 
 pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
     let stream_level = params.stream_level.as_deref().unwrap_or("quiet");
@@ -102,7 +99,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     };
 
     let subject_id = subject.id().to_string();
-    let workflow = hub.workflows().run(input).await.or_else(|run_err| {
+    let mut workflow = hub.workflows().run(input).await.or_else(|run_err| {
         if matches!(subject, WorkflowSubject::Custom { .. }) {
             return Err(run_err);
         }
@@ -155,17 +152,10 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     let workflow_config = load_workflow_config(Path::new(&params.project_root))?;
     let workflow_ref = workflow
         .workflow_ref
-        .as_deref()
-        .unwrap_or(workflow_config.default_workflow_ref.as_str());
-    let verdict_routing =
-        resolve_workflow_verdict_routing(&workflow_config, workflow.workflow_ref.as_deref());
-    let rework_attempts =
-        resolve_workflow_rework_attempts(&workflow_config, workflow.workflow_ref.as_deref());
-
-    let mut rework_counts: HashMap<String, u32> = HashMap::new();
+        .clone()
+        .unwrap_or_else(|| workflow_config.default_workflow_ref.clone());
     let mut rework_context: Option<String> = None;
     let mut results = Vec::new();
-    let total_phases = phases_to_run.len();
     let workflow_start = Instant::now();
 
     let emit = |event: PhaseEvent<'_>| {
@@ -174,20 +164,18 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         }
     };
 
-    let mut phase_idx: usize = 0;
-    while phase_idx < phases_to_run.len() {
-        let phase_id = &phases_to_run[phase_idx];
+    if let Some(phase_filter) = params.phase_filter.clone() {
         let phase_attempt = workflow
             .phases
             .iter()
-            .find(|p| &p.phase_id == phase_id)
+            .find(|p| p.phase_id.eq_ignore_ascii_case(&phase_filter))
             .map(|p| p.attempt)
             .unwrap_or(0);
 
         emit(PhaseEvent::Started {
-            phase_id,
-            phase_index: phase_idx,
-            total_phases,
+            phase_id: &phase_filter,
+            phase_index: 0,
+            total_phases: 1,
         });
         let phase_start = Instant::now();
 
@@ -200,12 +188,12 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
             &params.project_root,
             &execution_cwd,
             &workflow.id,
-            workflow_ref,
+            workflow_ref.as_str(),
             &subject_id_str,
             &subject_title,
             &subject_description,
             task_complexity,
-            phase_id,
+            &phase_filter,
             phase_attempt,
             Some(&phase_overrides),
             None,
@@ -216,16 +204,161 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
 
         match run_result {
             Ok(result) => {
-                let mut routed_back = false;
-
                 if let PhaseExecutionOutcome::Completed {
                     phase_decision: Some(ref decision),
                     ..
-                } = result.outcome
+                } = &result.outcome
                 {
-                    emit(PhaseEvent::Decision { phase_id, decision });
+                    emit(PhaseEvent::Decision {
+                        phase_id: &phase_filter,
+                        decision,
+                    });
+                }
 
-                    if decision.verdict == PhaseDecisionVerdict::Skip {
+                let phase_status = phase_result_status(&result.outcome);
+                let _ = persist_phase_output(
+                    &params.project_root,
+                    &workflow.id,
+                    &phase_filter,
+                    &result.outcome,
+                );
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_filter,
+                    duration: phase_elapsed,
+                    success: phase_status != "failed",
+                });
+                results.push(serde_json::json!({
+                    "phase_id": phase_filter,
+                    "status": phase_status,
+                    "duration_secs": phase_elapsed.as_secs(),
+                    "outcome": result.outcome,
+                    "metadata": result.metadata,
+                }));
+
+                let total_duration = workflow_start.elapsed();
+                return Ok(WorkflowExecuteResult {
+                    success: phase_status != "failed",
+                    workflow_id: workflow.id.clone(),
+                    workflow_ref,
+                    workflow_status: workflow.status,
+                    subject_id: subject_id_str,
+                    execution_cwd,
+                    phases_requested: vec![phase_filter],
+                    phases_completed: usize::from(phase_status == "completed"),
+                    phases_total: 1,
+                    total_duration,
+                    phase_results: results,
+                    post_success: serde_json::json!({
+                        "status": "skipped",
+                        "reason": "post-success actions are not run for single-phase execution",
+                    }),
+                });
+            }
+            Err(err) => {
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_filter,
+                    duration: phase_elapsed,
+                    success: false,
+                });
+                results.push(serde_json::json!({
+                    "phase_id": phase_filter,
+                    "status": "failed",
+                    "duration_secs": phase_elapsed.as_secs(),
+                    "error": err.to_string(),
+                }));
+                let total_duration = workflow_start.elapsed();
+                return Ok(WorkflowExecuteResult {
+                    success: false,
+                    workflow_id: workflow.id.clone(),
+                    workflow_ref,
+                    workflow_status: workflow.status,
+                    subject_id: subject_id_str,
+                    execution_cwd,
+                    phases_requested: vec![phase_filter],
+                    phases_completed: 0,
+                    phases_total: 1,
+                    total_duration,
+                    phase_results: results,
+                    post_success: serde_json::json!({
+                        "status": "skipped",
+                        "reason": "post-success actions are not run for single-phase execution",
+                    }),
+                });
+            }
+        }
+    }
+
+    let mut phases_to_run: Vec<String> = workflow.phases.iter().map(|p| p.phase_id.clone()).collect();
+    if phases_to_run.is_empty() {
+        return Err(anyhow!("workflow has no phases to execute"));
+    }
+
+    let mut phase_idx: usize = workflow.current_phase_index;
+    let mut reported_workflow_status = workflow.status;
+    while phase_idx < phases_to_run.len() && !is_terminal_workflow_status(workflow.status) {
+        let phase_id = phases_to_run[phase_idx].clone();
+        let phase_attempt = workflow
+            .phases
+            .iter()
+            .find(|p| p.phase_id == phase_id)
+            .map(|p| p.attempt)
+            .unwrap_or(0);
+
+        emit(PhaseEvent::Started {
+            phase_id: &phase_id,
+            phase_index: phase_idx,
+            total_phases: phases_to_run.len(),
+        });
+        let phase_start = Instant::now();
+
+        let phase_overrides = PhaseExecuteOverrides {
+            tool: params.tool.clone(),
+            model: params.model.clone(),
+            rework_context: rework_context.take(),
+        };
+        let run_result = run_workflow_phase(
+            &params.project_root,
+            &execution_cwd,
+            &workflow.id,
+            workflow_ref.as_str(),
+            &subject_id_str,
+            &subject_title,
+            &subject_description,
+            task_complexity,
+            &phase_id,
+            phase_attempt,
+            Some(&phase_overrides),
+            None,
+        )
+        .await;
+
+        let phase_elapsed = phase_start.elapsed();
+
+        match run_result {
+            Ok(result) => {
+                if let PhaseExecutionOutcome::Completed {
+                    phase_decision: Some(ref decision),
+                    ..
+                } = &result.outcome
+                {
+                    emit(PhaseEvent::Decision {
+                        phase_id: &phase_id,
+                        decision,
+                    });
+                }
+
+                let _ = persist_phase_output(
+                    &params.project_root,
+                    &workflow.id,
+                    &phase_id,
+                    &result.outcome,
+                );
+
+                match &result.outcome {
+                    PhaseExecutionOutcome::Completed {
+                        phase_decision: Some(decision),
+                        ..
+                    } if decision.verdict == PhaseDecisionVerdict::Skip => {
                         let close_reason = decision.reason.trim().to_lowercase();
                         let target_status = if close_reason.contains("already_done") {
                             TaskStatus::Done
@@ -243,14 +376,14 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                             let _ = hub.tasks().replace(t).await;
                         }
 
-                        let _ = persist_phase_output(
-                            &params.project_root,
-                            &workflow.id,
-                            phase_id,
-                            &result.outcome,
-                        );
+                        workflow = hub.workflows().cancel(&workflow.id).await?;
+                        reported_workflow_status = if target_status == TaskStatus::Done {
+                            WorkflowStatus::Completed
+                        } else {
+                            workflow.status
+                        };
                         emit(PhaseEvent::Completed {
-                            phase_id,
+                            phase_id: &phase_id,
                             duration: phase_elapsed,
                             success: true,
                         });
@@ -265,123 +398,123 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         }));
                         break;
                     }
-
-                    if decision.verdict == PhaseDecisionVerdict::Rework {
-                        let target = verdict_routing
-                            .get(phase_id.as_str())
-                            .and_then(|routing| routing.get("rework"))
-                            .map(|transition| transition.target.clone())
+                    PhaseExecutionOutcome::Completed {
+                        phase_decision,
+                        ..
+                    } => {
+                        let decision = phase_decision.clone();
+                        let updated = hub
+                            .workflows()
+                            .complete_current_phase_with_decision(&workflow.id, decision)
+                            .await?;
+                        let next_status = updated.status;
+                        let next_phase_index = updated.current_phase_index;
+                        let next_phase_id = updated
+                            .current_phase
+                            .clone()
                             .or_else(|| {
-                                has_matching_phase(&phases_to_run, DEFAULT_REWORK_TARGET_PHASE)
-                                    .and_then(|idx| phases_to_run.get(idx).cloned())
+                                updated
+                                    .phases
+                                    .get(updated.current_phase_index)
+                                    .map(|phase| phase.phase_id.clone())
                             });
-                        let count = rework_counts.entry(phase_id.clone()).or_insert(0);
-                        let max_attempts = *rework_attempts
-                            .get(phase_id)
-                            .unwrap_or(&DEFAULT_PHASE_REWORK_ATTEMPTS);
                         let maybe_context = phase_rework_context(&result.outcome);
-                        let _ = persist_phase_output(
-                            &params.project_root,
-                            &workflow.id,
-                            phase_id,
-                            &result.outcome,
+                        workflow = updated;
+                        reported_workflow_status = next_status;
+                        phases_to_run = workflow
+                            .phases
+                            .iter()
+                            .map(|phase| phase.phase_id.clone())
+                            .collect();
+
+                        let status = phase_result_status(&result.outcome).to_string();
+                        let next_success = !matches!(
+                            next_status,
+                            WorkflowStatus::Failed | WorkflowStatus::Escalated
                         );
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: next_success,
+                        });
+                        let mut result_value = serde_json::json!({
+                            "phase_id": phase_id,
+                            "status": status,
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", next_status).to_ascii_lowercase(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
+                        });
+                        if let Some(next_phase_id) = next_phase_id {
+                            result_value["next_phase_id"] = serde_json::json!(next_phase_id);
+                        }
+                        results.push(result_value);
 
-                        if target.is_none() {
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "failed",
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "error": format!("rework target for phase '{}' not configured", phase_id),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
+                        if matches!(
+                            workflow.status,
+                            WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
+                        ) {
                             break;
                         }
 
-                        if *count < max_attempts {
-                            *count += 1;
-                            let target = target.expect("rework target");
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "rework",
-                                "rework_target": target,
-                                "rework_attempt": *count,
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
-
-                            rework_context = maybe_context;
-                            if let Some(target_idx) = phases_to_run
-                                .iter()
-                                .position(|p| p.eq_ignore_ascii_case(&target))
-                            {
-                                phase_idx = target_idx;
-                                routed_back = true;
-                            } else {
-                                results.push(serde_json::json!({
-                                    "phase_id": phase_id,
-                                    "status": "failed",
-                                    "duration_secs": phase_elapsed.as_secs(),
-                                    "error": format!("rework target '{}' not found in phases", target),
-                                }));
-                                break;
-                            }
-                        } else {
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "failed",
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "error": format!("rework budget exhausted after {} attempts", max_attempts),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
-                            break;
-                        }
+                        rework_context = maybe_context;
+                        phase_idx = next_phase_index;
+                        continue;
                     }
-                }
-
-                if !routed_back {
-                    let _ = persist_phase_output(
-                        &params.project_root,
-                        &workflow.id,
-                        phase_id,
-                        &result.outcome,
-                    );
-                    emit(PhaseEvent::Completed {
-                        phase_id,
-                        duration: phase_elapsed,
-                        success: true,
-                    });
-                    results.push(serde_json::json!({
-                        "phase_id": phase_id,
-                        "status": "completed",
-                        "duration_secs": phase_elapsed.as_secs(),
-                        "outcome": result.outcome,
-                        "metadata": result.metadata,
-                    }));
-                    phase_idx += 1;
+                    PhaseExecutionOutcome::NeedsResearch { reason } => {
+                        workflow = hub
+                            .workflows()
+                            .request_research(&workflow.id, reason.clone())
+                            .await?;
+                        reported_workflow_status = workflow.status;
+                        phases_to_run = workflow
+                            .phases
+                            .iter()
+                            .map(|phase| phase.phase_id.clone())
+                            .collect();
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: true,
+                        });
+                        results.push(serde_json::json!({
+                            "phase_id": phase_id,
+                            "status": "research_requested",
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
+                        }));
+                        phase_idx = workflow.current_phase_index;
+                        continue;
+                    }
+                    PhaseExecutionOutcome::ManualPending { .. } => {
+                        reported_workflow_status = workflow.status;
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: true,
+                        });
+                        results.push(serde_json::json!({
+                            "phase_id": phase_id,
+                            "status": "manual_pending",
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
+                        }));
+                        break;
+                    }
                 }
             }
             Err(err) => {
+                workflow = hub
+                    .workflows()
+                    .fail_current_phase(&workflow.id, err.to_string())
+                    .await?;
+                reported_workflow_status = workflow.status;
                 emit(PhaseEvent::Completed {
-                    phase_id,
+                    phase_id: &phase_id,
                     duration: phase_elapsed,
                     success: false,
                 });
@@ -389,6 +522,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                     "phase_id": phase_id,
                     "status": "failed",
                     "duration_secs": phase_elapsed.as_secs(),
+                    "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
                     "error": err.to_string(),
                 }));
                 break;
@@ -397,9 +531,12 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     }
 
     let total_duration = workflow_start.elapsed();
-    let all_phases_completed = phase_idx >= phases_to_run.len();
-    let post_success = if all_phases_completed {
-        if let Some(ref t) = task {
+    let mut post_success = serde_json::json!({
+        "status": "skipped",
+        "reason": "workflow did not complete all phases",
+    });
+    if workflow.status == WorkflowStatus::Completed {
+        post_success = if let Some(ref t) = task {
             execute_post_success_actions(
                 &params.project_root,
                 t,
@@ -413,22 +550,39 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                 "status": "skipped",
                 "reason": "post-success actions require a task subject",
             })
+        };
+
+        match post_success["status"].as_str() {
+            Some("conflict") => {
+                let reason = post_success_failure_reason(&post_success)
+                    .unwrap_or_else(|| "post-success merge conflict".to_string());
+                workflow = hub.workflows().mark_merge_conflict(&workflow.id, reason).await?;
+                reported_workflow_status = workflow.status;
+            }
+            Some("failed") => {
+                let reason = post_success_failure_reason(&post_success)
+                    .unwrap_or_else(|| "post-success action failed".to_string());
+                workflow = hub.workflows().mark_completed_failed(&workflow.id, reason).await?;
+                reported_workflow_status = workflow.status;
+            }
+            _ => {}
         }
-    } else {
-        serde_json::json!({
-            "status": "skipped",
-            "reason": "workflow did not complete all phases",
-        })
-    };
+    }
 
     Ok(WorkflowExecuteResult {
-        success: all_phases_completed,
+        success: workflow_exit_success(reported_workflow_status),
         workflow_id: workflow.id.clone(),
+        workflow_ref,
+        workflow_status: reported_workflow_status,
         subject_id: subject_id_str,
         execution_cwd,
-        phases_requested: phases_to_run,
-        phases_completed: phase_idx.min(total_phases),
-        phases_total: total_phases,
+        phases_requested: phases_to_run.clone(),
+        phases_completed: workflow
+            .phases
+            .iter()
+            .filter(|phase| phase.completed_at.is_some())
+            .count(),
+        phases_total: phases_to_run.len(),
         total_duration,
         phase_results: results,
         post_success,
@@ -454,12 +608,6 @@ fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
     }
 }
 
-fn has_matching_phase(phases: &[String], target: &str) -> Option<usize> {
-    phases
-        .iter()
-        .position(|phase| phase.eq_ignore_ascii_case(target))
-}
-
 fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
     match outcome {
         PhaseExecutionOutcome::Completed {
@@ -470,6 +618,72 @@ fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn is_terminal_workflow_status(status: WorkflowStatus) -> bool {
+    matches!(
+        status,
+        WorkflowStatus::Completed
+            | WorkflowStatus::Failed
+            | WorkflowStatus::Escalated
+            | WorkflowStatus::Cancelled
+    )
+}
+
+fn workflow_exit_success(status: WorkflowStatus) -> bool {
+    !matches!(status, WorkflowStatus::Failed | WorkflowStatus::Escalated)
+}
+
+fn phase_result_status(outcome: &PhaseExecutionOutcome) -> &'static str {
+    match outcome {
+        PhaseExecutionOutcome::Completed {
+            phase_decision: Some(decision),
+            ..
+        } => match decision.verdict {
+            PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Unknown => "completed",
+            PhaseDecisionVerdict::Rework => "rework",
+            PhaseDecisionVerdict::Fail => "failed",
+            PhaseDecisionVerdict::Skip => "closed",
+        },
+        PhaseExecutionOutcome::Completed {
+            phase_decision: None,
+            ..
+        } => "completed",
+        PhaseExecutionOutcome::NeedsResearch { .. } => "research_requested",
+        PhaseExecutionOutcome::ManualPending { .. } => "manual_pending",
+    }
+}
+
+fn post_success_failure_reason(post_success: &Value) -> Option<String> {
+    post_success
+        .get("error")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            post_success
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            post_success
+                .get("actions")
+                .and_then(Value::as_object)
+                .and_then(|actions| {
+                    actions.values().find_map(|action| {
+                        if action.get("status").and_then(Value::as_str) == Some("failed")
+                            || action.get("status").and_then(Value::as_str) == Some("conflict")
+                        {
+                            action
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        } else {
+                            None
+                        }
+                    })
+                })
+        })
 }
 
 async fn execute_post_success_actions(

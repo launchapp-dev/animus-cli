@@ -120,7 +120,12 @@ pub async fn ensure_execution_cwd(
     };
 
     if !status.success() {
-        return Ok(project_root.to_string());
+        anyhow::bail!(
+            "failed to provision managed worktree '{}' for task {} on branch '{}'",
+            worktree_path_str,
+            task.id,
+            branch_name
+        );
     }
 
     let mut updated = task.clone();
@@ -335,5 +340,51 @@ mod tests {
             .as_deref()
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn ensure_execution_cwd_fails_closed_when_worktree_creation_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let mut task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "invalid branch".to_string(),
+                description: "should fail closed".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        task.branch_name = Some("invalid branch name".to_string());
+        hub.tasks()
+            .replace(task.clone())
+            .await
+            .expect("task should update");
+
+        let error = ensure_execution_cwd(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &project_root,
+            Some(&task),
+        )
+        .await
+        .expect_err("invalid branch should fail worktree provisioning");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to provision managed worktree"),
+            "unexpected error: {error}"
+        );
+        let updated = hub.tasks().get(&task.id).await.expect("task should load");
+        assert!(updated.worktree_path.is_none());
+        assert_eq!(updated.branch_name.as_deref(), Some("invalid branch name"));
     }
 }
