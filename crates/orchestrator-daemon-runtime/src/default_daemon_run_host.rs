@@ -1,11 +1,9 @@
 use anyhow::Result;
 use chrono::Utc;
+use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use serde_json::json;
 
-use crate::{
-    DaemonEventLog, DaemonNotificationRuntime, DaemonRunEvent, DaemonRunHooks,
-    NotificationLifecycleEvent, ProjectTickSummary,
-};
+use crate::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary};
 
 pub struct DefaultDaemonRunHost {
     seq: u64,

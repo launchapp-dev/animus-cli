@@ -43,13 +43,13 @@ pub struct NotificationConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(super) enum NotificationConnectorConfig {
+enum NotificationConnectorConfig {
     Webhook(WebhookConnectorConfig),
     SlackWebhook(SlackWebhookConnectorConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct WebhookConnectorConfig {
+struct WebhookConnectorConfig {
     id: String,
     #[serde(default = "default_connector_enabled")]
     enabled: bool,
@@ -61,7 +61,7 @@ pub(super) struct WebhookConnectorConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct SlackWebhookConnectorConfig {
+struct SlackWebhookConnectorConfig {
     id: String,
     #[serde(default = "default_connector_enabled")]
     enabled: bool,
@@ -79,7 +79,7 @@ pub(super) struct SlackWebhookConnectorConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct NotificationSubscription {
+struct NotificationSubscription {
     id: String,
     #[serde(default = "default_connector_enabled")]
     enabled: bool,
@@ -95,7 +95,7 @@ pub(super) struct NotificationSubscription {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct NotificationRetryPolicy {
+struct NotificationRetryPolicy {
     #[serde(default = "default_retry_max_attempts")]
     max_attempts: u32,
     #[serde(default = "default_retry_base_delay_secs")]

@@ -2328,6 +2328,7 @@ dependencies = [
  "orchestrator-core",
  "orchestrator-daemon-runtime",
  "orchestrator-git-ops",
+ "orchestrator-notifications",
  "orchestrator-web-api",
  "orchestrator-web-contracts",
  "orchestrator-web-server",
@@ -2397,16 +2398,14 @@ dependencies = [
  "async-trait",
  "chrono",
  "croner",
- "dirs",
  "fs2",
  "orchestrator-core",
  "orchestrator-git-ops",
+ "orchestrator-notifications",
  "orchestrator-providers",
  "protocol",
- "reqwest 0.11.27",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tokio",
  "uuid",
@@ -2427,6 +2426,23 @@ dependencies = [
  "tokio",
  "uuid",
  "workflow-runner",
+]
+
+[[package]]
+name = "orchestrator-notifications"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "protocol",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

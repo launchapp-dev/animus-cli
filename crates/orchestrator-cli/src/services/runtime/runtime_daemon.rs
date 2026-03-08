@@ -9,6 +9,11 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
 use orchestrator_daemon_runtime::DaemonRuntimeState;
+use orchestrator_notifications::{
+    clear_notification_config, parse_notification_config_value,
+    read_notification_config_from_pm_config, serialize_notification_config,
+    NOTIFICATION_CONFIG_SCHEMA,
+};
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
@@ -21,11 +26,6 @@ pub(crate) mod daemon_scheduler;
 
 use daemon_events::handle_daemon_events_impl;
 use daemon_run::handle_daemon_run;
-use orchestrator_daemon_runtime::{
-    clear_notification_config, parse_notification_config_value,
-    read_notification_config_from_pm_config, serialize_notification_config,
-    NOTIFICATION_CONFIG_SCHEMA,
-};
 
 pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
 
