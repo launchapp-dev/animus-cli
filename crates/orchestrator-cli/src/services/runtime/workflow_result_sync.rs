@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use super::runtime_daemon::daemon_reconciliation::project_terminal_workflow_status;
 use orchestrator_core::{services::ServiceHub, WorkflowStatus};
-use orchestrator_daemon_runtime::project_terminal_workflow_status;
 
 pub(crate) async fn sync_task_status_for_workflow_result(
     hub: Arc<dyn ServiceHub>,

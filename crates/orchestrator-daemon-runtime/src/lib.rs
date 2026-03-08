@@ -11,8 +11,7 @@ pub use daemon::{
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan,
     build_runner_command_from_dispatch, is_terminally_completed_workflow, plan_ready_dispatch,
-    project_terminal_workflow_status, ready_dispatch_limit, ready_dispatch_limit_for_options,
-    reconcile_completed_processes, recover_orphaned_running_workflows, workflow_current_phase_id,
+    ready_dispatch_limit, ready_dispatch_limit_for_options, workflow_current_phase_id,
     CompletedProcess, CompletionReconciliationPlan, DispatchCandidate, DispatchSelectionSource,
     DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
     ReadyDispatchPlan,

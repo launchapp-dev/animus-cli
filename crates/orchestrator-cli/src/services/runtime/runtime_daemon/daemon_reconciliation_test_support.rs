@@ -1,13 +1,12 @@
 use super::*;
+use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
 use crate::services::runtime::sync_task_status_for_workflow_result;
 use orchestrator_core::{
     dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
     is_merge_gate_block, project_task_blocked_with_reason, project_task_status,
     services::ServiceHub, TaskStatus, WorkflowResumeManager, WorkflowStatus,
 };
-use orchestrator_daemon_runtime::{
-    active_workflow_task_ids, is_terminally_completed_workflow, recover_orphaned_running_workflows,
-};
+use orchestrator_daemon_runtime::{active_workflow_task_ids, is_terminally_completed_workflow};
 use orchestrator_git_ops::is_branch_merged;
 
 #[cfg(test)]

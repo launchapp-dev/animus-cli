@@ -21,6 +21,7 @@ use crate::{
 };
 
 mod daemon_events;
+pub(crate) mod daemon_reconciliation;
 mod daemon_run;
 mod daemon_run_host;
 pub(crate) mod daemon_scheduler;
