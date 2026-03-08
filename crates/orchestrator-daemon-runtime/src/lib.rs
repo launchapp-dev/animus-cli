@@ -71,8 +71,7 @@ pub use queue_service::{
 };
 pub use dispatch_support::{
     active_workflow_task_ids, is_terminally_completed_workflow, ready_dispatch_limit,
-    ready_dispatch_limit_for_options, routing_complexity_for_task, should_skip_task_dispatch,
-    workflow_current_phase_id, workflow_ref_for_task,
+    ready_dispatch_limit_for_options, workflow_current_phase_id,
 };
 pub use ready_dispatch_plan::{
     plan_ready_dispatch, PlannedDispatchStart, ReadyDispatchPlan,

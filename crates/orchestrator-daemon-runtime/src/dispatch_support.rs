@@ -1,10 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::Utc;
-use orchestrator_core::{
-    Complexity, DaemonHealth, OrchestratorTask, OrchestratorWorkflow, WorkflowStatus,
-    STANDARD_PIPELINE_ID, UI_UX_PIPELINE_ID,
-};
+use orchestrator_core::{DaemonHealth, OrchestratorWorkflow, WorkflowStatus};
 
 use crate::DaemonRuntimeOptions;
 
@@ -94,44 +90,6 @@ pub fn workflow_current_phase_id(workflow: &OrchestratorWorkflow) -> Option<Stri
                 .map(|phase| phase.phase_id.clone())
         })
         .and_then(|phase_id| normalize_optional_id(Some(phase_id.as_str())))
-}
-
-pub fn routing_complexity_for_task(
-    task: &OrchestratorTask,
-) -> Option<protocol::ModelRoutingComplexity> {
-    match task.complexity {
-        Complexity::Low => Some(protocol::ModelRoutingComplexity::Low),
-        Complexity::Medium => Some(protocol::ModelRoutingComplexity::Medium),
-        Complexity::High => Some(protocol::ModelRoutingComplexity::High),
-    }
-}
-
-pub fn workflow_ref_for_task(task: &OrchestratorTask) -> String {
-    if task.is_frontend_related() {
-        UI_UX_PIPELINE_ID.to_string()
-    } else {
-        STANDARD_PIPELINE_ID.to_string()
-    }
-}
-
-pub fn should_skip_task_dispatch(task: &OrchestratorTask) -> bool {
-    const MAX_DISPATCH_RETRIES: u32 = 3;
-    const MIN_RETRY_DELAY_SECS: i64 = 60;
-
-    if let Some(count) = task.consecutive_dispatch_failures {
-        if count >= MAX_DISPATCH_RETRIES {
-            return true;
-        }
-    }
-    if let Some(ref last_failure) = task.last_dispatch_failure_at {
-        if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(last_failure) {
-            let elapsed = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
-            if elapsed.num_seconds() < MIN_RETRY_DELAY_SECS {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 #[cfg(test)]
