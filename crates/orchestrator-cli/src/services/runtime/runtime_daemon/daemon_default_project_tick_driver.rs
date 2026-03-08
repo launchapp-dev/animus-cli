@@ -27,22 +27,8 @@ pub trait DefaultProjectTickServices {
     ) -> Result<ReadyTaskWorkflowStartSummary>;
 }
 
-#[cfg(test)]
-pub type DefaultFullProjectTickDriver<S> =
-    HookBackedProjectTickDriver<DefaultFullProjectTickHooks<S>>;
 pub type DefaultSlimProjectTickDriver<'a, S> =
     HookBackedProjectTickDriver<DefaultSlimProjectTickHooks<'a, S>>;
-
-#[cfg(test)]
-pub fn default_full_project_tick_driver<S>(services: S) -> DefaultFullProjectTickDriver<S>
-where
-    S: DefaultProjectTickServices,
-{
-    HookBackedProjectTickDriver::new(DefaultFullProjectTickHooks {
-        services,
-        schedule_process_manager: ProcessManager::new(),
-    })
-}
 
 pub fn default_slim_project_tick_driver<'a, S>(
     services: S,
@@ -55,12 +41,6 @@ where
         services,
         process_manager,
     })
-}
-
-#[cfg(test)]
-pub struct DefaultFullProjectTickHooks<S> {
-    services: S,
-    schedule_process_manager: ProcessManager,
 }
 
 pub struct DefaultSlimProjectTickHooks<'a, S> {
@@ -114,44 +94,6 @@ fn spawn_schedule_command(project_root: &str, schedule_id: &str, command: &str) 
     });
 
     Ok(())
-}
-
-#[async_trait::async_trait(?Send)]
-#[cfg(test)]
-impl<S> ProjectTickHooks for DefaultFullProjectTickHooks<S>
-where
-    S: DefaultProjectTickServices,
-{
-    fn build_hub(&mut self, root: &str) -> Result<Arc<dyn ServiceHub>> {
-        Ok(Arc::new(FileServiceHub::new(root)?))
-    }
-
-    fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>) {
-        ScheduleDispatch::process_due_schedules(
-            root,
-            now,
-            |schedule_id, dispatch| {
-                spawn_schedule_pipeline(
-                    &mut self.schedule_process_manager,
-                    root,
-                    schedule_id,
-                    dispatch,
-                )
-            },
-            |schedule_id, command| spawn_schedule_command(root, schedule_id, command),
-        );
-    }
-
-    async fn dispatch_ready_tasks(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-        limit: usize,
-    ) -> Result<ReadyTaskWorkflowStartSummary> {
-        self.services
-            .dispatch_ready_tasks(hub, root, limit, None)
-            .await
-    }
 }
 
 #[async_trait::async_trait(?Send)]

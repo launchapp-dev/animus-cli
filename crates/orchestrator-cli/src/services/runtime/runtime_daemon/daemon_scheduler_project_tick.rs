@@ -16,49 +16,13 @@ mod tick_executor;
 mod tick_wrapper;
 
 use task_dispatch::*;
-#[cfg(test)]
-use tick_executor::full_project_tick_driver;
 pub(crate) use tick_executor::slim_project_tick_driver;
-#[cfg(test)]
-use tick_executor::FullProjectTickDriver;
 use tick_executor::SlimProjectTickDriver;
 use tick_wrapper::{
     apply_cli_pre_tick, flush_git_outbox_for_project, refresh_runtime_binaries_for_project,
     run_cli_pre_tick,
 };
 pub(super) use workflow_result_sync::sync_task_status_for_workflow_result;
-
-#[cfg(test)]
-pub(super) async fn project_tick(
-    root: &str,
-    args: &DaemonRuntimeOptions,
-) -> Result<ProjectTickSummary> {
-    project_tick_at(root, args, chrono::Utc::now()).await
-}
-
-#[cfg(test)]
-pub(super) async fn project_tick_at(
-    root: &str,
-    args: &DaemonRuntimeOptions,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<ProjectTickSummary> {
-    let root = canonicalize_lossy(root);
-    let pre_tick = run_cli_pre_tick(&root, args, None).await?;
-    flush_git_outbox_for_project(&root);
-    let mut driver: FullProjectTickDriver = full_project_tick_driver();
-    let mut summary = run_project_tick_at(
-        &root,
-        args,
-        ProjectTickRunMode::Full,
-        false,
-        &mut driver,
-        ProjectTickTime::from_utc(now),
-    )
-    .await?;
-    apply_cli_pre_tick(&mut summary, pre_tick);
-    refresh_runtime_binaries_for_project(&root).await?;
-    Ok(summary)
-}
 
 pub(super) async fn slim_daemon_tick(
     root: &str,
@@ -87,7 +51,7 @@ pub(super) async fn slim_daemon_tick_at(
     let active_subject_ids = process_manager.active_subject_ids();
     let pre_tick = run_cli_pre_tick(&root, args, Some(&active_subject_ids)).await?;
     flush_git_outbox_for_project(&root);
-    let mode = ProjectTickRunMode::Slim {
+    let mode = ProjectTickRunMode {
         active_process_count: process_manager.active_count(),
     };
     let mut driver: SlimProjectTickDriver<'_> = slim_project_tick_driver(process_manager);
@@ -110,8 +74,9 @@ mod tests {
     use super::reconciliation::reconcile_stale_in_progress_tasks_for_project;
     use super::task_dispatch::run_ready_task_workflows_for_project;
     use super::*;
-    use orchestrator_core::Priority;
+    use chrono::Utc;
     use orchestrator_core::ServiceHub;
+    use orchestrator_core::{Priority, TaskCreateInput, TaskType};
     use tempfile::TempDir;
     use workflow_runner::executor::parse_merge_conflict_recovery_response;
 

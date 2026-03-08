@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use workflow_runner::executor::PhaseExecutionEvent;
 
-use crate::{RequirementLifecycleTransition, TaskStateTransition};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectTickSummary {
     pub project_root: String,
@@ -27,6 +25,4 @@ pub struct ProjectTickSummary {
     pub executed_workflow_phases: usize,
     pub failed_workflow_phases: usize,
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
-    pub requirement_lifecycle_transitions: Vec<RequirementLifecycleTransition>,
-    pub task_state_transitions: Vec<TaskStateTransition>,
 }

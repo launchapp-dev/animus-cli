@@ -2,8 +2,6 @@ use super::*;
 #[path = "daemon_default_project_tick_driver.rs"]
 mod default_project_tick_driver;
 
-#[cfg(test)]
-use default_project_tick_driver::{default_full_project_tick_driver, DefaultFullProjectTickDriver};
 use default_project_tick_driver::{
     default_slim_project_tick_driver, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
 };
@@ -43,16 +41,8 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     }
 }
 
-#[cfg(test)]
-pub(super) type FullProjectTickDriver = DefaultFullProjectTickDriver<CliProjectTickServices>;
-
 pub(crate) type SlimProjectTickDriver<'a> =
     DefaultSlimProjectTickDriver<'a, CliProjectTickServices>;
-
-#[cfg(test)]
-pub(super) fn full_project_tick_driver() -> FullProjectTickDriver {
-    default_full_project_tick_driver(CliProjectTickServices)
-}
 
 pub(crate) fn slim_project_tick_driver(
     process_manager: &mut ProcessManager,

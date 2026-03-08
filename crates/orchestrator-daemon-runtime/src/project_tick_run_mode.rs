@@ -5,9 +5,8 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectTickRunMode {
-    Full,
-    Slim { active_process_count: usize },
+pub struct ProjectTickRunMode {
+    pub active_process_count: usize,
 }
 
 impl ProjectTickRunMode {
@@ -18,14 +17,7 @@ impl ProjectTickRunMode {
         now: NaiveTime,
         pool_draining: bool,
     ) -> ProjectTickContext {
-        match self {
-            Self::Full => {
-                ProjectTickContext::load_for_project_tick(project_root, options, now, pool_draining)
-            }
-            Self::Slim { .. } => {
-                ProjectTickContext::load_for_slim_tick(project_root, options, now, pool_draining)
-            }
-        }
+        ProjectTickContext::load(project_root, options, now, pool_draining)
     }
 
     pub fn build_preparation(
@@ -36,30 +28,20 @@ impl ProjectTickRunMode {
         pool_draining: bool,
         snapshot: &ProjectTickSnapshot,
     ) -> ProjectTickPreparation {
-        match self {
-            Self::Full => context.build_project_tick_preparation(
-                options,
-                now,
-                pool_draining,
-                snapshot.daemon_health.as_ref(),
-            ),
-            Self::Slim {
-                active_process_count,
-            } => context.build_slim_tick_preparation(
-                options,
-                now,
-                pool_draining,
-                snapshot
-                    .daemon_health
-                    .as_ref()
-                    .and_then(|health| health.max_agents),
-                snapshot
-                    .daemon_health
-                    .as_ref()
-                    .and_then(|health| health.pool_size.map(|value| value as usize)),
-                active_process_count,
-            ),
-        }
+        context.build_preparation(
+            options,
+            now,
+            pool_draining,
+            snapshot
+                .daemon_health
+                .as_ref()
+                .and_then(|health| health.max_agents),
+            snapshot
+                .daemon_health
+                .as_ref()
+                .and_then(|health| health.pool_size.map(|value| value as usize)),
+            self.active_process_count,
+        )
     }
 
     pub fn include_phase_execution_events(self) -> bool {

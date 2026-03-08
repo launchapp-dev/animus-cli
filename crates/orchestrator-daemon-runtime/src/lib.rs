@@ -1,6 +1,4 @@
 mod build_runner_command_from_dispatch;
-mod collect_requirement_lifecycle_transitions;
-mod collect_task_state_transitions;
 mod completed_process;
 mod completion_reconciliation_plan;
 mod daemon_event_log;
@@ -25,7 +23,6 @@ mod project_tick_context;
 mod project_tick_driver;
 mod project_tick_execution_outcome;
 mod project_tick_hooks;
-mod project_tick_mode;
 mod project_tick_operation_executor;
 mod project_tick_plan;
 mod project_tick_preparation;
@@ -41,17 +38,13 @@ mod ready_task_dispatch_support;
 mod ready_task_workflow_start;
 mod ready_task_workflow_start_summary;
 mod reconcile_completed_processes;
-mod requirement_lifecycle_transition;
 mod run_daemon;
 mod run_project_tick;
 mod schedule_dispatch;
 mod task_selection_source;
-mod task_state_transition;
 mod tick_summary_builder;
 
 pub use build_runner_command_from_dispatch::build_runner_command_from_dispatch;
-pub use collect_requirement_lifecycle_transitions::collect_requirement_lifecycle_transitions;
-pub use collect_task_state_transitions::collect_task_state_transitions;
 pub use completed_process::CompletedProcess;
 pub use completion_reconciliation_plan::{
     build_completion_reconciliation_plan, CompletionReconciliationPlan,
@@ -86,7 +79,6 @@ pub use project_tick_context::ProjectTickContext;
 pub use project_tick_driver::ProjectTickDriver;
 pub use project_tick_execution_outcome::ProjectTickExecutionOutcome;
 pub use project_tick_hooks::ProjectTickHooks;
-pub use project_tick_mode::ProjectTickMode;
 pub use project_tick_operation_executor::{ProjectTickOperationExecutor, ProjectTickOperations};
 pub use project_tick_plan::ProjectTickPlan;
 pub use project_tick_preparation::ProjectTickPreparation;
@@ -112,10 +104,8 @@ pub use ready_task_dispatch_support::{
 pub use ready_task_workflow_start::ReadyTaskWorkflowStart;
 pub use ready_task_workflow_start_summary::ReadyTaskWorkflowStartSummary;
 pub use reconcile_completed_processes::reconcile_completed_processes;
-pub use requirement_lifecycle_transition::RequirementLifecycleTransition;
 pub use run_daemon::run_daemon;
 pub use run_project_tick::{run_project_tick, run_project_tick_at};
 pub use schedule_dispatch::ScheduleDispatch;
 pub use task_selection_source::TaskSelectionSource;
-pub use task_state_transition::TaskStateTransition;
 pub use tick_summary_builder::TickSummaryBuilder;

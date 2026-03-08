@@ -96,7 +96,7 @@ where
         let tick_result = run_project_tick(
             &primary_root,
             options,
-            ProjectTickRunMode::Slim {
+            ProjectTickRunMode {
                 active_process_count: driver.active_process_count(),
             },
             externally_paused,

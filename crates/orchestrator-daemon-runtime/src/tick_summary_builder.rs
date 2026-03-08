@@ -3,10 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use orchestrator_core::{services::ServiceHub, OrchestratorTask, TaskStatus, WorkflowStatus};
 
-use crate::{
-    collect_requirement_lifecycle_transitions, collect_task_state_transitions,
-    DaemonRuntimeOptions, ProjectTickSummary, ProjectTickSummaryInput,
-};
+use crate::{DaemonRuntimeOptions, ProjectTickSummary, ProjectTickSummaryInput};
 
 pub struct TickSummaryBuilder;
 
@@ -53,19 +50,6 @@ impl TickSummaryBuilder {
             .iter()
             .filter(|workflow| workflow.status == WorkflowStatus::Failed)
             .count();
-        let requirements_after = hub.planning().list_requirements().await.unwrap_or_default();
-        let requirement_lifecycle_transitions = collect_requirement_lifecycle_transitions(
-            &input.requirements_before,
-            &requirements_after,
-        );
-        let task_state_transitions = collect_task_state_transitions(
-            &input.tasks_before,
-            &tasks,
-            &workflows,
-            &input.phase_execution_events,
-            &input.ready_started_workflows,
-        );
-
         Ok(ProjectTickSummary {
             project_root: input.project_root,
             started_daemon: input.started_daemon,
@@ -91,8 +75,6 @@ impl TickSummaryBuilder {
             executed_workflow_phases: input.executed_workflow_phases,
             failed_workflow_phases: input.failed_workflow_phases,
             phase_execution_events: input.phase_execution_events,
-            requirement_lifecycle_transitions,
-            task_state_transitions,
         })
     }
 }

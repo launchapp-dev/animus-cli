@@ -1,4 +1,4 @@
-use crate::{DaemonRuntimeOptions, ProjectTickAction, ProjectTickMode, ProjectTickPlan};
+use crate::{DaemonRuntimeOptions, ProjectTickAction, ProjectTickPlan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickScript {
@@ -6,16 +6,9 @@ pub struct ProjectTickScript {
 }
 
 impl ProjectTickScript {
-    pub fn build(
-        mode: ProjectTickMode,
-        _options: &DaemonRuntimeOptions,
-        tick_plan: &ProjectTickPlan,
-    ) -> Self {
+    pub fn build(_options: &DaemonRuntimeOptions, tick_plan: &ProjectTickPlan) -> Self {
         let mut actions = Vec::new();
-
-        if mode == ProjectTickMode::Slim {
-            actions.push(ProjectTickAction::ReconcileCompletedProcesses);
-        }
+        actions.push(ProjectTickAction::ReconcileCompletedProcesses);
 
         if tick_plan.should_prepare_ready_tasks {
             actions.push(ProjectTickAction::DispatchReadyTasks {
@@ -36,10 +29,10 @@ mod tests {
     use chrono::NaiveTime;
 
     use super::ProjectTickScript;
-    use crate::{DaemonRuntimeOptions, ProjectTickAction, ProjectTickMode, ProjectTickPlan};
+    use crate::{DaemonRuntimeOptions, ProjectTickAction, ProjectTickPlan};
 
     #[test]
-    fn builds_full_tick_actions_in_runtime_order() {
+    fn builds_tick_actions_in_runtime_order() {
         let options = DaemonRuntimeOptions {
             ai_task_generation: true,
             resume_interrupted: true,
@@ -55,11 +48,14 @@ mod tests {
             2,
         );
 
-        let script = ProjectTickScript::build(ProjectTickMode::Full, &options, &tick_plan);
+        let script = ProjectTickScript::build(&options, &tick_plan);
 
         assert_eq!(
             script.actions(),
-            &[ProjectTickAction::DispatchReadyTasks { limit: 2 },]
+            &[
+                ProjectTickAction::ReconcileCompletedProcesses,
+                ProjectTickAction::DispatchReadyTasks { limit: 2 },
+            ]
         );
     }
 
@@ -79,7 +75,7 @@ mod tests {
             0,
         );
 
-        let script = ProjectTickScript::build(ProjectTickMode::Slim, &options, &tick_plan);
+        let script = ProjectTickScript::build(&options, &tick_plan);
 
         assert_eq!(
             script.actions(),

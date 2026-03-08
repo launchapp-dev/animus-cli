@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use chrono::NaiveTime;
-use orchestrator_core::DaemonHealth;
 
 use crate::{DaemonRuntimeOptions, ProjectTickPreparation};
 
@@ -12,7 +11,7 @@ pub struct ProjectTickContext {
 }
 
 impl ProjectTickContext {
-    pub fn load_for_project_tick(
+    pub fn load(
         project_root: &str,
         options: &DaemonRuntimeOptions,
         now: NaiveTime,
@@ -20,29 +19,7 @@ impl ProjectTickContext {
     ) -> Self {
         let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(project_root));
         let active_hours = load_active_hours(project_root);
-        let initial_preparation = ProjectTickPreparation::for_project_tick(
-            options,
-            active_hours.as_deref(),
-            now,
-            pool_draining,
-            None,
-        );
-
-        Self {
-            active_hours,
-            initial_preparation,
-        }
-    }
-
-    pub fn load_for_slim_tick(
-        project_root: &str,
-        options: &DaemonRuntimeOptions,
-        now: NaiveTime,
-        pool_draining: bool,
-    ) -> Self {
-        let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(project_root));
-        let active_hours = load_active_hours(project_root);
-        let initial_preparation = ProjectTickPreparation::for_slim_tick(
+        let initial_preparation = ProjectTickPreparation::build(
             options,
             active_hours.as_deref(),
             now,
@@ -58,23 +35,7 @@ impl ProjectTickContext {
         }
     }
 
-    pub fn build_project_tick_preparation(
-        &self,
-        options: &DaemonRuntimeOptions,
-        now: NaiveTime,
-        pool_draining: bool,
-        daemon_health: Option<&DaemonHealth>,
-    ) -> ProjectTickPreparation {
-        ProjectTickPreparation::for_project_tick(
-            options,
-            self.active_hours.as_deref(),
-            now,
-            pool_draining,
-            daemon_health,
-        )
-    }
-
-    pub fn build_slim_tick_preparation(
+    pub fn build_preparation(
         &self,
         options: &DaemonRuntimeOptions,
         now: NaiveTime,
@@ -83,7 +44,7 @@ impl ProjectTickContext {
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> ProjectTickPreparation {
-        ProjectTickPreparation::for_slim_tick(
+        ProjectTickPreparation::build(
             options,
             self.active_hours.as_deref(),
             now,

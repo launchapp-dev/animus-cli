@@ -1,37 +1,33 @@
 use super::canonicalize_lossy;
 use crate::cli_types::DaemonRunArgs;
-use anyhow::{anyhow, Result};
-use chrono::Utc;
+use anyhow::Result;
 #[cfg(test)]
 use orchestrator_core::is_dependency_gate_block;
 #[cfg(test)]
 use orchestrator_core::DependencyType;
-use orchestrator_core::{services::ServiceHub, TaskCreateInput, TaskStatus, TaskType};
+use orchestrator_core::{services::ServiceHub, TaskStatus};
 pub(super) use orchestrator_daemon_runtime::{
     run_project_tick_at, DaemonRuntimeOptions, ProcessManager, ProjectTickRunMode,
     ProjectTickSummary, ProjectTickTime,
 };
 pub(crate) use project_tick_ops::slim_project_tick_driver;
-use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 #[cfg(test)]
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
-use uuid::Uuid;
 #[cfg(test)]
 #[path = "daemon_scheduler_mock_runner_tests.rs"]
 mod mock_runner_tests;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
-use ::workflow_runner::executor::PhaseExecutionOutcome;
-pub(crate) use ::workflow_runner::phase_failover;
+#[cfg(test)]
+use ::workflow_runner::phase_failover::PhaseFailureClassifier;
 pub(crate) use ::workflow_runner::phase_targets;
 #[cfg(test)]
 use ::workflow_runner::runtime_support;
-use phase_failover::PhaseFailureClassifier;
 use phase_targets::PhaseTargetPlanner;
 
 #[cfg(test)]
@@ -48,9 +44,6 @@ use runtime_support::WorkflowPipelineRuntimeRecord;
 use runtime_support::WorkflowRuntimeConfigLite;
 #[cfg(test)]
 use serde_json::Value;
-#[cfg(test)]
-use std::collections::HashSet;
-
 #[cfg(test)]
 fn resolve_phase_runtime_settings(
     config: &WorkflowRuntimeConfigLite,
@@ -150,10 +143,7 @@ fn fallback_implementation_commit_message(task_id: &str, task_title: &str) -> St
 mod tests {
     use super::*;
     use crate::shared::build_runtime_contract;
-    use orchestrator_core::{
-        InMemoryServiceHub, Priority, RequirementItem, RequirementPriority, RequirementStatus,
-        TaskCreateInput, TaskType, VisionDraftInput,
-    };
+    use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
     use protocol::{ModelRoutingComplexity, PhaseCapabilities};
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1617,8 +1607,8 @@ mod tests {
             .await
             .expect("task should be marked stale");
 
-        // Avoid runner bootstrap in this test: project_tick should reconcile state without
-        // depending on an external agent-runner process.
+        // Avoid external runner bootstrap in this test: the slim tick with an empty process
+        // manager should still reconcile state without an external agent-runner process.
         let state_path = protocol::scoped_state_root(Path::new(&project_root))
             .unwrap_or_else(|| Path::new(&project_root).join(".ao"))
             .join("core-state.json");
@@ -1652,16 +1642,11 @@ mod tests {
             idle_timeout_secs: None,
             once: true,
         };
-        let summary = project_tick(&project_root, &args)
+        let mut process_manager = ProcessManager::new();
+        let summary = slim_project_tick(&project_root, &args, &mut process_manager, false)
             .await
             .expect("project tick should succeed");
         assert!(summary.reconciled_stale_tasks >= 1);
-        assert!(summary.task_state_transitions.iter().any(|transition| {
-            transition.task_id == task.id
-                && transition.from_status == "in-progress"
-                && transition.to_status == "done"
-        }));
-
         let refreshed_hub = Arc::new(FileServiceHub::new(&project_root).expect("refreshed hub"));
         let updated = refreshed_hub
             .tasks()
@@ -1670,116 +1655,6 @@ mod tests {
             .expect("task should load");
         assert_eq!(updated.status, TaskStatus::Done);
     }
-
-    #[tokio::test]
-    async fn project_tick_reports_requirement_lifecycle_transitions() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
-
-        let temp = TempDir::new().expect("temp dir");
-        let project_root = temp.path().to_string_lossy().to_string();
-        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
-
-        hub.planning()
-            .draft_vision(VisionDraftInput {
-                project_name: Some("Lifecycle Events".to_string()),
-                problem_statement: "Need requirement lifecycle events".to_string(),
-                target_users: vec!["Product teams".to_string()],
-                goals: vec!["Draft and execute requirements through review gates".to_string()],
-                constraints: vec![],
-                value_proposition: Some(
-                    "Visibility into requirement state transitions".to_string(),
-                ),
-                complexity_assessment: None,
-            })
-            .await
-            .expect("vision should be drafted");
-
-        let now = chrono::Utc::now();
-        hub.planning()
-            .upsert_requirement(RequirementItem {
-                id: String::new(),
-                title: "Investigate provider tradeoffs for image generation".to_string(),
-                description: "Investigate options and choose one.".to_string(),
-                body: None,
-                legacy_id: None,
-                category: None,
-                requirement_type: None,
-                acceptance_criteria: vec!["Decision documented".to_string()],
-                priority: RequirementPriority::Should,
-                status: RequirementStatus::Draft,
-                source: "manual".to_string(),
-                tags: vec![],
-                links: orchestrator_core::RequirementLinks::default(),
-                comments: vec![],
-                relative_path: None,
-                linked_task_ids: vec![],
-                created_at: now,
-                updated_at: now,
-            })
-            .await
-            .expect("requirement should be stored");
-
-        let args = DaemonRunArgs {
-            pool_size: None,
-            max_agents: None,
-            interval_secs: 1,
-            ai_task_generation: false,
-            auto_run_ready: false,
-            auto_merge: None,
-            auto_pr: None,
-            auto_commit_before_merge: None,
-            auto_prune_worktrees_after_merge: None,
-            startup_cleanup: false,
-            resume_interrupted: false,
-            reconcile_stale: false,
-            stale_threshold_hours: 24,
-            max_tasks_per_tick: 2,
-            phase_timeout_secs: None,
-            idle_timeout_secs: None,
-            once: true,
-        };
-        let summary = project_tick(&project_root, &args)
-            .await
-            .expect("project tick should succeed");
-
-        assert!(!summary.requirement_lifecycle_transitions.is_empty());
-        let phases: HashSet<String> = summary
-            .requirement_lifecycle_transitions
-            .iter()
-            .map(|transition| transition.phase.clone())
-            .collect();
-        assert!(phases.contains("refine"));
-        assert!(phases.contains("po-review"));
-        assert!(phases.contains("em-review"));
-        assert!(phases.contains("approved"));
-        assert!(phases.contains("rework") || phases.contains("research"));
-    }
-}
-
-fn persist_phase_output(
-    project_root: &str,
-    workflow_id: &str,
-    phase_id: &str,
-    outcome: &PhaseExecutionOutcome,
-) -> Result<()> {
-    ::workflow_runner::executor::persist_phase_output(project_root, workflow_id, phase_id, outcome)
-}
-
-#[cfg(test)]
-pub(super) async fn project_tick(root: &str, args: &DaemonRunArgs) -> Result<ProjectTickSummary> {
-    project_tick_ops::project_tick(root, &runtime_options_from_cli(args)).await
-}
-
-#[cfg(test)]
-pub(super) async fn project_tick_at(
-    root: &str,
-    args: &DaemonRunArgs,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<ProjectTickSummary> {
-    project_tick_ops::project_tick_at(root, &runtime_options_from_cli(args), now).await
 }
 
 pub(super) async fn slim_project_tick(

@@ -27,9 +27,8 @@ mod tests {
     use super::execute_project_tick_script;
     use crate::{
         DaemonRuntimeOptions, ProjectTickAction, ProjectTickActionEffect,
-        ProjectTickActionExecutor, ProjectTickExecutionOutcome, ProjectTickMode, ProjectTickPlan,
-        ProjectTickScript, ReadyTaskWorkflowStart, ReadyTaskWorkflowStartSummary,
-        TaskSelectionSource,
+        ProjectTickActionExecutor, ProjectTickExecutionOutcome, ProjectTickPlan, ProjectTickScript,
+        ReadyTaskWorkflowStart, ReadyTaskWorkflowStartSummary, TaskSelectionSource,
     };
 
     struct FakeExecutor {
@@ -82,7 +81,7 @@ mod tests {
             false,
             1,
         );
-        let script = ProjectTickScript::build(ProjectTickMode::Full, &options, &plan);
+        let script = ProjectTickScript::build(&options, &plan);
         let mut executor = FakeExecutor { calls: Vec::new() };
 
         let outcome: ProjectTickExecutionOutcome =

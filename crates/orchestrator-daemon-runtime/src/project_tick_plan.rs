@@ -1,7 +1,5 @@
-use chrono::NaiveTime;
-use orchestrator_core::DaemonHealth;
-
 use crate::{ready_task_dispatch_limit_for_options, DaemonRuntimeOptions, ScheduleDispatch};
+use chrono::NaiveTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickPlan {
@@ -36,33 +34,6 @@ impl ProjectTickPlan {
         }
     }
 
-    pub fn for_project_tick(
-        options: &DaemonRuntimeOptions,
-        active_hours: Option<&str>,
-        now: NaiveTime,
-        pool_draining: bool,
-        daemon_health: Option<&DaemonHealth>,
-    ) -> Self {
-        let requested_ready_dispatch_limit = daemon_health
-            .map(|health| {
-                ready_task_dispatch_limit_for_options(
-                    options,
-                    health.active_agents,
-                    health.max_agents,
-                    health.pool_size.map(|value| value as usize),
-                )
-            })
-            .unwrap_or(options.max_tasks_per_tick);
-
-        Self::build(
-            options,
-            active_hours,
-            now,
-            pool_draining,
-            requested_ready_dispatch_limit,
-        )
-    }
-
     pub fn for_slim_tick(
         options: &DaemonRuntimeOptions,
         active_hours: Option<&str>,
@@ -92,7 +63,6 @@ impl ProjectTickPlan {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveTime;
-    use orchestrator_core::{DaemonHealth, DaemonStatus};
 
     use super::ProjectTickPlan;
     use crate::DaemonRuntimeOptions;
@@ -146,38 +116,6 @@ mod tests {
         assert!(plan.should_process_due_schedules);
         assert!(!plan.should_prepare_ready_tasks);
         assert_eq!(plan.ready_dispatch_limit, 0);
-    }
-
-    #[test]
-    fn project_tick_uses_daemon_health_capacity() {
-        let plan = ProjectTickPlan::for_project_tick(
-            &DaemonRuntimeOptions {
-                max_tasks_per_tick: 5,
-                ..DaemonRuntimeOptions::default()
-            },
-            None,
-            NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
-            false,
-            Some(&DaemonHealth {
-                healthy: true,
-                status: DaemonStatus::Running,
-                runner_connected: true,
-                runner_pid: Some(42),
-                max_agents: Some(2),
-                active_agents: 1,
-                project_root: Some("/tmp/project".to_string()),
-                daemon_pid: Some(24),
-                process_alive: Some(true),
-                pool_size: Some(2),
-                pool_utilization_percent: Some(50.0),
-                queued_tasks: Some(0),
-                total_agents_spawned: Some(1),
-                total_agents_completed: Some(0),
-                total_agents_failed: Some(0),
-            }),
-        );
-
-        assert_eq!(plan.ready_dispatch_limit, 1);
     }
 
     #[test]

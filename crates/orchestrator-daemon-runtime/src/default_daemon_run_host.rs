@@ -143,37 +143,6 @@ impl DefaultDaemonRunHost {
             }),
         )?;
 
-        for transition in &summary.requirement_lifecycle_transitions {
-            self.emit_daemon_event_with_notifications(
-                "requirement-lifecycle",
-                Some(summary.project_root.clone()),
-                json!({
-                    "requirement_id": transition.requirement_id,
-                    "requirement_title": transition.requirement_title,
-                    "phase": transition.phase,
-                    "status": transition.status,
-                    "transition_at": transition.transition_at,
-                    "comment": transition.comment,
-                }),
-            )?;
-        }
-
-        for transition in &summary.task_state_transitions {
-            self.emit_daemon_event_with_notifications(
-                "task-state-change",
-                Some(summary.project_root.clone()),
-                json!({
-                    "task_id": transition.task_id,
-                    "from_status": transition.from_status,
-                    "to_status": transition.to_status,
-                    "changed_at": transition.changed_at,
-                    "workflow_id": transition.workflow_id,
-                    "phase_id": transition.phase_id,
-                    "selection_source": transition.selection_source,
-                }),
-            )?;
-        }
-
         for phase_event in &summary.phase_execution_events {
             self.emit_daemon_event_with_notifications(
                 &phase_event.event_type,
