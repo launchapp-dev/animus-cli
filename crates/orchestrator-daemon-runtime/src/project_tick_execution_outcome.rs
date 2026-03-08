@@ -1,6 +1,6 @@
 use workflow_runner::executor::PhaseExecutionEvent;
 
-use crate::{DispatchWorkflowStartSummary, ProjectTickActionEffect};
+use crate::DispatchWorkflowStartSummary;
 
 #[derive(Debug, Clone)]
 pub struct ProjectTickExecutionOutcome {
@@ -27,39 +27,6 @@ impl Default for ProjectTickExecutionOutcome {
             executed_workflow_phases: 0,
             failed_workflow_phases: 0,
             phase_execution_events: Vec::new(),
-        }
-    }
-}
-
-impl ProjectTickExecutionOutcome {
-    pub fn apply_effect(&mut self, effect: ProjectTickActionEffect) {
-        match effect {
-            ProjectTickActionEffect::ResumedInterrupted {
-                cleaned_stale_workflows,
-                resumed_workflows,
-            } => {
-                self.cleaned_stale_workflows = cleaned_stale_workflows;
-                self.resumed_workflows = resumed_workflows;
-            }
-            ProjectTickActionEffect::ReconciledStaleTasks { count } => {
-                self.reconciled_stale_tasks = count;
-            }
-            ProjectTickActionEffect::ReconciledDependencyTasks { count } => {
-                self.reconciled_dependency_tasks = count;
-            }
-            ProjectTickActionEffect::ReconciledMergeTasks { count } => {
-                self.reconciled_merge_tasks = count;
-            }
-            ProjectTickActionEffect::ReconciledCompletedProcesses {
-                executed_workflow_phases,
-                failed_workflow_phases,
-            } => {
-                self.executed_workflow_phases = executed_workflow_phases;
-                self.failed_workflow_phases = failed_workflow_phases;
-            }
-            ProjectTickActionEffect::ReadyWorkflowStarts { summary } => {
-                self.ready_workflow_starts = summary;
-            }
         }
     }
 }

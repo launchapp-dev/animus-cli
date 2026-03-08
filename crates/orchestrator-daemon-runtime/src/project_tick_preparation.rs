@@ -1,11 +1,11 @@
 use chrono::NaiveTime;
 
-use crate::{DaemonRuntimeOptions, ProjectTickPlan, ProjectTickScript};
+use crate::{DaemonRuntimeOptions, ProjectTickPlan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickPreparation {
     pub schedule_plan: ProjectTickPlan,
-    pub tick_script: ProjectTickScript,
+    pub ready_dispatch_limit: usize,
 }
 
 impl ProjectTickPreparation {
@@ -36,11 +36,9 @@ impl ProjectTickPreparation {
             daemon_pool_size,
             active_process_count,
         );
-        let tick_script = ProjectTickScript::build(options, &tick_plan);
-
         Self {
             schedule_plan,
-            tick_script,
+            ready_dispatch_limit: tick_plan.ready_dispatch_limit,
         }
     }
 }
@@ -50,7 +48,7 @@ mod tests {
     use chrono::NaiveTime;
 
     use super::ProjectTickPreparation;
-    use crate::{DaemonRuntimeOptions, ProjectTickAction};
+    use crate::DaemonRuntimeOptions;
 
     #[test]
     fn project_tick_preparation_uses_capacity_for_dispatch_but_not_schedule_gate() {
@@ -68,12 +66,6 @@ mod tests {
         );
 
         assert!(preparation.schedule_plan.should_process_due_schedules);
-        assert_eq!(
-            preparation.tick_script.actions(),
-            &[
-                ProjectTickAction::ReconcileCompletedProcesses,
-                ProjectTickAction::DispatchReadyTasks { limit: 1 },
-            ]
-        );
+        assert_eq!(preparation.ready_dispatch_limit, 1);
     }
 }

@@ -4,7 +4,7 @@ use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
 use crate::{
-    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickHooks, ProjectTickRunMode,
+    DaemonRuntimeOptions, ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickRunMode,
     ProjectTickSnapshot, ProjectTickSummary, ProjectTickTime, TickSummaryBuilder,
 };
 
@@ -65,8 +65,17 @@ where
 
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
-    let execution_outcome =
-        execute_project_tick_script(&preparation.tick_script, hooks, hub.clone(), root).await?;
+    let mut execution_outcome = ProjectTickExecutionOutcome::default();
+    let (executed_workflow_phases, failed_workflow_phases) =
+        hooks.reconcile_completed_processes(hub.clone(), root).await?;
+    execution_outcome.executed_workflow_phases = executed_workflow_phases;
+    execution_outcome.failed_workflow_phases = failed_workflow_phases;
+
+    if preparation.ready_dispatch_limit > 0 {
+        execution_outcome.ready_workflow_starts = hooks
+            .dispatch_ready_tasks(hub.clone(), root, preparation.ready_dispatch_limit)
+            .await?;
+    }
 
     let health = serde_json::to_value(hub.daemon().health().await?)?;
     let summary_input = snapshot.into_summary_input(
