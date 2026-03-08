@@ -4322,4 +4322,28 @@ workflows:
             "empty variables should not be serialized"
         );
     }
+
+    #[test]
+    fn repo_custom_yaml_parses_requirement_task_generation_workflows() {
+        let yaml = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../.ao/workflows/custom.yaml"
+        ));
+
+        let config = parse_yaml_workflow_config(yaml).expect("custom workflow yaml should parse");
+        let workflow_ids = config
+            .workflows
+            .iter()
+            .map(|workflow| workflow.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(workflow_ids.contains(&"requirement-task-generation"));
+        assert!(workflow_ids.contains(&"requirement-task-generation-run"));
+        assert!(config
+            .phase_catalog
+            .contains_key("requirement-task-generation"));
+        assert!(config
+            .phase_catalog
+            .contains_key("requirement-workflow-bootstrap"));
+    }
 }

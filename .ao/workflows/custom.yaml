@@ -99,6 +99,16 @@ phase_catalog:
     description: "Validate and refine task requirements before implementation"
     category: planning
     tags: [requirements, planning]
+  requirement-task-generation:
+    label: "Requirement Task Generation"
+    description: "Create or refine linked tasks for a requirement through typed AO tools"
+    category: planning
+    tags: [requirements, planning, task-generation]
+  requirement-workflow-bootstrap:
+    label: "Requirement Workflow Bootstrap"
+    description: "Start task workflows for linked requirement tasks"
+    category: planning
+    tags: [requirements, planning, orchestration]
   brain-requirement-scan:
     label: "Brain Requirement Scan"
     description: "List requirement candidates that still need planning work"
@@ -142,6 +152,20 @@ phases:
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120
+
+workflows:
+  - id: requirement-task-generation
+    name: "Requirement Task Generation"
+    description: "Create or refine requirement-linked AO tasks through typed mutation tools"
+    phases:
+      - requirement-task-generation
+
+  - id: requirement-task-generation-run
+    name: "Requirement Task Generation + Workflow Start"
+    description: "Create or refine requirement-linked tasks, then start workflows for the eligible linked tasks"
+    phases:
+      - requirement-task-generation
+      - requirement-workflow-bootstrap
 
 pipelines:
   - id: triage

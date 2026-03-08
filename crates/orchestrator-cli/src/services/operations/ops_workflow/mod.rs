@@ -8,7 +8,11 @@ use std::sync::Arc;
 use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use orchestrator_core::{services::ServiceHub, WorkflowResumeManager, WorkflowRunInput};
+use orchestrator_core::{
+    ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
+    WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -40,6 +44,37 @@ fn resolve_workflow_run_input(
         _ => Err(anyhow!(
             "--task-id, --requirement-id, and --title are mutually exclusive"
         )),
+    }
+}
+
+pub(super) fn preferred_requirement_workflow_ref(project_root: &str) -> Option<String> {
+    let root = Path::new(project_root);
+    ensure_workflow_config_compiled(root).ok()?;
+    let workflow_config = load_workflow_config(root).ok()?;
+    workflow_config
+        .workflows
+        .iter()
+        .any(|workflow| {
+            workflow
+                .id
+                .eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
+        })
+        .then(|| REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string())
+}
+
+fn apply_requirement_workflow_default(
+    project_root: &str,
+    input: WorkflowRunInput,
+) -> WorkflowRunInput {
+    if input.workflow_ref().is_some() {
+        return input;
+    }
+
+    match input.subject() {
+        WorkflowSubject::Requirement { .. } => {
+            input.with_optional_workflow_ref(preferred_requirement_workflow_ref(project_root))
+        }
+        _ => input,
     }
 }
 
@@ -110,7 +145,12 @@ pub(crate) async fn handle_workflow(
                     args.workflow_ref,
                 )
             })?;
-            print_value(workflows.run(input).await?, json)
+            print_value(
+                workflows
+                    .run(apply_requirement_workflow_default(project_root, input))
+                    .await?,
+                json,
+            )
         }
         WorkflowCommand::Execute(args) => {
             execute::handle_workflow_execute(args, hub, project_root, json).await?;
@@ -297,6 +337,51 @@ pub(crate) async fn handle_workflow(
             })?;
             print_value(phases::upsert_pipeline(project_root, workflow)?, json)
         }
+    }
+}
+
+#[cfg(test)]
+mod requirement_workflow_tests {
+    use super::*;
+    use orchestrator_core::{
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
+        write_workflow_config, WorkflowDefinition,
+    };
+
+    #[test]
+    fn preferred_requirement_workflow_ref_returns_none_when_workflow_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let workflow_ref =
+            preferred_requirement_workflow_ref(temp.path().to_string_lossy().as_ref());
+        assert_eq!(workflow_ref, None);
+    }
+
+    #[test]
+    fn preferred_requirement_workflow_ref_detects_requirement_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.workflows.push(WorkflowDefinition {
+            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
+            name: "Requirement Task Generation".to_string(),
+            description: String::new(),
+            phases: vec!["requirements".to_string().into()],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        write_workflow_config(temp.path(), &workflow_config).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let workflow_ref =
+            preferred_requirement_workflow_ref(temp.path().to_string_lossy().as_ref());
+        assert_eq!(
+            workflow_ref.as_deref(),
+            Some(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
+        );
     }
 }
 

@@ -210,6 +210,66 @@
         "allow_missing_decision": true
       }
     },
+    "requirement-task-generation": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Turn the active requirement into a complete set of linked AO tasks. Read the requirement and any existing linked tasks, reuse or refine tasks that already cover the requirement, create new linked tasks only for missing work, and update the requirement so linked_task_ids reflects the final task set. Use typed AO commands or MCP tools only. Do not edit .ao files directly.",
+      "system_prompt": "You are a planning agent for the ao-cli Rust workspace. Your job is to turn the active requirement into concrete linked AO tasks by using typed AO or MCP mutation tools.\n\nYou MUST:\n1. Read the active requirement and any currently linked tasks.\n2. Reuse and refine existing linked tasks when they already cover the requirement.\n3. Create new tasks only for missing work; do not create duplicates.\n4. Create tasks through ao.task.create or the equivalent AO MCP tool with linked requirements set.\n5. Update the requirement through ao.requirements.update so linked_task_ids reflects the final task set.\n6. Keep each task implementation-ready, scoped to one coherent workflow, and specific about verification.\n\nSet verdict to advance when the requirement has a complete linked task set. Set verdict to rework when the task set is still incomplete or too vague. Set verdict to fail only for unrecoverable tool or state errors.",
+      "runtime": {
+        "tool": "claude",
+        "model": "claude-sonnet-4-6",
+        "fallback_models": [],
+        "reasoning_effort": null,
+        "web_search": null,
+        "network_access": null,
+        "timeout_secs": null,
+        "max_attempts": null,
+        "extra_args": [],
+        "codex_config_overrides": []
+      },
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null,
+      "decision_contract": {
+        "required_evidence": [
+          "requirements_met"
+        ],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": true
+      }
+    },
+    "requirement-workflow-bootstrap": {
+      "mode": "agent",
+      "agent_id": "default",
+      "directive": "Start workflows for the active requirement's linked tasks. Read the requirement, inspect linked_task_ids, skip tasks that are already done, cancelled, or blocked, reuse existing active workflows, and start workflows only for eligible tasks by using typed AO commands or MCP tools. Update the requirement status to in-progress once at least one linked task workflow has been started. Do not edit .ao files directly.",
+      "system_prompt": "You are a workflow orchestration agent for the ao-cli Rust workspace. Your job is to start task workflows for the active requirement's linked tasks after task generation is complete.\n\nYou MUST:\n1. Read the active requirement and collect linked_task_ids.\n2. Inspect each linked task before starting anything.\n3. Reuse existing active workflows; do not create duplicates.\n4. Start workflows only for tasks that are eligible to proceed.\n5. Use ao.workflow.run or the equivalent AO MCP workflow tool to start those task workflows.\n6. Update the requirement status to in-progress once at least one linked task workflow is started.\n\nSet verdict to advance when every eligible linked task has an active workflow. Set verdict to rework when task generation must be corrected before workflows can be started. Set verdict to fail only for unrecoverable tool or state errors.",
+      "runtime": {
+        "tool": "claude",
+        "model": "claude-sonnet-4-6",
+        "fallback_models": [],
+        "reasoning_effort": null,
+        "web_search": null,
+        "network_access": null,
+        "timeout_secs": null,
+        "max_attempts": null,
+        "extra_args": [],
+        "codex_config_overrides": []
+      },
+      "output_contract": null,
+      "output_json_schema": null,
+      "command": null,
+      "manual": null,
+      "decision_contract": {
+        "required_evidence": [
+          "requirements_met"
+        ],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": true
+      }
+    },
     "research": {
       "mode": "agent",
       "agent_id": "default",

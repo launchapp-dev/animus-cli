@@ -3,7 +3,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 use orchestrator_core::config::resolve_project_root;
-use orchestrator_core::{FileServiceHub, RuntimeConfig};
+use orchestrator_core::{
+    FileServiceHub, RuntimeConfig, REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+};
 use serde::Serialize;
 
 mod cli_types;
@@ -219,36 +222,46 @@ struct VersionInfo {
 }
 
 fn build_workflow_execute_command(command: ExecuteCommand) -> Result<WorkflowCommand> {
-    let (requirement_ids, workflow_ref, input_json) = match command {
-        ExecuteCommand::Plan(args) => (args.requirement_ids, args.workflow_ref, args.input_json),
-        ExecuteCommand::Run(args) => (args.requirement_ids, args.workflow_ref, args.input_json),
+    let (requirement_ids, workflow_ref, input_json, default_workflow_ref) = match command {
+        ExecuteCommand::Plan(args) => (
+            args.requirement_ids,
+            args.workflow_ref,
+            args.input_json,
+            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        ),
+        ExecuteCommand::Run(args) => (
+            args.requirement_ids,
+            args.workflow_ref,
+            args.input_json,
+            REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        ),
     };
 
-    let mut task_ids = requirement_ids
+    let mut requirement_ids = requirement_ids
         .into_iter()
         .filter(|id| !id.trim().is_empty())
         .collect::<Vec<_>>();
 
-    if task_ids.is_empty() {
+    if requirement_ids.is_empty() {
         return Err(anyhow::anyhow!(
-            "missing --id value for deprecated `execute` command; pass a task id to delegate to `workflow execute`"
+            "missing --id value for deprecated `execute` command; pass a requirement id to delegate to `workflow execute --requirement-id`"
         ));
     }
 
-    if task_ids.len() > 1 {
+    if requirement_ids.len() > 1 {
         return Err(anyhow::anyhow!(
-            "deprecated `execute` supports only a single --id when delegating to `workflow execute`"
+            "deprecated `execute` supports only a single --id when delegating to `workflow execute --requirement-id`"
         ));
     }
 
-    let task_id = task_ids.remove(0);
+    let requirement_id = requirement_ids.remove(0);
 
     Ok(WorkflowCommand::Execute(WorkflowExecuteArgs {
-        task_id: Some(task_id),
-        requirement_id: None,
+        task_id: None,
+        requirement_id: Some(requirement_id),
         title: None,
         description: None,
-        workflow_ref,
+        workflow_ref: workflow_ref.or_else(|| Some(default_workflow_ref.to_string())),
         phase: None,
         model: None,
         tool: None,
@@ -258,4 +271,35 @@ fn build_workflow_execute_command(command: ExecuteCommand) -> Result<WorkflowCom
         verbose: false,
         vars: Vec::new(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deprecated_execute_plan_delegates_to_requirement_workflow_execute() {
+        let command = ExecuteCommand::Plan(ExecuteArgs {
+            requirement_ids: vec!["REQ-123".to_string()],
+            workflow_ref: None,
+            ai_task_generation: false,
+            include_wont: false,
+            input_json: None,
+        });
+
+        let workflow_command =
+            build_workflow_execute_command(command).expect("execute command should build");
+
+        match workflow_command {
+            WorkflowCommand::Execute(args) => {
+                assert_eq!(args.task_id, None);
+                assert_eq!(args.requirement_id.as_deref(), Some("REQ-123"));
+                assert_eq!(
+                    args.workflow_ref.as_deref(),
+                    Some(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
+                );
+            }
+            other => panic!("expected workflow execute command, got {other:?}"),
+        }
+    }
 }

@@ -8,11 +8,15 @@ use crate::{print_value, WorkflowExecuteArgs};
 use ::workflow_runner::workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams};
 
 pub(crate) async fn handle_workflow_execute(
-    args: WorkflowExecuteArgs,
+    mut args: WorkflowExecuteArgs,
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    if args.requirement_id.is_some() && args.workflow_ref.is_none() {
+        args.workflow_ref = super::preferred_requirement_workflow_ref(project_root);
+    }
+
     let stream_level = if args.quiet {
         "quiet"
     } else if args.verbose {
@@ -22,6 +26,8 @@ pub(crate) async fn handle_workflow_execute(
     };
 
     let json_for_cb = json;
+    let task_id_for_output = args.task_id.clone();
+    let requirement_id_for_output = args.requirement_id.clone();
     let on_phase_event: Box<dyn Fn(PhaseEvent<'_>) + Send + Sync> =
         Box::new(move |event| match event {
             PhaseEvent::Started {
@@ -67,7 +73,9 @@ pub(crate) async fn handle_workflow_execute(
         print_value(
             serde_json::json!({
                 "workflow_id": result.workflow_id,
-                "task_id": result.subject_id,
+                "subject_id": result.subject_id,
+                "task_id": task_id_for_output,
+                "requirement_id": requirement_id_for_output,
                 "execution_cwd": result.execution_cwd,
                 "phases_requested": result.phases_requested,
                 "total_duration_secs": result.total_duration.as_secs(),
