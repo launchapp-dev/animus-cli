@@ -14,10 +14,6 @@ pub trait ProjectTickOperations {
         Ok(())
     }
 
-    async fn ensure_ai_generated_tasks(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     async fn resume_interrupted(&mut self) -> Result<(usize, usize)> {
         Ok((0, 0))
     }
@@ -93,10 +89,6 @@ where
                         self.options.ai_task_generation,
                     )
                     .await?;
-                Ok(ProjectTickActionEffect::Noop)
-            }
-            ProjectTickAction::EnsureAiGeneratedTasks => {
-                self.operations.ensure_ai_generated_tasks().await?;
                 Ok(ProjectTickActionEffect::Noop)
             }
             ProjectTickAction::ResumeInterrupted => {

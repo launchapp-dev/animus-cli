@@ -30,15 +30,6 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         bootstrap_from_vision_if_needed(hub, startup_cleanup, ai_task_generation).await
     }
 
-    async fn ensure_ai_generated_tasks(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        let _ = ensure_tasks_for_unplanned_requirements(hub, root).await;
-        Ok(())
-    }
-
     async fn resume_interrupted(
         &mut self,
         hub: Arc<dyn ServiceHub>,

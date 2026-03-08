@@ -13,9 +13,6 @@ impl ProjectTickScript {
     ) -> Self {
         let mut actions = vec![ProjectTickAction::BootstrapFromVision];
 
-        if options.ai_task_generation {
-            actions.push(ProjectTickAction::EnsureAiGeneratedTasks);
-        }
         if options.resume_interrupted {
             actions.push(ProjectTickAction::ResumeInterrupted);
         }
@@ -84,7 +81,6 @@ mod tests {
             script.actions(),
             &[
                 ProjectTickAction::BootstrapFromVision,
-                ProjectTickAction::EnsureAiGeneratedTasks,
                 ProjectTickAction::ResumeInterrupted,
                 ProjectTickAction::RecoverOrphanedRunningWorkflows,
                 ProjectTickAction::ReconcileStaleTasks,

@@ -37,12 +37,6 @@ where
             .await
     }
 
-    async fn ensure_ai_generated_tasks(&mut self) -> Result<()> {
-        self.hooks
-            .ensure_ai_generated_tasks(self.hub.clone(), self.root)
-            .await
-    }
-
     async fn resume_interrupted(&mut self) -> Result<(usize, usize)> {
         self.hooks
             .resume_interrupted(self.hub.clone(), self.root)

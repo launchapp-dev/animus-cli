@@ -30,14 +30,6 @@ pub trait ProjectTickHooks {
         Ok(())
     }
 
-    async fn ensure_ai_generated_tasks(
-        &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     async fn resume_interrupted(
         &mut self,
         _hub: Arc<dyn ServiceHub>,

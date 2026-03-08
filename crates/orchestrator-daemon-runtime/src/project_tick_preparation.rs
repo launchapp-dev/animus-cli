@@ -112,7 +112,6 @@ mod tests {
             preparation.tick_script.actions(),
             &[
                 ProjectTickAction::BootstrapFromVision,
-                ProjectTickAction::EnsureAiGeneratedTasks,
                 ProjectTickAction::ResumeInterrupted,
                 ProjectTickAction::RecoverOrphanedRunningWorkflows,
                 ProjectTickAction::ReconcileStaleTasks,

@@ -22,12 +22,6 @@ pub trait DefaultProjectTickServices {
         ai_task_generation: bool,
     ) -> Result<()>;
 
-    async fn ensure_ai_generated_tasks(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()>;
-
     async fn resume_interrupted(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -225,14 +219,6 @@ where
             .await
     }
 
-    async fn ensure_ai_generated_tasks(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.ensure_ai_generated_tasks(hub, root).await
-    }
-
     async fn resume_interrupted(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -358,14 +344,6 @@ where
         self.services
             .bootstrap_from_vision(hub, root, startup_cleanup, ai_task_generation)
             .await
-    }
-
-    async fn ensure_ai_generated_tasks(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.ensure_ai_generated_tasks(hub, root).await
     }
 
     async fn resume_interrupted(
