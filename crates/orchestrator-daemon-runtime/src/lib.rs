@@ -11,13 +11,11 @@ mod daemon_runtime_state;
 mod em_work_queue_state;
 mod em_work_queue_store;
 mod execute_project_tick_script;
-mod hook_backed_project_tick_driver;
 mod process_manager;
 mod project_tick_action;
 mod project_tick_action_effect;
 mod project_tick_action_executor;
 mod project_tick_context;
-mod project_tick_driver;
 mod project_tick_execution_outcome;
 mod project_tick_hooks;
 mod project_tick_operation_executor;
@@ -59,13 +57,11 @@ pub use em_work_queue_store::{
     remove_terminal_em_work_queue_entry_non_fatal, save_em_work_queue_state,
 };
 pub use execute_project_tick_script::execute_project_tick_script;
-pub use hook_backed_project_tick_driver::HookBackedProjectTickDriver;
 pub use process_manager::ProcessManager;
 pub use project_tick_action::ProjectTickAction;
 pub use project_tick_action_effect::ProjectTickActionEffect;
 pub use project_tick_action_executor::ProjectTickActionExecutor;
 pub use project_tick_context::ProjectTickContext;
-pub use project_tick_driver::ProjectTickDriver;
 pub use project_tick_execution_outcome::ProjectTickExecutionOutcome;
 pub use project_tick_hooks::ProjectTickHooks;
 pub use project_tick_operation_executor::ProjectTickOperationExecutor;

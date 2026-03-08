@@ -4,8 +4,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{services::ServiceHub, FileServiceHub};
 use orchestrator_daemon_runtime::{
-    CompletedProcess, HookBackedProjectTickDriver, ProcessManager, ProjectTickHooks,
-    ReadyTaskWorkflowStartSummary, ScheduleDispatch, SubjectDispatch,
+    CompletedProcess, ProcessManager, ProjectTickHooks, ReadyTaskWorkflowStartSummary,
+    ScheduleDispatch, SubjectDispatch,
 };
 use tokio::process::Command as TokioCommand;
 
@@ -27,8 +27,7 @@ pub trait DefaultProjectTickServices {
     ) -> Result<ReadyTaskWorkflowStartSummary>;
 }
 
-pub type DefaultSlimProjectTickDriver<'a, S> =
-    HookBackedProjectTickDriver<DefaultSlimProjectTickHooks<'a, S>>;
+pub type DefaultSlimProjectTickDriver<'a, S> = DefaultSlimProjectTickHooks<'a, S>;
 
 pub fn default_slim_project_tick_driver<'a, S>(
     services: S,
@@ -37,10 +36,10 @@ pub fn default_slim_project_tick_driver<'a, S>(
 where
     S: DefaultProjectTickServices,
 {
-    HookBackedProjectTickDriver::new(DefaultSlimProjectTickHooks {
+    DefaultSlimProjectTickHooks {
         services,
         process_manager,
-    })
+    }
 }
 
 pub struct DefaultSlimProjectTickHooks<'a, S> {

@@ -4,41 +4,41 @@ use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
 use crate::{
-    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickDriver, ProjectTickRunMode,
+    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickHooks, ProjectTickRunMode,
     ProjectTickSnapshot, ProjectTickSummary, ProjectTickTime, TickSummaryBuilder,
 };
 
-pub async fn run_project_tick<D>(
+pub async fn run_project_tick<H>(
     root: &str,
     args: &DaemonRuntimeOptions,
     mode: ProjectTickRunMode,
     pool_draining: bool,
-    driver: &mut D,
+    hooks: &mut H,
 ) -> Result<ProjectTickSummary>
 where
-    D: ProjectTickDriver,
+    H: ProjectTickHooks,
 {
     run_project_tick_at(
         root,
         args,
         mode,
         pool_draining,
-        driver,
+        hooks,
         ProjectTickTime::now(),
     )
     .await
 }
 
-pub async fn run_project_tick_at<D>(
+pub async fn run_project_tick_at<H>(
     root: &str,
     args: &DaemonRuntimeOptions,
     mode: ProjectTickRunMode,
     pool_draining: bool,
-    driver: &mut D,
+    hooks: &mut H,
     tick_time: ProjectTickTime,
 ) -> Result<ProjectTickSummary>
 where
-    D: ProjectTickDriver,
+    H: ProjectTickHooks,
 {
     let now = tick_time.local_time();
     let context = mode.load_context(root, args, now, pool_draining);
@@ -49,7 +49,7 @@ where
         .within_active_hours
     {
         if let Some(message) = context.active_hours_skip_message() {
-            driver.emit_notice(&message);
+            hooks.emit_notice(&message);
         }
     }
 
@@ -58,14 +58,14 @@ where
         .schedule_plan
         .should_process_due_schedules
     {
-        driver.process_due_schedules(root, tick_time.schedule_at());
+        hooks.process_due_schedules(root, tick_time.schedule_at());
     }
 
-    let hub: Arc<dyn ServiceHub> = driver.build_hub(root)?;
+    let hub: Arc<dyn ServiceHub> = hooks.build_hub(root)?;
 
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
-    let mut executor = driver.build_executor(args, hub.clone(), root);
+    let mut executor = crate::ProjectTickOperationExecutor::new(args, hooks, hub.clone(), root);
     let execution_outcome =
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 

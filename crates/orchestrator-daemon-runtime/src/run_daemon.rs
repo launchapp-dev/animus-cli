@@ -16,7 +16,7 @@ use crate::DaemonRunGuard;
 use crate::DaemonRunHooks;
 use crate::DaemonRuntimeOptions;
 use crate::DaemonRuntimeState;
-use crate::ProjectTickDriver;
+use crate::ProjectTickHooks;
 use crate::ProjectTickRunMode;
 
 pub async fn run_daemon<D, H>(
@@ -27,7 +27,7 @@ pub async fn run_daemon<D, H>(
     hooks: &mut H,
 ) -> Result<()>
 where
-    D: ProjectTickDriver,
+    D: ProjectTickHooks,
     H: DaemonRunHooks,
 {
     let _run_guard = DaemonRunGuard::acquire(project_root)?;
