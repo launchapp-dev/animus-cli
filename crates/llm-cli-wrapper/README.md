@@ -1,262 +1,118 @@
-# CLI Wrapper
+# llm-cli-wrapper
 
-A standalone Rust tool for testing and managing different AI coding CLIs (Claude Code, Codex, Gemini, etc.).
+Library and companion CLI for discovering, validating, and normalizing the agent CLIs used by AO.
 
-## Features
+## Overview
 
-- **CLI Discovery**: Automatically detect installed AI coding CLIs
-- **Testing Framework**: Verify CLI functionality with customizable test suites
-- **Health Checks**: Quick health status for all CLIs
-- **Output Validation**: Parse and validate CLI outputs
-- **Multi-CLI Support**: Works with Claude, Codex, Gemini, Aider, and more
+`llm-cli-wrapper` provides the thin abstraction layer AO uses to reason about heterogeneous agent tools in one consistent way. It exposes CLI metadata, health checks, capability flags, test suites, launch-contract parsing, and output normalization, and it also ships a small binary for manual inspection and testing.
 
-## Installation
+## Targets
 
-```bash
-cd llm-cli-wrapper
-cargo build --release
-```
-
-The binary will be at `target/release/llm-cli-wrapper`.
-
-## Usage
-
-### Discover Installed CLIs
-
-```bash
-llm-cli-wrapper discover
-```
-
-### List All CLIs
-
-```bash
-llm-cli-wrapper list
-```
-
-Output:
-```
-Installed CLIs:
-────────────────────────────────────────────────────────────
-Claude Code     ✓ Available
-OpenAI Codex    ⚠ Not Authenticated
-Google Gemini   ✗ Not Installed
-```
-
-### Run Health Checks
-
-Check all CLIs:
-```bash
-llm-cli-wrapper health
-```
-
-Check specific CLI:
-```bash
-llm-cli-wrapper health claude
-```
-
-### Run Tests
-
-Test all CLIs with basic suite:
-```bash
-llm-cli-wrapper test
-```
-
-Test specific CLI:
-```bash
-llm-cli-wrapper test claude
-```
-
-Test with different suite:
-```bash
-llm-cli-wrapper test --suite file-ops
-llm-cli-wrapper test --suite code-gen
-```
-
-Available test suites:
-- `basic` - Version, auth, simple commands
-- `file-ops` - File reading, writing, editing
-- `code-gen` - Code generation capabilities
-
-### Show CLI Info
-
-```bash
-llm-cli-wrapper info claude
-```
-
-Output:
-```
-Claude Code
-────────────────────────────────────────────────────────────
-Executable: "/usr/local/bin/claude"
-Version: 0.2.0
-
-Capabilities:
-  File editing: ✓
-  Streaming: ✓
-  Tool use: ✓
-  Vision: ✓
-  Max context: 200000 tokens
-```
-
-## Configuration
-
-Create a `config.toml` file:
-
-```toml
-# Directory for test workspaces
-test_workspace_dir = "/tmp/llm-cli-wrapper-tests"
-
-# Default timeout for CLI operations (seconds)
-default_timeout_secs = 300
-
-# Enable verbose logging
-verbose = false
-
-# Custom CLI configurations
-[[custom_clis]]
-name = "my-custom-cli"
-executable_path = "/path/to/custom-cli"
-auth_command = "custom-cli login"
-```
-
-Use with:
-```bash
-llm-cli-wrapper --config config.toml test
-```
-
-## Supported CLIs
-
-| CLI | Support | Auth Method |
-|-----|---------|-------------|
-| Claude Code | ✓ Full | `ANTHROPIC_API_KEY` env var |
-| OpenAI Codex | ✓ Full | `codex login` |
-| Google Gemini | ✓ Full | `GEMINI_API_KEY` or `GOOGLE_APPLICATION_CREDENTIALS` |
-| Aider | ✓ Basic | API keys in config |
-| Cursor | 🚧 Planned | - |
-| Cline | 🚧 Planned | - |
+- Library: `cli_wrapper`
+- Binary: `llm-cli-wrapper`
 
 ## Architecture
 
-```
-llm-cli-wrapper/
-├── src/
-│   ├── cli/           # CLI implementations
-│   │   ├── claude.rs  # Claude Code
-│   │   ├── codex.rs   # OpenAI Codex
-│   │   ├── gemini.rs  # Google Gemini
-│   │   └── ...
-│   ├── tester/        # Testing framework
-│   ├── validator/     # Output validation
-│   ├── parser/        # Output parsing
-│   └── main.rs        # CLI binary
-```
+```mermaid
+flowchart TD
+    subgraph "library"
+        REG["CliRegistry"]
+        IFACE["CliInterface"]
+        TYPES["CliType / CliMetadata / CliCapability"]
+        PARSE["parser"]
+        TEST["tester"]
+        VALID["validator"]
+        CFG["config.rs"]
+        LAUNCH["launch + runtime-contract helpers"]
+    end
 
-## Integration with Host Application
+    REG --> IFACE
+    IFACE --> TYPES
+    REG --> TEST
+    REG --> PARSE
+    REG --> LAUNCH
+    TEST --> VALID
+    CFG --> TEST
 
-This CLI wrapper can be used standalone or integrated with your Rust-hosted service:
+    subgraph "built-in implementations"
+        CLAUDE["claude.rs"]
+        CODEX["codex.rs"]
+        GEMINI["gemini.rs"]
+        OPENCODE["opencode.rs"]
+        OAI["oai_runner.rs"]
+    end
 
-```rust
-use cli_wrapper::{CliRegistry, CliTester, TestSuite};
+    IFACE --> CLAUDE
+    IFACE --> CODEX
+    IFACE --> GEMINI
+    IFACE --> OPENCODE
+    IFACE --> OAI
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let mut registry = CliRegistry::new();
-    registry.discover_clis().await?;
+    subgraph "binary"
+        MAIN["src/main.rs"]
+        DISC["discover"]
+        LIST["list"]
+        HEALTH["health"]
+        TESTCMD["test"]
+        INFO["info"]
+    end
 
-    let tester = CliTester::new();
-    let results = tester.test_all_clis(&registry, &TestSuite::basic_verification()).await?;
-
-    for result in results {
-        println!("{}: {} ({}ms)",
-            result.cli_type.display_name(),
-            if result.passed { "✓" } else { "✗" },
-            result.duration_ms
-        );
-    }
-
-    Ok(())
-}
-```
-
-## Development
-
-Run tests:
-```bash
-cargo test
-```
-
-Run with verbose logging:
-```bash
-llm-cli-wrapper --verbose test
-```
-
-Build documentation:
-```bash
-cargo doc --open
+    MAIN --> DISC
+    MAIN --> LIST
+    MAIN --> HEALTH
+    MAIN --> TESTCMD
+    MAIN --> INFO
+    MAIN --> REG
 ```
 
-## Examples
+## Supported implementations
 
-### Quick Health Check
-```bash
-# Check if Claude is working
-llm-cli-wrapper health claude
+Built-in implementations that currently exist in `src/cli/`:
 
-# Check all CLIs
-llm-cli-wrapper health
+| CLI | Built-in implementation |
+|---|---|
+| Claude Code | Yes |
+| OpenAI Codex | Yes |
+| Google Gemini CLI | Yes |
+| OpenCode | Yes |
+| AO OAI Runner | Yes |
+
+`CliType` also defines `Aider`, `Cursor`, `Cline`, and `Custom`. Those variants exist in the type system, but they do not currently have full built-in implementations in the registry.
+
+## Binary commands
+
+- `discover`
+- `list`
+- `health [cli]`
+- `test [cli] --suite <basic|file-ops|code-gen>`
+- `info <cli>`
+
+## Key modules
+
+- `src/cli/registry.rs`: discovery and registration of supported CLIs.
+- `src/cli/types.rs`: capability flags, metadata, statuses, and supported CLI enum.
+- `src/cli/launch.rs`: launch-contract parsing and machine-flag helpers.
+- `src/parser/`: text extraction and normalized event parsing.
+- `src/tester/`: health checks and reusable test suites.
+- `src/validator/`: output validation helpers.
+- `src/config.rs`: optional TOML-backed wrapper configuration.
+
+## Integration points
+
+```mermaid
+graph LR
+    WRAP["llm-cli-wrapper"]
+    RUNNER["agent-runner"]
+    CORE["orchestrator-core"]
+
+    RUNNER --> WRAP
+    CORE --> WRAP
 ```
 
-### Run Full Test Suite
-```bash
-# Test basic functionality
-llm-cli-wrapper test --suite basic
+- `agent-runner` uses it to parse runtime contracts and to normalize tool-specific launch behavior.
+- `orchestrator-core` uses it when building runtime contracts and reasoning about tool capabilities.
 
-# Test file operations
-llm-cli-wrapper test --suite file-ops
+## Notes
 
-# Test code generation
-llm-cli-wrapper test --suite code-gen
-```
-
-### Get CLI Information
-```bash
-# Show Claude capabilities
-llm-cli-wrapper info claude
-
-# Show Codex capabilities
-llm-cli-wrapper info codex
-```
-
-## Troubleshooting
-
-### CLI not found
-Make sure the CLI is installed and in your PATH:
-```bash
-which claude
-which codex
-which gemini
-```
-
-### Authentication errors
-Set the required environment variables:
-```bash
-export ANTHROPIC_API_KEY="your-key"
-export OPENAI_API_KEY="your-key"
-export GEMINI_API_KEY="your-key"
-```
-
-Or run the CLI's login command:
-```bash
-codex login
-gemini login
-```
-
-### Test failures
-Run with verbose logging to see details:
-```bash
-llm-cli-wrapper --verbose test
-```
-
-## License
-
-MIT
+- The binary is a developer utility, not the main AO entrypoint.
+- The library is the real production surface.
