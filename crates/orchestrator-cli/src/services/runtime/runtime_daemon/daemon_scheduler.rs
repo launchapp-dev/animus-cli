@@ -11,6 +11,7 @@ use orchestrator_daemon_runtime::{ProcessManager, ProjectTickSummary};
 pub(crate) use project_tick_ops::slim_project_tick_driver;
 #[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
 use std::process::Command as ProcessCommand;
@@ -23,10 +24,10 @@ mod project_tick_ops;
 
 #[cfg(test)]
 use ::workflow_runner::phase_failover::PhaseFailureClassifier;
-pub(crate) use ::workflow_runner::phase_targets;
+#[cfg(test)]
+use ::workflow_runner::phase_targets::PhaseTargetPlanner;
 #[cfg(test)]
 use ::workflow_runner::runtime_support;
-use phase_targets::PhaseTargetPlanner;
 
 #[cfg(test)]
 use orchestrator_core::FileServiceHub;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
+use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
 use orchestrator_core::{services::ServiceHub, WorkflowMachineState, WorkflowStatus};
 use std::collections::HashSet;
 
@@ -35,19 +35,7 @@ pub async fn recover_orphaned_running_workflows(
             workflow.subject.id(),
             workflow.task_id
         );
-        if let Ok(_updated) = hub.workflows().cancel(&workflow.id).await {
-            project_terminal_workflow_result(
-                hub.clone(),
-                project_root,
-                workflow.subject.id(),
-                Some(workflow.task_id.as_str()),
-                workflow.workflow_ref.as_deref(),
-                Some(workflow.id.as_str()),
-                WorkflowStatus::Cancelled,
-                workflow.failure_reason.as_deref(),
-            )
-            .await;
-        }
+        let _ = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
         recovered = recovered.saturating_add(1);
     }
 

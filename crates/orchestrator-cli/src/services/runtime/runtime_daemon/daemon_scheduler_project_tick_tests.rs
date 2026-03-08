@@ -6,6 +6,7 @@ use chrono::Utc;
 use orchestrator_core::ServiceHub;
 use orchestrator_core::{Priority, TaskCreateInput, TaskType};
 use orchestrator_daemon_runtime::CompletedProcess;
+use std::path::Path;
 use tempfile::TempDir;
 use workflow_runner::executor::parse_merge_conflict_recovery_response;
 
