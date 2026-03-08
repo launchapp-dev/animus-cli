@@ -1,13 +1,12 @@
 use crate::cli_types::DaemonRunArgs;
 use anyhow::Result;
 use orchestrator_core::{FileServiceHub, ServiceHub};
-use orchestrator_daemon_runtime::{
-    run_daemon, DaemonRunEvent, DaemonRunHooks, DefaultDaemonRunHost, ProcessManager,
-};
+use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
 use std::sync::Arc;
 
 #[cfg(test)]
 use super::canonicalize_lossy;
+use super::daemon_run_host::DefaultDaemonRunHost;
 use super::daemon_scheduler::{
     recover_orphaned_running_workflows_on_startup, runtime_options_from_cli,
     slim_project_tick_driver,

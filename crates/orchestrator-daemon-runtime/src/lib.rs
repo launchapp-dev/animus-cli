@@ -8,7 +8,6 @@ mod daemon_run_guard;
 mod daemon_run_hooks;
 mod daemon_runtime_options;
 mod daemon_runtime_state;
-mod default_daemon_run_host;
 mod em_work_queue_state;
 mod em_work_queue_store;
 mod execute_project_tick_script;
@@ -54,7 +53,6 @@ pub use daemon_run_guard::DaemonRunGuard;
 pub use daemon_run_hooks::DaemonRunHooks;
 pub use daemon_runtime_options::DaemonRuntimeOptions;
 pub use daemon_runtime_state::DaemonRuntimeState;
-pub use default_daemon_run_host::DefaultDaemonRunHost;
 pub use em_work_queue_state::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQueueState};
 pub use em_work_queue_store::{
     em_work_queue_state_path, load_em_work_queue_state, mark_em_work_queue_entry_assigned,

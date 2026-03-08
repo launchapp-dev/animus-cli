@@ -22,6 +22,7 @@ use crate::{
 
 mod daemon_events;
 mod daemon_run;
+mod daemon_run_host;
 pub(crate) mod daemon_scheduler;
 
 use daemon_events::handle_daemon_events_impl;
