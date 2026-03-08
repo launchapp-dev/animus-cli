@@ -20,8 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 use uuid::Uuid;
-#[path = "daemon_scheduler_frontend_gate.rs"]
-mod frontend_phase_gate;
 #[cfg(test)]
 #[path = "daemon_scheduler_mock_runner_tests.rs"]
 mod mock_runner_tests;
@@ -1759,15 +1757,6 @@ mod tests {
         assert!(phases.contains("approved"));
         assert!(phases.contains("rework") || phases.contains("research"));
     }
-}
-
-fn enforce_frontend_phase_gate(
-    project_root: &str,
-    workflow_id: &str,
-    phase_id: &str,
-    task: &orchestrator_core::OrchestratorTask,
-) -> Result<()> {
-    frontend_phase_gate::enforce_frontend_phase_gate(project_root, workflow_id, phase_id, task)
 }
 
 fn persist_phase_output(
