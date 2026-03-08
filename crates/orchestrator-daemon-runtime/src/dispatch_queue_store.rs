@@ -5,50 +5,50 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQueueState};
+use crate::{DispatchQueueEntry, DispatchQueueEntryStatus, DispatchQueueState};
 
-const EM_WORK_QUEUE_STATE_FILE: &str = "em-work-queue.json";
+const DISPATCH_QUEUE_STATE_FILE: &str = "dispatch-queue.json";
 
-pub fn em_work_queue_state_path(project_root: &str) -> Result<PathBuf> {
+pub fn dispatch_queue_state_path(project_root: &str) -> Result<PathBuf> {
     let runtime_root = protocol::scoped_state_root(std::path::Path::new(project_root))
         .ok_or_else(|| anyhow!("failed to resolve scoped state root for {project_root}"))?;
     Ok(runtime_root
         .join("scheduler")
-        .join(EM_WORK_QUEUE_STATE_FILE))
+        .join(DISPATCH_QUEUE_STATE_FILE))
 }
 
-pub fn load_em_work_queue_state(project_root: &str) -> Result<Option<EmWorkQueueState>> {
-    let path = em_work_queue_state_path(project_root)?;
+pub fn load_dispatch_queue_state(project_root: &str) -> Result<Option<DispatchQueueState>> {
+    let path = dispatch_queue_state_path(project_root)?;
     if !path.exists() {
         return Ok(None);
     }
 
     let content = fs::read_to_string(&path).with_context(|| {
         format!(
-            "failed to read EM work queue state file at {}",
+            "failed to read dispatch queue state file at {}",
             path.display()
         )
     })?;
     if content.trim().is_empty() {
-        return Ok(Some(EmWorkQueueState::default()));
+        return Ok(Some(DispatchQueueState::default()));
     }
 
-    serde_json::from_str::<EmWorkQueueState>(&content)
+    serde_json::from_str::<DispatchQueueState>(&content)
         .map(Some)
         .or_else(|_| {
-            serde_json::from_str::<Vec<EmWorkQueueEntry>>(&content)
-                .map(|entries| Some(EmWorkQueueState { entries }))
+            serde_json::from_str::<Vec<DispatchQueueEntry>>(&content)
+                .map(|entries| Some(DispatchQueueState { entries }))
         })
         .with_context(|| {
             format!(
-                "failed to parse EM work queue state file at {}",
+                "failed to parse dispatch queue state file at {}",
                 path.display()
             )
         })
 }
 
-pub fn save_em_work_queue_state(project_root: &str, state: &EmWorkQueueState) -> Result<()> {
-    let path = em_work_queue_state_path(project_root)?;
+pub fn save_dispatch_queue_state(project_root: &str, state: &DispatchQueueState) -> Result<()> {
+    let path = dispatch_queue_state_path(project_root)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -65,7 +65,7 @@ pub fn save_em_work_queue_state(project_root: &str, state: &EmWorkQueueState) ->
         "{}.{}.tmp",
         path.file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or(EM_WORK_QUEUE_STATE_FILE),
+            .unwrap_or(DISPATCH_QUEUE_STATE_FILE),
         Uuid::new_v4()
     ));
     fs::write(&tmp_path, payload)?;
@@ -73,12 +73,12 @@ pub fn save_em_work_queue_state(project_root: &str, state: &EmWorkQueueState) ->
     Ok(())
 }
 
-pub fn mark_em_work_queue_entry_assigned(
+pub fn mark_dispatch_queue_entry_assigned(
     project_root: &str,
     task_id: &str,
     workflow_id: &str,
 ) -> Result<bool> {
-    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
     };
 
@@ -87,10 +87,10 @@ pub fn mark_em_work_queue_entry_assigned(
         if entry.task_id != task_id {
             continue;
         }
-        if entry.status != EmWorkQueueEntryStatus::Pending {
+        if entry.status != DispatchQueueEntryStatus::Pending {
             continue;
         }
-        entry.status = EmWorkQueueEntryStatus::Assigned;
+        entry.status = DispatchQueueEntryStatus::Assigned;
         entry.workflow_id = Some(workflow_id.to_string());
         entry.assigned_at = Some(Utc::now().to_rfc3339());
         updated = true;
@@ -98,18 +98,18 @@ pub fn mark_em_work_queue_entry_assigned(
     }
 
     if updated {
-        save_em_work_queue_state(project_root, &state)?;
+        save_dispatch_queue_state(project_root, &state)?;
     }
 
     Ok(updated)
 }
 
-fn remove_terminal_em_work_queue_entry(
+fn remove_terminal_dispatch_queue_entry(
     project_root: &str,
     task_id: &str,
     workflow_id: Option<&str>,
 ) -> Result<usize> {
-    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(0);
     };
 
@@ -118,7 +118,7 @@ fn remove_terminal_em_work_queue_entry(
         if entry.task_id != task_id {
             return true;
         }
-        if entry.status != EmWorkQueueEntryStatus::Assigned {
+        if entry.status != DispatchQueueEntryStatus::Assigned {
             return true;
         }
         if let Some(workflow_id) = workflow_id {
@@ -134,19 +134,19 @@ fn remove_terminal_em_work_queue_entry(
     });
     let removed = before.saturating_sub(state.entries.len());
     if removed > 0 {
-        save_em_work_queue_state(project_root, &state)?;
+        save_dispatch_queue_state(project_root, &state)?;
     }
     Ok(removed)
 }
 
-pub fn remove_terminal_em_work_queue_entry_non_fatal(
+pub fn remove_terminal_dispatch_queue_entry_non_fatal(
     project_root: &str,
     task_id: &str,
     workflow_id: Option<&str>,
 ) {
-    if let Err(error) = remove_terminal_em_work_queue_entry(project_root, task_id, workflow_id) {
+    if let Err(error) = remove_terminal_dispatch_queue_entry(project_root, task_id, workflow_id) {
         eprintln!(
-            "{}: failed to remove terminal EM queue entry for task {}: {}",
+            "{}: failed to remove terminal dispatch queue entry for task {}: {}",
             protocol::ACTOR_DAEMON,
             task_id,
             error

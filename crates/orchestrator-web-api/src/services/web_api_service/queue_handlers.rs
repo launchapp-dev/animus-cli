@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use orchestrator_daemon_runtime::{
-    hold_subject, queue_snapshot, release_subject, reorder_subjects, EmWorkQueueEntryStatus,
+    hold_subject, queue_snapshot, release_subject, reorder_subjects, DispatchQueueEntryStatus,
     QueueEntrySnapshot, QueueSnapshot,
 };
 use protocol::orchestrator::OrchestratorTask;
@@ -30,7 +30,7 @@ fn avg_wait_time_secs(snapshot: &QueueSnapshot, now: DateTime<Utc>) -> i64 {
     let mut wait_count = 0usize;
 
     for entry in &snapshot.entries {
-        if entry.status != EmWorkQueueEntryStatus::Pending {
+        if entry.status != DispatchQueueEntryStatus::Pending {
             continue;
         }
         let Some(dispatch) = &entry.dispatch else {
@@ -221,7 +221,7 @@ mod tests {
                     subject_id: "TASK-1".into(),
                     task_id: Some("TASK-1".into()),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: None,
                     assigned_at: Some(now.to_rfc3339()),
                     held_at: None,
@@ -230,7 +230,7 @@ mod tests {
                     subject_id: "TASK-2".into(),
                     task_id: Some("TASK-2".into()),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: None,
                     assigned_at: Some(
                         Utc.with_ymd_and_hms(2026, 3, 7, 20, 30, 0)
@@ -264,7 +264,7 @@ mod tests {
                     "queue-test",
                     Utc.with_ymd_and_hms(2026, 3, 8, 0, 20, 0).unwrap(),
                 )),
-                status: EmWorkQueueEntryStatus::Pending,
+                status: DispatchQueueEntryStatus::Pending,
                 workflow_id: None,
                 assigned_at: None,
                 held_at: None,

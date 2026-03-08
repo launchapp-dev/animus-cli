@@ -19,8 +19,8 @@ All required tests have been implemented and are passing:
 | graceful_drain_completes_running | daemon_scheduler_project_tick.rs:3627-3708 | has_running_workflow_phase_pool_activity false after drain |
 | pool_metrics_active_count | daemon_scheduler_project_tick.rs:3710-3730 | active_count matches in-flight count |
 | pool_metrics_utilization | daemon_scheduler_project_tick.rs:3732-3754 | utilization = active_count / max_phases_per_tick |
-| EM queue precedence | daemon_scheduler_project_tick.rs:2440-2541 | run_ready_prefers_em_queue_and_marks_selected_entry_assigned |
-| Multiple EM entries | daemon_scheduler_project_tick.rs:2544-2671 | run_ready_dispatches_multiple_tasks_from_em_queue_before_fallback_picker |
+| Dispatch queue precedence | daemon_scheduler_project_tick.rs:2440-2541 | run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned |
+| Multiple dispatch queue entries | daemon_scheduler_project_tick.rs:2544-2671 | run_ready_dispatches_multiple_tasks_from_dispatch_queue_before_fallback_picker |
 | Fallback when queue empty | daemon_scheduler_project_tick.rs:2674-2746 | run_ready_falls_back_when_queue_has_no_dispatchable_entries |
 | Ready task dispatch limit | daemon_scheduler_project_tick.rs:3097-3138 | ready_task_dispatch_limit_honors_available_agent_capacity |
 | Completion processing | daemon_scheduler_project_tick.rs:3140-3225 | execute_running_workflow_phases_processes_completions_when_spawn_limit_is_zero |

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EmWorkQueueEntryStatus {
+pub enum DispatchQueueEntryStatus {
     Pending,
     Assigned,
     Held,
@@ -11,19 +11,19 @@ pub enum EmWorkQueueEntryStatus {
     Unknown,
 }
 
-impl Default for EmWorkQueueEntryStatus {
+impl Default for DispatchQueueEntryStatus {
     fn default() -> Self {
         Self::Pending
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmWorkQueueEntry {
+pub struct DispatchQueueEntry {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch: Option<SubjectDispatch>,
     #[serde(default)]
-    pub status: EmWorkQueueEntryStatus,
+    pub status: DispatchQueueEntryStatus,
     #[serde(default)]
     pub workflow_id: Option<String>,
     #[serde(default)]
@@ -33,17 +33,17 @@ pub struct EmWorkQueueEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct EmWorkQueueState {
+pub struct DispatchQueueState {
     #[serde(default)]
-    pub entries: Vec<EmWorkQueueEntry>,
+    pub entries: Vec<DispatchQueueEntry>,
 }
 
-impl EmWorkQueueEntry {
+impl DispatchQueueEntry {
     pub fn from_dispatch(dispatch: SubjectDispatch) -> Self {
         Self {
             task_id: dispatch.task_id().unwrap_or_default().to_string(),
             dispatch: Some(dispatch),
-            status: EmWorkQueueEntryStatus::Pending,
+            status: DispatchQueueEntryStatus::Pending,
             workflow_id: None,
             assigned_at: None,
             held_at: None,

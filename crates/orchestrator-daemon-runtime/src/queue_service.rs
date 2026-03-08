@@ -4,8 +4,8 @@ use protocol::SubjectDispatch;
 use serde::Serialize;
 
 use crate::{
-    load_em_work_queue_state, save_em_work_queue_state, EmWorkQueueEntry, EmWorkQueueEntryStatus,
-    EmWorkQueueState,
+    load_dispatch_queue_state, save_dispatch_queue_state, DispatchQueueEntry,
+    DispatchQueueEntryStatus, DispatchQueueState,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -15,7 +15,7 @@ pub struct QueueEntrySnapshot {
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch: Option<SubjectDispatch>,
-    pub status: EmWorkQueueEntryStatus,
+    pub status: DispatchQueueEntryStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -45,7 +45,7 @@ pub struct QueueEnqueueResult {
 }
 
 pub fn queue_snapshot(project_root: &str) -> Result<QueueSnapshot> {
-    let state = load_em_work_queue_state(project_root)?.unwrap_or_default();
+    let state = load_dispatch_queue_state(project_root)?.unwrap_or_default();
     Ok(snapshot_from_state(&state))
 }
 
@@ -63,12 +63,12 @@ pub fn enqueue_subject_dispatch(
             dispatch.subject_id()
         ));
     };
-    let mut state = load_em_work_queue_state(project_root)?.unwrap_or_default();
+    let mut state = load_dispatch_queue_state(project_root)?.unwrap_or_default();
     let subject_id = dispatch.subject_id().to_string();
 
     if state.entries.iter().any(|entry| {
         entry.subject_id() == subject_id
-            && entry.status != EmWorkQueueEntryStatus::Unknown
+            && entry.status != DispatchQueueEntryStatus::Unknown
             && entry.task_id() == Some(task_id)
             && entry
                 .dispatch
@@ -84,8 +84,8 @@ pub fn enqueue_subject_dispatch(
 
     state
         .entries
-        .push(EmWorkQueueEntry::from_dispatch(dispatch));
-    save_em_work_queue_state(project_root, &state)?;
+        .push(DispatchQueueEntry::from_dispatch(dispatch));
+    save_dispatch_queue_state(project_root, &state)?;
     Ok(QueueEnqueueResult {
         enqueued: true,
         subject_id,
@@ -93,51 +93,51 @@ pub fn enqueue_subject_dispatch(
 }
 
 pub fn hold_subject(project_root: &str, subject_id: &str) -> Result<bool> {
-    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
     };
 
     let mut updated = false;
     for entry in &mut state.entries {
-        if entry.subject_id() != subject_id || entry.status != EmWorkQueueEntryStatus::Pending {
+        if entry.subject_id() != subject_id || entry.status != DispatchQueueEntryStatus::Pending {
             continue;
         }
-        entry.status = EmWorkQueueEntryStatus::Held;
+        entry.status = DispatchQueueEntryStatus::Held;
         entry.held_at = Some(Utc::now().to_rfc3339());
         updated = true;
         break;
     }
 
     if updated {
-        save_em_work_queue_state(project_root, &state)?;
+        save_dispatch_queue_state(project_root, &state)?;
     }
     Ok(updated)
 }
 
 pub fn release_subject(project_root: &str, subject_id: &str) -> Result<bool> {
-    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
     };
 
     let mut updated = false;
     for entry in &mut state.entries {
-        if entry.subject_id() != subject_id || entry.status != EmWorkQueueEntryStatus::Held {
+        if entry.subject_id() != subject_id || entry.status != DispatchQueueEntryStatus::Held {
             continue;
         }
-        entry.status = EmWorkQueueEntryStatus::Pending;
+        entry.status = DispatchQueueEntryStatus::Pending;
         entry.held_at = None;
         updated = true;
         break;
     }
 
     if updated {
-        save_em_work_queue_state(project_root, &state)?;
+        save_dispatch_queue_state(project_root, &state)?;
     }
     Ok(updated)
 }
 
 pub fn reorder_subjects(project_root: &str, subject_ids: Vec<String>) -> Result<bool> {
-    let Some(mut state) = load_em_work_queue_state(project_root)? else {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
     };
 
@@ -175,11 +175,11 @@ pub fn reorder_subjects(project_root: &str, subject_ids: Vec<String>) -> Result<
     }
 
     state.entries = reordered;
-    save_em_work_queue_state(project_root, &state)?;
+    save_dispatch_queue_state(project_root, &state)?;
     Ok(true)
 }
 
-fn snapshot_from_state(state: &EmWorkQueueState) -> QueueSnapshot {
+fn snapshot_from_state(state: &DispatchQueueState) -> QueueSnapshot {
     let entries = state
         .entries
         .iter()
@@ -199,17 +199,17 @@ fn snapshot_from_state(state: &EmWorkQueueState) -> QueueSnapshot {
         pending: state
             .entries
             .iter()
-            .filter(|entry| entry.status == EmWorkQueueEntryStatus::Pending)
+            .filter(|entry| entry.status == DispatchQueueEntryStatus::Pending)
             .count(),
         assigned: state
             .entries
             .iter()
-            .filter(|entry| entry.status == EmWorkQueueEntryStatus::Assigned)
+            .filter(|entry| entry.status == DispatchQueueEntryStatus::Assigned)
             .count(),
         held: state
             .entries
             .iter()
-            .filter(|entry| entry.status == EmWorkQueueEntryStatus::Held)
+            .filter(|entry| entry.status == DispatchQueueEntryStatus::Held)
             .count(),
     };
 

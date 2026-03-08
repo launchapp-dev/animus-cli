@@ -6,7 +6,7 @@
 - Task: `TASK-085`
 
 ## Objective
-Expose the EM (Executor Manager) work queue through REST endpoints to power both the web UI dashboard and external integrations.
+Expose the dispatch queue through REST endpoints to power both the web UI dashboard and external integrations.
 
 ## Current Baseline Audit
 
@@ -14,7 +14,7 @@ Expose the EM (Executor Manager) work queue through REST endpoints to power both
 | --- | --- | --- | --- |
 | Queue REST endpoints | `crates/orchestrator-web-server/src/services/web_server.rs` | Not yet implemented | None - implemented |
 | Queue handlers | `crates/orchestrator-web-api/src/services/web_api_service/queue_handlers.rs` | Not yet implemented | None - implemented |
-| Queue state persistence | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs` | Already has EM work queue state management | None - reused |
+| Queue state persistence | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs` | Already has dispatch queue state management | None - reused |
 | Web API service | `crates/orchestrator-web-api/src/services/web_api_service/mod.rs` | Already has queue handler methods | None - implemented |
 
 ## Scope
@@ -32,7 +32,7 @@ Expose the EM (Executor Manager) work queue through REST endpoints to power both
 - Desktop UI components
 
 ## Constraints
-- Endpoints must work with existing daemon queue state file (`em-work-queue.json`)
+- Endpoints must work with the daemon queue state file (`dispatch-queue.json`)
 - All mutations must emit daemon events for real-time updates
 - Queue state path must follow repo-scoped daemon runtime directory
 
@@ -162,7 +162,7 @@ All queue endpoints are under `/api/v1/queue/*` to match existing REST API versi
 
 ### Queue State Storage
 The web API reads queue state from the daemon-managed state file:
-- Path: `~/.ao/<repo-scope>/scheduler/em-work-queue.json`
+- Path: `~/.ao/<repo-scope>/scheduler/dispatch-queue.json`
 - Read-only for list/stats operations
 - Write operations update the file and emit events
 

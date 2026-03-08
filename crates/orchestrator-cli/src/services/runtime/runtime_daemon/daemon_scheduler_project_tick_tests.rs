@@ -57,7 +57,7 @@
     }
 
     #[tokio::test]
-    async fn run_ready_prefers_em_queue_and_marks_selected_entry_assigned() {
+    async fn run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned() {
         let _lock = crate::shared::test_env_lock()
             .lock()
             .expect("env lock should be available");
@@ -106,22 +106,22 @@
             .await
             .expect("queue task should be ready");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
+            &DispatchQueueState {
                 entries: vec![
-                    EmWorkQueueEntry {
+                    DispatchQueueEntry {
                         task_id: queue_task.id.clone(),
                         dispatch: None,
-                        status: EmWorkQueueEntryStatus::Pending,
+                        status: DispatchQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                         held_at: None,
                     },
-                    EmWorkQueueEntry {
+                    DispatchQueueEntry {
                         task_id: fallback_task.id.clone(),
                         dispatch: None,
-                        status: EmWorkQueueEntryStatus::Pending,
+                        status: DispatchQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                         held_at: None,
@@ -143,9 +143,9 @@
         assert_eq!(summary.started_workflows.len(), 1);
         let started = &summary.started_workflows[0];
         assert_eq!(started.task_id(), Some(queue_task.id.as_str()));
-        assert_eq!(started.selection_source, DispatchSelectionSource::EmQueue);
+        assert_eq!(started.selection_source, DispatchSelectionSource::DispatchQueue);
 
-        let queue_state = load_em_work_queue_state(&project_root_str)
+        let queue_state = load_dispatch_queue_state(&project_root_str)
             .expect("queue should load")
             .expect("queue should exist");
         let queue_entry = queue_state
@@ -153,7 +153,7 @@
             .iter()
             .find(|entry| entry.task_id == queue_task.id)
             .expect("queue task entry should remain present");
-        assert_eq!(queue_entry.status, EmWorkQueueEntryStatus::Assigned);
+        assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
         assert_eq!(
             queue_entry.workflow_id.as_deref(),
             Some(started.workflow_id.as_str())
@@ -164,7 +164,7 @@
             .iter()
             .find(|entry| entry.task_id == fallback_task.id)
             .expect("fallback queue entry should remain present");
-        assert_eq!(fallback_entry.status, EmWorkQueueEntryStatus::Pending);
+        assert_eq!(fallback_entry.status, DispatchQueueEntryStatus::Pending);
     }
 
     #[tokio::test]
@@ -217,13 +217,13 @@
             .await
             .expect("fallback task should be ready");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: queue_task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Pending,
+                    status: DispatchQueueEntryStatus::Pending,
                     workflow_id: None,
                     assigned_at: None,
                     held_at: None,
@@ -252,14 +252,14 @@
         );
         assert_eq!(
             summary.started_workflows[0].selection_source,
-            DispatchSelectionSource::EmQueue
+            DispatchSelectionSource::DispatchQueue
         );
         assert_eq!(
             summary.started_workflows[1].selection_source,
             DispatchSelectionSource::FallbackPicker
         );
 
-        let queue_state = load_em_work_queue_state(&project_root_str)
+        let queue_state = load_dispatch_queue_state(&project_root_str)
             .expect("queue should load")
             .expect("queue should exist");
         let queue_entry = queue_state
@@ -267,7 +267,7 @@
             .iter()
             .find(|entry| entry.task_id == queue_task.id)
             .expect("queue task entry should remain present");
-        assert_eq!(queue_entry.status, EmWorkQueueEntryStatus::Assigned);
+        assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
         assert_eq!(
             queue_entry.workflow_id.as_deref(),
             Some(summary.started_workflows[0].workflow_id.as_str())
@@ -275,7 +275,7 @@
     }
 
     #[tokio::test]
-    async fn run_ready_dispatches_multiple_tasks_from_em_queue_before_fallback_picker() {
+    async fn run_ready_dispatches_multiple_tasks_from_dispatch_queue_before_fallback_picker() {
         let _lock = crate::shared::test_env_lock()
             .lock()
             .expect("env lock should be available");
@@ -343,22 +343,22 @@
             .await
             .expect("fallback task should be ready");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
+            &DispatchQueueState {
                 entries: vec![
-                    EmWorkQueueEntry {
+                    DispatchQueueEntry {
                         task_id: queue_task_one.id.clone(),
                         dispatch: None,
-                        status: EmWorkQueueEntryStatus::Pending,
+                        status: DispatchQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                         held_at: None,
                     },
-                    EmWorkQueueEntry {
+                    DispatchQueueEntry {
                         task_id: queue_task_two.id.clone(),
                         dispatch: None,
-                        status: EmWorkQueueEntryStatus::Pending,
+                        status: DispatchQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                         held_at: None,
@@ -388,18 +388,18 @@
         );
         assert_eq!(
             summary.started_workflows[0].selection_source,
-            DispatchSelectionSource::EmQueue
+            DispatchSelectionSource::DispatchQueue
         );
         assert_eq!(
             summary.started_workflows[1].selection_source,
-            DispatchSelectionSource::EmQueue
+            DispatchSelectionSource::DispatchQueue
         );
         assert!(!summary
             .started_workflows
             .iter()
             .any(|started| started.task_id() == Some(fallback_task.id.as_str())));
 
-        let queue_state = load_em_work_queue_state(&project_root_str)
+        let queue_state = load_dispatch_queue_state(&project_root_str)
             .expect("queue should load")
             .expect("queue should exist");
         for started in &summary.started_workflows {
@@ -408,7 +408,7 @@
                 .iter()
                 .find(|entry| started.task_id() == Some(entry.task_id.as_str()))
                 .expect("started queue entry should remain present");
-            assert_eq!(queue_entry.status, EmWorkQueueEntryStatus::Assigned);
+            assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
             assert_eq!(
                 queue_entry.workflow_id.as_deref(),
                 Some(started.workflow_id.as_str())
@@ -462,13 +462,13 @@
             .await
             .expect("fallback task should be ready");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: queue_only_task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Pending,
+                    status: DispatchQueueEntryStatus::Pending,
                     workflow_id: None,
                     assigned_at: None,
                     held_at: None,
@@ -525,7 +525,7 @@
             .await
             .expect("fallback task should be ready");
 
-        let queue_path = em_work_queue_state_path(&project_root_str).expect("queue path");
+        let queue_path = dispatch_queue_state_path(&project_root_str).expect("queue path");
         if let Some(parent) = queue_path.parent() {
             fs::create_dir_all(parent).expect("queue parent should be created");
         }
@@ -583,13 +583,13 @@
             .await
             .expect("workflow should start");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
                     held_at: None,
@@ -611,7 +611,7 @@
         assert_eq!(updated_task.status, TaskStatus::Done);
 
         let queue_state =
-            load_em_work_queue_state(&project_root_str).expect("queue should load after cleanup");
+            load_dispatch_queue_state(&project_root_str).expect("queue should load after cleanup");
         assert!(
             queue_state.is_none()
                 || queue_state
@@ -657,13 +657,13 @@
             .await
             .expect("workflow should start");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
                     held_at: None,
@@ -682,7 +682,7 @@
         .await;
 
         let queue_state =
-            load_em_work_queue_state(&project_root_str).expect("queue should load after cleanup");
+            load_dispatch_queue_state(&project_root_str).expect("queue should load after cleanup");
         assert!(
             queue_state.is_none()
                 || queue_state
@@ -734,13 +734,13 @@
             .await
             .expect("workflow should fail");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
                     held_at: None,
@@ -762,7 +762,7 @@
         assert_eq!(updated_task.status, TaskStatus::Blocked);
 
         let queue_state =
-            load_em_work_queue_state(&project_root_str).expect("queue should load after cleanup");
+            load_dispatch_queue_state(&project_root_str).expect("queue should load after cleanup");
         assert!(
             queue_state.is_none()
                 || queue_state
@@ -814,13 +814,13 @@
             .await
             .expect("workflow should cancel");
 
-        save_em_work_queue_state(
+        save_dispatch_queue_state(
             &project_root_str,
-            &EmWorkQueueState {
-                entries: vec![EmWorkQueueEntry {
+            &DispatchQueueState {
+                entries: vec![DispatchQueueEntry {
                     task_id: task.id.clone(),
                     dispatch: None,
-                    status: EmWorkQueueEntryStatus::Assigned,
+                    status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
                     held_at: None,
@@ -842,7 +842,7 @@
         assert_eq!(updated_task.status, TaskStatus::Cancelled);
 
         let queue_state =
-            load_em_work_queue_state(&project_root_str).expect("queue should load after cleanup");
+            load_dispatch_queue_state(&project_root_str).expect("queue should load after cleanup");
         assert!(
             queue_state.is_none()
                 || queue_state

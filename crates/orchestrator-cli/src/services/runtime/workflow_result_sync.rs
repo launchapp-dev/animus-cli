@@ -6,7 +6,7 @@ use orchestrator_core::{
     merge_blocked_reason, project_task_blocked_with_reason, project_task_dispatch_failure,
     project_task_status, services::ServiceHub, TaskStatus, WorkflowStatus, MERGE_GATE_PREFIX,
 };
-use orchestrator_daemon_runtime::remove_terminal_em_work_queue_entry_non_fatal;
+use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
 use orchestrator_git_ops::{
     cleanup_merge_conflict_worktree, finalize_merge_conflict_resolution, is_branch_merged,
     load_post_success_git_config, post_success_merge_push_and_cleanup, PostMergeOutcome,
@@ -33,7 +33,7 @@ pub(crate) async fn sync_task_status_for_workflow_result(
             } else {
                 None
             };
-            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
+            remove_terminal_dispatch_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let task = hub.tasks().get(task_id).await;
             let Ok(task) = task else {
                 let _ = project_task_status(hub.clone(), task_id, TaskStatus::Done).await;
@@ -167,21 +167,21 @@ pub(crate) async fn sync_task_status_for_workflow_result(
             if let Some(wf_id) = workflow_id {
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "failed").await;
             }
-            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
+            remove_terminal_dispatch_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = project_task_dispatch_failure(hub.clone(), task_id, MAX_DISPATCH_RETRIES).await;
         }
         WorkflowStatus::Escalated => {
             if let Some(wf_id) = workflow_id {
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "escalated").await;
             }
-            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
+            remove_terminal_dispatch_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = project_task_status(hub.clone(), task_id, TaskStatus::Blocked).await;
         }
         WorkflowStatus::Cancelled => {
             if let Some(wf_id) = workflow_id {
                 record_dispatch_history_entry(hub.clone(), task_id, wf_id, "cancelled").await;
             }
-            remove_terminal_em_work_queue_entry_non_fatal(project_root, task_id, workflow_id);
+            remove_terminal_dispatch_queue_entry_non_fatal(project_root, task_id, workflow_id);
             let _ = project_task_status(hub.clone(), task_id, TaskStatus::Cancelled).await;
         }
         WorkflowStatus::Paused | WorkflowStatus::Running | WorkflowStatus::Pending => {

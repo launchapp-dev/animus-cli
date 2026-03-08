@@ -5,7 +5,7 @@ use orchestrator_core::{
 };
 
 use crate::{
-    build_completion_reconciliation_plan, remove_terminal_em_work_queue_entry_non_fatal,
+    build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal,
     CompletedProcess,
 };
 
@@ -30,7 +30,7 @@ pub async fn reconcile_completed_processes(
 
         if let Some(task_id) = fact.task_id.as_deref() {
             if fact.success {
-                remove_terminal_em_work_queue_entry_non_fatal(root, task_id, None);
+                remove_terminal_dispatch_queue_entry_non_fatal(root, task_id, None);
             }
             project_task_execution_fact(hub.clone(), root, &fact).await;
         } else {

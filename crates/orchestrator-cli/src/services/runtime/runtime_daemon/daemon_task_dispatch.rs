@@ -6,14 +6,14 @@ use orchestrator_core::{
     workflow_ref_for_task,
 };
 pub use orchestrator_daemon_runtime::{
-    active_workflow_task_ids, load_em_work_queue_state, mark_em_work_queue_entry_assigned,
+    active_workflow_task_ids, load_dispatch_queue_state, mark_dispatch_queue_entry_assigned,
     plan_ready_dispatch, workflow_current_phase_id, DispatchCandidate,
     DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, SubjectDispatch,
-    EmWorkQueueEntryStatus, EmWorkQueueState, is_terminally_completed_workflow,
+    DispatchQueueEntryStatus, DispatchQueueState, is_terminally_completed_workflow,
 };
 #[cfg(test)]
 pub use orchestrator_daemon_runtime::{
-    em_work_queue_state_path, save_em_work_queue_state, EmWorkQueueEntry,
+    dispatch_queue_state_path, save_dispatch_queue_state, DispatchQueueEntry,
 };
 pub fn daemon_agent_assignee_for_workflow_start(
     project_root: &str,
@@ -73,11 +73,11 @@ pub async fn run_ready_task_workflows_for_project(
             .cloned()
             .map(|task| (task.id.clone(), task))
             .collect();
-    let queue_state = match load_em_work_queue_state(project_root) {
+    let queue_state = match load_dispatch_queue_state(project_root) {
         Ok(state) => state,
         Err(error) => {
             eprintln!(
-                "{}: failed to load EM work queue state: {}",
+                "{}: failed to load dispatch queue state: {}",
                 protocol::ACTOR_DAEMON,
                 error
             );
@@ -127,12 +127,12 @@ pub async fn run_ready_task_workflows_for_project(
                 Some(planned_start.dispatch.workflow_ref.clone()),
             ))
             .await?;
-        if planned_start.selection_source == DispatchSelectionSource::EmQueue {
+        if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
             if let Err(error) =
-                mark_em_work_queue_entry_assigned(project_root, &task.id, workflow.id.as_str())
+                mark_dispatch_queue_entry_assigned(project_root, &task.id, workflow.id.as_str())
             {
                 eprintln!(
-                    "{}: failed to mark EM queue entry assigned for task {}: {}",
+                    "{}: failed to mark dispatch queue entry assigned for task {}: {}",
                     protocol::ACTOR_DAEMON,
                     task.id,
                     error
@@ -169,11 +169,11 @@ pub async fn dispatch_ready_tasks_via_runner(
 ) -> Result<DispatchWorkflowStartSummary> {
     let candidates = hub.tasks().list_prioritized().await?;
     let workflows = hub.workflows().list().await.unwrap_or_default();
-    let queue_state = match load_em_work_queue_state(root) {
+    let queue_state = match load_dispatch_queue_state(root) {
         Ok(state) => state,
         Err(error) => {
             eprintln!(
-                "{}: failed to load EM work queue state: {}",
+                "{}: failed to load dispatch queue state: {}",
                 protocol::ACTOR_DAEMON,
                 error
             );
@@ -224,12 +224,12 @@ pub async fn dispatch_ready_tasks_via_runner(
         match process_manager.spawn_workflow_runner(&planned_start.dispatch, root) {
             Ok(_) => {
                 let _ = project_task_status(hub.clone(), &task.id, TaskStatus::InProgress).await;
-                if planned_start.selection_source == DispatchSelectionSource::EmQueue {
+                if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
                     if let Err(error) =
-                        mark_em_work_queue_entry_assigned(root, &task.id, task.id.as_str())
+                        mark_dispatch_queue_entry_assigned(root, &task.id, task.id.as_str())
                     {
                         eprintln!(
-                            "{}: failed to mark EM queue entry assigned for task {}: {}",
+                            "{}: failed to mark dispatch queue entry assigned for task {}: {}",
                             protocol::ACTOR_DAEMON,
                             task.id,
                             error
@@ -264,7 +264,7 @@ struct PreparedReadyDispatchCandidates {
 fn prepare_ready_dispatch_candidates(
     tasks: &[orchestrator_core::OrchestratorTask],
     workflows: &[orchestrator_core::OrchestratorWorkflow],
-    queue_state: Option<&EmWorkQueueState>,
+    queue_state: Option<&DispatchQueueState>,
     requested_at: chrono::DateTime<chrono::Utc>,
 ) -> PreparedReadyDispatchCandidates {
     let active_task_ids = active_workflow_task_ids(workflows);
@@ -283,7 +283,7 @@ fn prepare_ready_dispatch_candidates(
 
     if let Some(queue_state) = queue_state {
         for entry in &queue_state.entries {
-            if entry.status != EmWorkQueueEntryStatus::Pending {
+            if entry.status != DispatchQueueEntryStatus::Pending {
                 continue;
             }
 
@@ -317,7 +317,7 @@ fn prepare_ready_dispatch_candidates(
 
             queued_candidates.push(DispatchCandidate {
                 dispatch,
-                selection_source: DispatchSelectionSource::EmQueue,
+                selection_source: DispatchSelectionSource::DispatchQueue,
             });
         }
     }

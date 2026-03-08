@@ -11,8 +11,8 @@ mod daemon_runtime_state;
 mod dispatch_selection_source;
 mod dispatch_workflow_start;
 mod dispatch_workflow_start_summary;
-mod em_work_queue_state;
-mod em_work_queue_store;
+mod dispatch_queue_state;
+mod dispatch_queue_store;
 mod process_manager;
 mod project_tick_context;
 mod project_tick_execution_outcome;
@@ -48,10 +48,12 @@ pub use daemon_runtime_state::DaemonRuntimeState;
 pub use dispatch_selection_source::DispatchSelectionSource;
 pub use dispatch_workflow_start::DispatchWorkflowStart;
 pub use dispatch_workflow_start_summary::DispatchWorkflowStartSummary;
-pub use em_work_queue_state::{EmWorkQueueEntry, EmWorkQueueEntryStatus, EmWorkQueueState};
-pub use em_work_queue_store::{
-    em_work_queue_state_path, load_em_work_queue_state, mark_em_work_queue_entry_assigned,
-    remove_terminal_em_work_queue_entry_non_fatal, save_em_work_queue_state,
+pub use dispatch_queue_state::{
+    DispatchQueueEntry, DispatchQueueEntryStatus, DispatchQueueState,
+};
+pub use dispatch_queue_store::{
+    dispatch_queue_state_path, load_dispatch_queue_state, mark_dispatch_queue_entry_assigned,
+    remove_terminal_dispatch_queue_entry_non_fatal, save_dispatch_queue_state,
 };
 pub use process_manager::ProcessManager;
 pub use project_tick_context::ProjectTickContext;

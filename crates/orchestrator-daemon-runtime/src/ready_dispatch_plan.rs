@@ -75,7 +75,7 @@ mod tests {
                 "em-queue",
                 now,
             ),
-            selection_source: DispatchSelectionSource::EmQueue,
+            selection_source: DispatchSelectionSource::DispatchQueue,
         };
         let fallback = DispatchCandidate {
             dispatch: SubjectDispatch::for_task_with_metadata(
@@ -100,7 +100,7 @@ mod tests {
                         "em-queue",
                         now,
                     ),
-                    selection_source: DispatchSelectionSource::EmQueue,
+                    selection_source: DispatchSelectionSource::DispatchQueue,
                 },
                 PlannedDispatchStart {
                     dispatch: SubjectDispatch::for_task_with_metadata(
@@ -162,7 +162,7 @@ mod tests {
                 "em-queue",
                 now,
             ),
-            selection_source: DispatchSelectionSource::EmQueue,
+            selection_source: DispatchSelectionSource::DispatchQueue,
         };
         let fallback = DispatchCandidate {
             dispatch: SubjectDispatch::for_task_with_metadata(
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(plan.ordered_starts.len(), 1);
         assert_eq!(
             plan.ordered_starts[0].selection_source,
-            DispatchSelectionSource::EmQueue
+            DispatchSelectionSource::DispatchQueue
         );
     }
 }

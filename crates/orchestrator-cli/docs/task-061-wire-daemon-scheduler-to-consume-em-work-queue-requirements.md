@@ -1,4 +1,4 @@
-# TASK-061 Requirements: Wire Daemon Scheduler to Consume EM Work Queue
+# TASK-061 Requirements: Wire Daemon Scheduler to Consume Dispatch Queue
 
 ## Phase
 - Workflow phase: `requirements`
@@ -6,12 +6,12 @@
 - Task: `TASK-061`
 
 ## Objective
-Make daemon ready-task scheduling deterministic with EM-directed ordering:
-- prefer EM work queue entries when queue data exists and has dispatchable work,
+Make daemon ready-task scheduling deterministic with dispatch-queue ordering:
+- prefer dispatch queue entries when queue data exists and has dispatchable work,
 - preserve current priority picker as fallback when queue has no dispatchable entries,
 - track queue entry lifecycle (`pending -> assigned -> removed`) across workflow start
   and terminal workflow outcomes,
-- emit explicit per-task selection source telemetry (`em_queue` or
+- emit explicit per-task selection source telemetry (`dispatch_queue` or
   `fallback_picker`).
 
 ## Current Baseline Audit
@@ -19,17 +19,17 @@ Snapshot date: `2026-02-27`.
 
 | Surface | Current location | Current behavior | Gap |
 | --- | --- | --- | --- |
-| Ready-task workflow startup | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs` (`run_ready_task_workflows_for_project`) | always enumerates `tasks.list_prioritized()` and starts eligible `ready` tasks | no EM queue precedence path |
+| Ready-task workflow startup | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_project_tick.rs` (`run_ready_task_workflows_for_project`) | always enumerates `tasks.list_prioritized()` and starts eligible `ready` tasks | no dispatch queue precedence path |
 | Daemon concurrency signal | `crates/orchestrator-core/src/services/daemon_impl.rs` (`health`) | provides `active_agents` and optional `max_agents` | ready-task startup path does not consume this signal when deciding batch size |
 | Workflow terminal reconciliation | `daemon_scheduler_project_tick.rs` (`sync_task_status_for_workflow_result`) | syncs task status with workflow terminal states | no queue-entry lifecycle cleanup hook |
 | Daemon task-state telemetry | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_run.rs` (`task-state-change` events) | emits status transitions with task/workflow/phase fields | no task selection-source field |
-| Repo-scoped daemon runtime state | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs` (`repo_ao_root`) | supports deterministic repo-scoped state under `~/.ao/<repo-scope>/...` | no documented EM queue persistence/loader contract in scheduler runtime |
+| Repo-scoped daemon runtime state | `crates/orchestrator-cli/src/services/runtime/runtime_daemon/daemon_scheduler_git_ops.rs` (`repo_ao_root`) | supports deterministic repo-scoped state under `~/.ao/<repo-scope>/...` | no documented dispatch queue persistence/loader contract in scheduler runtime |
 
 ## Problem Statement
 The scheduler currently ignores EM-curated task ordering and only uses the
-priority-based picker. This prevents explicit EM queue sequencing, does not
+priority-based picker. This prevents explicit dispatch queue sequencing, does not
 track queue assignment/removal lifecycle, and leaves no machine-readable signal
-for whether a started task came from EM queue or fallback picker.
+for whether a started task came from dispatch queue or fallback picker.
 
 ## Scope
 In scope for implementation after this phase:
@@ -40,7 +40,7 @@ In scope for implementation after this phase:
   - mark selected queue entries as `assigned` after successful workflow start,
   - remove assigned entries when workflow reaches terminal completion/failure.
 - Preserve existing fallback picker for queue-miss/empty cases.
-- Emit per-task source telemetry for starts (`em_queue` vs `fallback_picker`).
+- Emit per-task source telemetry for starts (`dispatch_queue` vs `fallback_picker`).
 - Add targeted scheduler/event tests for precedence and lifecycle semantics.
 
 Out of scope:
@@ -59,7 +59,7 @@ Out of scope:
   of existing fields).
 - State mutation path remains service/API-driven and repo-safe.
 
-## EM Queue Dispatch Contract
+## Dispatch Queue Contract
 
 ### Queue Entry Lifecycle
 - `pending`: entry eligible for scheduler selection.
@@ -83,18 +83,18 @@ Scheduler dispatch limit per tick is:
 - Use fallback priority picker only when queue is unavailable or has no
   dispatchable `pending` entries.
 - Record source on each workflow start:
-  - `em_queue` for queue-selected entries,
+  - `dispatch_queue` for queue-selected entries,
   - `fallback_picker` for priority-list fallback selections.
 
 ## Functional Requirements
 
 ### FR-01: Queue-First Task Selection
-When EM queue exists and has dispatchable `pending` entries, scheduler must
+When the dispatch queue exists and has dispatchable `pending` entries, scheduler must
 attempt queue entries before using fallback picker.
 
 ### FR-02: Deterministic Batch Extraction
 Scheduler must consume at most `dispatch_limit` queue-selected tasks per tick
-using queue order as stored by EM queue.
+using queue order as stored by the dispatch queue.
 
 ### FR-03: Eligibility Parity
 Queue-selected tasks must pass the same readiness gates as fallback-selected
@@ -112,7 +112,7 @@ corresponding queue entry is marked `assigned` (including associated
 
 ### FR-05: Remove Entry on Terminal Workflow Result
 When an assigned queue entry's workflow reaches terminal completion/failure,
-remove that queue entry from EM queue state.
+remove that queue entry from dispatch queue state.
 
 ### FR-06: Fallback Compatibility
 If queue is unavailable, empty, or has no dispatchable `pending` entries for
@@ -120,7 +120,7 @@ the current tick, scheduler falls back to existing priority picker behavior.
 
 ### FR-07: Source Telemetry
 Emit task-level source selection telemetry so operators and MCP consumers can
-determine whether each started workflow came from `em_queue` or
+determine whether each started workflow came from `dispatch_queue` or
 `fallback_picker`.
 
 ### FR-08: Non-Fatal Queue Errors
@@ -146,7 +146,7 @@ and source telemetry payload.
   completed or failed.
 - `AC-05`: When queue has no dispatchable pending entries, scheduler falls back
   to current priority picker.
-- `AC-06`: Per-task selection source is emitted as `em_queue` or
+- `AC-06`: Per-task selection source is emitted as `dispatch_queue` or
   `fallback_picker`.
 - `AC-07`: Queue load/update failures are non-fatal and preserve daemon tick
   continuity.
@@ -192,7 +192,7 @@ Primary expected change targets:
 
 Likely supporting surfaces:
 - `crates/orchestrator-core/src/services.rs` and/or new queue-state types if a
-  typed EM queue API is introduced.
+  typed dispatch queue API is introduced.
 - daemon scheduler tests under
   `crates/orchestrator-cli/src/services/runtime/runtime_daemon/`.
 
