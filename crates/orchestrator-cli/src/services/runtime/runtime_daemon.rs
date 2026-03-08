@@ -616,7 +616,7 @@ pub(crate) async fn handle_daemon(
             }
             result.map(|_| print_ok("daemon started", json))
         }
-        DaemonCommand::Run(args) => handle_daemon_run(args, hub, project_root, json).await,
+        DaemonCommand::Run(args) => handle_daemon_run(args, project_root, json).await,
         DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
         DaemonCommand::Stop(args) => {
             handle_daemon_stop(args, hub.clone(), project_root, json).await?;

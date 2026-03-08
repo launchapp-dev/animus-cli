@@ -1,9 +1,4 @@
-use std::sync::Arc;
-
-use anyhow::Result;
-use orchestrator_core::{
-    services::ServiceHub, DaemonHealth, DaemonStatus, OrchestratorTask, RequirementItem,
-};
+use orchestrator_core::{DaemonHealth, OrchestratorTask, RequirementItem};
 use serde_json::Value;
 
 use crate::{ProjectTickExecutionOutcome, ProjectTickSummaryInput};
@@ -17,26 +12,6 @@ pub struct ProjectTickSnapshot {
 }
 
 impl ProjectTickSnapshot {
-    pub async fn capture(hub: Arc<dyn ServiceHub>) -> Result<Self> {
-        let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
-        let tasks_before = hub.tasks().list().await.unwrap_or_default();
-        let daemon = hub.daemon();
-        let status = daemon.status().await?;
-        let mut started_daemon = false;
-        if !matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
-            daemon.start().await?;
-            started_daemon = true;
-        }
-        let daemon_health = daemon.health().await.ok();
-
-        Ok(Self {
-            requirements_before,
-            tasks_before,
-            started_daemon,
-            daemon_health,
-        })
-    }
-
     pub fn into_summary_input(
         self,
         project_root: String,

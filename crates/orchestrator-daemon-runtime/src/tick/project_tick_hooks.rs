@@ -1,29 +1,31 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use orchestrator_core::services::ServiceHub;
+use serde_json::Value;
 
-use crate::DispatchWorkflowStartSummary;
+use crate::{
+    DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickSnapshot, ProjectTickSummary,
+    ProjectTickSummaryInput,
+};
 
 #[async_trait::async_trait(?Send)]
 pub trait ProjectTickHooks {
     fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>);
 
-    async fn reconcile_completed_processes(
-        &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<(usize, usize)> {
-        Ok((0, 0))
-    }
+    async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot>;
+
+    async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)>;
 
     async fn dispatch_ready_tasks(
         &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
+        root: &str,
         _limit: usize,
-    ) -> Result<DispatchWorkflowStartSummary> {
-        Ok(DispatchWorkflowStartSummary::default())
-    }
+    ) -> Result<DispatchWorkflowStartSummary>;
+
+    async fn collect_health(&mut self, root: &str) -> Result<Value>;
+
+    async fn build_summary(
+        &mut self,
+        args: &DaemonRuntimeOptions,
+        input: ProjectTickSummaryInput,
+    ) -> Result<ProjectTickSummary>;
 }

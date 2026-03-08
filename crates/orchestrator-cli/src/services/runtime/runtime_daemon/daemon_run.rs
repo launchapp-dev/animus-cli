@@ -1,9 +1,11 @@
 use crate::cli_types::DaemonRunArgs;
 use anyhow::Result;
-#[cfg(test)]
+use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
-use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
+use orchestrator_daemon_runtime::{
+    recover_orphaned_running_workflows, run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager,
+};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -37,6 +39,31 @@ impl DaemonRunHooks for CliDaemonRunHost {
         self.inner.handle_event(event)
     }
 
+    async fn daemon_status(&mut self, project_root: &str) -> Result<DaemonStatus> {
+        let hub = FileServiceHub::new(project_root)?;
+        hub.daemon().status().await
+    }
+
+    async fn start_daemon(&mut self, project_root: &str) -> Result<()> {
+        let hub = FileServiceHub::new(project_root)?;
+        hub.daemon().start().await
+    }
+
+    async fn stop_daemon(&mut self, project_root: &str) -> Result<()> {
+        let hub = FileServiceHub::new(project_root)?;
+        hub.daemon().stop().await
+    }
+
+    async fn recover_startup_orphans(&mut self, project_root: &str) -> Result<usize> {
+        let startup_hub = Arc::new(FileServiceHub::new(project_root)?);
+        Ok(recover_orphaned_running_workflows(
+            startup_hub as Arc<dyn ServiceHub>,
+            project_root,
+            &std::collections::HashSet::new(),
+        )
+        .await)
+    }
+
     async fn flush_notifications(&mut self, project_root: &str) -> Result<()> {
         self.inner.flush_notifications(project_root).await
     }
@@ -44,7 +71,6 @@ impl DaemonRunHooks for CliDaemonRunHost {
 
 pub(super) async fn handle_daemon_run(
     args: DaemonRunArgs,
-    hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
@@ -106,7 +132,6 @@ pub(super) async fn handle_daemon_run(
     let run_result = run_daemon(
         project_root,
         &runtime_options,
-        hub,
         &mut driver,
         &mut host,
         |driver| driver.active_process_count(),
@@ -175,8 +200,6 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
 
-        let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
-
         let args = DaemonRunArgs {
             pool_size: None,
             max_agents: None,
@@ -196,14 +219,9 @@ mod tests {
             idle_timeout_secs: None,
             once: true,
         };
-        handle_daemon_run(
-            args,
-            primary_hub as Arc<dyn ServiceHub>,
-            &primary_root,
-            true,
-        )
-        .await
-        .expect("daemon run should succeed");
+        handle_daemon_run(args, &primary_root, true)
+            .await
+            .expect("daemon run should succeed");
 
         let events_path = daemon_events_log_path();
         let events_content =
@@ -330,14 +348,9 @@ mod tests {
             idle_timeout_secs: None,
             once: true,
         };
-        handle_daemon_run(
-            args,
-            primary_hub as Arc<dyn ServiceHub>,
-            &primary_root,
-            true,
-        )
-        .await
-        .expect("daemon run should emit transition event");
+        handle_daemon_run(args, &primary_root, true)
+            .await
+            .expect("daemon run should emit transition event");
 
         let events_path = daemon_events_log_path();
         let events_content =
@@ -454,14 +467,9 @@ mod tests {
             idle_timeout_secs: None,
             once: true,
         };
-        handle_daemon_run(
-            args,
-            primary_hub as Arc<dyn ServiceHub>,
-            &primary_root,
-            true,
-        )
-        .await
-        .expect("daemon run should emit selection source transition");
+        handle_daemon_run(args, &primary_root, true)
+            .await
+            .expect("daemon run should emit selection source transition");
 
         let events_path = daemon_events_log_path();
         let events_content =
@@ -518,7 +526,6 @@ mod tests {
 
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
-        let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
 
         let pm_config_path = PathBuf::from(&primary_root)
             .join(".ao")
@@ -579,14 +586,9 @@ mod tests {
             idle_timeout_secs: None,
             once: true,
         };
-        handle_daemon_run(
-            args,
-            primary_hub as Arc<dyn ServiceHub>,
-            &primary_root,
-            true,
-        )
-        .await
-        .expect("daemon run should succeed even when notification delivery fails");
+        handle_daemon_run(args, &primary_root, true)
+            .await
+            .expect("daemon run should succeed even when notification delivery fails");
 
         let events_path = daemon_events_log_path();
         let events_content =

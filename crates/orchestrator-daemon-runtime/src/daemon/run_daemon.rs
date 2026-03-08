@@ -1,17 +1,12 @@
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
-use orchestrator_core::FileServiceHub;
 use tokio::time::sleep;
 
-use crate::recover_orphaned_running_workflows;
 use crate::run_project_tick;
 use crate::DaemonRunEvent;
 use crate::DaemonRunGuard;
@@ -24,7 +19,6 @@ use crate::ProjectTickRunMode;
 pub async fn run_daemon<D, H>(
     project_root: &str,
     options: &DaemonRuntimeOptions,
-    hub: Arc<dyn ServiceHub>,
     driver: &mut D,
     hooks: &mut H,
     mut active_process_count: impl FnMut(&D) -> usize,
@@ -42,11 +36,10 @@ where
         daemon_pid,
     })?;
 
-    let daemon = hub.daemon();
-    let initial_status = daemon.status().await?;
+    let initial_status = hooks.daemon_status(&primary_root).await?;
     let mut stop_daemon_on_exit = false;
     if !matches!(initial_status, DaemonStatus::Running | DaemonStatus::Paused) {
-        daemon.start().await?;
+        hooks.start_daemon(&primary_root).await?;
         stop_daemon_on_exit = true;
     }
     let _ = DaemonRuntimeState::set_runtime_paused(project_root, false);
@@ -61,8 +54,7 @@ where
             project_root: primary_root.clone(),
         })?;
 
-        let startup_orphans =
-            recover_orphaned_running_workflows(hub.clone(), &primary_root, &HashSet::new()).await;
+        let startup_orphans = hooks.recover_startup_orphans(&primary_root).await?;
         if startup_orphans > 0 {
             hooks.handle_event(DaemonRunEvent::OrphanDetection {
                 project_root: primary_root.clone(),
@@ -161,9 +153,7 @@ where
     }
 
     if stop_daemon_on_exit {
-        if let Ok(project_hub) = FileServiceHub::new(&primary_root) {
-            let _ = project_hub.daemon().stop().await;
-        }
+        let _ = hooks.stop_daemon(&primary_root).await;
     }
 
     hooks.handle_event(DaemonRunEvent::Status {
