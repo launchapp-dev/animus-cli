@@ -769,14 +769,14 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             .find(|candidate| candidate.exists())
         {
             return Err(anyhow!(
-                "workflow config v2 is required at {} (found legacy file at {}). Run `ao workflow config migrate-v2 --json`",
+                "workflow config v2 is required at {} (found unsupported legacy file at {}). Remove the legacy file and define workflows in YAML or workflow-config.v2.json",
                 path.display(),
                 legacy_path.display()
             ));
         }
 
         return Err(anyhow!(
-            "workflow config v2 file is missing at {}. Run `ao workflow config migrate-v2 --json` or initialize a new project",
+            "workflow config v2 file is missing at {}. Define workflows in YAML or create workflow-config.v2.json",
             path.display()
         ));
     }
@@ -2131,7 +2131,7 @@ mod tests {
         let err = load_workflow_config(temp.path()).expect_err("missing config should fail");
         let message = err.to_string();
         assert!(message.contains("workflow config v2 file is missing"));
-        assert!(message.contains("migrate-v2"));
+        assert!(message.contains("Define workflows in YAML"));
     }
 
     #[test]

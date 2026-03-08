@@ -1232,14 +1232,14 @@ pub fn load_agent_runtime_config_with_metadata(
         let legacy = legacy_agent_runtime_config_path(project_root);
         if legacy.exists() {
             return Err(anyhow!(
-                "agent runtime config v2 is required at {} (found legacy file at {}). Run `ao workflow config migrate-v2 --json`",
+                "agent runtime config v2 is required at {} (found unsupported legacy file at {}). Remove the legacy file and define agent runtime in workflow-agent-runtime-config.v2.json",
                 path.display(),
                 legacy.display()
             ));
         }
 
         return Err(anyhow!(
-            "agent runtime config v2 file is missing at {}. Run `ao workflow config migrate-v2 --json` or initialize a new project",
+            "agent runtime config v2 file is missing at {}. Define agent runtime in workflow-agent-runtime-config.v2.json",
             path.display()
         ));
     }
@@ -1722,7 +1722,7 @@ mod tests {
         let err = load_agent_runtime_config(temp.path()).expect_err("missing config should fail");
         let message = err.to_string();
         assert!(message.contains("agent runtime config v2 file is missing"));
-        assert!(message.contains("migrate-v2"));
+        assert!(message.contains("Define agent runtime"));
     }
 
     #[test]

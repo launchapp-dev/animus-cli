@@ -166,10 +166,10 @@ mod tests {
         std::fs::write(legacy_path, "{}").expect("write legacy config placeholder");
 
         let err = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("standard"))
-            .expect_err("legacy config should return migration guidance");
+            .expect_err("legacy config should be rejected");
         let message = err.to_string();
         assert!(message.contains("workflow config v2 is required"));
-        assert!(message.contains("migrate-v2"));
+        assert!(message.contains("unsupported legacy file"));
     }
 
     #[test]

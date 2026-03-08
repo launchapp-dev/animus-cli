@@ -104,7 +104,7 @@ ao
 │   ├── config
 │   │   ├── get              Read workflow config
 │   │   ├── validate         Validate config
-│   │   └── migrate-v2       Migrate to v2
+│   │   └── compile          Compile YAML workflows
 │   ├── state-machine
 │   │   ├── get              Read state-machine config
 │   │   ├── validate         Validate state-machine

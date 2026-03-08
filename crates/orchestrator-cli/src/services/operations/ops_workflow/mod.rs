@@ -252,9 +252,6 @@ pub(crate) async fn handle_workflow(
             WorkflowConfigCommand::Validate => {
                 print_value(config::validate_workflow_config_payload(project_root), json)
             }
-            WorkflowConfigCommand::MigrateV2 => {
-                print_value(config::migrate_v1_to_v2(project_root)?, json)
-            }
             WorkflowConfigCommand::Compile => {
                 print_value(config::compile_yaml_workflows_payload(project_root)?, json)
             }
