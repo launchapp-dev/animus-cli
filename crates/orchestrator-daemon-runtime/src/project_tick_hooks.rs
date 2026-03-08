@@ -79,14 +79,6 @@ pub trait ProjectTickHooks {
         Ok((0, 0))
     }
 
-    async fn retry_failed_task_workflows(
-        &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     async fn dispatch_ready_tasks(
         &mut self,
         _hub: Arc<dyn ServiceHub>,

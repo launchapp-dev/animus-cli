@@ -83,15 +83,6 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         Ok(reconcile_completed_processes(hub, root, completed_processes).await)
     }
 
-    async fn retry_failed_task_workflows(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<()> {
-        let _ = retry_failed_task_workflows(hub).await;
-        Ok(())
-    }
-
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -99,6 +90,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<ReadyTaskWorkflowStartSummary> {
+        let _ = retry_failed_task_workflows(hub.clone()).await;
         let _ = promote_backlog_tasks_to_ready(hub.clone(), root).await;
         match process_manager {
             Some(process_manager) => {

@@ -61,12 +61,6 @@ pub trait DefaultProjectTickServices {
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<(usize, usize)>;
 
-    async fn retry_failed_task_workflows(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()>;
-
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -258,14 +252,6 @@ where
         self.services.reconcile_merge_tasks(hub, root).await
     }
 
-    async fn retry_failed_task_workflows(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.retry_failed_task_workflows(hub, root).await
-    }
-
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -385,14 +371,6 @@ where
         self.services
             .reconcile_completed_processes(hub, root, completed_processes)
             .await
-    }
-
-    async fn retry_failed_task_workflows(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.retry_failed_task_workflows(hub, root).await
     }
 
     async fn dispatch_ready_tasks(

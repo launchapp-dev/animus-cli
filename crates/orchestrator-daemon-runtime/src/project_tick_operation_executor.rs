@@ -38,10 +38,6 @@ pub trait ProjectTickOperations {
         Ok((0, 0))
     }
 
-    async fn retry_failed_task_workflows(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     async fn dispatch_ready_tasks(
         &mut self,
         _limit: usize,
@@ -121,10 +117,6 @@ where
                     executed_workflow_phases,
                     failed_workflow_phases,
                 })
-            }
-            ProjectTickAction::RetryFailedTaskWorkflows => {
-                self.operations.retry_failed_task_workflows().await?;
-                Ok(ProjectTickActionEffect::Noop)
             }
             ProjectTickAction::DispatchReadyTasks { limit } => {
                 let summary = self.operations.dispatch_ready_tasks(*limit).await?;

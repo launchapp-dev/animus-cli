@@ -73,12 +73,6 @@ where
             .await
     }
 
-    async fn retry_failed_task_workflows(&mut self) -> Result<()> {
-        self.hooks
-            .retry_failed_task_workflows(self.hub.clone(), self.root)
-            .await
-    }
-
     async fn dispatch_ready_tasks(
         &mut self,
         limit: usize,
