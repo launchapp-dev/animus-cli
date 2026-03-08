@@ -717,7 +717,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
             }
 
             let task = lock.tasks.get(task_id).cloned();
-            let pipeline_id = input.pipeline_id.clone().unwrap_or_else(|| {
+            let workflow_ref = input.pipeline_id.clone().unwrap_or_else(|| {
                 if task
                     .as_ref()
                     .map(|task| task.is_frontend_related())
@@ -729,7 +729,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                 }
             });
             let phase_plan =
-                crate::resolve_phase_plan_for_pipeline(project_root, Some(pipeline_id.as_str()))?;
+                crate::resolve_phase_plan_for_pipeline(project_root, Some(workflow_ref.as_str()))?;
             let executor = if let Some(machine_catalog) = state_machines {
                 WorkflowLifecycleExecutor::with_state_machines(phase_plan, machine_catalog.clone())
             } else {
@@ -738,7 +738,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
             let workflow_id = Uuid::new_v4().to_string();
             let workflow = executor.bootstrap(
                 workflow_id.clone(),
-                WorkflowRunInput::for_task(task_id.clone(), Some(pipeline_id)),
+                WorkflowRunInput::for_task(task_id.clone(), Some(workflow_ref)),
             );
 
             if let Some(manager) = workflow_manager {

@@ -118,7 +118,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
             } else {
                 None
             };
-            let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
+            let pipeline_id = effective_pipeline_id(input.workflow_ref(), task.as_ref());
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_pipeline(
                 None,
                 Some(pipeline_id.as_str()),
@@ -279,7 +279,7 @@ impl WorkflowServiceApi for FileServiceHub {
         } else {
             None
         };
-        let pipeline_id = effective_pipeline_id(input.pipeline_id.as_deref(), task.as_ref());
+        let pipeline_id = effective_pipeline_id(input.workflow_ref(), task.as_ref());
         let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
         let skip_guards = crate::resolve_pipeline_skip_guards(
             &workflow_config.config,

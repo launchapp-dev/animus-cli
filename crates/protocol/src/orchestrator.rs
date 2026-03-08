@@ -1604,8 +1604,8 @@ impl SubjectDispatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowRunInput {
     pub subject: WorkflowSubject,
-    #[serde(default)]
-    pub pipeline_id: Option<String>,
+    #[serde(default, alias = "pipeline_id")]
+    pub workflow_ref: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1617,40 +1617,40 @@ pub struct WorkflowRunInput {
 }
 
 impl WorkflowRunInput {
-    pub fn for_task(task_id: String, pipeline_id: Option<String>) -> Self {
+    pub fn for_task(task_id: String, workflow_ref: Option<String>) -> Self {
         Self {
             subject: WorkflowSubject::Task {
                 id: task_id.clone(),
             },
             task_id,
-            pipeline_id,
+            workflow_ref,
             requirement_id: None,
             title: None,
             description: None,
         }
     }
 
-    pub fn for_requirement(requirement_id: String, pipeline_id: Option<String>) -> Self {
+    pub fn for_requirement(requirement_id: String, workflow_ref: Option<String>) -> Self {
         Self {
             subject: WorkflowSubject::Requirement {
                 id: requirement_id.clone(),
             },
             task_id: String::new(),
-            pipeline_id,
+            workflow_ref,
             requirement_id: Some(requirement_id),
             title: None,
             description: None,
         }
     }
 
-    pub fn for_custom(title: String, description: String, pipeline_id: Option<String>) -> Self {
+    pub fn for_custom(title: String, description: String, workflow_ref: Option<String>) -> Self {
         Self {
             subject: WorkflowSubject::Custom {
                 title: title.clone(),
                 description: description.clone(),
             },
             task_id: String::new(),
-            pipeline_id,
+            workflow_ref,
             requirement_id: None,
             title: Some(title),
             description: Some(description),
@@ -1665,8 +1665,41 @@ impl WorkflowRunInput {
         self.subject.id()
     }
 
-    pub fn with_pipeline(mut self, pipeline_id: String) -> Self {
-        self.pipeline_id = Some(pipeline_id);
+    pub fn workflow_ref(&self) -> Option<&str> {
+        self.workflow_ref.as_deref()
+    }
+
+    pub fn pipeline_id(&self) -> Option<&str> {
+        self.workflow_ref()
+    }
+
+    pub fn with_workflow_ref(mut self, workflow_ref: String) -> Self {
+        self.workflow_ref = Some(workflow_ref);
+        self
+    }
+
+    pub fn with_pipeline(self, pipeline_id: String) -> Self {
+        self.with_workflow_ref(pipeline_id)
+    }
+
+    pub fn into_workflow_ref(self) -> Option<String> {
+        self.workflow_ref
+    }
+
+    pub fn clone_workflow_ref(&self) -> Option<String> {
+        self.workflow_ref.clone()
+    }
+
+    pub fn into_pipeline_id(self) -> Option<String> {
+        self.workflow_ref
+    }
+
+    pub fn clone_pipeline_id(&self) -> Option<String> {
+        self.workflow_ref.clone()
+    }
+
+    pub fn with_optional_workflow_ref(mut self, workflow_ref: Option<String>) -> Self {
+        self.workflow_ref = workflow_ref;
         self
     }
 }
