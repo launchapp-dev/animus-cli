@@ -22,6 +22,7 @@ orchestrator-web-server = { path = "../orchestrator-web-server", features = ["gr
 protocol = { path = "../protocol" }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 orchestrator-daemon-runtime = { workspace = true }
+orchestrator-git-ops = { workspace = true }
 workflow-runner = { path = "../workflow-runner" }
 dirs = "5.0"
 uuid = { version = "1", features = ["v4"] }

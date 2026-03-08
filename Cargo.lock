@@ -2327,6 +2327,7 @@ dependencies = [
  "llm-cli-wrapper",
  "orchestrator-core",
  "orchestrator-daemon-runtime",
+ "orchestrator-git-ops",
  "orchestrator-web-api",
  "orchestrator-web-contracts",
  "orchestrator-web-server",
@@ -2399,12 +2400,29 @@ dependencies = [
  "dirs",
  "fs2",
  "orchestrator-core",
+ "orchestrator-git-ops",
  "orchestrator-providers",
  "protocol",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "workflow-runner",
+]
+
+[[package]]
+name = "orchestrator-git-ops"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "orchestrator-core",
+ "protocol",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "uuid",

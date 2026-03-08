@@ -15,7 +15,6 @@ mod default_project_tick_driver;
 mod em_work_queue_state;
 mod em_work_queue_store;
 mod execute_project_tick_script;
-mod git_ops;
 mod hook_backed_project_tick_driver;
 mod hook_backed_project_tick_operations;
 mod notification_runtime;
@@ -86,7 +85,6 @@ pub use em_work_queue_store::{
     remove_terminal_em_work_queue_entry_non_fatal, save_em_work_queue_state,
 };
 pub use execute_project_tick_script::execute_project_tick_script;
-pub use git_ops::*;
 pub use hook_backed_project_tick_driver::HookBackedProjectTickDriver;
 pub use hook_backed_project_tick_operations::HookBackedProjectTickOperations;
 pub use notification_runtime::{

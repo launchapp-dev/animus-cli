@@ -4,6 +4,7 @@ members = [
   "crates/protocol",
   "crates/llm-cli-wrapper",
   "crates/orchestrator-daemon-runtime",
+  "crates/orchestrator-git-ops",
   "crates/orchestrator-config",
   "crates/orchestrator-core",
   "crates/orchestrator-store",
@@ -27,6 +28,7 @@ resolver = "2"
 protocol = { path = "crates/protocol" }
 llm-cli-wrapper = { path = "crates/llm-cli-wrapper" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
+orchestrator-git-ops = { path = "crates/orchestrator-git-ops" }
 orchestrator-config = { path = "crates/orchestrator-config" }
 orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-providers = { path = "crates/orchestrator-providers" }

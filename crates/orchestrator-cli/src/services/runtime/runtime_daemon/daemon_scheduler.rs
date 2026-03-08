@@ -9,7 +9,6 @@ use orchestrator_core::{
     services::ServiceHub, RequirementItem, RequirementStatus, RequirementsDraftInput,
     RequirementsExecutionInput, RequirementsRefineInput, TaskCreateInput, TaskStatus, TaskType,
 };
-use orchestrator_daemon_runtime as git_ops;
 pub(super) use orchestrator_daemon_runtime::{
     dependency_blocked_reason, dependency_gate_issues_for_task, run_project_tick_at,
     sync_task_status_for_workflow_result, DaemonRuntimeOptions, ProcessManager, ProjectTickRunMode,
@@ -45,6 +44,8 @@ use orchestrator_core::FileServiceHub;
 use orchestrator_core::{WorkflowRunInput, WorkflowStatus};
 #[cfg(test)]
 use orchestrator_daemon_runtime::is_dependency_gate_block;
+#[cfg(test)]
+use orchestrator_git_ops as git_ops;
 #[cfg(test)]
 use runtime_support::WorkflowPhaseRuntimeSettings;
 #[cfg(test)]

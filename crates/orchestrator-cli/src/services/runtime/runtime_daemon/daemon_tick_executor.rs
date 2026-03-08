@@ -6,6 +6,7 @@ use orchestrator_daemon_runtime::{
     reconcile_completed_processes, CompletedProcess, DefaultProjectTickServices,
     DefaultSlimProjectTickDriver, ProcessManager,
 };
+use orchestrator_git_ops as git_ops;
 
 pub(crate) struct CliProjectTickServices;
 
