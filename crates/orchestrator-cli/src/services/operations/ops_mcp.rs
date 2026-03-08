@@ -175,6 +175,31 @@ struct WorkflowRunInput {
     project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct QueueEnqueueInput {
+    task_id: String,
+    #[serde(default)]
+    pipeline: Option<String>,
+    #[serde(default)]
+    input_json: Option<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct QueueSubjectInput {
+    subject_id: String,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+struct QueueReorderInput {
+    subject_ids: Vec<String>,
+    #[serde(default)]
+    project_root: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 struct DaemonStartInput {
     #[serde(default)]
@@ -1283,6 +1308,116 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.queue.list",
+        description = "List queued subject dispatches. Purpose: View the daemon dispatch queue entries, statuses, and selected metadata. Prerequisites: None. Example: {}. Sequencing: Use ao.queue.stats for aggregate depth, or ao.queue.hold / ao.queue.reorder to adjust queue state.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_queue_list(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.queue.list",
+            vec!["queue".to_string(), "list".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.queue.stats",
+        description = "Show queue statistics. Purpose: Get aggregate queue depth and per-status counts for the daemon dispatch queue. Prerequisites: None. Example: {}. Sequencing: Use ao.queue.list for detailed entries or ao.daemon.health for broader capacity context.",
+        input_schema = ao_schema_for_type::<ProjectRootInput>()
+    )]
+    async fn ao_queue_stats(
+        &self,
+        params: Parameters<ProjectRootInput>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(
+            "ao.queue.stats",
+            vec!["queue".to_string(), "stats".to_string()],
+            params.0.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.queue.enqueue",
+        description = "Enqueue a task-backed subject dispatch. Purpose: Add a SubjectDispatch to the daemon queue using a task subject and optional pipeline/input override. Prerequisites: Task must exist. Example: {\"task_id\": \"TASK-001\", \"pipeline\": \"ops\"}. Sequencing: Use ao.queue.list to inspect position or ao.queue.reorder to adjust ordering.",
+        input_schema = ao_schema_for_type::<QueueEnqueueInput>()
+    )]
+    async fn ao_queue_enqueue(
+        &self,
+        params: Parameters<QueueEnqueueInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_queue_enqueue_args(&input);
+        self.run_tool("ao.queue.enqueue", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.queue.hold",
+        description = "Hold a queued subject dispatch. Purpose: Prevent a pending subject from being selected for dispatch without removing it from the queue. Prerequisites: Subject must be queued and pending. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use ao.queue.release to resume dispatch eligibility.",
+        input_schema = ao_schema_for_type::<QueueSubjectInput>()
+    )]
+    async fn ao_queue_hold(
+        &self,
+        params: Parameters<QueueSubjectInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        self.run_tool(
+            "ao.queue.hold",
+            vec![
+                "queue".to_string(),
+                "hold".to_string(),
+                "--subject-id".to_string(),
+                input.subject_id,
+            ],
+            input.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.queue.release",
+        description = "Release a held queued subject dispatch. Purpose: Make a previously held subject eligible for dispatch again. Prerequisites: Subject must be queued and held. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use ao.queue.list to verify queue state after release.",
+        input_schema = ao_schema_for_type::<QueueSubjectInput>()
+    )]
+    async fn ao_queue_release(
+        &self,
+        params: Parameters<QueueSubjectInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        self.run_tool(
+            "ao.queue.release",
+            vec![
+                "queue".to_string(),
+                "release".to_string(),
+                "--subject-id".to_string(),
+                input.subject_id,
+            ],
+            input.project_root,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "ao.queue.reorder",
+        description = "Reorder queued subject dispatches. Purpose: Set the preferred dispatch order for queued subjects by subject id. Prerequisites: Subjects should already be queued. Example: {\"subject_ids\": [\"TASK-002\", \"TASK-001\"]}. Sequencing: Use ao.queue.list before and after to confirm the effective order.",
+        input_schema = ao_schema_for_type::<QueueReorderInput>()
+    )]
+    async fn ao_queue_reorder(
+        &self,
+        params: Parameters<QueueReorderInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_queue_reorder_args(&input);
+        self.run_tool("ao.queue.reorder", args, input.project_root)
+            .await
+    }
+
+    #[tool(
         name = "ao.agent.run",
         description = "Run an agent to execute work. Purpose: Launch an AI agent to perform tasks. Prerequisites: Runner must be healthy (check ao.runner.health). Example: {\"tool\": \"claude\", \"model\": \"claude-3-opus\", \"prompt\": \"Fix the bug\"}. Sequencing: Use ao.agent.status to monitor, ao.agent.control to pause/resume/terminate.",
         input_schema = ao_schema_for_type::<AgentRunInput>()
@@ -2364,6 +2499,13 @@ const REQUIREMENT_SUMMARY_FIELDS: &[&str] = &[
     "linked_task_ids",
 ];
 
+const QUEUE_SUMMARY_FIELDS: &[&str] = &[
+    "subject_id",
+    "task_id",
+    "status",
+    "workflow_id",
+];
+
 const WORKFLOW_SUMMARY_FIELDS: &[&str] = &[
     "id",
     "task_id",
@@ -2410,6 +2552,12 @@ const REQUIREMENT_LIST_PROFILE: ListToolProfile = ListToolProfile {
     digest_status_fields: &["status", "priority"],
 };
 
+const QUEUE_LIST_PROFILE: ListToolProfile = ListToolProfile {
+    summary_fields: QUEUE_SUMMARY_FIELDS,
+    digest_id_fields: &["subject_id", "task_id"],
+    digest_status_fields: &["status", "workflow_id"],
+};
+
 const WORKFLOW_LIST_PROFILE: ListToolProfile = ListToolProfile {
     summary_fields: WORKFLOW_SUMMARY_FIELDS,
     digest_id_fields: &["id", "task_id"],
@@ -2432,6 +2580,7 @@ fn list_tool_profile(tool_name: &str) -> Option<ListToolProfile> {
     match tool_name {
         "ao.task.list" | "ao.task.prioritized" => Some(TASK_LIST_PROFILE),
         "ao.requirements.list" => Some(REQUIREMENT_LIST_PROFILE),
+        "ao.queue.list" => Some(QUEUE_LIST_PROFILE),
         "ao.workflow.list" => Some(WORKFLOW_LIST_PROFILE),
         "ao.workflow.decisions" => Some(WORKFLOW_DECISION_LIST_PROFILE),
         "ao.workflow.checkpoints.list" => Some(WORKFLOW_CHECKPOINT_LIST_PROFILE),
@@ -2799,6 +2948,27 @@ fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<String> {
         "--auto-prune-worktrees-after-merge",
         input.auto_prune_worktrees_after_merge,
     );
+    args
+}
+
+fn build_queue_enqueue_args(input: &QueueEnqueueInput) -> Vec<String> {
+    let mut args = vec![
+        "queue".to_string(),
+        "enqueue".to_string(),
+        "--task-id".to_string(),
+        input.task_id.clone(),
+    ];
+    push_opt(&mut args, "--pipeline", input.pipeline.clone());
+    push_opt(&mut args, "--input-json", input.input_json.clone());
+    args
+}
+
+fn build_queue_reorder_args(input: &QueueReorderInput) -> Vec<String> {
+    let mut args = vec!["queue".to_string(), "reorder".to_string()];
+    for subject_id in &input.subject_ids {
+        args.push("--subject-id".to_string());
+        args.push(subject_id.clone());
+    }
     args
 }
 
@@ -4643,6 +4813,50 @@ mod tests {
                 "start".to_string(),
                 "--stale-threshold-hours".to_string(),
                 "48".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_queue_enqueue_args_includes_optional_fields() {
+        let input = QueueEnqueueInput {
+            task_id: "TASK-123".to_string(),
+            pipeline: Some("ops".to_string()),
+            input_json: Some("{\"mode\":\"fast\"}".to_string()),
+            project_root: None,
+        };
+        let args = build_queue_enqueue_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "queue".to_string(),
+                "enqueue".to_string(),
+                "--task-id".to_string(),
+                "TASK-123".to_string(),
+                "--pipeline".to_string(),
+                "ops".to_string(),
+                "--input-json".to_string(),
+                "{\"mode\":\"fast\"}".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_queue_reorder_args_repeats_subject_flags() {
+        let input = QueueReorderInput {
+            subject_ids: vec!["TASK-2".to_string(), "TASK-1".to_string()],
+            project_root: None,
+        };
+        let args = build_queue_reorder_args(&input);
+        assert_eq!(
+            args,
+            vec![
+                "queue".to_string(),
+                "reorder".to_string(),
+                "--subject-id".to_string(),
+                "TASK-2".to_string(),
+                "--subject-id".to_string(),
+                "TASK-1".to_string(),
             ]
         );
     }
