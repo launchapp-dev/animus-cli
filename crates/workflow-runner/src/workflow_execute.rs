@@ -45,6 +45,7 @@ pub struct WorkflowExecuteParams {
     pub requirement_id: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub workflow_ref: Option<String>,
     pub pipeline_id: Option<String>,
     pub model: Option<String>,
     pub tool: Option<String>,
@@ -436,19 +437,20 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
 }
 
 fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
+    let workflow_ref = params
+        .workflow_ref
+        .clone()
+        .or_else(|| params.pipeline_id.clone());
     match (&params.task_id, &params.requirement_id, &params.title) {
-        (Some(task_id), _, _) => Ok(WorkflowRunInput::for_task(
-            task_id.clone(),
-            params.pipeline_id.clone(),
-        )),
+        (Some(task_id), _, _) => Ok(WorkflowRunInput::for_task(task_id.clone(), workflow_ref)),
         (None, Some(req_id), _) => Ok(WorkflowRunInput::for_requirement(
             req_id.clone(),
-            params.pipeline_id.clone(),
+            workflow_ref,
         )),
         (None, None, Some(title)) => Ok(WorkflowRunInput::for_custom(
             title.clone(),
             params.description.clone().unwrap_or_default(),
-            params.pipeline_id.clone(),
+            workflow_ref,
         )),
         _ => Err(anyhow!(
             "one of --task-id, --requirement-id, or --title must be provided"

@@ -119,11 +119,11 @@ where
 {
     let mut status = "evaluated".to_string();
 
-    if let Some(ref pipeline_id) = schedule.pipeline {
+    if let Some(ref workflow_ref) = schedule.pipeline {
         let dispatch = SubjectDispatch::for_custom(
             format!("schedule:{schedule_id}"),
             format!("Triggered by schedule '{schedule_id}'"),
-            pipeline_id.clone(),
+            workflow_ref.clone(),
             schedule.input.clone(),
             trigger_source.to_string(),
         );
@@ -134,10 +134,10 @@ where
             Err(error) => {
                 status = format!("failed: {error}");
                 eprintln!(
-                    "{}: schedule '{}' pipeline '{}' dispatch failed: {}",
+                    "{}: schedule '{}' workflow '{}' dispatch failed: {}",
                     protocol::ACTOR_DAEMON,
                     schedule_id,
-                    pipeline_id,
+                    workflow_ref,
                     error
                 );
             }
@@ -464,7 +464,7 @@ mod tests {
             move |schedule_id, dispatch| {
                 pipeline_calls_ref.lock().expect("pipeline lock").push((
                     schedule_id.to_string(),
-                    dispatch.pipeline_id.clone(),
+                    dispatch.workflow_ref.clone(),
                     dispatch.input.as_ref().map(|value| value.to_string()),
                 ));
                 Ok(())

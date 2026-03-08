@@ -1505,7 +1505,8 @@ impl WorkflowSubject {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubjectDispatch {
     pub subject: WorkflowSubject,
-    pub pipeline_id: String,
+    #[serde(alias = "pipeline_id")]
+    pub workflow_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1515,19 +1516,19 @@ pub struct SubjectDispatch {
 }
 
 impl SubjectDispatch {
-    pub fn for_task(task_id: impl Into<String>, pipeline_id: impl Into<String>) -> Self {
-        Self::for_task_with_metadata(task_id, pipeline_id, "ready-queue", Utc::now())
+    pub fn for_task(task_id: impl Into<String>, workflow_ref: impl Into<String>) -> Self {
+        Self::for_task_with_metadata(task_id, workflow_ref, "ready-queue", Utc::now())
     }
 
     pub fn for_task_with_metadata(
         task_id: impl Into<String>,
-        pipeline_id: impl Into<String>,
+        workflow_ref: impl Into<String>,
         trigger_source: impl Into<String>,
         requested_at: DateTime<Utc>,
     ) -> Self {
         Self {
             subject: WorkflowSubject::Task { id: task_id.into() },
-            pipeline_id: pipeline_id.into(),
+            workflow_ref: workflow_ref.into(),
             input: None,
             priority: None,
             trigger_source: trigger_source.into(),
@@ -1537,14 +1538,14 @@ impl SubjectDispatch {
 
     pub fn for_requirement(
         requirement_id: impl Into<String>,
-        pipeline_id: impl Into<String>,
+        workflow_ref: impl Into<String>,
         trigger_source: impl Into<String>,
     ) -> Self {
         Self {
             subject: WorkflowSubject::Requirement {
                 id: requirement_id.into(),
             },
-            pipeline_id: pipeline_id.into(),
+            workflow_ref: workflow_ref.into(),
             input: None,
             priority: None,
             trigger_source: trigger_source.into(),
@@ -1555,7 +1556,7 @@ impl SubjectDispatch {
     pub fn for_custom(
         title: impl Into<String>,
         description: impl Into<String>,
-        pipeline_id: impl Into<String>,
+        workflow_ref: impl Into<String>,
         input: Option<Value>,
         trigger_source: impl Into<String>,
     ) -> Self {
@@ -1564,7 +1565,7 @@ impl SubjectDispatch {
                 title: title.into(),
                 description: description.into(),
             },
-            pipeline_id: pipeline_id.into(),
+            workflow_ref: workflow_ref.into(),
             input,
             priority: None,
             trigger_source: trigger_source.into(),
@@ -1581,6 +1582,10 @@ impl SubjectDispatch {
             WorkflowSubject::Task { id } => Some(id),
             _ => None,
         }
+    }
+
+    pub fn pipeline_id(&self) -> &str {
+        self.workflow_ref.as_str()
     }
 
     pub fn schedule_id(&self) -> Option<&str> {

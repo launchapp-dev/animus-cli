@@ -292,7 +292,7 @@ mod tests {
 
         let temp_dir = TempDir::new().expect("temp directory should be created");
         let runner_path = temp_dir.path().join("ao-workflow-runner");
-        let runner_payload = "#!/bin/sh\nprintf '%s\\n' '{\"event\":\"runner_start\"}' >&2\nprintf '%s\\n' '{\"event\":\"runner_complete\",\"exit_code\":0}' >&2\nexit 0\n";
+        let runner_payload = "#!/bin/sh\nprintf '%s\\n' '{\"event\":\"runner_start\",\"workflow_ref\":\"standard\"}' >&2\nprintf '%s\\n' '{\"event\":\"runner_complete\",\"workflow_ref\":\"standard\",\"exit_code\":0}' >&2\nexit 0\n";
         fs::write(&runner_path, runner_payload).expect("mock runner should be written");
         #[cfg(unix)]
         {
@@ -338,5 +338,13 @@ mod tests {
         assert_eq!(completed.schedule_id.as_deref(), Some("nightly"));
         assert!(completed.success);
         assert_eq!(completed.events.len(), 2);
+        assert_eq!(
+            completed.events[0].workflow_ref.as_deref(),
+            Some("standard")
+        );
+        assert_eq!(
+            completed.events[1].workflow_ref.as_deref(),
+            Some("standard")
+        );
     }
 }

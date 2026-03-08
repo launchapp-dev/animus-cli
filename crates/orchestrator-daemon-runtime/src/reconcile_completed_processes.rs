@@ -16,11 +16,11 @@ pub async fn reconcile_completed_processes(
     for fact in plan.execution_facts {
         for event in &fact.runner_events {
             eprintln!(
-                "{}: runner event: {} subject={} pipeline={:?} exit={:?}",
+                "{}: runner event: {} subject={} workflow_ref={:?} exit={:?}",
                 protocol::ACTOR_DAEMON,
                 event.event,
                 fact.subject_id,
-                event.pipeline,
+                event.workflow_ref,
                 event.exit_code,
             );
         }

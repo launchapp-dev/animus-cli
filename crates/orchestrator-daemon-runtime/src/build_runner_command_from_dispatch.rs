@@ -23,8 +23,8 @@ pub fn build_runner_command_from_dispatch(
         }
     }
 
-    cmd.arg("--pipeline")
-        .arg(&dispatch.pipeline_id)
+    cmd.arg("--workflow-ref")
+        .arg(&dispatch.workflow_ref)
         .arg("--project-root")
         .arg(project_root);
     cmd
@@ -39,7 +39,7 @@ mod tests {
     use super::build_runner_command_from_dispatch;
 
     #[test]
-    fn runner_command_uses_subject_and_pipeline_from_dispatch() {
+    fn runner_command_uses_subject_and_workflow_ref_from_dispatch() {
         let dispatch = SubjectDispatch::for_custom(
             "schedule:nightly",
             "nightly dispatch",
@@ -63,7 +63,7 @@ mod tests {
                 "schedule:nightly",
                 "--description",
                 "nightly dispatch",
-                "--pipeline",
+                "--workflow-ref",
                 "ops",
                 "--project-root",
                 "/tmp/project",

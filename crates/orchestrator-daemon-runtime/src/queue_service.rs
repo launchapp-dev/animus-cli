@@ -73,7 +73,7 @@ pub fn enqueue_subject_dispatch(
             && entry
                 .dispatch
                 .as_ref()
-                .map(|existing| existing.pipeline_id == dispatch.pipeline_id)
+                .map(|existing| existing.workflow_ref == dispatch.workflow_ref)
                 .unwrap_or(true)
     }) {
         return Ok(QueueEnqueueResult {

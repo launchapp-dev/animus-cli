@@ -49,6 +49,7 @@ pub(crate) async fn handle_workflow_execute(
         requirement_id: args.requirement_id,
         title: args.title,
         description: args.description,
+        workflow_ref: args.pipeline_id.clone(),
         pipeline_id: args.pipeline_id,
         model: args.model,
         tool: args.tool,

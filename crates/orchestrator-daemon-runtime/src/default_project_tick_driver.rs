@@ -142,10 +142,10 @@ fn spawn_schedule_pipeline(
     process_manager.spawn_workflow_runner(dispatch, project_root)?;
 
     eprintln!(
-        "{}: schedule '{}' fired pipeline '{}'",
+        "{}: schedule '{}' fired workflow '{}'",
         protocol::ACTOR_DAEMON,
         schedule_id,
-        dispatch.pipeline_id
+        dispatch.workflow_ref
     );
     Ok(())
 }

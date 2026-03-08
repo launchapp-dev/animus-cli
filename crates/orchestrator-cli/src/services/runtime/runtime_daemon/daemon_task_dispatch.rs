@@ -115,7 +115,7 @@ pub async fn run_ready_task_workflows_for_project(
             .workflows()
             .run(WorkflowRunInput::for_task(
                 task.id.clone(),
-                Some(planned_start.dispatch.pipeline_id.clone()),
+                Some(planned_start.dispatch.workflow_ref.clone()),
             ))
             .await?;
         if planned_start.selection_source == TaskSelectionSource::EmQueue {

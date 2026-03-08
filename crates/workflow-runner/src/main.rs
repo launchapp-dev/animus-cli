@@ -35,6 +35,9 @@ struct WorkflowExecuteArgs {
     description: Option<String>,
 
     #[arg(long)]
+    workflow_ref: Option<String>,
+
+    #[arg(long)]
     pipeline: Option<String>,
 
     #[arg(long)]
@@ -58,7 +61,7 @@ struct RunnerEvent {
     event: &'static str,
     task_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pipeline: Option<String>,
+    workflow_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exit_code: Option<i32>,
 }
@@ -90,7 +93,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let startup = RunnerEvent {
         event: "runner_start",
         task_id: subject_id.clone(),
-        pipeline: args.pipeline.clone(),
+        workflow_ref: args.workflow_ref.clone().or_else(|| args.pipeline.clone()),
         exit_code: None,
     };
     eprintln!("{}", serde_json::to_string(&startup).unwrap_or_default());
@@ -101,6 +104,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         requirement_id: args.requirement_id,
         title: args.title,
         description: args.description,
+        workflow_ref: args.workflow_ref.clone().or_else(|| args.pipeline.clone()),
         pipeline_id: args.pipeline.clone(),
         model: args.model,
         tool: args.tool,
@@ -122,7 +126,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let completion = RunnerEvent {
         event: "runner_complete",
         task_id: subject_id,
-        pipeline: args.pipeline,
+        workflow_ref: args.workflow_ref.or(args.pipeline),
         exit_code: Some(exit_code),
     };
     eprintln!("{}", serde_json::to_string(&completion).unwrap_or_default());
@@ -180,7 +184,7 @@ mod tests {
         let event = RunnerEvent {
             event: "runner_start",
             task_id: "TASK-001".to_string(),
-            pipeline: Some("default".to_string()),
+            workflow_ref: Some("default".to_string()),
             exit_code: None,
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -191,13 +195,13 @@ mod tests {
         let complete = RunnerEvent {
             event: "runner_complete",
             task_id: "TASK-001".to_string(),
-            pipeline: None,
+            workflow_ref: None,
             exit_code: Some(0),
         };
         let json = serde_json::to_string(&complete).unwrap();
         assert!(json.contains("runner_complete"));
         assert!(json.contains("\"exit_code\":0"));
-        assert!(!json.contains("pipeline"));
+        assert!(!json.contains("workflow_ref"));
     }
 
     #[test]
