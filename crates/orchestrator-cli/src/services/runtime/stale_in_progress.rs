@@ -17,6 +17,7 @@ pub(crate) struct StaleInProgressSummary {
     pub(crate) tasks: Vec<StaleInProgressEntry>,
 }
 
+#[cfg(test)]
 impl StaleInProgressSummary {
     pub(crate) fn task_ids(&self) -> Vec<String> {
         self.tasks

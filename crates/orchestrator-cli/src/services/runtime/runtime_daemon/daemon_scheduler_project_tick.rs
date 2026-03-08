@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::runtime::sync_task_status_for_workflow_result;
 #[cfg(test)]
 use crate::services::runtime::runtime_daemon::canonicalize_lossy;
 use orchestrator_daemon_runtime::ProcessManager;
@@ -12,9 +13,6 @@ pub(super) mod task_dispatch;
 
 #[path = "daemon_reconciliation.rs"]
 pub(super) mod reconciliation;
-
-#[path = "daemon_workflow_result_sync.rs"]
-pub(super) mod workflow_result_sync;
 
 #[path = "daemon_tick_executor.rs"]
 mod tick_executor;
@@ -30,7 +28,6 @@ use tick_wrapper::{
     apply_cli_pre_tick, flush_git_outbox_for_project, refresh_runtime_binaries_for_project,
     run_cli_pre_tick,
 };
-pub(super) use workflow_result_sync::sync_task_status_for_workflow_result;
 
 #[cfg(test)]
 pub(super) async fn slim_daemon_tick(

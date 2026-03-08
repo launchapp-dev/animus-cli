@@ -16,7 +16,7 @@ use workflow_runner::executor::attempt_ai_merge_conflict_recovery;
 
 const MAX_DISPATCH_RETRIES: u32 = 3;
 
-pub async fn sync_task_status_for_workflow_result(
+pub(crate) async fn sync_task_status_for_workflow_result(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task_id: &str,
@@ -215,14 +215,14 @@ fn effective_post_success_git_config(
         Err(_) => return cfg,
     };
 
-    let requested_pipeline_id = workflow
+    let requested_workflow_ref = workflow
         .pipeline_id
         .as_deref()
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
         .unwrap_or_else(|| workflow_config.default_pipeline_id.as_str());
     let Some(pipeline) =
-        resolve_workflow_pipeline_definition(&workflow_config, requested_pipeline_id)
+        resolve_workflow_pipeline_definition(&workflow_config, requested_workflow_ref)
             .or_else(|| {
                 resolve_workflow_pipeline_definition(
                     &workflow_config,
@@ -245,7 +245,7 @@ fn effective_post_success_git_config(
         .and_then(|post_success| post_success.merge.as_ref())
     else {
         eprintln!(
-            "warning: using daemon post-success merge flags (`--auto-merge`, `--auto-pr`) because workflow pipeline `{}` is missing `post_success.merge`; prefer configuring it in `.ao/workflows.yaml` (or `.ao/state/workflow-config.v2.json`) for deprecation-safe behavior",
+            "warning: using daemon post-success merge flags (`--auto-merge`, `--auto-pr`) because workflow `{}` is missing `post_success.merge`; prefer configuring it in `.ao/workflows.yaml` (or `.ao/state/workflow-config.v2.json`) for deprecation-safe behavior",
             pipeline.id
         );
         return cfg;
