@@ -4,10 +4,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use orchestrator_core::services::ServiceHub;
 
-use crate::ProjectTickOperations;
+use crate::ProjectTickActionExecutor;
 
 pub trait ProjectTickDriver {
-    type Operations<'a>: ProjectTickOperations
+    type Executor<'a>: ProjectTickActionExecutor
     where
         Self: 'a;
 
@@ -21,9 +21,10 @@ pub trait ProjectTickDriver {
 
     fn emit_notice(&mut self, _message: &str) {}
 
-    fn build_operations<'a>(
+    fn build_executor<'a>(
         &'a mut self,
+        options: &'a crate::DaemonRuntimeOptions,
         hub: Arc<dyn ServiceHub>,
         root: &'a str,
-    ) -> Self::Operations<'a>;
+    ) -> Self::Executor<'a>;
 }

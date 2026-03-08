@@ -4,9 +4,8 @@ use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
 use crate::{
-    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickDriver,
-    ProjectTickOperationExecutor, ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary,
-    ProjectTickTime, TickSummaryBuilder,
+    execute_project_tick_script, DaemonRuntimeOptions, ProjectTickDriver, ProjectTickRunMode,
+    ProjectTickSnapshot, ProjectTickSummary, ProjectTickTime, TickSummaryBuilder,
 };
 
 pub async fn run_project_tick<D>(
@@ -66,8 +65,7 @@ where
 
     let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
-    let mut operations = driver.build_operations(hub.clone(), root);
-    let mut executor = ProjectTickOperationExecutor::new(args, &mut operations);
+    let mut executor = driver.build_executor(args, hub.clone(), root);
     let execution_outcome =
         execute_project_tick_script(&preparation.tick_script, &mut executor).await?;
 

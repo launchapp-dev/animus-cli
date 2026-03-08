@@ -1,37 +1,31 @@
-use crate::{
-    ProjectTickAction, ProjectTickActionEffect, ProjectTickActionExecutor,
-    ReadyTaskWorkflowStartSummary,
-};
+use std::sync::Arc;
+
 use anyhow::Result;
+use orchestrator_core::services::ServiceHub;
 
-#[async_trait::async_trait(?Send)]
-pub trait ProjectTickOperations {
-    async fn reconcile_completed_processes(&mut self) -> Result<(usize, usize)> {
-        Ok((0, 0))
-    }
+use crate::{ProjectTickAction, ProjectTickActionEffect, ProjectTickActionExecutor, ProjectTickHooks};
 
-    async fn dispatch_ready_tasks(
-        &mut self,
-        _limit: usize,
-    ) -> Result<ReadyTaskWorkflowStartSummary> {
-        Ok(ReadyTaskWorkflowStartSummary::default())
-    }
+pub struct ProjectTickOperationExecutor<'a, H> {
+    hooks: &'a mut H,
+    hub: Arc<dyn ServiceHub>,
+    root: &'a str,
 }
 
-pub struct ProjectTickOperationExecutor<'a, O> {
-    operations: &'a mut O,
-}
-
-impl<'a, O> ProjectTickOperationExecutor<'a, O> {
-    pub fn new(_options: &'a crate::DaemonRuntimeOptions, operations: &'a mut O) -> Self {
-        Self { operations }
+impl<'a, H> ProjectTickOperationExecutor<'a, H> {
+    pub fn new(
+        _options: &'a crate::DaemonRuntimeOptions,
+        hooks: &'a mut H,
+        hub: Arc<dyn ServiceHub>,
+        root: &'a str,
+    ) -> Self {
+        Self { hooks, hub, root }
     }
 }
 
 #[async_trait::async_trait(?Send)]
-impl<O> ProjectTickActionExecutor for ProjectTickOperationExecutor<'_, O>
+impl<H> ProjectTickActionExecutor for ProjectTickOperationExecutor<'_, H>
 where
-    O: ProjectTickOperations,
+    H: ProjectTickHooks,
 {
     async fn execute_action(
         &mut self,
@@ -40,14 +34,19 @@ where
         match action {
             ProjectTickAction::ReconcileCompletedProcesses => {
                 let (executed_workflow_phases, failed_workflow_phases) =
-                    self.operations.reconcile_completed_processes().await?;
+                    self.hooks
+                        .reconcile_completed_processes(self.hub.clone(), self.root)
+                        .await?;
                 Ok(ProjectTickActionEffect::ReconciledCompletedProcesses {
                     executed_workflow_phases,
                     failed_workflow_phases,
                 })
             }
             ProjectTickAction::DispatchReadyTasks { limit } => {
-                let summary = self.operations.dispatch_ready_tasks(*limit).await?;
+                let summary = self
+                    .hooks
+                    .dispatch_ready_tasks(self.hub.clone(), self.root, *limit)
+                    .await?;
                 Ok(ProjectTickActionEffect::ReadyWorkflowStarts { summary })
             }
         }

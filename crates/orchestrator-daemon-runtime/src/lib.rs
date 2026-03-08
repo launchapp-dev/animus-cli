@@ -13,7 +13,6 @@ mod em_work_queue_state;
 mod em_work_queue_store;
 mod execute_project_tick_script;
 mod hook_backed_project_tick_driver;
-mod hook_backed_project_tick_operations;
 mod notification_runtime;
 mod process_manager;
 mod project_tick_action;
@@ -64,7 +63,6 @@ pub use em_work_queue_store::{
 };
 pub use execute_project_tick_script::execute_project_tick_script;
 pub use hook_backed_project_tick_driver::HookBackedProjectTickDriver;
-pub use hook_backed_project_tick_operations::HookBackedProjectTickOperations;
 pub use notification_runtime::{
     clear_notification_config, parse_notification_config_value,
     read_notification_config_from_pm_config, serialize_notification_config,
@@ -79,7 +77,7 @@ pub use project_tick_context::ProjectTickContext;
 pub use project_tick_driver::ProjectTickDriver;
 pub use project_tick_execution_outcome::ProjectTickExecutionOutcome;
 pub use project_tick_hooks::ProjectTickHooks;
-pub use project_tick_operation_executor::{ProjectTickOperationExecutor, ProjectTickOperations};
+pub use project_tick_operation_executor::ProjectTickOperationExecutor;
 pub use project_tick_plan::ProjectTickPlan;
 pub use project_tick_preparation::ProjectTickPreparation;
 pub use project_tick_run_mode::ProjectTickRunMode;

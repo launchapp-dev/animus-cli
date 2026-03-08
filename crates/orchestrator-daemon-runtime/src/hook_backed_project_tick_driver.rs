@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use orchestrator_core::services::ServiceHub;
 
-use crate::{HookBackedProjectTickOperations, ProjectTickDriver, ProjectTickHooks};
+use crate::{ProjectTickDriver, ProjectTickHooks, ProjectTickOperationExecutor};
 
 pub struct HookBackedProjectTickDriver<H> {
     hooks: H,
@@ -20,8 +20,8 @@ impl<H> ProjectTickDriver for HookBackedProjectTickDriver<H>
 where
     H: ProjectTickHooks,
 {
-    type Operations<'a>
-        = HookBackedProjectTickOperations<'a, H>
+    type Executor<'a>
+        = ProjectTickOperationExecutor<'a, H>
     where
         Self: 'a;
 
@@ -41,11 +41,12 @@ where
         self.hooks.emit_notice(message);
     }
 
-    fn build_operations<'a>(
+    fn build_executor<'a>(
         &'a mut self,
+        options: &'a crate::DaemonRuntimeOptions,
         hub: Arc<dyn ServiceHub>,
         root: &'a str,
-    ) -> Self::Operations<'a> {
-        HookBackedProjectTickOperations::new(&mut self.hooks, hub, root)
+    ) -> Self::Executor<'a> {
+        ProjectTickOperationExecutor::new(options, &mut self.hooks, hub, root)
     }
 }
