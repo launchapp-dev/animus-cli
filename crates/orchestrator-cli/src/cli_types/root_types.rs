@@ -42,6 +42,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Inspect and mutate the daemon dispatch queue.
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
     /// Manage tasks, dependencies, status, and operational controls.
     Task {
         #[command(subcommand)]

@@ -70,13 +70,17 @@ pub fn plan_ready_task_dispatch(
                 continue;
             }
 
-            plan.ordered_starts.push(PlannedReadyTaskStart {
-                dispatch: SubjectDispatch::for_task_with_metadata(
+            let dispatch = entry.dispatch.clone().unwrap_or_else(|| {
+                SubjectDispatch::for_task_with_metadata(
                     task.id.clone(),
                     pipeline_for_task(task),
                     "em-queue",
                     requested_at,
-                ),
+                )
+            });
+
+            plan.ordered_starts.push(PlannedReadyTaskStart {
+                dispatch,
                 selection_source: TaskSelectionSource::EmQueue,
             });
         }
@@ -164,6 +168,7 @@ mod tests {
         let queue = EmWorkQueueState {
             entries: vec![EmWorkQueueEntry {
                 task_id: "TASK-1".to_string(),
+                dispatch: None,
                 status: EmWorkQueueEntryStatus::Pending,
                 workflow_id: None,
                 assigned_at: None,
@@ -206,6 +211,7 @@ mod tests {
         let queue = EmWorkQueueState {
             entries: vec![EmWorkQueueEntry {
                 task_id: "TASK-1".to_string(),
+                dispatch: None,
                 status: EmWorkQueueEntryStatus::Pending,
                 workflow_id: None,
                 assigned_at: None,
@@ -247,6 +253,7 @@ mod tests {
         let queue = EmWorkQueueState {
             entries: vec![EmWorkQueueEntry {
                 task_id: "TASK-1".to_string(),
+                dispatch: None,
                 status: EmWorkQueueEntryStatus::Pending,
                 workflow_id: None,
                 assigned_at: None,

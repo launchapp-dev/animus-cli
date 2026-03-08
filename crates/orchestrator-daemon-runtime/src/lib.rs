@@ -39,6 +39,7 @@ mod project_tick_snapshot;
 mod project_tick_summary;
 mod project_tick_summary_input;
 mod project_tick_time;
+mod queue_service;
 mod ready_task_dispatch_plan;
 mod ready_task_dispatch_support;
 mod ready_task_workflow_start;
@@ -111,6 +112,10 @@ pub use project_tick_snapshot::ProjectTickSnapshot;
 pub use project_tick_summary::ProjectTickSummary;
 pub use project_tick_summary_input::ProjectTickSummaryInput;
 pub use project_tick_time::ProjectTickTime;
+pub use queue_service::{
+    enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject,
+    reorder_subjects, QueueEnqueueResult, QueueEntrySnapshot, QueueSnapshot, QueueStats,
+};
 pub use ready_task_dispatch_plan::{
     plan_ready_task_dispatch, PlannedReadyTaskStart, ReadyTaskDispatchPlan,
 };

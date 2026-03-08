@@ -9,6 +9,7 @@ mod history_types;
 mod mcp_types;
 mod model_types;
 mod output_types;
+mod queue_types;
 
 mod project_types;
 mod qa_types;
@@ -16,11 +17,11 @@ mod requirements_types;
 mod review_types;
 mod root_types;
 mod runner_types;
+mod schedule_types;
 mod setup_types;
 mod shared_types;
 mod skill_types;
 mod task_types;
-mod schedule_types;
 mod tui_types;
 mod vision_types;
 mod web_types;
@@ -37,6 +38,7 @@ pub(crate) use history_types::*;
 pub(crate) use mcp_types::*;
 pub(crate) use model_types::*;
 pub(crate) use output_types::*;
+pub(crate) use queue_types::*;
 
 pub(crate) use project_types::*;
 pub(crate) use qa_types::*;
@@ -44,11 +46,11 @@ pub(crate) use requirements_types::*;
 pub(crate) use review_types::*;
 pub(crate) use root_types::*;
 pub(crate) use runner_types::*;
+pub(crate) use schedule_types::*;
 pub(crate) use setup_types::*;
 pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
 pub(crate) use task_types::*;
-pub(crate) use schedule_types::*;
 pub(crate) use tui_types::*;
 pub(crate) use vision_types::*;
 pub(crate) use web_types::*;
@@ -134,6 +136,53 @@ mod tests {
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["ao", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parses_queue_enqueue_command() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "queue",
+            "enqueue",
+            "--task-id",
+            "TASK-123",
+            "--pipeline",
+            "ops",
+        ])
+        .expect("queue enqueue command should parse");
+
+        match cli.command {
+            Command::Queue {
+                command: QueueCommand::Enqueue(args),
+            } => {
+                assert_eq!(args.task_id, "TASK-123");
+                assert_eq!(args.pipeline_id.as_deref(), Some("ops"));
+            }
+            _ => panic!("expected queue enqueue command"),
+        }
+    }
+
+    #[test]
+    fn parses_queue_reorder_subject_ids() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "queue",
+            "reorder",
+            "--subject-id",
+            "TASK-2",
+            "--subject-id",
+            "TASK-1",
+        ])
+        .expect("queue reorder command should parse");
+
+        match cli.command {
+            Command::Queue {
+                command: QueueCommand::Reorder(args),
+            } => {
+                assert_eq!(args.subject_ids, vec!["TASK-2", "TASK-1"]);
+            }
+            _ => panic!("expected queue reorder command"),
+        }
     }
 
     #[test]

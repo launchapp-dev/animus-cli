@@ -1589,6 +1589,11 @@ impl SubjectDispatch {
             _ => None,
         }
     }
+
+    pub fn with_input(mut self, input: Option<Value>) -> Self {
+        self.input = input;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

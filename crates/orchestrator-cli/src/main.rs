@@ -63,6 +63,15 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Project { command } => {
                     services::runtime::handle_project(command, hub.clone(), cli.json).await
                 }
+                Command::Queue { command } => {
+                    services::operations::handle_queue(
+                        command,
+                        hub.clone(),
+                        &project_root,
+                        cli.json,
+                    )
+                    .await
+                }
                 Command::Task { command } => {
                     services::runtime::handle_task(command, hub.clone(), &project_root, cli.json)
                         .await
@@ -82,8 +91,13 @@ async fn run(cli: Cli) -> Result<()> {
                     .await
                 }
                 Command::Schedule { command } => {
-                    services::operations::handle_schedule(command, hub.clone(), &project_root, cli.json)
-                        .await
+                    services::operations::handle_schedule(
+                        command,
+                        hub.clone(),
+                        &project_root,
+                        cli.json,
+                    )
+                    .await
                 }
                 Command::Vision { command } => {
                     services::operations::handle_vision(

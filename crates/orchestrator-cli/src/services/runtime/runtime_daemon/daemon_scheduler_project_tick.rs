@@ -211,12 +211,14 @@ mod tests {
                 entries: vec![
                     EmWorkQueueEntry {
                         task_id: queue_task.id.clone(),
+                        dispatch: None,
                         status: EmWorkQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                     },
                     EmWorkQueueEntry {
                         task_id: fallback_task.id.clone(),
+                        dispatch: None,
                         status: EmWorkQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
@@ -317,6 +319,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: queue_task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Pending,
                     workflow_id: None,
                     assigned_at: None,
@@ -436,12 +439,14 @@ mod tests {
                 entries: vec![
                     EmWorkQueueEntry {
                         task_id: queue_task_one.id.clone(),
+                        dispatch: None,
                         status: EmWorkQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
                     },
                     EmWorkQueueEntry {
                         task_id: queue_task_two.id.clone(),
+                        dispatch: None,
                         status: EmWorkQueueEntryStatus::Pending,
                         workflow_id: None,
                         assigned_at: None,
@@ -544,6 +549,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: queue_only_task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Pending,
                     workflow_id: None,
                     assigned_at: None,
@@ -663,6 +669,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
@@ -735,6 +742,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
@@ -810,6 +818,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
@@ -888,6 +897,7 @@ mod tests {
             &EmWorkQueueState {
                 entries: vec![EmWorkQueueEntry {
                     task_id: task.id.clone(),
+                    dispatch: None,
                     status: EmWorkQueueEntryStatus::Assigned,
                     workflow_id: Some(workflow.id.clone()),
                     assigned_at: Some(Utc::now().to_rfc3339()),
