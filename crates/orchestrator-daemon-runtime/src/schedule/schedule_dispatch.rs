@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{Datelike, Timelike};
 use croner::parser::{CronParser, Seconds, Year};
+use orchestrator_core::{project_schedule_completion_status, project_schedule_dispatch_attempt};
 
 use crate::SubjectDispatch;
 
@@ -22,7 +23,7 @@ impl ScheduleDispatch {
     {
         let config =
             orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
-        let mut state = orchestrator_core::load_schedule_state(std::path::Path::new(project_root))
+        let state = orchestrator_core::load_schedule_state(std::path::Path::new(project_root))
             .unwrap_or_default();
         let due = evaluate_schedules(&config.config.schedules, &state, now);
         if due.is_empty() {
@@ -41,18 +42,11 @@ impl ScheduleDispatch {
 
         for schedule_id in &due {
             if let Some(schedule) = schedule_lookup.get(schedule_id.as_str()) {
-                dispatch_schedule(
-                    &mut state,
-                    schedule_id,
-                    schedule,
-                    now,
-                    "schedule",
-                    &mut spawn_pipeline,
-                );
+                let status =
+                    dispatch_schedule(schedule_id, schedule, now, "schedule", &mut spawn_pipeline);
+                project_schedule_dispatch_attempt(project_root, schedule_id, now, &status);
             }
         }
-
-        let _ = orchestrator_core::save_schedule_state(std::path::Path::new(project_root), &state);
     }
 
     pub fn fire_schedule<PipelineSpawner>(
@@ -73,10 +67,7 @@ impl ScheduleDispatch {
             .iter()
             .find(|schedule| schedule.id == schedule_id)
             .ok_or_else(|| anyhow::anyhow!("schedule not found: {schedule_id}"))?;
-        let mut state = orchestrator_core::load_schedule_state(std::path::Path::new(project_root))
-            .unwrap_or_default();
         let status = dispatch_schedule(
-            &mut state,
             schedule_id,
             schedule,
             now,
@@ -84,25 +75,19 @@ impl ScheduleDispatch {
             &mut spawn_pipeline,
         );
 
-        let _ = orchestrator_core::save_schedule_state(std::path::Path::new(project_root), &state);
+        project_schedule_dispatch_attempt(project_root, schedule_id, now, &status);
         Ok(status)
     }
 
     pub fn update_completion_state(project_root: &str, schedule_id: &str, status: &str) {
-        let path = std::path::Path::new(project_root);
-        let mut state = orchestrator_core::load_schedule_state(path).unwrap_or_default();
-        if let Some(entry) = state.schedules.get_mut(schedule_id) {
-            entry.last_status = status.to_string();
-            let _ = orchestrator_core::save_schedule_state(path, &state);
-        }
+        project_schedule_completion_status(project_root, schedule_id, status);
     }
 }
 
 fn dispatch_schedule<PipelineSpawner>(
-    state: &mut orchestrator_core::ScheduleState,
     schedule_id: &str,
     schedule: &orchestrator_core::workflow_config::WorkflowSchedule,
-    now: chrono::DateTime<chrono::Utc>,
+    _now: chrono::DateTime<chrono::Utc>,
     trigger_source: &str,
     spawn_pipeline: &mut PipelineSpawner,
 ) -> String
@@ -138,14 +123,6 @@ where
         );
         "failed: schedule is missing workflow_ref".to_string()
     };
-
-    let entry = state
-        .schedules
-        .entry(schedule_id.to_string())
-        .or_insert_with(orchestrator_core::ScheduleRunState::default);
-    entry.last_run = Some(now);
-    entry.last_status = status.clone();
-    entry.run_count = entry.run_count.saturating_add(1);
 
     status
 }
@@ -481,8 +458,6 @@ mod tests {
             input: None,
             enabled: true,
         };
-        let mut state = orchestrator_core::ScheduleState::default();
-
         let pipeline_calls = Arc::new(Mutex::new(Vec::new()));
         let pipeline_calls_ref = pipeline_calls.clone();
         let mut record_pipeline_call = move |schedule_id: &str, dispatch: &SubjectDispatch| {
@@ -494,7 +469,6 @@ mod tests {
         };
 
         let status = dispatch_schedule(
-            &mut state,
             "broken",
             &schedule,
             now,
@@ -505,17 +479,6 @@ mod tests {
 
         let calls = pipeline_calls.lock().expect("pipeline lock");
         assert!(calls.is_empty());
-
-        let entry = state
-            .schedules
-            .get("broken")
-            .expect("broken schedule state should exist");
-        assert_eq!(
-            entry.last_status,
-            "failed: schedule is missing workflow_ref"
-        );
-        assert_eq!(entry.run_count, 1);
-        assert_eq!(entry.last_run, Some(now));
     }
 
     #[test]

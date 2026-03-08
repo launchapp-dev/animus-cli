@@ -3,9 +3,11 @@ use crate::services::runtime::sync_task_status_for_workflow_result;
 use orchestrator_core::{
     dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
     is_merge_gate_block, project_task_blocked_with_reason, project_task_status,
-    services::ServiceHub, TaskStatus, WorkflowMachineState, WorkflowResumeManager, WorkflowStatus,
+    services::ServiceHub, TaskStatus, WorkflowResumeManager, WorkflowStatus,
 };
-use orchestrator_daemon_runtime::{active_workflow_task_ids, is_terminally_completed_workflow};
+use orchestrator_daemon_runtime::{
+    active_workflow_task_ids, is_terminally_completed_workflow, recover_orphaned_running_workflows,
+};
 use orchestrator_git_ops::is_branch_merged;
 
 #[cfg(test)]
@@ -207,47 +209,7 @@ pub async fn recover_orphaned_running_workflows_with_active_ids(
     project_root: &str,
     active_ids: &std::collections::HashSet<String>,
 ) -> usize {
-    let workflows = match hub.workflows().list().await {
-        Ok(w) => w,
-        Err(_) => return 0,
-    };
-
-    let mut recovered = 0usize;
-    for workflow in workflows {
-        if workflow.status != WorkflowStatus::Running {
-            continue;
-        }
-        if workflow.machine_state == WorkflowMachineState::MergeConflict {
-            continue;
-        }
-        if active_ids.contains(&workflow.id)
-            || active_ids.contains(workflow.subject.id())
-            || (!workflow.task_id.is_empty() && active_ids.contains(&workflow.task_id))
-        {
-            continue;
-        }
-
-        eprintln!(
-            "{}: recovering orphaned running workflow {} (task {})",
-            protocol::ACTOR_DAEMON,
-            workflow.id,
-            workflow.task_id
-        );
-        let task_id = workflow.task_id.clone();
-        if let Ok(_updated) = hub.workflows().cancel(&workflow.id).await {
-            sync_task_status_for_workflow_result(
-                hub.clone(),
-                project_root,
-                &task_id,
-                WorkflowStatus::Cancelled,
-                Some(workflow.id.as_str()),
-            )
-            .await;
-        }
-        recovered = recovered.saturating_add(1);
-    }
-
-    recovered
+    recover_orphaned_running_workflows(hub, project_root, active_ids).await
 }
 
 #[cfg(test)]

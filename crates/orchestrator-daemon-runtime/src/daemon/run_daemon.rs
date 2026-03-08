@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use tokio::time::sleep;
 
+use crate::recover_orphaned_running_workflows;
 use crate::run_project_tick;
 use crate::DaemonRunEvent;
 use crate::DaemonRunGuard;
@@ -59,9 +61,8 @@ where
             project_root: primary_root.clone(),
         })?;
 
-        let startup_orphans = hooks
-            .recover_orphaned_running_workflows_on_startup(&primary_root)
-            .await?;
+        let startup_orphans =
+            recover_orphaned_running_workflows(hub.clone(), &primary_root, &HashSet::new()).await;
         if startup_orphans > 0 {
             hooks.handle_event(DaemonRunEvent::OrphanDetection {
                 project_root: primary_root.clone(),

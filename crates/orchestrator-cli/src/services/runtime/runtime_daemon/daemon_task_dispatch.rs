@@ -1,8 +1,8 @@
 use super::*;
 use orchestrator_core::WorkflowRunInput;
 use orchestrator_core::{
-    dependency_gate_issues_for_task, routing_complexity_for_task, should_skip_task_dispatch,
-    workflow_ref_for_task,
+    dependency_gate_issues_for_task, project_task_workflow_start, routing_complexity_for_task,
+    should_skip_task_dispatch, workflow_ref_for_task,
 };
 pub use orchestrator_daemon_runtime::{
     active_workflow_subject_ids, active_workflow_task_ids, is_terminally_completed_workflow,
@@ -49,9 +49,14 @@ pub async fn auto_assign_task_to_daemon_agent(
     workflow: &orchestrator_core::OrchestratorWorkflow,
 ) -> Result<()> {
     let (role, model) = daemon_agent_assignee_for_workflow_start(project_root, workflow, task);
-    hub.tasks()
-        .assign_agent(&task.id, role, model, protocol::ACTOR_DAEMON.to_string())
-        .await?;
+    project_task_workflow_start(
+        hub,
+        &task.id,
+        role,
+        model,
+        protocol::ACTOR_DAEMON.to_string(),
+    )
+    .await?;
     Ok(())
 }
 

@@ -50,8 +50,10 @@ pub use domain_state::{
 };
 pub use events::{OrchestratorEvent, OrchestratorEventKind};
 pub use execution_projection::{
+    project_schedule_completion_status, project_schedule_dispatch_attempt,
     project_schedule_execution_fact, project_task_blocked_with_reason,
     project_task_dispatch_failure, project_task_execution_fact, project_task_status,
+    project_task_workflow_start,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path,

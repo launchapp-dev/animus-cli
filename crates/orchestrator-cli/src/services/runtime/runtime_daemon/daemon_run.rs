@@ -1,16 +1,15 @@
 use crate::cli_types::DaemonRunArgs;
 use anyhow::Result;
-use orchestrator_core::{FileServiceHub, ServiceHub};
+#[cfg(test)]
+use orchestrator_core::FileServiceHub;
+use orchestrator_core::ServiceHub;
 use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
 use std::sync::Arc;
 
 #[cfg(test)]
 use super::canonicalize_lossy;
 use super::daemon_run_host::DefaultDaemonRunHost;
-use super::daemon_scheduler::{
-    recover_orphaned_running_workflows_on_startup, runtime_options_from_cli,
-    slim_project_tick_driver,
-};
+use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver};
 
 fn restore_env_override(key: &str, original: Option<String>) {
     if let Some(value) = original {
@@ -36,18 +35,6 @@ impl CliDaemonRunHost {
 impl DaemonRunHooks for CliDaemonRunHost {
     fn handle_event(&mut self, event: DaemonRunEvent) -> Result<()> {
         self.inner.handle_event(event)
-    }
-
-    async fn recover_orphaned_running_workflows_on_startup(
-        &mut self,
-        project_root: &str,
-    ) -> Result<usize> {
-        let startup_hub = Arc::new(FileServiceHub::new(project_root)?);
-        Ok(recover_orphaned_running_workflows_on_startup(
-            startup_hub as Arc<dyn ServiceHub>,
-            project_root,
-        )
-        .await)
     }
 
     async fn flush_notifications(&mut self, project_root: &str) -> Result<()> {

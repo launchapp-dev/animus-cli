@@ -1,11 +1,7 @@
 use std::sync::Arc;
 
-use orchestrator_core::{
-    project_task_execution_fact, project_task_status, services::ServiceHub, TaskStatus,
-    WorkflowStatus,
-};
-use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
-use protocol::SubjectExecutionFact;
+use orchestrator_core::{services::ServiceHub, WorkflowStatus};
+use orchestrator_daemon_runtime::project_terminal_workflow_status;
 
 pub(crate) async fn sync_task_status_for_workflow_result(
     hub: Arc<dyn ServiceHub>,
@@ -24,62 +20,15 @@ pub(crate) async fn sync_task_status_for_workflow_result(
         None
     };
 
-    if matches!(
+    project_terminal_workflow_status(
+        hub,
+        project_root,
+        task_id,
+        Some(task_id),
+        workflow_ref.as_deref(),
+        workflow_id,
         workflow_status,
-        WorkflowStatus::Completed
-            | WorkflowStatus::Failed
-            | WorkflowStatus::Escalated
-            | WorkflowStatus::Cancelled
-    ) {
-        remove_terminal_dispatch_queue_entry_non_fatal(
-            project_root,
-            task_id,
-            workflow_ref.as_deref(),
-            workflow_id,
-        );
-    }
-
-    match workflow_status {
-        WorkflowStatus::Completed => {
-            project_task_execution_fact(
-                hub,
-                project_root,
-                &SubjectExecutionFact {
-                    subject_id: task_id.to_string(),
-                    task_id: Some(task_id.to_string()),
-                    workflow_ref,
-                    schedule_id: None,
-                    exit_code: Some(0),
-                    success: true,
-                    failure_reason: None,
-                    runner_events: Vec::new(),
-                },
-            )
-            .await;
-        }
-        WorkflowStatus::Failed | WorkflowStatus::Escalated => {
-            project_task_execution_fact(
-                hub,
-                project_root,
-                &SubjectExecutionFact {
-                    subject_id: task_id.to_string(),
-                    task_id: Some(task_id.to_string()),
-                    workflow_ref,
-                    schedule_id: None,
-                    exit_code: None,
-                    success: false,
-                    failure_reason: Some(format!(
-                        "workflow ended with status {}",
-                        format!("{workflow_status:?}").to_ascii_lowercase()
-                    )),
-                    runner_events: Vec::new(),
-                },
-            )
-            .await;
-        }
-        WorkflowStatus::Cancelled => {
-            let _ = project_task_status(hub, task_id, TaskStatus::Cancelled).await;
-        }
-        WorkflowStatus::Paused | WorkflowStatus::Running | WorkflowStatus::Pending => {}
-    }
+        None,
+    )
+    .await;
 }

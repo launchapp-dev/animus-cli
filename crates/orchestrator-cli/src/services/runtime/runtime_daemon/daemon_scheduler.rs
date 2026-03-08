@@ -195,14 +195,3 @@ pub(super) fn runtime_options_from_cli(args: &DaemonRunArgs) -> DaemonRuntimeOpt
         once: args.once,
     }
 }
-
-pub(super) async fn recover_orphaned_running_workflows_on_startup(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-) -> usize {
-    project_tick_ops::reconciliation::recover_orphaned_running_workflows_on_startup(
-        hub,
-        project_root,
-    )
-    .await
-}
