@@ -27,13 +27,13 @@ pub fn resolve_project_root(config: &RuntimeConfig) -> (String, ProjectRootSourc
         .map(str::trim)
         .filter(|root| !root.is_empty())
     {
-        return (root.to_string(), ProjectRootSource::CliArg);
+        return (normalize_project_root(root), ProjectRootSource::CliArg);
     }
 
     if let Ok(root) = std::env::var("PROJECT_ROOT") {
         let root = root.trim();
         if !root.is_empty() {
-            return (root.to_string(), ProjectRootSource::EnvVar);
+            return (normalize_project_root(root), ProjectRootSource::EnvVar);
         }
     }
 
@@ -47,6 +47,13 @@ pub fn resolve_project_root(config: &RuntimeConfig) -> (String, ProjectRootSourc
         cwd.to_string_lossy().to_string(),
         ProjectRootSource::CurrentDir,
     )
+}
+
+fn normalize_project_root(root: &str) -> String {
+    let cwd = std::env::current_dir().expect("Failed to get current directory");
+    let candidate = absolutize_path(&cwd, root);
+
+    resolve_git_repo_root(&candidate).unwrap_or_else(|| candidate.to_string_lossy().to_string())
 }
 
 fn resolve_git_repo_root(cwd: &Path) -> Option<String> {
@@ -187,6 +194,50 @@ mod tests {
 
             let (root, source) = resolve_project_root(&config);
             assert_eq!(root, "/tmp/custom");
+            assert_eq!(source, ProjectRootSource::CliArg);
+        });
+    }
+
+    #[test]
+    fn cli_project_root_dot_in_linked_worktree_resolves_primary_repo_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let worktree_root = temp.path().join("repo-worktree");
+        std::fs::create_dir_all(&repo_root).expect("repo root should be created");
+
+        run_git(&repo_root, &["init"]);
+        run_git(
+            &repo_root,
+            &["config", "user.email", "ao-tests@example.com"],
+        );
+        run_git(&repo_root, &["config", "user.name", "AO Tests"]);
+        std::fs::write(repo_root.join("README.md"), "root\n").expect("seed file should write");
+        run_git(&repo_root, &["add", "README.md"]);
+        run_git(&repo_root, &["commit", "-m", "init"]);
+        run_git(&repo_root, &["branch", "feature/cli-dot-root"]);
+        run_git(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                worktree_root.to_string_lossy().as_ref(),
+                "feature/cli-dot-root",
+            ],
+        );
+
+        run_with_test_process_state(&worktree_root, None, || {
+            let config = RuntimeConfig {
+                project_root: Some(".".to_string()),
+                ..RuntimeConfig::default()
+            };
+
+            let (root, source) = resolve_project_root(&config);
+            assert_eq!(
+                PathBuf::from(root),
+                repo_root
+                    .canonicalize()
+                    .expect("repo root should canonicalize")
+            );
             assert_eq!(source, ProjectRootSource::CliArg);
         });
     }
