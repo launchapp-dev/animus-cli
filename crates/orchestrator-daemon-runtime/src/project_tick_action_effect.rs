@@ -2,7 +2,6 @@ use crate::ReadyTaskWorkflowStartSummary;
 
 #[derive(Debug, Clone)]
 pub enum ProjectTickActionEffect {
-    Noop,
     ResumedInterrupted {
         cleaned_stale_workflows: usize,
         resumed_workflows: usize,

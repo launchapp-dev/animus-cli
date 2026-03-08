@@ -45,20 +45,6 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             None => run_ready_task_workflows_for_project(hub, root, limit).await,
         }
     }
-
-    async fn refresh_runtime_binaries(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        let _ = git_ops::refresh_runtime_binaries_if_main_advanced(
-            hub,
-            root,
-            git_ops::RuntimeBinaryRefreshTrigger::Tick,
-        )
-        .await;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

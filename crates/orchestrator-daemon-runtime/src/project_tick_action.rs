@@ -2,5 +2,4 @@
 pub enum ProjectTickAction {
     ReconcileCompletedProcesses,
     DispatchReadyTasks { limit: usize },
-    RefreshRuntimeBinaries,
 }

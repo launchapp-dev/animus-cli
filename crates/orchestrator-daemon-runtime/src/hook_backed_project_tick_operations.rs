@@ -36,10 +36,4 @@ where
             .dispatch_ready_tasks(self.hub.clone(), self.root, limit)
             .await
     }
-
-    async fn refresh_runtime_binaries(&mut self) -> Result<()> {
-        self.hooks
-            .refresh_runtime_binaries(self.hub.clone(), self.root)
-            .await
-    }
 }

@@ -36,12 +36,4 @@ pub trait ProjectTickHooks {
     ) -> Result<ReadyTaskWorkflowStartSummary> {
         Ok(ReadyTaskWorkflowStartSummary::default())
     }
-
-    async fn refresh_runtime_binaries(
-        &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<()> {
-        Ok(())
-    }
 }

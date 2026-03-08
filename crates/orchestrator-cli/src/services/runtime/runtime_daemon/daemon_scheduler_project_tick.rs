@@ -1,6 +1,7 @@
 use super::*;
 use orchestrator_core::FileServiceHub;
 use orchestrator_daemon_runtime::ProcessManager;
+use orchestrator_git_ops as git_ops;
 use std::collections::HashSet;
 
 #[path = "daemon_task_dispatch.rs"]
@@ -83,6 +84,17 @@ async fn run_cli_pre_tick(
     })
 }
 
+async fn refresh_runtime_binaries_for_project(root: &str) -> Result<()> {
+    let hub = Arc::new(FileServiceHub::new(root)?);
+    let _ = git_ops::refresh_runtime_binaries_if_main_advanced(
+        hub,
+        root,
+        git_ops::RuntimeBinaryRefreshTrigger::Tick,
+    )
+    .await;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(super) async fn project_tick(
     root: &str,
@@ -118,6 +130,7 @@ pub(super) async fn project_tick_at(
     summary.reconciled_stale_tasks = summary
         .reconciled_stale_tasks
         .saturating_add(pre_tick.reconciled_tasks);
+    refresh_runtime_binaries_for_project(&root).await?;
     Ok(summary)
 }
 
@@ -169,6 +182,7 @@ pub(super) async fn slim_daemon_tick_at(
     summary.reconciled_stale_tasks = summary
         .reconciled_stale_tasks
         .saturating_add(pre_tick.reconciled_tasks);
+    refresh_runtime_binaries_for_project(&root).await?;
     Ok(summary)
 }
 

@@ -56,7 +56,12 @@ mod tests {
                         },
                     }
                 }
-                _ => ProjectTickActionEffect::Noop,
+                ProjectTickAction::ReconcileCompletedProcesses => {
+                    ProjectTickActionEffect::ReconciledCompletedProcesses {
+                        executed_workflow_phases: 0,
+                        failed_workflow_phases: 0,
+                    }
+                }
             })
         }
     }

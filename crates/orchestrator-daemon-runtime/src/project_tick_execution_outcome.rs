@@ -34,7 +34,6 @@ impl Default for ProjectTickExecutionOutcome {
 impl ProjectTickExecutionOutcome {
     pub fn apply_effect(&mut self, effect: ProjectTickActionEffect) {
         match effect {
-            ProjectTickActionEffect::Noop => {}
             ProjectTickActionEffect::ResumedInterrupted {
                 cleaned_stale_workflows,
                 resumed_workflows,

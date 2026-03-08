@@ -23,8 +23,6 @@ impl ProjectTickScript {
             });
         }
 
-        actions.push(ProjectTickAction::RefreshRuntimeBinaries);
-
         Self { actions }
     }
 
@@ -61,10 +59,7 @@ mod tests {
 
         assert_eq!(
             script.actions(),
-            &[
-                ProjectTickAction::DispatchReadyTasks { limit: 2 },
-                ProjectTickAction::RefreshRuntimeBinaries,
-            ]
+            &[ProjectTickAction::DispatchReadyTasks { limit: 2 },]
         );
     }
 
@@ -88,10 +83,7 @@ mod tests {
 
         assert_eq!(
             script.actions(),
-            &[
-                ProjectTickAction::ReconcileCompletedProcesses,
-                ProjectTickAction::RefreshRuntimeBinaries,
-            ]
+            &[ProjectTickAction::ReconcileCompletedProcesses,]
         );
     }
 }

@@ -110,10 +110,7 @@ mod tests {
         assert!(preparation.schedule_plan.should_process_due_schedules);
         assert_eq!(
             preparation.tick_script.actions(),
-            &[
-                ProjectTickAction::DispatchReadyTasks { limit: 1 },
-                ProjectTickAction::RefreshRuntimeBinaries,
-            ]
+            &[ProjectTickAction::DispatchReadyTasks { limit: 1 },]
         );
     }
 }

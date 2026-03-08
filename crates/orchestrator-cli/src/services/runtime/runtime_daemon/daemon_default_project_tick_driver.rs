@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -28,12 +27,6 @@ pub trait DefaultProjectTickServices {
         limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<ReadyTaskWorkflowStartSummary>;
-
-    async fn refresh_runtime_binaries(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -165,14 +158,6 @@ where
             .dispatch_ready_tasks(hub, root, limit, None)
             .await
     }
-
-    async fn refresh_runtime_binaries(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.refresh_runtime_binaries(hub, root).await
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -227,13 +212,5 @@ where
         self.services
             .dispatch_ready_tasks(hub, root, limit, Some(self.process_manager))
             .await
-    }
-
-    async fn refresh_runtime_binaries(
-        &mut self,
-        hub: Arc<dyn ServiceHub>,
-        root: &str,
-    ) -> Result<()> {
-        self.services.refresh_runtime_binaries(hub, root).await
     }
 }

@@ -16,10 +16,6 @@ pub trait ProjectTickOperations {
     ) -> Result<ReadyTaskWorkflowStartSummary> {
         Ok(ReadyTaskWorkflowStartSummary::default())
     }
-
-    async fn refresh_runtime_binaries(&mut self) -> Result<()> {
-        Ok(())
-    }
 }
 
 pub struct ProjectTickOperationExecutor<'a, O> {
@@ -53,10 +49,6 @@ where
             ProjectTickAction::DispatchReadyTasks { limit } => {
                 let summary = self.operations.dispatch_ready_tasks(*limit).await?;
                 Ok(ProjectTickActionEffect::ReadyWorkflowStarts { summary })
-            }
-            ProjectTickAction::RefreshRuntimeBinaries => {
-                self.operations.refresh_runtime_binaries().await?;
-                Ok(ProjectTickActionEffect::Noop)
             }
         }
     }
