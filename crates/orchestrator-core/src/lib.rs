@@ -1,6 +1,7 @@
 // phase-decision-test
 pub mod agent_runtime_config;
 pub mod config;
+pub mod daemon_tick_metrics;
 pub mod daemon_config;
 pub mod doctor;
 pub mod domain_state;
@@ -31,6 +32,7 @@ pub use daemon_config::{
     write_daemon_project_config, DaemonProjectConfig, DaemonProjectConfigPatch,
     DAEMON_PROJECT_CONFIG_FILE_NAME,
 };
+pub use daemon_tick_metrics::DaemonTickMetrics;
 pub use doctor::{
     DoctorCheck, DoctorCheckResult, DoctorCheckStatus, DoctorRemediation, DoctorReport,
 };
