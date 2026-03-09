@@ -39,6 +39,21 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
     }
 }
 
+fn skip_decision(reason: &str) -> PhaseDecision {
+    PhaseDecision {
+        kind: "phase_decision".to_string(),
+        phase_id: "requirements".to_string(),
+        verdict: PhaseDecisionVerdict::Skip,
+        confidence: 0.92,
+        risk: WorkflowDecisionRisk::Low,
+        reason: reason.to_string(),
+        evidence: Vec::new(),
+        guardrail_violations: Vec::new(),
+        commit_message: None,
+        target_phase: None,
+    }
+}
+
 #[test]
 fn state_machine_transitions() {
     let mut machine = WorkflowStateMachine::default();
@@ -96,6 +111,75 @@ fn lifecycle_does_not_pause_completed_workflow() {
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
+}
+
+#[test]
+fn lifecycle_skip_already_done_completes_workflow_early() {
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.machine_state = WorkflowMachineState::RunPhase;
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    let executor = WorkflowLifecycleExecutor::default();
+
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(skip_decision(
+            "already_done: task already completed upstream",
+        )),
+    );
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
+    assert!(workflow.completed_at.is_some());
+    assert_eq!(workflow.current_phase, None);
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Success);
+    assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Pending);
+    assert_eq!(
+        workflow
+            .decision_history
+            .last()
+            .map(|record| record.decision),
+        Some(WorkflowDecisionAction::Skip)
+    );
+}
+
+#[test]
+fn lifecycle_skip_duplicate_cancels_workflow_early() {
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.machine_state = WorkflowMachineState::RunPhase;
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    let executor = WorkflowLifecycleExecutor::default();
+
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(skip_decision("duplicate: superseded by TASK-999")),
+    );
+
+    assert_eq!(workflow.status, WorkflowStatus::Cancelled);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::Cancelled);
+    assert!(workflow.completed_at.is_some());
+    assert_eq!(workflow.current_phase, None);
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Success);
+    assert_eq!(
+        workflow
+            .decision_history
+            .last()
+            .map(|record| record.decision),
+        Some(WorkflowDecisionAction::Skip)
+    );
 }
 
 #[test]

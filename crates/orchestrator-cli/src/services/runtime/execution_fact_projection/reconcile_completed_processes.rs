@@ -31,7 +31,7 @@ pub(crate) async fn reconcile_completed_processes(
             root,
             &fact.subject_id,
             fact.workflow_ref.as_deref(),
-            None,
+            fact.workflow_id.as_deref(),
         );
 
         if fact.task_id.is_some() {
@@ -40,7 +40,7 @@ pub(crate) async fn reconcile_completed_processes(
             eprintln!(
                 "{}: workflow runner {} for subject '{}' (exit={:?})",
                 protocol::ACTOR_DAEMON,
-                if fact.success { "succeeded" } else { "failed" },
+                fact.completion_status(),
                 fact.subject_id,
                 fact.exit_code,
             );

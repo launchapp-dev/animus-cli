@@ -1601,8 +1601,12 @@ pub struct RunnerEvent {
     pub event: String,
     #[serde(default)]
     pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
     #[serde(default)]
     pub workflow_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_status: Option<WorkflowStatus>,
     #[serde(default)]
     pub exit_code: Option<i32>,
 }
@@ -1613,7 +1617,11 @@ pub struct SubjectExecutionFact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_status: Option<WorkflowStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1627,7 +1635,16 @@ pub struct SubjectExecutionFact {
 
 impl SubjectExecutionFact {
     pub fn completion_status(&self) -> &str {
-        if self.success {
+        if let Some(status) = self.workflow_status {
+            match status {
+                WorkflowStatus::Pending => "pending",
+                WorkflowStatus::Running => "running",
+                WorkflowStatus::Paused => "paused",
+                WorkflowStatus::Completed => "completed",
+                WorkflowStatus::Failed | WorkflowStatus::Escalated => "failed",
+                WorkflowStatus::Cancelled => "cancelled",
+            }
+        } else if self.success {
             "completed"
         } else {
             "failed"

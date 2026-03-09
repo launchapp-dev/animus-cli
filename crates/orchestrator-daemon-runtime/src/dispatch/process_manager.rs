@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use protocol::orchestrator::WorkflowStatus;
 use protocol::SubjectDispatch;
 use tokio::process::{Child, Command};
 
@@ -86,7 +87,9 @@ impl ProcessManager {
                         completed.push(CompletedProcess {
                             subject_id: process.subject_id,
                             task_id: process.task_id,
+                            workflow_id: None,
                             workflow_ref: Some(process.workflow_ref),
+                            workflow_status: None,
                             schedule_id: process.schedule_id,
                             exit_code: None,
                             success: false,
@@ -106,6 +109,9 @@ impl ProcessManager {
             match status {
                 Ok(Some(status)) => {
                     let exit_code = status.code();
+                    let events = parse_runner_events(&process.stderr_lines);
+                    let workflow_id = latest_runner_workflow_id(&events);
+                    let workflow_status = latest_runner_workflow_status(&events);
                     let (success, failure_reason) = if status.success() {
                         (true, None)
                     } else {
@@ -121,12 +127,14 @@ impl ProcessManager {
                     completed.push(CompletedProcess {
                         subject_id: process.subject_id,
                         task_id: process.task_id,
+                        workflow_id,
                         workflow_ref: Some(process.workflow_ref),
+                        workflow_status,
                         schedule_id: process.schedule_id,
                         exit_code,
                         success,
                         failure_reason,
-                        events: parse_runner_events(&process.stderr_lines),
+                        events,
                     });
                 }
                 Ok(None) => active.push(process),
@@ -134,7 +142,9 @@ impl ProcessManager {
                     completed.push(CompletedProcess {
                         subject_id: process.subject_id,
                         task_id: process.task_id,
+                        workflow_id: None,
                         workflow_ref: Some(process.workflow_ref),
+                        workflow_status: None,
                         schedule_id: process.schedule_id,
                         exit_code: None,
                         success: false,
@@ -173,6 +183,17 @@ fn parse_runner_events(stderr_lines: &Arc<Mutex<Vec<String>>>) -> Vec<RunnerEven
         .iter()
         .filter_map(|line| serde_json::from_str::<RunnerEvent>(line).ok())
         .collect()
+}
+
+fn latest_runner_workflow_id(events: &[RunnerEvent]) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| event.workflow_id.clone())
+}
+
+fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatus> {
+    events.iter().rev().find_map(|event| event.workflow_status)
 }
 
 #[cfg(test)]
@@ -344,6 +365,8 @@ mod tests {
         assert_eq!(completed.schedule_id.as_deref(), Some("nightly"));
         assert!(completed.success);
         assert_eq!(completed.events.len(), 2);
+        assert!(completed.workflow_id.is_none());
+        assert!(completed.workflow_status.is_none());
         assert_eq!(
             completed.events[0].workflow_ref.as_deref(),
             Some("standard")

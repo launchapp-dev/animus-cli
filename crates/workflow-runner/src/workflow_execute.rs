@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,10 +10,10 @@ use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
     ensure_workflow_config_compiled, load_workflow_config, project_requirement_workflow_status,
     providers::{BuiltinGitProvider, GitProvider},
-    resolve_workflow_rework_attempts, resolve_workflow_verdict_routing,
+    register_workflow_runner_pid,
     services::ServiceHub,
-    FileServiceHub, OrchestratorTask, PhaseDecisionVerdict, TaskStatus, WorkflowRunInput,
-    WorkflowSubject,
+    unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow,
+    PhaseDecisionVerdict, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
 };
 
 use crate::executor::{
@@ -41,6 +40,7 @@ pub enum PhaseEvent<'a> {
 
 pub struct WorkflowExecuteParams {
     pub project_root: String,
+    pub workflow_id: Option<String>,
     pub task_id: Option<String>,
     pub requirement_id: Option<String>,
     pub title: Option<String>,
@@ -58,6 +58,8 @@ pub struct WorkflowExecuteParams {
 pub struct WorkflowExecuteResult {
     pub success: bool,
     pub workflow_id: String,
+    pub workflow_ref: String,
+    pub workflow_status: WorkflowStatus,
     pub subject_id: String,
     pub execution_cwd: String,
     pub phases_requested: Vec<String>,
@@ -69,14 +71,31 @@ pub struct WorkflowExecuteResult {
 }
 
 struct ExecutionSubjectContext {
-    subject_id: String,
     subject_title: String,
     subject_description: String,
     task: Option<OrchestratorTask>,
 }
 
-const DEFAULT_PHASE_REWORK_ATTEMPTS: u32 = 3;
-const DEFAULT_REWORK_TARGET_PHASE: &str = "implementation";
+struct WorkflowRunnerPidGuard {
+    project_root: String,
+    workflow_id: String,
+}
+
+impl WorkflowRunnerPidGuard {
+    fn register(project_root: &str, workflow_id: &str) -> Result<Self> {
+        register_workflow_runner_pid(Path::new(project_root), workflow_id, std::process::id())?;
+        Ok(Self {
+            project_root: project_root.to_string(),
+            workflow_id: workflow_id.to_string(),
+        })
+    }
+}
+
+impl Drop for WorkflowRunnerPidGuard {
+    fn drop(&mut self) {
+        let _ = unregister_workflow_runner_pid(Path::new(&self.project_root), &self.workflow_id);
+    }
+}
 
 pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
     let stream_level = params.stream_level.as_deref().unwrap_or("quiet");
@@ -86,38 +105,44 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         std::env::set_var("AO_PHASE_TIMEOUT_SECS", timeout.to_string());
     }
 
-    let input = resolve_input(&params)?;
-    let subject = input.subject().clone();
-
     let hub: Arc<dyn ServiceHub> = match params.hub {
-        Some(h) => h,
+        Some(ref h) => h.clone(),
         None => Arc::new(
             FileServiceHub::new(&params.project_root)
                 .context("failed to create service hub for project")?,
         ),
     };
 
+    let mut workflow = match params.workflow_id.as_deref() {
+        Some(workflow_id) => load_existing_workflow(hub.clone(), workflow_id, &params).await?,
+        None => {
+            let input = resolve_input(&params)?;
+            let subject = input.subject().clone();
+            let subject_id = subject.id().to_string();
+            hub.workflows().run(input).await.or_else(|run_err| {
+                if matches!(subject, WorkflowSubject::Custom { .. }) {
+                    return Err(run_err);
+                }
+                let all = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(hub.workflows().list())
+                })?;
+                all.into_iter()
+                    .find(|w| w.subject.id() == subject_id || w.task_id == subject_id)
+                    .ok_or_else(|| anyhow!("no workflow found for subject '{}'", subject_id))
+            })?
+        }
+    };
+    let _runner_pid_guard = WorkflowRunnerPidGuard::register(&params.project_root, &workflow.id)
+        .context("failed to register active workflow execution")?;
+
     let mut subject_context = resolve_execution_subject_context(
         hub.clone(),
-        &subject,
+        &workflow.subject,
         params.title.as_deref(),
         params.description.as_deref(),
     )
     .await?;
     let mut task = subject_context.task.take();
-
-    let subject_id = subject.id().to_string();
-    let workflow = hub.workflows().run(input).await.or_else(|run_err| {
-        if matches!(subject, WorkflowSubject::Custom { .. }) {
-            return Err(run_err);
-        }
-        let all = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(hub.workflows().list())
-        })?;
-        all.into_iter()
-            .find(|w| w.subject.id() == subject_id || w.task_id == subject_id)
-            .ok_or_else(|| anyhow!("no workflow found for subject '{}'", subject_id))
-    })?;
 
     let execution_cwd = ensure_execution_cwd(hub.clone(), &params.project_root, task.as_ref())
         .await
@@ -151,7 +176,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         eprintln!("warning: failed to auto-start runner for workflow execute: {err}");
     }
 
-    let subject_id_str = subject_context.subject_id.clone();
+    let subject_id_str = workflow.subject.id().to_string();
     let subject_title = subject_context.subject_title.clone();
     let subject_description = subject_context.subject_description.clone();
     let task_complexity = task.as_ref().map(|t| t.complexity);
@@ -160,17 +185,10 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     let workflow_config = load_workflow_config(Path::new(&params.project_root))?;
     let workflow_ref = workflow
         .workflow_ref
-        .as_deref()
-        .unwrap_or(workflow_config.default_workflow_ref.as_str());
-    let verdict_routing =
-        resolve_workflow_verdict_routing(&workflow_config, workflow.workflow_ref.as_deref());
-    let rework_attempts =
-        resolve_workflow_rework_attempts(&workflow_config, workflow.workflow_ref.as_deref());
-
-    let mut rework_counts: HashMap<String, u32> = HashMap::new();
+        .clone()
+        .unwrap_or_else(|| workflow_config.default_workflow_ref.clone());
     let mut rework_context: Option<String> = None;
     let mut results = Vec::new();
-    let total_phases = phases_to_run.len();
     let workflow_start = Instant::now();
 
     let emit = |event: PhaseEvent<'_>| {
@@ -179,20 +197,18 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         }
     };
 
-    let mut phase_idx: usize = 0;
-    while phase_idx < phases_to_run.len() {
-        let phase_id = &phases_to_run[phase_idx];
+    if let Some(phase_filter) = params.phase_filter.clone() {
         let phase_attempt = workflow
             .phases
             .iter()
-            .find(|p| &p.phase_id == phase_id)
+            .find(|p| p.phase_id.eq_ignore_ascii_case(&phase_filter))
             .map(|p| p.attempt)
             .unwrap_or(0);
 
         emit(PhaseEvent::Started {
-            phase_id,
-            phase_index: phase_idx,
-            total_phases,
+            phase_id: &phase_filter,
+            phase_index: 0,
+            total_phases: 1,
         });
         let phase_start = Instant::now();
 
@@ -205,12 +221,12 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
             &params.project_root,
             &execution_cwd,
             &workflow.id,
-            workflow_ref,
+            workflow_ref.as_str(),
             &subject_id_str,
             &subject_title,
             &subject_description,
             task_complexity,
-            phase_id,
+            &phase_filter,
             phase_attempt,
             Some(&phase_overrides),
             None,
@@ -221,172 +237,281 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
 
         match run_result {
             Ok(result) => {
-                let mut routed_back = false;
-
                 if let PhaseExecutionOutcome::Completed {
                     phase_decision: Some(ref decision),
                     ..
-                } = result.outcome
+                } = &result.outcome
                 {
-                    emit(PhaseEvent::Decision { phase_id, decision });
+                    emit(PhaseEvent::Decision {
+                        phase_id: &phase_filter,
+                        decision,
+                    });
+                }
 
-                    if decision.verdict == PhaseDecisionVerdict::Skip {
-                        let close_reason = decision.reason.trim().to_lowercase();
-                        let target_status = if close_reason.contains("already_done") {
-                            TaskStatus::Done
-                        } else {
-                            TaskStatus::Cancelled
-                        };
+                let phase_status = phase_result_status(&result.outcome);
+                let _ = persist_phase_output(
+                    &params.project_root,
+                    &workflow.id,
+                    &phase_filter,
+                    &result.outcome,
+                );
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_filter,
+                    duration: phase_elapsed,
+                    success: phase_status != "failed",
+                });
+                results.push(serde_json::json!({
+                    "phase_id": phase_filter,
+                    "status": phase_status,
+                    "duration_secs": phase_elapsed.as_secs(),
+                    "outcome": result.outcome,
+                    "metadata": result.metadata,
+                }));
 
-                        if let Ok(mut t) = hub.tasks().get(&subject_id_str).await {
-                            t.resolution = Some(decision.reason.clone());
-                            if target_status == TaskStatus::Cancelled {
-                                t.cancelled = true;
-                            }
-                            t.status = target_status;
-                            t.metadata.updated_by = "workflow:skip".to_string();
-                            let _ = hub.tasks().replace(t).await;
-                        }
+                let total_duration = workflow_start.elapsed();
+                return Ok(WorkflowExecuteResult {
+                    success: phase_status != "failed",
+                    workflow_id: workflow.id.clone(),
+                    workflow_ref,
+                    workflow_status: workflow.status,
+                    subject_id: subject_id_str,
+                    execution_cwd,
+                    phases_requested: vec![phase_filter],
+                    phases_completed: usize::from(phase_status == "completed"),
+                    phases_total: 1,
+                    total_duration,
+                    phase_results: results,
+                    post_success: serde_json::json!({
+                        "status": "skipped",
+                        "reason": "post-success actions are not run for single-phase execution",
+                    }),
+                });
+            }
+            Err(err) => {
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_filter,
+                    duration: phase_elapsed,
+                    success: false,
+                });
+                results.push(serde_json::json!({
+                    "phase_id": phase_filter,
+                    "status": "failed",
+                    "duration_secs": phase_elapsed.as_secs(),
+                    "error": err.to_string(),
+                }));
+                let total_duration = workflow_start.elapsed();
+                return Ok(WorkflowExecuteResult {
+                    success: false,
+                    workflow_id: workflow.id.clone(),
+                    workflow_ref,
+                    workflow_status: workflow.status,
+                    subject_id: subject_id_str,
+                    execution_cwd,
+                    phases_requested: vec![phase_filter],
+                    phases_completed: 0,
+                    phases_total: 1,
+                    total_duration,
+                    phase_results: results,
+                    post_success: serde_json::json!({
+                        "status": "skipped",
+                        "reason": "post-success actions are not run for single-phase execution",
+                    }),
+                });
+            }
+        }
+    }
 
-                        let _ = persist_phase_output(
-                            &params.project_root,
-                            &workflow.id,
-                            phase_id,
-                            &result.outcome,
+    let mut phases_to_run: Vec<String> =
+        workflow.phases.iter().map(|p| p.phase_id.clone()).collect();
+    if phases_to_run.is_empty() {
+        return Err(anyhow!("workflow has no phases to execute"));
+    }
+
+    let mut phase_idx: usize = workflow.current_phase_index;
+    let mut reported_workflow_status = workflow.status;
+    while phase_idx < phases_to_run.len() && !is_terminal_workflow_status(workflow.status) {
+        let phase_id = phases_to_run[phase_idx].clone();
+        let phase_attempt = workflow
+            .phases
+            .iter()
+            .find(|p| p.phase_id == phase_id)
+            .map(|p| p.attempt)
+            .unwrap_or(0);
+
+        emit(PhaseEvent::Started {
+            phase_id: &phase_id,
+            phase_index: phase_idx,
+            total_phases: phases_to_run.len(),
+        });
+        let phase_start = Instant::now();
+
+        let phase_overrides = PhaseExecuteOverrides {
+            tool: params.tool.clone(),
+            model: params.model.clone(),
+            rework_context: rework_context.take(),
+        };
+        let run_result = run_workflow_phase(
+            &params.project_root,
+            &execution_cwd,
+            &workflow.id,
+            workflow_ref.as_str(),
+            &subject_id_str,
+            &subject_title,
+            &subject_description,
+            task_complexity,
+            &phase_id,
+            phase_attempt,
+            Some(&phase_overrides),
+            None,
+        )
+        .await;
+
+        let phase_elapsed = phase_start.elapsed();
+
+        match run_result {
+            Ok(result) => {
+                if let PhaseExecutionOutcome::Completed {
+                    phase_decision: Some(ref decision),
+                    ..
+                } = &result.outcome
+                {
+                    emit(PhaseEvent::Decision {
+                        phase_id: &phase_id,
+                        decision,
+                    });
+                }
+
+                let _ = persist_phase_output(
+                    &params.project_root,
+                    &workflow.id,
+                    &phase_id,
+                    &result.outcome,
+                );
+
+                match &result.outcome {
+                    PhaseExecutionOutcome::Completed { phase_decision, .. } => {
+                        let decision = phase_decision.clone();
+                        let updated = hub
+                            .workflows()
+                            .complete_current_phase_with_decision(&workflow.id, decision.clone())
+                            .await?;
+                        let next_status = updated.status;
+                        let next_phase_index = updated.current_phase_index;
+                        let next_phase_id = updated.current_phase.clone().or_else(|| {
+                            updated
+                                .phases
+                                .get(updated.current_phase_index)
+                                .map(|phase| phase.phase_id.clone())
+                        });
+                        let maybe_context = phase_rework_context(&result.outcome);
+                        workflow = updated;
+                        reported_workflow_status = next_status;
+                        phases_to_run = workflow
+                            .phases
+                            .iter()
+                            .map(|phase| phase.phase_id.clone())
+                            .collect();
+
+                        let status = phase_result_status(&result.outcome).to_string();
+                        let next_success = !matches!(
+                            next_status,
+                            WorkflowStatus::Failed | WorkflowStatus::Escalated
                         );
                         emit(PhaseEvent::Completed {
-                            phase_id,
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: next_success,
+                        });
+                        let mut result_value = serde_json::json!({
+                            "phase_id": phase_id,
+                            "status": status,
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", next_status).to_ascii_lowercase(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
+                        });
+                        if let Some(next_phase_id) = next_phase_id {
+                            result_value["next_phase_id"] = serde_json::json!(next_phase_id);
+                        }
+                        if matches!(
+                            decision.as_ref().map(|value| value.verdict),
+                            Some(PhaseDecisionVerdict::Skip)
+                        ) {
+                            result_value["close_reason"] = serde_json::json!(decision
+                                .as_ref()
+                                .map(|value| value.reason.clone())
+                                .unwrap_or_default());
+                        }
+                        results.push(result_value);
+
+                        if matches!(
+                            workflow.status,
+                            WorkflowStatus::Failed
+                                | WorkflowStatus::Escalated
+                                | WorkflowStatus::Cancelled
+                        ) {
+                            break;
+                        }
+
+                        rework_context = maybe_context;
+                        phase_idx = next_phase_index;
+                        continue;
+                    }
+                    PhaseExecutionOutcome::NeedsResearch { reason } => {
+                        workflow = hub
+                            .workflows()
+                            .request_research(&workflow.id, reason.clone())
+                            .await?;
+                        reported_workflow_status = workflow.status;
+                        phases_to_run = workflow
+                            .phases
+                            .iter()
+                            .map(|phase| phase.phase_id.clone())
+                            .collect();
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
                             duration: phase_elapsed,
                             success: true,
                         });
                         results.push(serde_json::json!({
                             "phase_id": phase_id,
-                            "status": "closed",
-                            "close_reason": decision.reason,
-                            "task_status": format!("{:?}", target_status).to_lowercase(),
+                            "status": "research_requested",
                             "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
+                            "outcome": result.outcome,
+                            "metadata": result.metadata,
+                        }));
+                        phase_idx = workflow.current_phase_index;
+                        continue;
+                    }
+                    PhaseExecutionOutcome::ManualPending { .. } => {
+                        workflow = hub.workflows().pause(&workflow.id).await?;
+                        reported_workflow_status = workflow.status;
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: true,
+                        });
+                        results.push(serde_json::json!({
+                            "phase_id": phase_id,
+                            "status": "manual_pending",
+                            "duration_secs": phase_elapsed.as_secs(),
+                            "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
                             "outcome": result.outcome,
                             "metadata": result.metadata,
                         }));
                         break;
                     }
-
-                    if decision.verdict == PhaseDecisionVerdict::Rework {
-                        let target = verdict_routing
-                            .get(phase_id.as_str())
-                            .and_then(|routing| routing.get("rework"))
-                            .map(|transition| transition.target.clone())
-                            .or_else(|| {
-                                has_matching_phase(&phases_to_run, DEFAULT_REWORK_TARGET_PHASE)
-                                    .and_then(|idx| phases_to_run.get(idx).cloned())
-                            });
-                        let count = rework_counts.entry(phase_id.clone()).or_insert(0);
-                        let max_attempts = *rework_attempts
-                            .get(phase_id)
-                            .unwrap_or(&DEFAULT_PHASE_REWORK_ATTEMPTS);
-                        let maybe_context = phase_rework_context(&result.outcome);
-                        let _ = persist_phase_output(
-                            &params.project_root,
-                            &workflow.id,
-                            phase_id,
-                            &result.outcome,
-                        );
-
-                        if target.is_none() {
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "failed",
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "error": format!("rework target for phase '{}' not configured", phase_id),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
-                            break;
-                        }
-
-                        if *count < max_attempts {
-                            *count += 1;
-                            let target = target.expect("rework target");
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "rework",
-                                "rework_target": target,
-                                "rework_attempt": *count,
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
-
-                            rework_context = maybe_context;
-                            if let Some(target_idx) = phases_to_run
-                                .iter()
-                                .position(|p| p.eq_ignore_ascii_case(&target))
-                            {
-                                phase_idx = target_idx;
-                                routed_back = true;
-                            } else {
-                                results.push(serde_json::json!({
-                                    "phase_id": phase_id,
-                                    "status": "failed",
-                                    "duration_secs": phase_elapsed.as_secs(),
-                                    "error": format!("rework target '{}' not found in phases", target),
-                                }));
-                                break;
-                            }
-                        } else {
-                            emit(PhaseEvent::Completed {
-                                phase_id,
-                                duration: phase_elapsed,
-                                success: false,
-                            });
-                            results.push(serde_json::json!({
-                                "phase_id": phase_id,
-                                "status": "failed",
-                                "duration_secs": phase_elapsed.as_secs(),
-                                "error": format!("rework budget exhausted after {} attempts", max_attempts),
-                                "outcome": result.outcome,
-                                "metadata": result.metadata,
-                            }));
-                            break;
-                        }
-                    }
-                }
-
-                if !routed_back {
-                    let _ = persist_phase_output(
-                        &params.project_root,
-                        &workflow.id,
-                        phase_id,
-                        &result.outcome,
-                    );
-                    emit(PhaseEvent::Completed {
-                        phase_id,
-                        duration: phase_elapsed,
-                        success: true,
-                    });
-                    results.push(serde_json::json!({
-                        "phase_id": phase_id,
-                        "status": "completed",
-                        "duration_secs": phase_elapsed.as_secs(),
-                        "outcome": result.outcome,
-                        "metadata": result.metadata,
-                    }));
-                    phase_idx += 1;
                 }
             }
             Err(err) => {
+                workflow = hub
+                    .workflows()
+                    .fail_current_phase(&workflow.id, err.to_string())
+                    .await?;
+                reported_workflow_status = workflow.status;
                 emit(PhaseEvent::Completed {
-                    phase_id,
+                    phase_id: &phase_id,
                     duration: phase_elapsed,
                     success: false,
                 });
@@ -394,6 +519,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                     "phase_id": phase_id,
                     "status": "failed",
                     "duration_secs": phase_elapsed.as_secs(),
+                    "workflow_status": format!("{:?}", workflow.status).to_ascii_lowercase(),
                     "error": err.to_string(),
                 }));
                 break;
@@ -402,12 +528,13 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     }
 
     let total_duration = workflow_start.elapsed();
-    let all_phases_completed = phase_idx >= phases_to_run.len();
-    if all_phases_completed {
-        project_requirement_success_status(hub.clone(), &subject, workflow_ref).await?;
-    }
-    let post_success = if all_phases_completed {
-        if let Some(ref t) = task {
+    let mut post_success = serde_json::json!({
+        "status": "skipped",
+        "reason": "workflow did not complete all phases",
+    });
+    if workflow.status == WorkflowStatus::Completed {
+        project_requirement_success_status(hub.clone(), &workflow.subject, &workflow_ref).await?;
+        post_success = if let Some(ref t) = task {
             execute_post_success_actions(
                 &params.project_root,
                 t,
@@ -421,26 +548,134 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                 "status": "skipped",
                 "reason": "post-success actions require a task subject",
             })
+        };
+
+        match post_success["status"].as_str() {
+            Some("conflict") => {
+                let reason = post_success_failure_reason(&post_success)
+                    .unwrap_or_else(|| "post-success merge conflict".to_string());
+                workflow = hub
+                    .workflows()
+                    .mark_merge_conflict(&workflow.id, reason)
+                    .await?;
+                reported_workflow_status = workflow.status;
+            }
+            Some("failed") => {
+                let reason = post_success_failure_reason(&post_success)
+                    .unwrap_or_else(|| "post-success action failed".to_string());
+                workflow = hub
+                    .workflows()
+                    .mark_completed_failed(&workflow.id, reason)
+                    .await?;
+                reported_workflow_status = workflow.status;
+            }
+            _ => {}
         }
-    } else {
-        serde_json::json!({
-            "status": "skipped",
-            "reason": "workflow did not complete all phases",
-        })
-    };
+    }
 
     Ok(WorkflowExecuteResult {
-        success: all_phases_completed,
+        success: workflow_exit_success(reported_workflow_status),
         workflow_id: workflow.id.clone(),
+        workflow_ref,
+        workflow_status: reported_workflow_status,
         subject_id: subject_id_str,
         execution_cwd,
-        phases_requested: phases_to_run,
-        phases_completed: phase_idx.min(total_phases),
-        phases_total: total_phases,
+        phases_requested: phases_to_run.clone(),
+        phases_completed: workflow
+            .phases
+            .iter()
+            .filter(|phase| phase.completed_at.is_some())
+            .count(),
+        phases_total: phases_to_run.len(),
         total_duration,
         phase_results: results,
         post_success,
     })
+}
+
+async fn load_existing_workflow(
+    hub: Arc<dyn ServiceHub>,
+    workflow_id: &str,
+    params: &WorkflowExecuteParams,
+) -> Result<OrchestratorWorkflow> {
+    let workflow = hub
+        .workflows()
+        .get(workflow_id)
+        .await
+        .with_context(|| format!("workflow '{}' not found", workflow_id))?;
+
+    if workflow.status != WorkflowStatus::Running {
+        return Err(anyhow!(
+            "workflow '{}' is not runnable (status: {})",
+            workflow_id,
+            format!("{:?}", workflow.status).to_ascii_lowercase()
+        ));
+    }
+
+    validate_existing_workflow_subject(&workflow, params)?;
+    Ok(workflow)
+}
+
+fn validate_existing_workflow_subject(
+    workflow: &OrchestratorWorkflow,
+    params: &WorkflowExecuteParams,
+) -> Result<()> {
+    if let Some(task_id) = params.task_id.as_deref() {
+        let workflow_task_id = match &workflow.subject {
+            WorkflowSubject::Task { id } => id.as_str(),
+            _ => workflow.task_id.as_str(),
+        };
+        if workflow_task_id != task_id {
+            return Err(anyhow!(
+                "workflow '{}' is for task '{}' not '{}'",
+                workflow.id,
+                workflow_task_id,
+                task_id
+            ));
+        }
+    }
+
+    if let Some(requirement_id) = params.requirement_id.as_deref() {
+        match &workflow.subject {
+            WorkflowSubject::Requirement { id } if id == requirement_id => {}
+            WorkflowSubject::Requirement { id } => {
+                return Err(anyhow!(
+                    "workflow '{}' is for requirement '{}' not '{}'",
+                    workflow.id,
+                    id,
+                    requirement_id
+                ));
+            }
+            _ => {
+                return Err(anyhow!(
+                    "workflow '{}' is not a requirement workflow",
+                    workflow.id
+                ));
+            }
+        }
+    }
+
+    if let Some(title) = params.title.as_deref() {
+        match &workflow.subject {
+            WorkflowSubject::Custom { title: actual, .. } if actual == title => {}
+            WorkflowSubject::Custom { title: actual, .. } => {
+                return Err(anyhow!(
+                    "workflow '{}' is for custom subject '{}' not '{}'",
+                    workflow.id,
+                    actual,
+                    title
+                ));
+            }
+            _ => {
+                return Err(anyhow!(
+                    "workflow '{}' is not a custom workflow",
+                    workflow.id
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
@@ -476,7 +711,6 @@ async fn resolve_execution_subject_context(
                 .await
                 .with_context(|| format!("task '{}' not found", id))?;
             Ok(ExecutionSubjectContext {
-                subject_id: task.id.clone(),
                 subject_title: task.title.clone(),
                 subject_description: task.description.clone(),
                 task: Some(task),
@@ -489,14 +723,12 @@ async fn resolve_execution_subject_context(
                 .await
                 .with_context(|| format!("requirement '{}' not found", id))?;
             Ok(ExecutionSubjectContext {
-                subject_id: requirement.id.clone(),
                 subject_title: requirement.title.clone(),
                 subject_description: requirement.description.clone(),
                 task: None,
             })
         }
         WorkflowSubject::Custom { title, description } => Ok(ExecutionSubjectContext {
-            subject_id: subject.id().to_string(),
             subject_title: fallback_title.unwrap_or(title).to_string(),
             subject_description: fallback_description.unwrap_or(description).to_string(),
             task: None,
@@ -515,13 +747,6 @@ async fn project_requirement_success_status(
 
     project_requirement_workflow_status(hub, id, workflow_ref).await
 }
-
-fn has_matching_phase(phases: &[String], target: &str) -> Option<usize> {
-    phases
-        .iter()
-        .position(|phase| phase.eq_ignore_ascii_case(target))
-}
-
 fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
     match outcome {
         PhaseExecutionOutcome::Completed {
@@ -531,6 +756,239 @@ fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
             Some(decision.reason.clone())
         }
         _ => None,
+    }
+}
+
+fn is_terminal_workflow_status(status: WorkflowStatus) -> bool {
+    matches!(
+        status,
+        WorkflowStatus::Completed
+            | WorkflowStatus::Failed
+            | WorkflowStatus::Escalated
+            | WorkflowStatus::Cancelled
+    )
+}
+
+fn workflow_exit_success(status: WorkflowStatus) -> bool {
+    !matches!(
+        status,
+        WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
+    )
+}
+
+fn phase_result_status(outcome: &PhaseExecutionOutcome) -> &'static str {
+    match outcome {
+        PhaseExecutionOutcome::Completed {
+            phase_decision: Some(decision),
+            ..
+        } => match decision.verdict {
+            PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Unknown => "completed",
+            PhaseDecisionVerdict::Rework => "rework",
+            PhaseDecisionVerdict::Fail => "failed",
+            PhaseDecisionVerdict::Skip => "closed",
+        },
+        PhaseExecutionOutcome::Completed {
+            phase_decision: None,
+            ..
+        } => "completed",
+        PhaseExecutionOutcome::NeedsResearch { .. } => "research_requested",
+        PhaseExecutionOutcome::ManualPending { .. } => "manual_pending",
+    }
+}
+
+fn post_success_failure_reason(post_success: &Value) -> Option<String> {
+    post_success
+        .get("error")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            post_success
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            post_success
+                .get("actions")
+                .and_then(Value::as_object)
+                .and_then(|actions| {
+                    actions.values().find_map(|action| {
+                        if action.get("status").and_then(Value::as_str) == Some("failed")
+                            || action.get("status").and_then(Value::as_str) == Some("conflict")
+                        {
+                            action
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        } else {
+                            None
+                        }
+                    })
+                })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{execute_workflow, workflow_exit_success, WorkflowExecuteParams};
+    use orchestrator_core::{
+        load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config,
+        FileServiceHub, PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput,
+        TaskStatus, TaskType, WorkflowRunInput, WorkflowStatus,
+    };
+    use std::process::Command as ProcessCommand;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn init_git_repo(temp: &TempDir) {
+        let init_main = ProcessCommand::new("git")
+            .arg("init")
+            .arg("-b")
+            .arg("main")
+            .current_dir(temp.path())
+            .status()
+            .expect("git init should run");
+        if !init_main.success() {
+            let init = ProcessCommand::new("git")
+                .arg("init")
+                .current_dir(temp.path())
+                .status()
+                .expect("git init should run");
+            assert!(init.success(), "git init should succeed");
+            let rename = ProcessCommand::new("git")
+                .args(["branch", "-M", "main"])
+                .current_dir(temp.path())
+                .status()
+                .expect("git branch -M should run");
+            assert!(rename.success(), "git branch -M main should succeed");
+        }
+
+        let email = ProcessCommand::new("git")
+            .args(["config", "user.email", "ao-test@example.com"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git config user.email should run");
+        assert!(email.success(), "git config user.email should succeed");
+        let name = ProcessCommand::new("git")
+            .args(["config", "user.name", "AO Test"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git config user.name should run");
+        assert!(name.success(), "git config user.name should succeed");
+
+        std::fs::write(temp.path().join("README.md"), "# test\n")
+            .expect("readme should be written");
+        let add = ProcessCommand::new("git")
+            .args(["add", "README.md"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git add should run");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "initial commit should succeed");
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_pauses_manual_pending_workflows() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "manual gate".to_string(),
+                description: "waits for approval".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::InProgress, false)
+            .await
+            .expect("task should be in progress");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+
+        let current_phase = workflow
+            .current_phase
+            .clone()
+            .expect("workflow should have a current phase");
+        let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
+        let mut definition = runtime
+            .phase_execution(&current_phase)
+            .cloned()
+            .expect("current phase should exist");
+        definition.mode = PhaseExecutionMode::Manual;
+        definition.agent_id = None;
+        definition.command = None;
+        definition.manual = Some(PhaseManualDefinition {
+            instructions: "Wait for approval".to_string(),
+            approval_note_required: false,
+        });
+        runtime.phases.insert(current_phase.clone(), definition);
+        write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project_root.clone(),
+            workflow_id: None,
+            task_id: Some(task.id.clone()),
+            requirement_id: None,
+            title: None,
+            description: None,
+            workflow_ref: None,
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            stream_level: Some("quiet".to_string()),
+            on_phase_event: None,
+            hub: Some(hub.clone()),
+        })
+        .await
+        .expect("workflow execution should succeed");
+
+        assert!(
+            result.success,
+            "manual wait should not exit as a runner failure"
+        );
+        assert_eq!(result.workflow_status, WorkflowStatus::Paused);
+        assert_eq!(
+            result.phase_results[0]["status"].as_str(),
+            Some("manual_pending")
+        );
+        assert_eq!(
+            result.phase_results[0]["workflow_status"].as_str(),
+            Some("paused")
+        );
+
+        let updated = hub
+            .workflows()
+            .get(&result.workflow_id)
+            .await
+            .expect("workflow should reload");
+        assert_eq!(updated.status, WorkflowStatus::Paused);
+    }
+
+    #[test]
+    fn cancelled_workflows_exit_unsuccessfully() {
+        assert!(workflow_exit_success(WorkflowStatus::Completed));
+        assert!(workflow_exit_success(WorkflowStatus::Paused));
+        assert!(!workflow_exit_success(WorkflowStatus::Cancelled));
     }
 }
 

@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+use orchestrator_core::WorkflowStatus;
 use serde::Serialize;
 
 use workflow_runner::workflow_execute::{execute_workflow, WorkflowExecuteParams};
@@ -58,7 +59,11 @@ struct RunnerEvent {
     event: &'static str,
     task_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     workflow_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow_status: Option<WorkflowStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exit_code: Option<i32>,
 }
@@ -90,13 +95,16 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let startup = RunnerEvent {
         event: "runner_start",
         task_id: subject_id.clone(),
+        workflow_id: None,
         workflow_ref: args.workflow_ref.clone(),
+        workflow_status: None,
         exit_code: None,
     };
     eprintln!("{}", serde_json::to_string(&startup).unwrap_or_default());
 
     let params = WorkflowExecuteParams {
         project_root: args.project_root,
+        workflow_id: None,
         task_id: args.task_id,
         requirement_id: args.requirement_id,
         title: args.title,
@@ -122,7 +130,15 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let completion = RunnerEvent {
         event: "runner_complete",
         task_id: subject_id,
-        workflow_ref: args.workflow_ref,
+        workflow_id: result.as_ref().ok().map(|value| value.workflow_id.clone()),
+        workflow_ref: result.as_ref().ok().and_then(|value| {
+            if value.workflow_ref.trim().is_empty() {
+                args.workflow_ref.clone()
+            } else {
+                Some(value.workflow_ref.clone())
+            }
+        }),
+        workflow_status: result.as_ref().ok().map(|value| value.workflow_status),
         exit_code: Some(exit_code),
     };
     eprintln!("{}", serde_json::to_string(&completion).unwrap_or_default());
@@ -180,7 +196,9 @@ mod tests {
         let event = RunnerEvent {
             event: "runner_start",
             task_id: "TASK-001".to_string(),
+            workflow_id: None,
             workflow_ref: Some("default".to_string()),
+            workflow_status: None,
             exit_code: None,
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -191,11 +209,15 @@ mod tests {
         let complete = RunnerEvent {
             event: "runner_complete",
             task_id: "TASK-001".to_string(),
+            workflow_id: Some("WF-001".to_string()),
             workflow_ref: None,
+            workflow_status: Some(WorkflowStatus::Completed),
             exit_code: Some(0),
         };
         let json = serde_json::to_string(&complete).unwrap();
         assert!(json.contains("runner_complete"));
+        assert!(json.contains("\"workflow_id\":\"WF-001\""));
+        assert!(json.contains("\"workflow_status\":\"completed\""));
         assert!(json.contains("\"exit_code\":0"));
         assert!(!json.contains("workflow_ref"));
     }

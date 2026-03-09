@@ -1,7 +1,10 @@
 use super::*;
 use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
-use orchestrator_core::{services::ServiceHub, WorkflowMachineState, WorkflowStatus};
+use orchestrator_core::{
+    active_workflow_runner_ids, services::ServiceHub, WorkflowMachineState, WorkflowStatus,
+};
 use std::collections::HashSet;
+use std::path::Path;
 
 pub async fn recover_orphaned_running_workflows(
     hub: Arc<dyn ServiceHub>,
@@ -12,6 +15,8 @@ pub async fn recover_orphaned_running_workflows(
         Ok(workflows) => workflows,
         Err(_) => return 0,
     };
+    let externally_active_workflows =
+        active_workflow_runner_ids(Path::new(project_root)).unwrap_or_default();
 
     let mut recovered = 0usize;
     for workflow in workflows {
@@ -21,7 +26,11 @@ pub async fn recover_orphaned_running_workflows(
         if workflow.machine_state == WorkflowMachineState::MergeConflict {
             continue;
         }
+        if workflow_is_waiting_on_manual_phase(project_root, &workflow) {
+            continue;
+        }
         if active_subject_ids.contains(&workflow.id)
+            || externally_active_workflows.contains(&workflow.id)
             || active_subject_ids.contains(workflow.subject.id())
             || (!workflow.task_id.is_empty() && active_subject_ids.contains(&workflow.task_id))
         {
@@ -40,4 +49,29 @@ pub async fn recover_orphaned_running_workflows(
     }
 
     recovered
+}
+
+fn workflow_is_waiting_on_manual_phase(
+    project_root: &str,
+    workflow: &orchestrator_core::OrchestratorWorkflow,
+) -> bool {
+    let Some(phase_id) = workflow.current_phase.clone().or_else(|| {
+        workflow
+            .phases
+            .get(workflow.current_phase_index)
+            .map(|phase| phase.phase_id.clone())
+    }) else {
+        return false;
+    };
+
+    orchestrator_core::load_agent_runtime_config(Path::new(project_root))
+        .ok()
+        .and_then(|config| config.phase_execution(&phase_id).cloned())
+        .map(|definition| {
+            matches!(
+                definition.mode,
+                orchestrator_core::PhaseExecutionMode::Manual
+            )
+        })
+        .unwrap_or(false)
 }

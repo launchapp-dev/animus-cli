@@ -520,6 +520,14 @@ impl WorkflowLifecycleExecutor {
         workflow: &OrchestratorWorkflow,
         machine: &mut WorkflowStateMachine,
     ) -> TransitionEffect {
+        if matches!(
+            decision.as_ref().map(|value| value.verdict),
+            Some(PhaseDecisionVerdict::Skip)
+        ) && matches!(gate_result, GateEvaluationResult::Pass)
+        {
+            return self.build_skip_close_effect(decision, current_phase_id, machine);
+        }
+
         match gate_result {
             GateEvaluationResult::Pass => {
                 self.build_advance_effect(decision, current_phase_id, workflow, machine)
@@ -538,6 +546,76 @@ impl WorkflowLifecycleExecutor {
             GateEvaluationResult::Fail { reason } => {
                 self.build_gate_fail_effect(decision, current_phase_id, reason, machine)
             }
+        }
+    }
+
+    fn build_skip_close_effect(
+        &self,
+        decision: &Option<PhaseDecision>,
+        current_phase_id: &str,
+        machine: &mut WorkflowStateMachine,
+    ) -> TransitionEffect {
+        machine
+            .apply(WorkflowMachineEvent::PolicyDecisionReady)
+            .expect("skip: PolicyDecisionReady transition");
+
+        let reason = decision
+            .as_ref()
+            .map(|value| value.reason.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "workflow closed by skip verdict".to_string());
+        let skip_as_completed = reason.to_ascii_lowercase().contains("already_done");
+        let (machine_version, machine_hash, machine_source) = self.machine_metadata();
+        let record = WorkflowDecisionRecord {
+            timestamp: Utc::now(),
+            phase_id: current_phase_id.to_string(),
+            decision: WorkflowDecisionAction::Skip,
+            target_phase: None,
+            reason: reason.clone(),
+            confidence: decision
+                .as_ref()
+                .map(|value| value.confidence)
+                .unwrap_or(1.0),
+            risk: decision
+                .as_ref()
+                .map(|value| value.risk)
+                .unwrap_or(WorkflowDecisionRisk::Low),
+            source: decision
+                .as_ref()
+                .map(|_| WorkflowDecisionSource::Llm)
+                .unwrap_or(WorkflowDecisionSource::Fallback),
+            guardrail_violations: decision
+                .as_ref()
+                .map(|value| value.guardrail_violations.clone())
+                .unwrap_or_default(),
+            machine_version,
+            machine_hash,
+            machine_source,
+        };
+
+        if skip_as_completed {
+            machine
+                .apply(WorkflowMachineEvent::NoMorePhases)
+                .expect("skip: NoMorePhases completion");
+        } else {
+            machine
+                .apply(WorkflowMachineEvent::CancelRequested)
+                .expect("skip: CancelRequested transition");
+        }
+        let final_state = machine.state();
+
+        TransitionEffect {
+            next_phase_index: None,
+            phase_status: None,
+            decision_record: Some(record),
+            workflow_status: Some(final_state.to_workflow_status()),
+            machine_state: final_state,
+            failure_reason: None,
+            completed_at: Some(Some(Utc::now())),
+            current_phase: Some(None),
+            rework_increment: None,
+            clear_phase_completed_at: false,
         }
     }
 
@@ -905,6 +983,31 @@ impl WorkflowLifecycleExecutor {
 
         let effect = self.resolve_failure_transition(&current_phase_id, &error, workflow);
         apply_transition_effects(&effect, workflow);
+    }
+
+    pub fn mark_completed_failed(&self, workflow: &mut OrchestratorWorkflow, error: String) {
+        if workflow.status != WorkflowStatus::Completed {
+            return;
+        }
+
+        let phase_id = workflow
+            .phases
+            .last()
+            .map(|phase| phase.phase_id.clone())
+            .unwrap_or_else(|| "post-success".to_string());
+
+        workflow.machine_state = WorkflowMachineState::Failed;
+        workflow.sync_status();
+        workflow.failure_reason = Some(error.clone());
+        workflow.completed_at = Some(Utc::now());
+        workflow.decision_history.push(self.decision_record(
+            phase_id,
+            WorkflowDecisionAction::Fail,
+            None,
+            error,
+            1.0,
+            WorkflowDecisionRisk::High,
+        ));
     }
 
     fn resolve_failure_transition(
