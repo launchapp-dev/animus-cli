@@ -8,7 +8,11 @@ use std::sync::Arc;
 use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use orchestrator_core::{services::ServiceHub, WorkflowResumeManager, WorkflowRunInput};
+use orchestrator_core::{
+    ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
+    WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -40,6 +44,43 @@ fn resolve_workflow_run_input(
         _ => Err(anyhow!(
             "--task-id, --requirement-id, and --title are mutually exclusive"
         )),
+    }
+}
+
+pub(super) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String> {
+    let root = Path::new(project_root);
+    ensure_workflow_config_compiled(root)?;
+    let workflow_config = load_workflow_config(root)?;
+    workflow_config
+        .workflows
+        .iter()
+        .any(|workflow| {
+            workflow
+                .id
+                .eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
+        })
+        .then(|| REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string())
+        .ok_or_else(|| {
+            anyhow!(
+                "requirement workflow '{}' is not configured for requirement subjects",
+                REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
+            )
+        })
+}
+
+fn apply_requirement_workflow_default(
+    project_root: &str,
+    input: WorkflowRunInput,
+) -> Result<WorkflowRunInput> {
+    if input.workflow_ref().is_some() {
+        return Ok(input);
+    }
+
+    match input.subject() {
+        WorkflowSubject::Requirement { .. } => {
+            Ok(input.with_workflow_ref(resolve_requirement_workflow_ref(project_root)?))
+        }
+        _ => Ok(input),
     }
 }
 
@@ -110,7 +151,12 @@ pub(crate) async fn handle_workflow(
                     args.workflow_ref,
                 )
             })?;
-            print_value(workflows.run(input).await?, json)
+            print_value(
+                workflows
+                    .run(apply_requirement_workflow_default(project_root, input)?)
+                    .await?,
+                json,
+            )
         }
         WorkflowCommand::Execute(args) => {
             execute::handle_workflow_execute(args, hub, project_root, json).await?;
@@ -297,6 +343,73 @@ pub(crate) async fn handle_workflow(
             })?;
             print_value(phases::upsert_pipeline(project_root, workflow)?, json)
         }
+    }
+}
+
+#[cfg(test)]
+mod requirement_workflow_tests {
+    use super::*;
+    use orchestrator_core::{
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
+        write_workflow_config, WorkflowDefinition,
+    };
+
+    #[test]
+    fn resolve_requirement_workflow_ref_errors_when_workflow_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
+            .expect_err("missing requirement workflow should error");
+        assert!(
+            error
+                .to_string()
+                .contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
+            "error should mention missing requirement workflow"
+        );
+    }
+
+    #[test]
+    fn resolve_requirement_workflow_ref_detects_requirement_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.workflows.push(WorkflowDefinition {
+            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
+            name: "Requirement Task Generation".to_string(),
+            description: String::new(),
+            phases: vec!["requirements".to_string().into()],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        write_workflow_config(temp.path(), &workflow_config).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
+            .expect("requirement workflow should resolve");
+        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
+    }
+
+    #[test]
+    fn apply_requirement_workflow_default_errors_when_requirement_workflow_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let error = apply_requirement_workflow_default(
+            temp.path().to_string_lossy().as_ref(),
+            WorkflowRunInput::for_requirement("REQ-404".to_string(), None),
+        )
+        .expect_err("missing requirement workflow should fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
+            "error should mention missing requirement workflow"
+        );
     }
 }
 

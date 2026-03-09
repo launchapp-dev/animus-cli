@@ -1,58 +1,28 @@
 use super::*;
-use orchestrator_core::WorkflowRunInput;
+#[cfg(test)]
+use crate::services::runtime::workflow_mutation_surface::daemon_workflow_assignment;
+use crate::services::runtime::workflow_mutation_surface::start_task_workflow_for_dispatch;
 use orchestrator_core::{
-    dependency_gate_issues_for_task, routing_complexity_for_task, should_skip_task_dispatch,
-    workflow_ref_for_task,
+    dependency_gate_issues_for_task, should_skip_task_dispatch, workflow_ref_for_task,
 };
 pub use orchestrator_daemon_runtime::{
     active_workflow_subject_ids, active_workflow_task_ids, is_terminally_completed_workflow,
     load_dispatch_queue_state, mark_dispatch_queue_entry_assigned, plan_ready_dispatch,
-    workflow_current_phase_id, DispatchCandidate, DispatchQueueEntryStatus, DispatchQueueState,
-    DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, SubjectDispatch,
+    DispatchCandidate, DispatchQueueEntryStatus, DispatchQueueState, DispatchSelectionSource,
+    DispatchWorkflowStart, DispatchWorkflowStartSummary, SubjectDispatch,
 };
 #[cfg(test)]
 pub use orchestrator_daemon_runtime::{
     dispatch_queue_state_path, save_dispatch_queue_state, DispatchQueueEntry,
 };
+
+#[cfg(test)]
 pub fn daemon_agent_assignee_for_workflow_start(
     project_root: &str,
     workflow: &orchestrator_core::OrchestratorWorkflow,
     task: &orchestrator_core::OrchestratorTask,
 ) -> (String, Option<String>) {
-    let phase_id = workflow_current_phase_id(workflow).unwrap_or_else(|| "unknown".to_string());
-    let runtime_config =
-        orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root));
-    let role = runtime_config
-        .phase_agent_id(&phase_id)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| phase_id.clone());
-
-    let fallback_models = runtime_config.phase_fallback_models(&phase_id);
-    let caps = runtime_config.phase_capabilities(&phase_id);
-    let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
-        &phase_id,
-        runtime_config.phase_model_override(&phase_id),
-        runtime_config.phase_tool_override(&phase_id),
-        fallback_models.as_slice(),
-        routing_complexity_for_task(task),
-        Some(project_root),
-        &caps,
-    );
-    let model = execution_targets.first().map(|(_, model)| model.clone());
-    (role, model)
-}
-
-pub async fn auto_assign_task_to_daemon_agent(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    task: &orchestrator_core::OrchestratorTask,
-    workflow: &orchestrator_core::OrchestratorWorkflow,
-) -> Result<()> {
-    let (role, model) = daemon_agent_assignee_for_workflow_start(project_root, workflow, task);
-    hub.tasks()
-        .assign_agent(&task.id, role, model, protocol::ACTOR_DAEMON.to_string())
-        .await?;
-    Ok(())
+    daemon_workflow_assignment(project_root, workflow, task)
 }
 
 pub async fn run_ready_task_workflows_for_project(
@@ -120,13 +90,13 @@ pub async fn run_ready_task_workflows_for_project(
             continue;
         }
 
-        let workflow = hub
-            .workflows()
-            .run(WorkflowRunInput::for_task(
-                task.id.clone(),
-                Some(planned_start.dispatch.workflow_ref.clone()),
-            ))
-            .await?;
+        let workflow = start_task_workflow_for_dispatch(
+            hub.clone(),
+            project_root,
+            &task,
+            &planned_start.dispatch.workflow_ref,
+        )
+        .await?;
         if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
             if let Err(error) = mark_dispatch_queue_entry_assigned(
                 project_root,
@@ -141,7 +111,6 @@ pub async fn run_ready_task_workflows_for_project(
                 );
             }
         }
-        auto_assign_task_to_daemon_agent(hub.clone(), project_root, &task, &workflow).await?;
         started_workflows.push(DispatchWorkflowStart {
             dispatch: planned_start.dispatch.clone(),
             workflow_id: workflow.id.clone(),

@@ -7,7 +7,6 @@ mod dispatch_workflow_start;
 mod dispatch_workflow_start_summary;
 mod process_manager;
 mod ready_dispatch_plan;
-mod reconcile_completed_processes;
 
 pub use build_runner_command_from_dispatch::build_runner_command_from_dispatch;
 pub use completed_process::CompletedProcess;
@@ -25,4 +24,3 @@ pub use process_manager::ProcessManager;
 pub use ready_dispatch_plan::{
     plan_ready_dispatch, DispatchCandidate, PlannedDispatchStart, ReadyDispatchPlan,
 };
-pub use reconcile_completed_processes::reconcile_completed_processes;

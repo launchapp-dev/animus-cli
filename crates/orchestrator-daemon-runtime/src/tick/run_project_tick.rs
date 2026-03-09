@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
 use anyhow::Result;
-use orchestrator_core::{services::ServiceHub, FileServiceHub};
 
 use crate::{
     DaemonRuntimeOptions, ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickRunMode,
-    ProjectTickSnapshot, ProjectTickSummary, ProjectTickTime, TickSummaryBuilder,
+    ProjectTickSummary, ProjectTickTime,
 };
 
 pub async fn run_project_tick<H>(
@@ -51,29 +48,26 @@ where
         hooks.process_due_schedules(root, tick_time.schedule_at());
     }
 
-    let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-
-    let snapshot = ProjectTickSnapshot::capture(hub.clone()).await?;
+    let snapshot = hooks.capture_snapshot(root).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
     let mut execution_outcome = ProjectTickExecutionOutcome::default();
-    let (executed_workflow_phases, failed_workflow_phases) = hooks
-        .reconcile_completed_processes(hub.clone(), root)
-        .await?;
+    let (executed_workflow_phases, failed_workflow_phases) =
+        hooks.reconcile_completed_processes(root).await?;
     execution_outcome.executed_workflow_phases = executed_workflow_phases;
     execution_outcome.failed_workflow_phases = failed_workflow_phases;
 
     if preparation.ready_dispatch_limit > 0 {
         execution_outcome.ready_workflow_starts = hooks
-            .dispatch_ready_tasks(hub.clone(), root, preparation.ready_dispatch_limit)
+            .dispatch_ready_tasks(root, preparation.ready_dispatch_limit)
             .await?;
     }
 
-    let health = serde_json::to_value(hub.daemon().health().await?)?;
+    let health = hooks.collect_health(root).await?;
     let summary_input = snapshot.into_summary_input(
         root.to_string(),
         health,
         execution_outcome,
         mode.include_phase_execution_events(),
     );
-    TickSummaryBuilder::build(hub, args, summary_input).await
+    hooks.build_summary(args, summary_input).await
 }

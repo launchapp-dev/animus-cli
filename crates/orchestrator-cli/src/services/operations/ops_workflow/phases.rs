@@ -11,7 +11,7 @@ use orchestrator_core::services::ServiceHub;
 use super::config::{manual_approvals_path, title_case_phase_id};
 use super::emit_daemon_event;
 use crate::dry_run_envelope;
-use crate::services::runtime::sync_task_status_for_workflow_result;
+use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManualApprovalRecord {
@@ -316,16 +316,17 @@ pub(crate) async fn approve_manual_phase(
     });
     write_manual_approvals(project_root, &store)?;
 
-    if !workflow.task_id.trim().is_empty() {
-        sync_task_status_for_workflow_result(
-            hub.clone(),
-            project_root,
-            &workflow.task_id,
-            updated.status,
-            Some(updated.id.as_str()),
-        )
-        .await;
-    }
+    project_terminal_workflow_result(
+        hub.clone(),
+        project_root,
+        updated.subject.id(),
+        Some(updated.task_id.as_str()),
+        updated.workflow_ref.as_deref(),
+        Some(updated.id.as_str()),
+        updated.status,
+        None,
+    )
+    .await;
     emit_daemon_event(
         project_root,
         "workflow-phase-manual-approved",

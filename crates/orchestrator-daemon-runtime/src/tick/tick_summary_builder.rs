@@ -1,20 +1,16 @@
-use std::sync::Arc;
-
 use anyhow::Result;
-use orchestrator_core::{services::ServiceHub, DaemonTickMetrics};
+use orchestrator_core::DaemonTickMetrics;
 
 use crate::{DaemonRuntimeOptions, ProjectTickSummary, ProjectTickSummaryInput};
 
 pub struct TickSummaryBuilder;
 
 impl TickSummaryBuilder {
-    pub async fn build(
-        hub: Arc<dyn ServiceHub>,
+    pub fn build(
         args: &DaemonRuntimeOptions,
         input: ProjectTickSummaryInput,
+        metrics: DaemonTickMetrics,
     ) -> Result<ProjectTickSummary> {
-        let metrics = DaemonTickMetrics::collect(hub, args.stale_threshold_hours).await?;
-
         Ok(ProjectTickSummary {
             project_root: input.project_root,
             started_daemon: input.started_daemon,

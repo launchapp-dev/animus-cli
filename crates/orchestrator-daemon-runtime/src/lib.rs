@@ -11,10 +11,10 @@ pub use daemon::{
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan,
     build_runner_command_from_dispatch, is_terminally_completed_workflow, plan_ready_dispatch,
-    ready_dispatch_limit, ready_dispatch_limit_for_options, reconcile_completed_processes,
-    workflow_current_phase_id, CompletedProcess, CompletionReconciliationPlan, DispatchCandidate,
-    DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary,
-    PlannedDispatchStart, ProcessManager, ReadyDispatchPlan,
+    ready_dispatch_limit, ready_dispatch_limit_for_options, workflow_current_phase_id,
+    CompletedProcess, CompletionReconciliationPlan, DispatchCandidate, DispatchSelectionSource,
+    DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
+    ReadyDispatchPlan,
 };
 pub use protocol::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
 pub use queue::{
@@ -24,7 +24,7 @@ pub use queue::{
     DispatchQueueEntry, DispatchQueueEntryStatus, DispatchQueueState, QueueEnqueueResult,
     QueueEntrySnapshot, QueueSnapshot, QueueStats,
 };
-pub use schedule::ScheduleDispatch;
+pub use schedule::{ScheduleDispatch, ScheduleDispatchOutcome};
 pub use tick::{
     run_project_tick, run_project_tick_at, ProjectTickContext, ProjectTickExecutionOutcome,
     ProjectTickHooks, ProjectTickPlan, ProjectTickPreparation, ProjectTickRunMode,

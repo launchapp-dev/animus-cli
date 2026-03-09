@@ -4,16 +4,20 @@ use std::time::Duration;
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
-use crate::services::runtime::sync_task_status_for_workflow_result;
+use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 use crate::{print_value, WorkflowExecuteArgs};
 use ::workflow_runner::workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams};
 
 pub(crate) async fn handle_workflow_execute(
-    args: WorkflowExecuteArgs,
+    mut args: WorkflowExecuteArgs,
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    if args.requirement_id.is_some() && args.workflow_ref.is_none() {
+        args.workflow_ref = Some(super::resolve_requirement_workflow_ref(project_root)?);
+    }
+
     let stream_level = if args.quiet {
         "quiet"
     } else if args.verbose {
@@ -25,6 +29,8 @@ pub(crate) async fn handle_workflow_execute(
     let phase_filter = args.phase.clone();
 
     let json_for_cb = json;
+    let task_id_for_output = args.task_id.clone();
+    let requirement_id_for_output = args.requirement_id.clone();
     let on_phase_event: Box<dyn Fn(PhaseEvent<'_>) + Send + Sync> =
         Box::new(move |event| match event {
             PhaseEvent::Started {
@@ -65,12 +71,15 @@ pub(crate) async fn handle_workflow_execute(
     let result = execute_workflow(params).await?;
     if phase_filter.is_none() {
         if let Some(task_id) = task_id_for_sync.as_deref() {
-            sync_task_status_for_workflow_result(
+            project_terminal_workflow_result(
                 hub.clone(),
                 project_root,
-                task_id,
-                result.workflow_status,
+                result.subject_id.as_str(),
+                Some(task_id),
+                Some(result.workflow_ref.as_str()),
                 Some(result.workflow_id.as_str()),
+                result.workflow_status,
+                None,
             )
             .await;
         }
@@ -84,7 +93,9 @@ pub(crate) async fn handle_workflow_execute(
                 "workflow_id": result.workflow_id,
                 "workflow_ref": result.workflow_ref,
                 "workflow_status": result.workflow_status,
-                "task_id": result.subject_id,
+                "subject_id": result.subject_id,
+                "task_id": task_id_for_output,
+                "requirement_id": requirement_id_for_output,
                 "execution_cwd": result.execution_cwd,
                 "phases_requested": result.phases_requested,
                 "total_duration_secs": result.total_duration.as_secs(),

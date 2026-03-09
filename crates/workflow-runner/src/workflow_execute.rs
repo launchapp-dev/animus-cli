@@ -8,7 +8,7 @@ use tokio::process::Command;
 
 use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config,
+    ensure_workflow_config_compiled, load_workflow_config, project_requirement_workflow_status,
     providers::{BuiltinGitProvider, GitProvider},
     services::ServiceHub,
     FileServiceHub, OrchestratorTask, PhaseDecisionVerdict, TaskStatus, WorkflowRunInput,
@@ -68,6 +68,12 @@ pub struct WorkflowExecuteResult {
     pub post_success: Value,
 }
 
+struct ExecutionSubjectContext {
+    subject_id: String,
+    subject_title: String,
+    subject_description: String,
+    task: Option<OrchestratorTask>,
+}
 pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
     let stream_level = params.stream_level.as_deref().unwrap_or("quiet");
     std::env::set_var("AO_STREAM_PHASE_OUTPUT", stream_level);
@@ -87,16 +93,14 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         ),
     };
 
-    let mut task = if let WorkflowSubject::Task { ref id } = subject {
-        Some(
-            hub.tasks()
-                .get(id)
-                .await
-                .with_context(|| format!("task '{}' not found", id))?,
-        )
-    } else {
-        None
-    };
+    let mut subject_context = resolve_execution_subject_context(
+        hub.clone(),
+        &subject,
+        params.title.as_deref(),
+        params.description.as_deref(),
+    )
+    .await?;
+    let mut task = subject_context.task.take();
 
     let subject_id = subject.id().to_string();
     let mut workflow = hub.workflows().run(input).await.or_else(|run_err| {
@@ -124,6 +128,11 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         );
     }
 
+    if let Some(task) = task.as_ref() {
+        subject_context.subject_title = task.title.clone();
+        subject_context.subject_description = task.description.clone();
+    }
+
     let phases_to_run: Vec<String> = if let Some(ref phase_filter) = params.phase_filter {
         vec![phase_filter.clone()]
     } else {
@@ -138,14 +147,9 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         eprintln!("warning: failed to auto-start runner for workflow execute: {err}");
     }
 
-    let (subject_id_str, subject_title, subject_description) = match &task {
-        Some(t) => (t.id.clone(), t.title.clone(), t.description.clone()),
-        None => (
-            subject_id.clone(),
-            params.title.clone().unwrap_or_else(|| subject_id.clone()),
-            params.description.clone().unwrap_or_default(),
-        ),
-    };
+    let subject_id_str = subject_context.subject_id.clone();
+    let subject_title = subject_context.subject_title.clone();
+    let subject_description = subject_context.subject_description.clone();
     let task_complexity = task.as_ref().map(|t| t.complexity);
 
     ensure_workflow_config_compiled(Path::new(&params.project_root))?;
@@ -534,6 +538,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
         "reason": "workflow did not complete all phases",
     });
     if workflow.status == WorkflowStatus::Completed {
+        project_requirement_success_status(hub.clone(), &subject, &workflow_ref).await?;
         post_success = if let Some(ref t) = task {
             execute_post_success_actions(
                 &params.project_root,
@@ -612,6 +617,59 @@ fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
     }
 }
 
+async fn resolve_execution_subject_context(
+    hub: Arc<dyn ServiceHub>,
+    subject: &WorkflowSubject,
+    fallback_title: Option<&str>,
+    fallback_description: Option<&str>,
+) -> Result<ExecutionSubjectContext> {
+    match subject {
+        WorkflowSubject::Task { id } => {
+            let task = hub
+                .tasks()
+                .get(id)
+                .await
+                .with_context(|| format!("task '{}' not found", id))?;
+            Ok(ExecutionSubjectContext {
+                subject_id: task.id.clone(),
+                subject_title: task.title.clone(),
+                subject_description: task.description.clone(),
+                task: Some(task),
+            })
+        }
+        WorkflowSubject::Requirement { id } => {
+            let requirement = hub
+                .planning()
+                .get_requirement(id)
+                .await
+                .with_context(|| format!("requirement '{}' not found", id))?;
+            Ok(ExecutionSubjectContext {
+                subject_id: requirement.id.clone(),
+                subject_title: requirement.title.clone(),
+                subject_description: requirement.description.clone(),
+                task: None,
+            })
+        }
+        WorkflowSubject::Custom { title, description } => Ok(ExecutionSubjectContext {
+            subject_id: subject.id().to_string(),
+            subject_title: fallback_title.unwrap_or(title).to_string(),
+            subject_description: fallback_description.unwrap_or(description).to_string(),
+            task: None,
+        }),
+    }
+}
+
+async fn project_requirement_success_status(
+    hub: Arc<dyn ServiceHub>,
+    subject: &WorkflowSubject,
+    workflow_ref: &str,
+) -> Result<()> {
+    let WorkflowSubject::Requirement { id } = subject else {
+        return Ok(());
+    };
+
+    project_requirement_workflow_status(hub, id, workflow_ref).await
+}
 fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
     match outcome {
         PhaseExecutionOutcome::Completed {
@@ -1409,5 +1467,159 @@ async fn cleanup_worktree_with_fallback(
                 }),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use orchestrator_core::{
+        InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority,
+        RequirementStatus, REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+    };
+
+    #[tokio::test]
+    async fn resolve_execution_subject_context_uses_requirement_metadata() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-123".to_string(),
+                title: "Generate linked tasks".to_string(),
+                description: "Create implementation-ready tasks from this requirement.".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: vec!["Derived tasks exist".to_string()],
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        let context = resolve_execution_subject_context(
+            hub as Arc<dyn ServiceHub>,
+            &WorkflowSubject::Requirement {
+                id: "REQ-123".to_string(),
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("resolve requirement context");
+
+        assert_eq!(context.subject_id, "REQ-123");
+        assert_eq!(context.subject_title, "Generate linked tasks");
+        assert_eq!(
+            context.subject_description,
+            "Create implementation-ready tasks from this requirement."
+        );
+        assert!(context.task.is_none());
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_planned_for_plan_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-200".to_string(),
+                title: "Plan requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &WorkflowSubject::Requirement {
+                id: "REQ-200".to_string(),
+            },
+            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub
+            .planning()
+            .get_requirement("REQ-200")
+            .await
+            .expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::Planned);
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_in_progress_for_run_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-201".to_string(),
+                title: "Run requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &WorkflowSubject::Requirement {
+                id: "REQ-201".to_string(),
+            },
+            REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub
+            .planning()
+            .get_requirement("REQ-201")
+            .await
+            .expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::InProgress);
     }
 }
