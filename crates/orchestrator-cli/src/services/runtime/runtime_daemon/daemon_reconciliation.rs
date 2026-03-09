@@ -1,13 +1,15 @@
 use super::*;
+use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
 use orchestrator_core::{services::ServiceHub, WorkflowMachineState, WorkflowStatus};
-use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
+use std::collections::HashSet;
 
-pub async fn recover_orphaned_running_workflows_on_startup(
+pub async fn recover_orphaned_running_workflows(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
+    active_subject_ids: &HashSet<String>,
 ) -> usize {
     let workflows = match hub.workflows().list().await {
-        Ok(w) => w,
+        Ok(workflows) => workflows,
         Err(_) => return 0,
     };
 
@@ -19,21 +21,21 @@ pub async fn recover_orphaned_running_workflows_on_startup(
         if workflow.machine_state == WorkflowMachineState::MergeConflict {
             continue;
         }
+        if active_subject_ids.contains(&workflow.id)
+            || active_subject_ids.contains(workflow.subject.id())
+            || (!workflow.task_id.is_empty() && active_subject_ids.contains(&workflow.task_id))
+        {
+            continue;
+        }
 
         eprintln!(
-            "{}: startup orphan detection — cancelling orphaned workflow {} (task {})",
+            "{}: recovering orphaned running workflow {} subject={} task={}",
             protocol::ACTOR_DAEMON,
             workflow.id,
+            workflow.subject.id(),
             workflow.task_id
         );
-        if let Ok(_updated) = hub.workflows().cancel(&workflow.id).await {
-            remove_terminal_dispatch_queue_entry_non_fatal(
-                project_root,
-                workflow.subject.id(),
-                workflow.workflow_ref.as_deref(),
-                Some(workflow.id.as_str()),
-            );
-        }
+        let _ = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
         recovered = recovered.saturating_add(1);
     }
 

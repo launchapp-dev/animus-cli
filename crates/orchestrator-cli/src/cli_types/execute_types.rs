@@ -14,7 +14,12 @@ pub(crate) struct ExecuteArgs {
     pub(crate) requirement_ids: Vec<String>,
     #[arg(long)]
     pub(crate) workflow_ref: Option<String>,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value_t = false,
+        help = "Deprecated no-op flag retained for CLI compatibility."
+    )]
     pub(crate) ai_task_generation: bool,
     #[arg(long, action = ArgAction::Set, default_value_t = false)]
     pub(crate) include_wont: bool,

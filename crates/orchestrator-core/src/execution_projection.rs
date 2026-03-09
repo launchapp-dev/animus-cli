@@ -1,3 +1,6 @@
+mod project_requirement_workflow_status;
+mod project_task_terminal_workflow_status;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -9,6 +12,9 @@ use crate::{
     load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask,
     ScheduleRunState, TaskStatus,
 };
+
+pub use project_requirement_workflow_status::project_requirement_workflow_status;
+pub use project_task_terminal_workflow_status::project_task_terminal_workflow_status;
 
 pub async fn project_task_status(
     hub: Arc<dyn ServiceHub>,
@@ -68,6 +74,22 @@ pub async fn project_task_dispatch_failure(
     project_task_status(hub, task_id, TaskStatus::Blocked).await
 }
 
+pub async fn project_task_workflow_start(
+    hub: Arc<dyn ServiceHub>,
+    task_id: &str,
+    role: String,
+    model: Option<String>,
+    updated_by: String,
+) -> Result<()> {
+    hub.tasks()
+        .set_status(task_id, TaskStatus::InProgress, false)
+        .await?;
+    hub.tasks()
+        .assign_agent(task_id, role, model, updated_by)
+        .await?;
+    Ok(())
+}
+
 pub async fn project_task_execution_fact(
     hub: Arc<dyn ServiceHub>,
     _root: &str,
@@ -92,17 +114,46 @@ pub async fn project_task_execution_fact(
     let _ = project_task_status(hub, task_id, TaskStatus::Blocked).await;
 }
 
+pub fn project_schedule_dispatch_attempt(
+    root: &str,
+    schedule_id: &str,
+    run_at: chrono::DateTime<Utc>,
+    status: &str,
+) {
+    update_schedule_state(root, schedule_id, Some(run_at), status, true);
+}
+
+pub fn project_schedule_completion_status(root: &str, schedule_id: &str, status: &str) {
+    update_schedule_state(root, schedule_id, None, status, false);
+}
+
 pub fn project_schedule_execution_fact(root: &str, fact: &SubjectExecutionFact) {
     let Some(schedule_id) = fact.schedule_id.as_deref() else {
         return;
     };
 
+    project_schedule_completion_status(root, schedule_id, fact.completion_status());
+}
+
+fn update_schedule_state(
+    root: &str,
+    schedule_id: &str,
+    run_at: Option<chrono::DateTime<Utc>>,
+    status: &str,
+    increment_run_count: bool,
+) {
     let project_root = Path::new(root);
     let mut state = load_schedule_state(project_root).unwrap_or_default();
     let entry = state
         .schedules
         .entry(schedule_id.to_string())
         .or_insert_with(ScheduleRunState::default);
-    entry.last_status = fact.completion_status().to_string();
+    if let Some(run_at) = run_at {
+        entry.last_run = Some(run_at);
+    }
+    if increment_run_count {
+        entry.run_count = entry.run_count.saturating_add(1);
+    }
+    entry.last_status = status.to_string();
     let _ = save_schedule_state(project_root, &state);
 }

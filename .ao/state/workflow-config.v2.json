@@ -72,6 +72,32 @@
       ],
       "visible": true
     },
+    "requirement-task-generation": {
+      "label": "Requirement Task Generation",
+      "description": "Create or refine linked tasks for a requirement through typed AO tools.",
+      "category": "planning",
+      "icon": null,
+      "docs_url": null,
+      "tags": [
+        "requirements",
+        "planning",
+        "task-generation"
+      ],
+      "visible": true
+    },
+    "requirement-workflow-bootstrap": {
+      "label": "Requirement Workflow Bootstrap",
+      "description": "Start task workflows for linked requirement tasks.",
+      "category": "planning",
+      "icon": null,
+      "docs_url": null,
+      "tags": [
+        "requirements",
+        "planning",
+        "orchestration"
+      ],
+      "visible": true
+    },
     "research": {
       "label": "Research",
       "description": "Gather implementation evidence and references for execution.",
@@ -204,6 +230,23 @@
           }
         },
         "po-review"
+      ]
+    },
+    {
+      "id": "requirement-task-generation",
+      "name": "Requirement Task Generation",
+      "description": "Create or refine requirement-linked AO tasks through typed mutation tools",
+      "phases": [
+        "requirement-task-generation"
+      ]
+    },
+    {
+      "id": "requirement-task-generation-run",
+      "name": "Requirement Task Generation + Workflow Start",
+      "description": "Create or refine requirement-linked tasks, then start workflows for eligible linked tasks",
+      "phases": [
+        "requirement-task-generation",
+        "requirement-workflow-bootstrap"
       ]
     }
   ],

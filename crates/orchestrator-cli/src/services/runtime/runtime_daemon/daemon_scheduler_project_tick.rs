@@ -10,8 +10,6 @@ use orchestrator_daemon_runtime::{
 #[path = "daemon_task_dispatch.rs"]
 pub(super) mod task_dispatch;
 
-#[path = "daemon_reconciliation.rs"]
-pub(super) mod reconciliation;
 #[cfg(test)]
 #[path = "daemon_reconciliation_test_support.rs"]
 pub(super) mod reconciliation_test_support;

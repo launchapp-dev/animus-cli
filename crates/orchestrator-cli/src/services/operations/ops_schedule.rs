@@ -3,7 +3,10 @@ use std::path::Path;
 use crate::{not_found_error, print_ok, print_value, ScheduleCommand};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use orchestrator_core::{load_schedule_state, load_workflow_config};
+use orchestrator_core::{
+    load_schedule_state, load_workflow_config, project_schedule_completion_status,
+    project_schedule_dispatch_attempt,
+};
 use orchestrator_daemon_runtime::{
     build_runner_command_from_dispatch, ScheduleDispatch as RuntimeScheduleDispatch,
 };
@@ -113,10 +116,11 @@ pub(crate) async fn handle_schedule(
 fn fire_schedule(project_root: &str, schedule_id: &str) -> Result<()> {
     use std::process::Stdio;
 
-    RuntimeScheduleDispatch::fire_schedule(
+    let now = Utc::now();
+    let status = RuntimeScheduleDispatch::fire_schedule(
         project_root,
         schedule_id,
-        Utc::now(),
+        now,
         "manual-schedule-fire",
         |schedule_id, dispatch| {
             let mut cmd = build_runner_command_from_dispatch(dispatch, project_root);
@@ -131,6 +135,7 @@ fn fire_schedule(project_root: &str, schedule_id: &str) -> Result<()> {
             Ok(())
         },
     )?;
+    project_schedule_dispatch_attempt(project_root, schedule_id, now, &status);
 
     Ok(())
 }
@@ -148,45 +153,17 @@ fn spawn_completion_writeback(
             Ok(_) => "failed",
             Err(_) => "failed",
         };
-        let path = std::path::Path::new(&root);
-        let mut state = orchestrator_core::load_schedule_state(path).unwrap_or_default();
-        if let Some(entry) = state.schedules.get_mut(&sched_id) {
-            entry.last_status = status.to_string();
-            let _ = orchestrator_core::save_schedule_state(path, &state);
-        }
+        project_schedule_completion_status(&root, &sched_id, status);
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use orchestrator_core::{builtin_workflow_config, load_schedule_state, write_workflow_config};
+    use orchestrator_core::{builtin_workflow_config, write_workflow_config};
     use tempfile::tempdir;
 
-    use super::fire_schedule;
-
-    fn wait_for_schedule_status(project_root: &std::path::Path, schedule_id: &str) -> String {
-        for _ in 0..50 {
-            let state = load_schedule_state(project_root).expect("schedule state should load");
-            if let Some(entry) = state.schedules.get(schedule_id) {
-                if entry.last_status != "dispatched" {
-                    return entry.last_status.clone();
-                }
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-
-        load_schedule_state(project_root)
-            .expect("schedule state should load")
-            .schedules
-            .get(schedule_id)
-            .map(|entry| entry.last_status.clone())
-            .unwrap_or_default()
-    }
-
     #[test]
-    fn manual_fire_rejects_command_schedules() {
+    fn manual_fire_rejects_legacy_command_schedules_at_config_write() {
         let temp = tempdir().expect("tempdir should be created");
         let project_root = temp.path();
         let mut config = builtin_workflow_config();
@@ -198,13 +175,12 @@ mod tests {
             input: None,
             enabled: true,
         });
-        write_workflow_config(project_root, &config).expect("workflow config should be written");
-
-        fire_schedule(project_root.to_string_lossy().as_ref(), "nightly")
-            .expect("manual schedule fire should write failed status");
-
-        let status = wait_for_schedule_status(project_root, "nightly");
-        assert_eq!(status, "failed: schedule is missing workflow_ref");
+        let error = write_workflow_config(project_root, &config)
+            .expect_err("legacy command schedule should be rejected");
+        assert!(
+            error.to_string().contains("command is no longer supported"),
+            "unexpected error: {error}"
+        );
     }
 }
 

@@ -4,6 +4,8 @@ use anyhow::{anyhow, Result};
 
 pub const STANDARD_WORKFLOW_REF: &str = "standard";
 pub const UI_UX_WORKFLOW_REF: &str = "ui-ux-standard";
+pub const REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "requirement-task-generation";
+pub const REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "requirement-task-generation-run";
 
 fn standard_phase_plan() -> Vec<String> {
     vec![

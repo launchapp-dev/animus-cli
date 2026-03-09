@@ -3,13 +3,12 @@ use std::sync::Arc;
 use orchestrator_core::{
     project_schedule_execution_fact, project_task_execution_fact, services::ServiceHub,
 };
-
-use crate::{
+use orchestrator_daemon_runtime::{
     build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal,
     CompletedProcess,
 };
 
-pub async fn reconcile_completed_processes(
+pub(crate) async fn reconcile_completed_processes(
     hub: Arc<dyn ServiceHub>,
     root: &str,
     completed_processes: Vec<CompletedProcess>,
