@@ -5,6 +5,7 @@ export default withMermaid(
   defineConfig({
     title: 'AO CLI',
     description: 'Agent Orchestrator — orchestrate AI agent workflows from the command line',
+    base: '/ao-cli/',
     themeConfig: {
       nav: [
         { text: 'Getting Started', link: '/getting-started/' },
