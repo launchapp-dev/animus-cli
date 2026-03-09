@@ -1,7 +1,7 @@
 use super::*;
 #[cfg(test)]
 use crate::services::runtime::workflow_mutation_surface::daemon_workflow_assignment;
-use crate::services::runtime::workflow_mutation_surface::start_task_workflow_for_dispatch;
+use crate::services::runtime::workflow_mutation_surface::start_workflow_for_dispatch;
 use orchestrator_core::{
     dependency_gate_issues_for_task, should_skip_task_dispatch, workflow_ref_for_task,
 };
@@ -73,30 +73,24 @@ pub async fn run_ready_task_workflows_for_project(
             break;
         }
 
-        let Some(task_id) = planned_start.task_id() else {
-            continue;
-        };
-        let Some(task) = task_lookup.get(task_id).cloned() else {
-            continue;
-        };
-        let dependency_issues =
-            dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-        if !dependency_issues.is_empty() {
-            eprintln!(
-                "{}: skipping queued task dispatch for {} until dependency gates clear",
-                protocol::ACTOR_DAEMON,
-                task.id
-            );
-            continue;
+        if let Some(task_id) = planned_start.task_id() {
+            let Some(task) = task_lookup.get(task_id).cloned() else {
+                continue;
+            };
+            let dependency_issues =
+                dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+            if !dependency_issues.is_empty() {
+                eprintln!(
+                    "{}: skipping queued task dispatch for {} until dependency gates clear",
+                    protocol::ACTOR_DAEMON,
+                    task.id
+                );
+                continue;
+            }
         }
 
-        let workflow = start_task_workflow_for_dispatch(
-            hub.clone(),
-            project_root,
-            &task,
-            &planned_start.dispatch.workflow_ref,
-        )
-        .await?;
+        let workflow =
+            start_workflow_for_dispatch(hub.clone(), project_root, &planned_start.dispatch).await?;
         if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
             if let Err(error) = mark_dispatch_queue_entry_assigned(
                 project_root,
@@ -106,7 +100,7 @@ pub async fn run_ready_task_workflows_for_project(
                 eprintln!(
                     "{}: failed to mark dispatch queue entry assigned for task {}: {}",
                     protocol::ACTOR_DAEMON,
-                    task.id,
+                    planned_start.dispatch.subject_id(),
                     error
                 );
             }

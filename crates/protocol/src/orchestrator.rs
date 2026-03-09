@@ -1594,6 +1594,22 @@ impl SubjectDispatch {
         self.input = input;
         self
     }
+
+    pub fn to_workflow_run_input(&self) -> WorkflowRunInput {
+        match &self.subject {
+            WorkflowSubject::Task { id } => {
+                WorkflowRunInput::for_task(id.clone(), Some(self.workflow_ref.clone()))
+            }
+            WorkflowSubject::Requirement { id } => {
+                WorkflowRunInput::for_requirement(id.clone(), Some(self.workflow_ref.clone()))
+            }
+            WorkflowSubject::Custom { title, description } => WorkflowRunInput::for_custom(
+                title.clone(),
+                description.clone(),
+                Some(self.workflow_ref.clone()),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
