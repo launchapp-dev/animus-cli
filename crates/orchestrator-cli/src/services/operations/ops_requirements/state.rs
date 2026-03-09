@@ -27,6 +27,14 @@ struct RequirementCreateInputCli {
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    external_ref: Option<String>,
+    #[serde(default)]
+    linked_epic_ids: Vec<String>,
+    #[serde(default)]
     linked_task_ids: Vec<String>,
 }
 
@@ -48,6 +56,14 @@ struct RequirementUpdateInputCli {
     status: Option<RequirementStatus>,
     #[serde(default)]
     source: Option<String>,
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    external_ref: Option<String>,
+    #[serde(default)]
+    linked_epic_ids: Option<Vec<String>>,
     #[serde(default)]
     linked_task_ids: Option<Vec<String>>,
 }
@@ -318,7 +334,7 @@ fn invalid_requirement_value_error(domain: &str, value: &str, expected: &str) ->
     ))
 }
 
-fn parse_requirement_priority(value: &str) -> Result<RequirementPriority> {
+pub(super) fn parse_requirement_priority(value: &str) -> Result<RequirementPriority> {
     let parsed = match value.trim().to_ascii_lowercase().as_str() {
         "must" => RequirementPriority::Must,
         "should" => RequirementPriority::Should,
@@ -353,7 +369,7 @@ fn parse_requirement_type(value: &str) -> Result<RequirementType> {
     Ok(parsed)
 }
 
-fn parse_requirement_category(value: &str) -> Result<String> {
+pub(super) fn parse_requirement_category(value: &str) -> Result<String> {
     let normalized = value.trim().to_ascii_lowercase();
     let parsed = match normalized.as_str() {
         "documentation" | "usability" | "runtime" | "integration" | "quality" | "release"
@@ -369,34 +385,38 @@ fn parse_requirement_category(value: &str) -> Result<String> {
     Ok(parsed)
 }
 
-fn parse_requirement_status(value: &str) -> Result<RequirementStatus> {
+pub(super) fn parse_requirement_status(value: &str) -> Result<RequirementStatus> {
     value
         .parse()
         .map_err(|_| invalid_requirement_value_error("status", value, REQUIREMENT_STATUS_EXPECTED))
 }
 
-fn parse_requirement_priority_opt(value: Option<&str>) -> Result<Option<RequirementPriority>> {
+pub(super) fn parse_requirement_priority_opt(
+    value: Option<&str>,
+) -> Result<Option<RequirementPriority>> {
     match value {
         Some(value) => Ok(Some(parse_requirement_priority(value)?)),
         None => Ok(None),
     }
 }
 
-fn parse_requirement_status_opt(value: Option<&str>) -> Result<Option<RequirementStatus>> {
+pub(super) fn parse_requirement_status_opt(
+    value: Option<&str>,
+) -> Result<Option<RequirementStatus>> {
     match value {
         Some(value) => Ok(Some(parse_requirement_status(value)?)),
         None => Ok(None),
     }
 }
 
-fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<RequirementType>> {
+pub(super) fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<RequirementType>> {
     match value {
         Some(value) => Ok(Some(parse_requirement_type(value)?)),
         None => Ok(None),
     }
 }
 
-fn parse_requirement_category_opt(value: Option<&str>) -> Result<Option<String>> {
+pub(super) fn parse_requirement_category_opt(value: Option<&str>) -> Result<Option<String>> {
     match value {
         Some(value) => Ok(Some(parse_requirement_category(value)?)),
         None => Ok(None),
@@ -417,6 +437,10 @@ pub(super) fn create_requirement_cli(
             priority: parse_requirement_priority_opt(args.priority.as_deref())?,
             status: None,
             source: args.source,
+            labels: args.label,
+            area: args.area,
+            external_ref: args.external_ref,
+            linked_epic_ids: args.linked_epic_id,
             linked_task_ids: Vec::new(),
         })
     })?;
@@ -444,6 +468,10 @@ pub(super) fn create_requirement_cli(
         status: input.status.unwrap_or(RequirementStatus::Draft),
         source: input.source.unwrap_or_else(|| "manual".to_string()),
         tags: Vec::new(),
+        labels: input.labels,
+        area: input.area,
+        external_ref: input.external_ref,
+        linked_epic_ids: input.linked_epic_ids,
         links: Default::default(),
         comments: Vec::new(),
         relative_path: None,
@@ -475,6 +503,18 @@ pub(super) fn update_requirement_cli(
             priority: parse_requirement_priority_opt(args.priority.as_deref())?,
             status: parse_requirement_status_opt(args.status.as_deref())?,
             source: args.source,
+            labels: if args.replace_labels || !args.label.is_empty() {
+                Some(args.label)
+            } else {
+                None
+            },
+            area: args.area,
+            external_ref: args.external_ref,
+            linked_epic_ids: if args.replace_linked_epic_ids || !args.linked_epic_id.is_empty() {
+                Some(args.linked_epic_id)
+            } else {
+                None
+            },
             linked_task_ids: if args.linked_task_id.is_empty() {
                 None
             } else {
@@ -527,6 +567,18 @@ pub(super) fn update_requirement_cli(
     }
     if let Some(source) = input.source {
         requirement.source = source;
+    }
+    if let Some(labels) = input.labels {
+        requirement.labels = labels;
+    }
+    if input.area.is_some() {
+        requirement.area = input.area;
+    }
+    if input.external_ref.is_some() {
+        requirement.external_ref = input.external_ref;
+    }
+    if let Some(linked_epic_ids) = input.linked_epic_ids {
+        requirement.linked_epic_ids = linked_epic_ids;
     }
     if let Some(linked_task_ids) = input.linked_task_ids {
         requirement.linked_task_ids = linked_task_ids;

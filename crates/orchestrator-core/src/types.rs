@@ -15,13 +15,13 @@ pub use protocol::orchestrator::{
 
 pub use protocol::orchestrator::{
     is_frontend_related_content, ChecklistItem, CodebaseInsight, DependencyType,
-    DispatchHistoryEntry, HandoffTargetRole, OrchestratorTask, RequirementComment, RequirementItem,
-    RequirementLinks, RequirementStatus, RequirementsDraftInput, RequirementsDraftResult,
-    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput,
-    ResourceRequirements, TaskCreateInput, TaskDependency, TaskFilter, TaskMetadata,
-    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange,
-    TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan, TaskStatistics, TaskUpdateInput,
-    WorkflowMetadata, MAX_DISPATCH_HISTORY_ENTRIES,
+    DispatchHistoryEntry, EpicItem, EpicStatus, HandoffTargetRole, OrchestratorTask,
+    RequirementComment, RequirementFilter, RequirementItem, RequirementLinks, RequirementStatus,
+    RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput,
+    RequirementsExecutionResult, RequirementsRefineInput, ResourceRequirements, TaskCreateInput,
+    TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
+    TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
+    TaskStatistics, TaskUpdateInput, WorkflowMetadata, MAX_DISPATCH_HISTORY_ENTRIES,
 };
 
 pub use protocol::RequirementPriority;

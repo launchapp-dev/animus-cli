@@ -14,10 +14,13 @@ impl TaskServiceApi for InMemoryServiceHub {
     }
 
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>> {
-        let tasks = TaskServiceApi::list(self).await?;
+        let lock = self.state.read().await;
+        let tasks = lock.tasks.values().cloned().collect::<Vec<_>>();
         Ok(tasks
             .into_iter()
-            .filter(|task| task_matches_filter(task, &filter))
+            .filter(|task| {
+                task_matches_filter_with_context(task, &filter, &lock.requirements, &lock.tasks)
+            })
             .collect())
     }
 
@@ -166,10 +169,13 @@ impl TaskServiceApi for FileServiceHub {
     }
 
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>> {
-        let tasks = TaskServiceApi::list(self).await?;
+        let lock = self.state.read().await;
+        let tasks = lock.tasks.values().cloned().collect::<Vec<_>>();
         Ok(tasks
             .into_iter()
-            .filter(|task| task_matches_filter(task, &filter))
+            .filter(|task| {
+                task_matches_filter_with_context(task, &filter, &lock.requirements, &lock.tasks)
+            })
             .collect())
     }
 

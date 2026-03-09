@@ -50,6 +50,14 @@ impl PlanningServiceApi for InMemoryServiceHub {
         Ok(planning_shared::list_requirements_sorted(&lock))
     }
 
+    async fn list_requirements_filtered(
+        &self,
+        filter: RequirementFilter,
+    ) -> Result<Vec<RequirementItem>> {
+        let lock = self.state.read().await;
+        Ok(planning_shared::list_requirements_filtered(&lock, &filter))
+    }
+
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem> {
         let lock = self.state.read().await;
         planning_shared::get_requirement(&lock, id)
@@ -112,6 +120,43 @@ impl PlanningServiceApi for InMemoryServiceHub {
             level: LogLevel::Info,
             message: format!("requirement deleted ({id})"),
         });
+        Ok(())
+    }
+
+    async fn list_epics(&self) -> Result<Vec<EpicItem>> {
+        let lock = self.state.read().await;
+        Ok(planning_shared::list_epics_sorted(&lock))
+    }
+
+    async fn get_epic(&self, id: &str) -> Result<EpicItem> {
+        let lock = self.state.read().await;
+        planning_shared::get_epic(&lock, id)
+    }
+
+    async fn upsert_epic(&self, mut epic: EpicItem) -> Result<EpicItem> {
+        let mut lock = self.state.write().await;
+        let now = Utc::now();
+
+        if epic.id.trim().is_empty() {
+            epic.id = next_epic_id(&lock.epics);
+        }
+        if epic.source.trim().is_empty() {
+            epic.source = protocol::ACTOR_CORE.to_string();
+        }
+        if epic.created_at.timestamp() == 0 {
+            epic.created_at = now;
+        }
+        epic.updated_at = now;
+
+        lock.epics.insert(epic.id.clone(), epic.clone());
+        Ok(epic)
+    }
+
+    async fn delete_epic(&self, id: &str) -> Result<()> {
+        let mut lock = self.state.write().await;
+        if lock.epics.remove(id).is_none() {
+            return Err(anyhow!("epic not found: {id}"));
+        }
         Ok(())
     }
 
@@ -215,6 +260,14 @@ impl PlanningServiceApi for FileServiceHub {
         Ok(planning_shared::list_requirements_sorted(&lock))
     }
 
+    async fn list_requirements_filtered(
+        &self,
+        filter: RequirementFilter,
+    ) -> Result<Vec<RequirementItem>> {
+        let lock = self.state.read().await;
+        Ok(planning_shared::list_requirements_filtered(&lock, &filter))
+    }
+
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem> {
         let lock = self.state.read().await;
         planning_shared::get_requirement(&lock, id)
@@ -298,6 +351,66 @@ impl PlanningServiceApi for FileServiceHub {
                     level: LogLevel::Info,
                     message: format!("requirement deleted ({id})"),
                 });
+                Ok(())
+            })
+            .await?;
+
+        write_planning_artifacts(
+            &self.project_root,
+            snapshot.vision.as_ref(),
+            &snapshot.requirements,
+        )?;
+        Ok(())
+    }
+
+    async fn list_epics(&self) -> Result<Vec<EpicItem>> {
+        let lock = self.state.read().await;
+        Ok(planning_shared::list_epics_sorted(&lock))
+    }
+
+    async fn get_epic(&self, id: &str) -> Result<EpicItem> {
+        let lock = self.state.read().await;
+        planning_shared::get_epic(&lock, id)
+    }
+
+    async fn upsert_epic(&self, epic: EpicItem) -> Result<EpicItem> {
+        let (epic, snapshot) = self
+            .mutate_persistent_state(|state| {
+                let mut epic = epic;
+                let now = Utc::now();
+
+                if epic.id.trim().is_empty() {
+                    epic.id = next_epic_id(&state.epics);
+                }
+                if epic.source.trim().is_empty() {
+                    epic.source = protocol::ACTOR_CORE.to_string();
+                }
+                if epic.created_at.timestamp() == 0 {
+                    epic.created_at = now;
+                }
+                epic.updated_at = now;
+
+                state.epics.insert(epic.id.clone(), epic.clone());
+                state.dirty_epics.insert(epic.id.clone());
+                Ok(epic)
+            })
+            .await?;
+
+        write_planning_artifacts(
+            &self.project_root,
+            snapshot.vision.as_ref(),
+            &snapshot.requirements,
+        )?;
+        Ok(epic)
+    }
+
+    async fn delete_epic(&self, id: &str) -> Result<()> {
+        let (_, snapshot) = self
+            .mutate_persistent_state(|state| {
+                if state.epics.remove(id).is_none() {
+                    return Err(anyhow!("epic not found: {id}"));
+                }
+                state.all_epics_dirty = true;
                 Ok(())
             })
             .await?;

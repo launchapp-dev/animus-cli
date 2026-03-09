@@ -27,6 +27,15 @@ impl QueryRoot {
                 None,
                 None,
                 vec![],
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 search,
@@ -54,7 +63,19 @@ impl QueryRoot {
     async fn requirements(&self, ctx: &Context<'_>) -> Result<Vec<GqlRequirement>> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
-            .requirements_list()
+            .requirements_list(
+                None,
+                None,
+                None,
+                None,
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
         let reqs: Vec<RawRequirement> = serde_json::from_value(val).unwrap_or_default();

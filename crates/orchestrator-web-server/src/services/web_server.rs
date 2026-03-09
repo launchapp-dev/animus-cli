@@ -122,6 +122,11 @@ fn build_router(state: AppState) -> Router {
         .route("/requirements/{id}", get(requirements_get_handler))
         .route("/requirements/{id}", patch(requirements_patch_handler))
         .route("/requirements/{id}", delete(requirements_delete_handler))
+        .route("/epics", get(epics_list_handler))
+        .route("/epics", post(epics_create_handler))
+        .route("/epics/{id}", get(epics_get_handler))
+        .route("/epics/{id}", patch(epics_patch_handler))
+        .route("/epics/{id}", delete(epics_delete_handler))
         .route("/tasks", get(tasks_list_handler))
         .route("/tasks", post(tasks_create_handler))
         .route("/tasks/prioritized", get(tasks_prioritized_handler))
@@ -306,7 +311,16 @@ async fn project_tasks_handler(
             query.risk,
             query.assignee_type,
             query.tag,
+            query.label,
             query.linked_requirement,
+            query.requirement_search,
+            query.epic_id,
+            query.parent_task_id,
+            query.has_parent,
+            query.has_children,
+            query.area,
+            query.related_task_id,
+            query.relation_type,
             query.linked_architecture_entity,
             query.search,
         )
@@ -425,15 +439,34 @@ async fn vision_refine_handler(State(state): State<AppState>, Json(body): Json<V
 
 async fn requirements_list_handler(
     State(state): State<AppState>,
-    Query(query): Query<ListPaginationQuery>,
+    Query(query): Query<RequirementsListQuery>,
 ) -> Response {
-    let pagination =
-        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
-            Ok(pagination) => pagination,
-            Err(error) => return error_response(error),
-        };
+    let pagination = match normalize_pagination_query(
+        &query.pagination,
+        state.default_page_size,
+        state.max_page_size,
+    ) {
+        Ok(pagination) => pagination,
+        Err(error) => return error_response(error),
+    };
 
-    match state.api.requirements_list().await {
+    match state
+        .api
+        .requirements_list(
+            query.status,
+            query.priority,
+            query.requirement_type,
+            query.category,
+            query.tag,
+            query.label,
+            query.area,
+            query.source,
+            query.epic_id,
+            query.linked_task_id,
+            query.search,
+        )
+        .await
+    {
         Ok(data) => match paginated_success_response(data, pagination, None) {
             Ok(response) => response,
             Err(error) => error_response(error),
@@ -503,6 +536,63 @@ async fn requirements_delete_handler(
     }
 }
 
+async fn epics_list_handler(
+    State(state): State<AppState>,
+    Query(query): Query<ListPaginationQuery>,
+) -> Response {
+    let pagination =
+        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
+            Ok(pagination) => pagination,
+            Err(error) => return error_response(error),
+        };
+
+    match state.api.epics_list().await {
+        Ok(data) => match paginated_success_response(data, pagination, None) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
+        Err(error) => error_response(error),
+    }
+}
+
+async fn epics_create_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    match state.api.epics_create(body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn epics_get_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match state.api.epics_get(&id).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn epics_patch_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    match state.api.epics_patch(&id, body).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn epics_delete_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match state.api.epics_delete(&id).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
 async fn tasks_list_handler(
     State(state): State<AppState>,
     Query(query): Query<TasksListQuery>,
@@ -526,7 +616,16 @@ async fn tasks_list_handler(
             query.risk,
             query.assignee_type,
             query.tag,
+            query.label,
             query.linked_requirement,
+            query.requirement_search,
+            query.epic_id,
+            query.parent_task_id,
+            query.has_parent,
+            query.has_children,
+            query.area,
+            query.related_task_id,
+            query.relation_type,
             query.linked_architecture_entity,
             query.search,
         )
@@ -1248,8 +1347,38 @@ struct TasksListQuery {
     assignee_type: Option<String>,
     #[serde(default)]
     tag: Vec<String>,
-    linked_requirement: Option<String>,
+    #[serde(default)]
+    label: Vec<String>,
+    #[serde(default)]
+    linked_requirement: Vec<String>,
+    requirement_search: Option<String>,
+    epic_id: Option<String>,
+    parent_task_id: Option<String>,
+    has_parent: Option<bool>,
+    has_children: Option<bool>,
+    area: Option<String>,
+    related_task_id: Option<String>,
+    relation_type: Option<String>,
     linked_architecture_entity: Option<String>,
+    search: Option<String>,
+    #[serde(flatten)]
+    pagination: ListPaginationQuery,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RequirementsListQuery {
+    status: Option<String>,
+    priority: Option<String>,
+    requirement_type: Option<String>,
+    category: Option<String>,
+    #[serde(default)]
+    tag: Vec<String>,
+    #[serde(default)]
+    label: Vec<String>,
+    area: Option<String>,
+    source: Option<String>,
+    epic_id: Option<String>,
+    linked_task_id: Option<String>,
     search: Option<String>,
     #[serde(flatten)]
     pagination: ListPaginationQuery,

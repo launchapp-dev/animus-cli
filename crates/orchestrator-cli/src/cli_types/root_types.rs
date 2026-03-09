@@ -78,6 +78,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: RequirementsCommand,
     },
+    /// Manage epics as first-class planning artifacts.
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommand,
+    },
     /// Manage architecture entities, edges, and graph metadata.
     Architecture {
         #[command(subcommand)]

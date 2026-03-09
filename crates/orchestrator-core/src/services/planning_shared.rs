@@ -133,6 +133,118 @@ pub(super) fn list_requirements_sorted(lock: &CoreState) -> Vec<RequirementItem>
     requirements
 }
 
+fn normalized_search_haystack(chunks: impl IntoIterator<Item = String>) -> String {
+    chunks
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn requirement_matches_filter(requirement: &RequirementItem, filter: &RequirementFilter) -> bool {
+    if let Some(status) = filter.status {
+        if requirement.status != status {
+            return false;
+        }
+    }
+    if let Some(priority) = filter.priority {
+        if requirement.priority != priority {
+            return false;
+        }
+    }
+    if let Some(requirement_type) = filter.requirement_type {
+        if requirement.requirement_type != Some(requirement_type) {
+            return false;
+        }
+    }
+    if let Some(category) = &filter.category {
+        if requirement.category.as_deref() != Some(category.as_str()) {
+            return false;
+        }
+    }
+    if let Some(tags) = &filter.tags {
+        if !tags.iter().all(|tag| requirement.tags.contains(tag)) {
+            return false;
+        }
+    }
+    if let Some(labels) = &filter.labels {
+        if !labels
+            .iter()
+            .all(|label| requirement.labels.contains(label))
+        {
+            return false;
+        }
+    }
+    if let Some(area) = &filter.area {
+        if requirement.area.as_deref() != Some(area.as_str()) {
+            return false;
+        }
+    }
+    if let Some(source) = &filter.source {
+        if !requirement.source.eq_ignore_ascii_case(source) {
+            return false;
+        }
+    }
+    if let Some(linked_epic_id) = &filter.linked_epic_id {
+        if !requirement.linked_epic_ids.contains(linked_epic_id) {
+            return false;
+        }
+    }
+    if let Some(linked_task_id) = &filter.linked_task_id {
+        if !requirement.linked_task_ids.contains(linked_task_id)
+            && !requirement.links.tasks.contains(linked_task_id)
+        {
+            return false;
+        }
+    }
+    if let Some(search_text) = &filter.search_text {
+        let haystack = normalized_search_haystack(vec![
+            requirement.id.clone(),
+            requirement.title.clone(),
+            requirement.description.clone(),
+            requirement.body.clone().unwrap_or_default(),
+            requirement.category.clone().unwrap_or_default(),
+            requirement.source.clone(),
+            requirement.area.clone().unwrap_or_default(),
+            requirement.external_ref.clone().unwrap_or_default(),
+            requirement.acceptance_criteria.join(" "),
+            requirement.tags.join(" "),
+            requirement.labels.join(" "),
+        ]);
+        let needle = normalized_search_haystack(vec![search_text.clone()]);
+        if !haystack.contains(&needle) {
+            return false;
+        }
+    }
+
+    true
+}
+
+pub(super) fn list_requirements_filtered(
+    lock: &CoreState,
+    filter: &RequirementFilter,
+) -> Vec<RequirementItem> {
+    let mut requirements: Vec<_> = lock
+        .requirements
+        .values()
+        .filter(|requirement| requirement_matches_filter(requirement, filter))
+        .cloned()
+        .collect();
+    requirements.sort_by(|a, b| a.id.cmp(&b.id));
+    requirements
+}
+
 pub(super) fn get_requirement(lock: &CoreState, id: &str) -> Result<RequirementItem> {
     lock.requirements
         .get(id)
@@ -150,6 +262,19 @@ pub(super) fn requirements_by_ids_sorted(
         .collect();
     requirements.sort_by(|a, b| a.id.cmp(&b.id));
     requirements
+}
+
+pub(super) fn list_epics_sorted(lock: &CoreState) -> Vec<EpicItem> {
+    let mut epics: Vec<_> = lock.epics.values().cloned().collect();
+    epics.sort_by(|a, b| a.id.cmp(&b.id));
+    epics
+}
+
+pub(super) fn get_epic(lock: &CoreState, id: &str) -> Result<EpicItem> {
+    lock.epics
+        .get(id)
+        .cloned()
+        .ok_or_else(|| anyhow!("epic not found: {id}"))
 }
 
 pub(super) fn refine_requirements_and_record(
@@ -617,6 +742,12 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                         model: None,
                     },
                     estimated_effort: None,
+                    epic_id: if requirement.linked_epic_ids.len() == 1 {
+                        requirement.linked_epic_ids.first().cloned()
+                    } else {
+                        None
+                    },
+                    parent_task_id: None,
                     linked_requirements: vec![requirement.id.clone()],
                     linked_architecture_entities: Vec::new(),
                     dependencies: Vec::new(),
@@ -633,6 +764,9 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                         }
                         tags
                     },
+                    labels: requirement.labels.clone(),
+                    area: requirement.area.clone(),
+                    external_ref: requirement.external_ref.clone(),
                     workflow_metadata: WorkflowMetadata {
                         requires_design: frontend_related,
                         requires_architecture: needs_research,

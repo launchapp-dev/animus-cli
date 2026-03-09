@@ -488,6 +488,11 @@ async fn handle_key_create_task(app: &mut AppState, hub: &Arc<dyn ServiceHub>, k
                     priority: None,
                     created_by: None,
                     tags: Vec::new(),
+                    labels: Vec::new(),
+                    area: None,
+                    external_ref: None,
+                    epic_id: None,
+                    parent_task_id: None,
                     linked_requirements: Vec::new(),
                     linked_architecture_entities: Vec::new(),
                 };

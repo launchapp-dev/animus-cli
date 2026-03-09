@@ -178,8 +178,7 @@ pub mod jira;
 pub mod linear;
 
 pub use builtin::{
-    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver,
-    BuiltinTaskProvider,
+    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver, BuiltinTaskProvider,
 };
 pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, PullRequestInfo,

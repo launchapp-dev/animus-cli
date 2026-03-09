@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use orchestrator_core::services::ServiceHub;
+use orchestrator_core::{services::ServiceHub, RequirementFilter};
 
 mod graph;
 mod mockups;
@@ -18,7 +18,11 @@ use crate::{
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
 use recommendations::handle_requirement_recommendations;
-use state::{create_requirement_cli, delete_requirement_cli, update_requirement_cli};
+use state::{
+    create_requirement_cli, delete_requirement_cli, parse_requirement_category_opt,
+    parse_requirement_priority_opt, parse_requirement_status_opt, parse_requirement_type_opt,
+    update_requirement_cli,
+};
 
 pub(crate) async fn handle_requirements(
     command: RequirementsCommand,
@@ -50,7 +54,30 @@ pub(crate) async fn handle_requirements(
                 json,
             )
         }
-        RequirementsCommand::List => print_value(planning.list_requirements().await?, json),
+        RequirementsCommand::List(args) => {
+            let filter = RequirementFilter {
+                status: parse_requirement_status_opt(args.status.as_deref())?,
+                priority: parse_requirement_priority_opt(args.priority.as_deref())?,
+                requirement_type: parse_requirement_type_opt(args.requirement_type.as_deref())?,
+                category: parse_requirement_category_opt(args.category.as_deref())?,
+                tags: if args.tag.is_empty() {
+                    None
+                } else {
+                    Some(args.tag)
+                },
+                labels: if args.label.is_empty() {
+                    None
+                } else {
+                    Some(args.label)
+                },
+                area: args.area,
+                source: args.source,
+                linked_epic_id: args.epic_id,
+                linked_task_id: args.linked_task_id.first().cloned(),
+                search_text: args.search,
+            };
+            print_value(planning.list_requirements_filtered(filter).await?, json)
+        }
         RequirementsCommand::Get(args) => {
             print_value(planning.get_requirement(&args.id).await?, json)
         }

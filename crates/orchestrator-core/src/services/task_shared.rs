@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) fn next_sequential_id<'a>(
     keys: impl Iterator<Item = &'a String>,
@@ -112,6 +112,40 @@ pub(super) fn apply_task_update(task: &mut OrchestratorTask, input: TaskUpdateIn
     if let Some(tags) = input.tags {
         task.tags = tags;
     }
+    if let Some(labels) = input.labels {
+        task.labels = labels;
+    }
+    if let Some(area) = input.area {
+        task.area = if area.trim().is_empty() {
+            None
+        } else {
+            Some(area)
+        };
+    }
+    if let Some(external_ref) = input.external_ref {
+        task.external_ref = if external_ref.trim().is_empty() {
+            None
+        } else {
+            Some(external_ref)
+        };
+    }
+    if let Some(epic_id) = input.epic_id {
+        task.epic_id = if epic_id.trim().is_empty() {
+            None
+        } else {
+            Some(epic_id)
+        };
+    }
+    if let Some(parent_task_id) = input.parent_task_id {
+        task.parent_task_id = if parent_task_id.trim().is_empty() {
+            None
+        } else {
+            Some(parent_task_id)
+        };
+    }
+    if let Some(linked_requirements) = input.linked_requirements {
+        task.linked_requirements = linked_requirements;
+    }
     if let Some(deadline) = input.deadline {
         task.deadline = if deadline.trim().is_empty() {
             None
@@ -160,6 +194,17 @@ fn assignee_type_label(assignee: &Assignee) -> &'static str {
 }
 
 pub fn task_matches_filter(task: &OrchestratorTask, filter: &TaskFilter) -> bool {
+    let requirements = HashMap::new();
+    let tasks = HashMap::new();
+    task_matches_filter_with_context(task, filter, &requirements, &tasks)
+}
+
+pub fn task_matches_filter_with_context(
+    task: &OrchestratorTask,
+    filter: &TaskFilter,
+    requirements: &HashMap<String, RequirementItem>,
+    tasks: &HashMap<String, OrchestratorTask>,
+) -> bool {
     if let Some(task_type) = filter.task_type {
         if task.task_type != task_type {
             return false;
@@ -196,8 +241,100 @@ pub fn task_matches_filter(task: &OrchestratorTask, filter: &TaskFilter) -> bool
         }
     }
 
-    if let Some(ref requirement) = filter.linked_requirement {
-        if !task.linked_requirements.contains(requirement) {
+    if let Some(ref labels) = filter.labels {
+        if !labels.iter().all(|label| task.labels.contains(label)) {
+            return false;
+        }
+    }
+
+    if let Some(ref area) = filter.area {
+        if task.area.as_deref() != Some(area.as_str()) {
+            return false;
+        }
+    }
+
+    if !filter.linked_requirements.is_empty()
+        && !filter
+            .linked_requirements
+            .iter()
+            .any(|requirement| task.linked_requirements.contains(requirement))
+    {
+        return false;
+    }
+
+    if let Some(ref requirement_search_text) = filter.requirement_search_text {
+        let needle = requirement_search_text.to_ascii_lowercase();
+        let mut matched = false;
+        for requirement_id in &task.linked_requirements {
+            if let Some(requirement) = requirements.get(requirement_id) {
+                let haystack = format!(
+                    "{} {} {} {} {} {} {}",
+                    requirement.id,
+                    requirement.title,
+                    requirement.description,
+                    requirement.acceptance_criteria.join(" "),
+                    requirement.tags.join(" "),
+                    requirement.labels.join(" "),
+                    requirement.area.clone().unwrap_or_default(),
+                )
+                .to_ascii_lowercase();
+                if haystack.contains(&needle) {
+                    matched = true;
+                    break;
+                }
+            } else if requirement_id.to_ascii_lowercase().contains(&needle) {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return false;
+        }
+    }
+
+    if let Some(ref epic_id) = filter.epic_id {
+        if task.epic_id.as_deref() != Some(epic_id.as_str()) {
+            return false;
+        }
+    }
+
+    if let Some(ref parent_task_id) = filter.parent_task_id {
+        if task.parent_task_id.as_deref() != Some(parent_task_id.as_str()) {
+            return false;
+        }
+    }
+
+    if let Some(has_parent) = filter.has_parent {
+        if task.parent_task_id.is_some() != has_parent {
+            return false;
+        }
+    }
+
+    if let Some(has_children) = filter.has_children {
+        let task_has_children = tasks
+            .values()
+            .any(|candidate| candidate.parent_task_id.as_deref() == Some(task.id.as_str()));
+        if task_has_children != has_children {
+            return false;
+        }
+    }
+
+    if let Some(ref related_task_id) = filter.related_task_id {
+        if !task
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.task_id == *related_task_id)
+        {
+            return false;
+        }
+    }
+
+    if let Some(relation_type) = filter.relation_type {
+        if !task
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.dependency_type == relation_type)
+        {
             return false;
         }
     }
@@ -210,7 +347,16 @@ pub fn task_matches_filter(task: &OrchestratorTask, filter: &TaskFilter) -> bool
 
     if let Some(ref search) = filter.search_text {
         let needle = search.to_ascii_lowercase();
-        let haystack = format!("{} {}", task.title, task.description).to_ascii_lowercase();
+        let haystack = format!(
+            "{} {} {} {} {} {}",
+            task.id,
+            task.title,
+            task.description,
+            task.tags.join(" "),
+            task.labels.join(" "),
+            task.area.clone().unwrap_or_default(),
+        )
+        .to_ascii_lowercase();
         if !haystack.contains(&needle) {
             return false;
         }
@@ -507,6 +653,11 @@ pub(super) fn create_task_in_state(
     state: &mut super::state_store::CoreState,
     input: TaskCreateInput,
 ) -> Result<OrchestratorTask> {
+    if let Some(parent_task_id) = input.parent_task_id.as_deref() {
+        if !parent_task_id.trim().is_empty() && !state.tasks.contains_key(parent_task_id) {
+            return Err(anyhow!("parent task not found: {parent_task_id}"));
+        }
+    }
     let now = Utc::now();
     let id = next_task_id(&state.tasks);
     let created_by = input
@@ -533,11 +684,16 @@ pub(super) fn create_task_in_state(
         impact_area: Vec::new(),
         assignee: Assignee::Unassigned,
         estimated_effort: None,
+        epic_id: input.epic_id,
+        parent_task_id: input.parent_task_id,
         linked_requirements: input.linked_requirements,
         linked_architecture_entities: input.linked_architecture_entities,
         dependencies: Vec::new(),
         checklist: Vec::new(),
         tags: input.tags,
+        labels: input.labels,
+        area: input.area,
+        external_ref: input.external_ref,
         workflow_metadata: WorkflowMetadata::default(),
         worktree_path: None,
         branch_name: None,
@@ -569,6 +725,14 @@ pub(super) fn update_task_in_state(
     id: &str,
     input: TaskUpdateInput,
 ) -> Result<OrchestratorTask> {
+    if let Some(parent_task_id) = input.parent_task_id.as_deref() {
+        if !parent_task_id.trim().is_empty()
+            && parent_task_id != id
+            && !state.tasks.contains_key(parent_task_id)
+        {
+            return Err(anyhow!("parent task not found: {parent_task_id}"));
+        }
+    }
     if let Some(entity_ids) = input.linked_architecture_entities.as_ref() {
         validate_linked_architecture_entities(&state.architecture, entity_ids)?;
     }
@@ -728,6 +892,9 @@ pub(super) fn add_dependency_in_state(
             dependency_type,
         });
     }
+    if dependency_type == DependencyType::ParentChild {
+        task.parent_task_id = Some(dependency_id.to_string());
+    }
     bump_task_version(task, updated_by);
     let result = task.clone();
     state.dirty_tasks.insert(id.to_string());
@@ -743,6 +910,9 @@ pub(super) fn remove_dependency_in_state(
     let task = get_task_mut(state, id)?;
     task.dependencies
         .retain(|dependency| dependency.task_id != dependency_id);
+    if task.parent_task_id.as_deref() == Some(dependency_id) {
+        task.parent_task_id = None;
+    }
     bump_task_version(task, updated_by);
     let result = task.clone();
     state.dirty_tasks.insert(id.to_string());

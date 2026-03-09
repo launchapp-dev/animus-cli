@@ -17,15 +17,21 @@ pub(super) struct CoreState {
     #[serde(default)]
     pub(super) requirements: HashMap<String, RequirementItem>,
     #[serde(default)]
+    pub(super) epics: HashMap<String, EpicItem>,
+    #[serde(default)]
     pub(super) architecture: ArchitectureGraph,
     #[serde(skip)]
     pub(super) dirty_tasks: HashSet<String>,
     #[serde(skip)]
     pub(super) dirty_requirements: HashSet<String>,
     #[serde(skip)]
+    pub(super) dirty_epics: HashSet<String>,
+    #[serde(skip)]
     pub(super) all_tasks_dirty: bool,
     #[serde(skip)]
     pub(super) all_requirements_dirty: bool,
+    #[serde(skip)]
+    pub(super) all_epics_dirty: bool,
 }
 
 impl CoreState {
@@ -223,6 +229,7 @@ mod tests {
         assert!(loaded.projects.is_empty());
         assert!(loaded.tasks.is_empty());
         assert!(loaded.requirements.is_empty());
+        assert!(loaded.epics.is_empty());
     }
 
     #[test]

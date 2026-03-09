@@ -120,6 +120,9 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                Command::Epic { command } => {
+                    services::operations::handle_epics(command, hub.clone(), cli.json).await
+                }
                 Command::Architecture { command } => {
                     services::operations::handle_architecture(command, &project_root, cli.json)
                         .await

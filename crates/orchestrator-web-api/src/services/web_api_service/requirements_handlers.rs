@@ -7,9 +7,9 @@ use serde_json::{json, Value};
 
 use super::{
     parsing::{
-        normalize_optional_string, normalize_string_list, parse_json_body,
-        parse_requirement_priority, parse_requirement_priority_opt, parse_requirement_status,
-        parse_requirement_status_opt, parse_requirement_type_opt,
+        build_requirement_filter, normalize_optional_string, normalize_string_list,
+        parse_json_body, parse_requirement_priority, parse_requirement_priority_opt,
+        parse_requirement_status, parse_requirement_status_opt, parse_requirement_type_opt,
     },
     requests::{
         RequirementCreateRequest, RequirementPatchRequest, RequirementsDraftRequest,
@@ -19,9 +19,39 @@ use super::{
 };
 
 impl WebApiService {
-    pub async fn requirements_list(&self) -> Result<Value, WebApiError> {
+    pub async fn requirements_list(
+        &self,
+        status: Option<String>,
+        priority: Option<String>,
+        requirement_type: Option<String>,
+        category: Option<String>,
+        tags: Vec<String>,
+        labels: Vec<String>,
+        area: Option<String>,
+        source: Option<String>,
+        epic_id: Option<String>,
+        linked_task_id: Option<String>,
+        search: Option<String>,
+    ) -> Result<Value, WebApiError> {
+        let filter = build_requirement_filter(
+            status,
+            priority,
+            requirement_type,
+            category,
+            tags,
+            labels,
+            area,
+            source,
+            epic_id,
+            linked_task_id,
+            search,
+        )?;
         Ok(json!(
-            self.context.hub.planning().list_requirements().await?
+            self.context
+                .hub
+                .planning()
+                .list_requirements_filtered(filter)
+                .await?
         ))
     }
 
@@ -79,6 +109,10 @@ impl WebApiService {
             source: normalize_optional_string(request.source)
                 .unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string()),
             tags: normalize_string_list(request.tags),
+            labels: normalize_string_list(request.labels),
+            area: normalize_optional_string(request.area),
+            external_ref: normalize_optional_string(request.external_ref),
+            linked_epic_ids: normalize_string_list(request.linked_epic_ids),
             links: Default::default(),
             comments: Vec::new(),
             relative_path: normalize_optional_string(request.relative_path),
@@ -152,6 +186,22 @@ impl WebApiService {
 
         if let Some(tags) = request.tags {
             requirement.tags = normalize_string_list(tags);
+        }
+
+        if let Some(labels) = request.labels {
+            requirement.labels = normalize_string_list(labels);
+        }
+
+        if let Some(area) = request.area {
+            requirement.area = normalize_optional_string(Some(area));
+        }
+
+        if let Some(external_ref) = request.external_ref {
+            requirement.external_ref = normalize_optional_string(Some(external_ref));
+        }
+
+        if let Some(linked_epic_ids) = request.linked_epic_ids {
+            requirement.linked_epic_ids = normalize_string_list(linked_epic_ids);
         }
 
         if let Some(linked_task_ids) = request.linked_task_ids {

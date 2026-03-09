@@ -175,6 +175,8 @@ pub(crate) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
 
     let normalized = value.trim().to_ascii_lowercase();
     let task_type = match normalized.as_str() {
+        "story" => TaskType::Feature,
+        "spike" => TaskType::Spike,
         "feature" => TaskType::Feature,
         "bugfix" => TaskType::Bugfix,
         "hotfix" => TaskType::Hotfix,
@@ -228,6 +230,10 @@ pub(crate) fn parse_dependency_type(value: &str) -> Result<DependencyType> {
         "blocks-by" | "blocks_by" | "blocksby" => DependencyType::BlocksBy,
         "blocked-by" | "blocked_by" | "blockedby" => DependencyType::BlockedBy,
         "related-to" | "related_to" | "relatedto" => DependencyType::RelatedTo,
+        "parent-child" | "parent_child" | "parentchild" => DependencyType::ParentChild,
+        "duplicate" => DependencyType::Duplicate,
+        "caused-by" | "caused_by" | "causedby" => DependencyType::CausedBy,
+        "split-from" | "split_from" | "splitfrom" => DependencyType::SplitFrom,
         _ => {
             return Err(invalid_value_error(
                 "dependency type",

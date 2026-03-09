@@ -54,6 +54,14 @@ pub(super) struct RequirementCreateRequest {
     #[serde(default)]
     pub(super) tags: Vec<String>,
     #[serde(default)]
+    pub(super) labels: Vec<String>,
+    #[serde(default)]
+    pub(super) area: Option<String>,
+    #[serde(default)]
+    pub(super) external_ref: Option<String>,
+    #[serde(default)]
+    pub(super) linked_epic_ids: Vec<String>,
+    #[serde(default)]
     pub(super) linked_task_ids: Vec<String>,
     #[serde(default)]
     pub(super) relative_path: Option<String>,
@@ -81,6 +89,14 @@ pub(super) struct RequirementPatchRequest {
     pub(super) source: Option<String>,
     #[serde(default)]
     pub(super) tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub(super) labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub(super) area: Option<String>,
+    #[serde(default)]
+    pub(super) external_ref: Option<String>,
+    #[serde(default)]
+    pub(super) linked_epic_ids: Option<Vec<String>>,
     #[serde(default)]
     pub(super) linked_task_ids: Option<Vec<String>>,
     #[serde(default)]
@@ -129,6 +145,16 @@ pub(super) struct TaskCreateRequest {
     #[serde(default)]
     pub(super) tags: Vec<String>,
     #[serde(default)]
+    pub(super) labels: Vec<String>,
+    #[serde(default)]
+    pub(super) area: Option<String>,
+    #[serde(default)]
+    pub(super) external_ref: Option<String>,
+    #[serde(default)]
+    pub(super) epic_id: Option<String>,
+    #[serde(default)]
+    pub(super) parent_task_id: Option<String>,
+    #[serde(default)]
     pub(super) linked_requirements: Vec<String>,
     #[serde(default)]
     pub(super) linked_architecture_entities: Vec<String>,
@@ -148,6 +174,18 @@ pub(super) struct TaskPatchRequest {
     pub(super) assignee: Option<String>,
     #[serde(default)]
     pub(super) tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub(super) labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub(super) area: Option<String>,
+    #[serde(default)]
+    pub(super) external_ref: Option<String>,
+    #[serde(default)]
+    pub(super) epic_id: Option<String>,
+    #[serde(default)]
+    pub(super) parent_task_id: Option<String>,
+    #[serde(default)]
+    pub(super) linked_requirements: Option<Vec<String>>,
     #[serde(default)]
     pub(super) updated_by: Option<String>,
     #[serde(default)]

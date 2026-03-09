@@ -1,4 +1,5 @@
 mod daemon_handlers;
+mod epic_handlers;
 mod event_stream;
 mod parsing;
 mod projects_handlers;

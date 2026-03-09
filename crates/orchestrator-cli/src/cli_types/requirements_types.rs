@@ -10,7 +10,7 @@ pub(crate) enum RequirementsCommand {
     /// Draft requirements from project context.
     Draft(RequirementsDraftArgs),
     /// List requirements.
-    List,
+    List(RequirementsListArgs),
     /// Get a requirement by id.
     Get(IdArgs),
     /// Refine existing requirements.
@@ -36,6 +36,52 @@ pub(crate) enum RequirementsCommand {
         #[command(subcommand)]
         command: RecommendationCommand,
     },
+}
+
+#[derive(Debug, Args, Default)]
+pub(crate) struct RequirementsListArgs {
+    #[arg(long, value_name = "STATUS", help = REQUIREMENT_STATUS_HELP)]
+    pub(crate) status: Option<String>,
+    #[arg(long, value_name = "PRIORITY", help = REQUIREMENT_PRIORITY_HELP)]
+    pub(crate) priority: Option<String>,
+    #[arg(long, value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
+    pub(crate) requirement_type: Option<String>,
+    #[arg(long, value_name = "CATEGORY", help = REQUIREMENT_CATEGORY_HELP)]
+    pub(crate) category: Option<String>,
+    #[arg(
+        long,
+        value_name = "TAG",
+        help = "Filter requirements by tag. Repeat to require multiple tags."
+    )]
+    pub(crate) tag: Vec<String>,
+    #[arg(
+        long,
+        value_name = "LABEL",
+        help = "Filter requirements by label. Repeat to require multiple labels."
+    )]
+    pub(crate) label: Vec<String>,
+    #[arg(long, value_name = "AREA", help = "Filter requirements by area.")]
+    pub(crate) area: Option<String>,
+    #[arg(long, value_name = "SOURCE", help = "Filter requirements by source.")]
+    pub(crate) source: Option<String>,
+    #[arg(
+        long = "epic-id",
+        value_name = "EPIC_ID",
+        help = "Filter requirements linked to an epic id."
+    )]
+    pub(crate) epic_id: Option<String>,
+    #[arg(
+        long = "linked-task-id",
+        value_name = "TASK_ID",
+        help = "Filter requirements linked to a task id."
+    )]
+    pub(crate) linked_task_id: Vec<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Search requirement id, title, description, body, acceptance criteria, tags, labels, area, and source."
+    )]
+    pub(crate) search: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -110,6 +156,26 @@ pub(crate) struct RequirementCreateArgs {
     )]
     pub(crate) source: Option<String>,
     #[arg(
+        long = "label",
+        value_name = "LABEL",
+        help = "Labels to assign to the requirement. Repeat to add multiple values."
+    )]
+    pub(crate) label: Vec<String>,
+    #[arg(long, value_name = "AREA", help = "Area assigned to the requirement.")]
+    pub(crate) area: Option<String>,
+    #[arg(
+        long = "external-ref",
+        value_name = "REF",
+        help = "External tracking reference for the requirement."
+    )]
+    pub(crate) external_ref: Option<String>,
+    #[arg(
+        long = "linked-epic-id",
+        value_name = "EPIC_ID",
+        help = "Epic ids linked to the requirement. Repeat to add multiple ids."
+    )]
+    pub(crate) linked_epic_id: Vec<String>,
+    #[arg(
         long = "acceptance-criterion",
         value_name = "TEXT",
         help = "Acceptance criteria text. Repeat to provide multiple criteria."
@@ -142,11 +208,47 @@ pub(crate) struct RequirementUpdateArgs {
     )]
     pub(crate) source: Option<String>,
     #[arg(
+        long = "label",
+        value_name = "LABEL",
+        help = "Labels to assign to the requirement. Repeat to add multiple values."
+    )]
+    pub(crate) label: Vec<String>,
+    #[arg(
+        long,
+        value_name = "AREA",
+        help = "Updated area value for the requirement."
+    )]
+    pub(crate) area: Option<String>,
+    #[arg(
+        long = "external-ref",
+        value_name = "REF",
+        help = "Updated external tracking reference for the requirement."
+    )]
+    pub(crate) external_ref: Option<String>,
+    #[arg(
+        long = "linked-epic-id",
+        value_name = "EPIC_ID",
+        help = "Epic ids linked to the requirement. Repeat to add multiple ids."
+    )]
+    pub(crate) linked_epic_id: Vec<String>,
+    #[arg(
         long = "linked-task-id",
         value_name = "TASK_ID",
         help = "Task ids linked to this requirement. Repeat to add multiple ids."
     )]
     pub(crate) linked_task_id: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace all linked epic ids with the provided --linked-epic-id values."
+    )]
+    pub(crate) replace_linked_epic_ids: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace all labels with the provided --label values."
+    )]
+    pub(crate) replace_labels: bool,
     #[arg(
         long = "acceptance-criterion",
         value_name = "TEXT",

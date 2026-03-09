@@ -23,15 +23,15 @@ use crate::providers::{
 use crate::types::{
     AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem,
     CheckpointReason, CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth,
-    DaemonStatus, DependencyType, LogEntry, LogLevel, OrchestratorProject, OrchestratorTask,
-    OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig, ProjectCreateInput, ProjectType,
-    RequirementItem, RequirementPriorityExt, RequirementStatus, RequirementsDraftInput,
-    RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency,
-    TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
-    TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
-    TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
-    WorkflowMetadata, WorkflowRunInput, WorkflowSubject,
+    DaemonStatus, DependencyType, EpicItem, LogEntry, LogLevel, OrchestratorProject,
+    OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig,
+    ProjectCreateInput, ProjectType, RequirementFilter, RequirementItem, RequirementPriorityExt,
+    RequirementStatus, RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput,
+    RequirementsExecutionResult, RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput,
+    TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution,
+    TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions,
+    TaskPriorityRebalancePlan, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput,
+    VisionDocument, VisionDraftInput, WorkflowMetadata, WorkflowRunInput, WorkflowSubject,
 };
 use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
 
@@ -201,6 +201,10 @@ pub trait PlanningServiceApi: Send + Sync {
         input: RequirementsDraftInput,
     ) -> Result<RequirementsDraftResult>;
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>>;
+    async fn list_requirements_filtered(
+        &self,
+        filter: RequirementFilter,
+    ) -> Result<Vec<RequirementItem>>;
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem>;
     async fn refine_requirements(
         &self,
@@ -208,6 +212,10 @@ pub trait PlanningServiceApi: Send + Sync {
     ) -> Result<Vec<RequirementItem>>;
     async fn upsert_requirement(&self, requirement: RequirementItem) -> Result<RequirementItem>;
     async fn delete_requirement(&self, id: &str) -> Result<()>;
+    async fn list_epics(&self) -> Result<Vec<EpicItem>>;
+    async fn get_epic(&self, id: &str) -> Result<EpicItem>;
+    async fn upsert_epic(&self, epic: EpicItem) -> Result<EpicItem>;
+    async fn delete_epic(&self, id: &str) -> Result<()>;
     async fn execute_requirements(
         &self,
         input: RequirementsExecutionInput,
@@ -425,8 +433,12 @@ impl FileServiceHub {
             "status": Self::legacy_requirement_status(requirement.status),
             "acceptance_criteria": requirement.acceptance_criteria,
             "tags": requirement.tags,
+            "labels": requirement.labels,
+            "area": requirement.area,
+            "external_ref": requirement.external_ref,
             "links": {
                 "tasks": tasks,
+                "epics": requirement.linked_epic_ids,
                 "workflows": requirement.links.workflows,
                 "tests": requirement.links.tests,
                 "mockups": requirement.links.mockups,
@@ -437,6 +449,129 @@ impl FileServiceHub {
             "created_at": requirement.created_at,
             "updated_at": requirement.updated_at,
         })
+    }
+
+    fn child_status_counts(snapshot: &CoreState, parent_task_id: &str) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for task in snapshot.tasks.values() {
+            if task.parent_task_id.as_deref() != Some(parent_task_id) {
+                continue;
+            }
+            *counts.entry(task.status.to_string()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    fn task_relation_summary(task: &OrchestratorTask) -> HashMap<String, Vec<String>> {
+        let mut summary: HashMap<String, Vec<String>> = HashMap::new();
+        for dependency in &task.dependencies {
+            summary
+                .entry(
+                    match dependency.dependency_type {
+                        DependencyType::BlocksBy => "blocks-by",
+                        DependencyType::BlockedBy => "blocked-by",
+                        DependencyType::RelatedTo => "related-to",
+                        DependencyType::ParentChild => "parent-child",
+                        DependencyType::Duplicate => "duplicate",
+                        DependencyType::CausedBy => "caused-by",
+                        DependencyType::SplitFrom => "split-from",
+                    }
+                    .to_string(),
+                )
+                .or_default()
+                .push(dependency.task_id.clone());
+        }
+        for related_ids in summary.values_mut() {
+            related_ids.sort();
+            related_ids.dedup();
+        }
+        summary
+    }
+
+    fn write_epic_files(
+        path: &Path,
+        snapshot: &CoreState,
+        only_ids: Option<&HashSet<String>>,
+    ) -> Result<()> {
+        let Some(ao_dir) = Self::ao_dir_for_state_file(path) else {
+            return Ok(());
+        };
+        let epics_dir = ao_dir.join("epics");
+        std::fs::create_dir_all(&epics_dir)?;
+
+        let mut epics: Vec<_> = snapshot.epics.values().cloned().collect();
+        epics.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut index_entries = Vec::new();
+        let mut traceability = HashMap::new();
+
+        for epic in epics {
+            let linked_tasks = if epic.linked_task_ids.is_empty() {
+                snapshot
+                    .tasks
+                    .values()
+                    .filter(|task| task.epic_id.as_deref() == Some(epic.id.as_str()))
+                    .map(|task| task.id.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                epic.linked_task_ids.clone()
+            };
+            let linked_requirements = if epic.linked_requirement_ids.is_empty() {
+                snapshot
+                    .requirements
+                    .values()
+                    .filter(|requirement| requirement.linked_epic_ids.contains(&epic.id))
+                    .map(|requirement| requirement.id.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                epic.linked_requirement_ids.clone()
+            };
+
+            let payload = serde_json::json!({
+                "id": epic.id,
+                "title": epic.title,
+                "description": epic.description,
+                "priority": epic.priority,
+                "status": epic.status,
+                "source": epic.source,
+                "tags": epic.tags,
+                "linked_task_ids": linked_tasks,
+                "linked_requirement_ids": linked_requirements,
+                "created_at": epic.created_at,
+                "updated_at": epic.updated_at,
+            });
+
+            if only_ids.is_none() || only_ids.map_or(false, |ids| ids.contains(&epic.id)) {
+                std::fs::write(
+                    epics_dir.join(format!("{}.json", epic.id)),
+                    serde_json::to_string_pretty(&payload)?,
+                )?;
+            }
+
+            index_entries.push(payload.clone());
+            traceability.insert(
+                epic.id.clone(),
+                serde_json::json!({
+                    "tasks": linked_tasks,
+                    "requirements": linked_requirements,
+                }),
+            );
+        }
+
+        let index_payload = serde_json::json!({
+            "epics": index_entries,
+            "traceability": traceability,
+        });
+        let index_dir = Self::index_root_for_state_file(path)
+            .ok_or_else(|| anyhow!("failed to resolve AO index directory"))?
+            .join("epics");
+        std::fs::create_dir_all(&index_dir)?;
+        std::fs::write(
+            index_dir.join("index.json"),
+            serde_json::to_string_pretty(&index_payload)?,
+        )?;
+
+        Ok(())
     }
 
     fn write_requirement_files(
@@ -487,8 +622,12 @@ impl FileServiceHub {
                 "status": Self::legacy_requirement_status(requirement.status),
                 "relative_path": relative_str,
                 "tags": requirement.tags,
+                "labels": requirement.labels,
+                "area": requirement.area,
+                "external_ref": requirement.external_ref,
                 "acceptance_criteria_count": requirement.acceptance_criteria.len(),
                 "linked_tasks": linked_tasks,
+                "linked_epics": requirement.linked_epic_ids,
                 "linked_workflows": requirement.links.workflows,
                 "linked_tests": requirement.links.tests,
                 "linked_mockups": requirement.links.mockups,
@@ -498,7 +637,13 @@ impl FileServiceHub {
                 "updated_at": requirement.updated_at,
             }));
 
-            traceability.insert(requirement.id, linked_tasks);
+            traceability.insert(
+                requirement.id,
+                serde_json::json!({
+                    "tasks": linked_tasks,
+                    "epics": requirement.linked_epic_ids,
+                }),
+            );
         }
 
         let index_payload = serde_json::json!({
@@ -568,9 +713,15 @@ impl FileServiceHub {
                 "estimated_effort": task.estimated_effort,
                 "linked_requirements": task.linked_requirements,
                 "linked_architecture_entities": task.linked_architecture_entities,
+                "epic_id": task.epic_id,
+                "parent_task_id": task.parent_task_id,
                 "dependencies": task.dependencies,
+                "relation_summary": Self::task_relation_summary(&task),
                 "checklist": task.checklist,
                 "tags": task.tags,
+                "labels": task.labels,
+                "area": task.area,
+                "external_ref": task.external_ref,
                 "workflow_metadata": task.workflow_metadata,
                 "worktree_path": task.worktree_path,
                 "branch_name": task.branch_name,
@@ -579,6 +730,7 @@ impl FileServiceHub {
                 "paused": task.paused,
                 "cancelled": task.cancelled,
                 "resource_requirements": task.resource_requirements,
+                "child_status_counts": Self::child_status_counts(snapshot, &task.id),
             });
             if only_ids.is_none() || only_ids.map_or(false, |ids| ids.contains(&task.id)) {
                 std::fs::write(
@@ -592,6 +744,13 @@ impl FileServiceHub {
                 "title": task.title,
                 "status": task.status,
                 "priority": task.priority,
+                "epic_id": task.epic_id,
+                "parent_task_id": task.parent_task_id,
+                "linked_requirements": task.linked_requirements,
+                "labels": task.labels,
+                "area": task.area,
+                "relation_summary": Self::task_relation_summary(&task),
+                "child_status_counts": Self::child_status_counts(snapshot, &task.id),
                 "linked_architecture_entities_count": task.linked_architecture_entities.len(),
                 "updated_at": task.metadata.updated_at,
             }));
@@ -633,6 +792,7 @@ impl FileServiceHub {
             serde_json::to_string_pretty(&snapshot.architecture)?,
         )?;
 
+        Self::write_epic_files(path, snapshot, None)?;
         Self::write_requirement_files(path, snapshot, None)?;
         Self::write_task_files(path, snapshot, None)?;
 
@@ -681,12 +841,23 @@ impl FileServiceHub {
                 };
                 Self::write_requirement_files(path, state, only)?;
             }
+
+            if state.all_epics_dirty || !state.dirty_epics.is_empty() {
+                let only = if state.all_epics_dirty {
+                    None
+                } else {
+                    Some(&state.dirty_epics)
+                };
+                Self::write_epic_files(path, state, only)?;
+            }
         }
 
         state.dirty_tasks.clear();
         state.dirty_requirements.clear();
+        state.dirty_epics.clear();
         state.all_tasks_dirty = false;
         state.all_requirements_dirty = false;
+        state.all_epics_dirty = false;
         Ok(())
     }
 

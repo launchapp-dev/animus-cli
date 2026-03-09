@@ -12,6 +12,10 @@ pub(super) fn next_requirement_id(requirements: &HashMap<String, RequirementItem
     crate::services::task_shared::next_sequential_id(requirements.keys(), "REQ-")
 }
 
+pub(super) fn next_epic_id(epics: &HashMap<String, EpicItem>) -> String {
+    crate::services::task_shared::next_sequential_id(epics.keys(), "EPIC-")
+}
+
 pub(super) fn default_vision_project_name(project_root: &Path) -> String {
     project_root
         .file_name()

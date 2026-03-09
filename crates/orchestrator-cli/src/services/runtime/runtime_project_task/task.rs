@@ -144,7 +144,24 @@ pub(crate) async fn handle_task(
                 } else {
                     Some(args.tag)
                 },
-                linked_requirement: args.linked_requirement,
+                labels: if args.label.is_empty() {
+                    None
+                } else {
+                    Some(args.label)
+                },
+                area: args.area,
+                linked_requirements: args.linked_requirement,
+                requirement_search_text: args.requirement_search,
+                epic_id: args.epic_id,
+                parent_task_id: args.parent_task_id,
+                has_parent: args.has_parent.then_some(true),
+                has_children: args.has_children.then_some(true),
+                related_task_id: args.related_task_id,
+                relation_type: args
+                    .relation_type
+                    .as_deref()
+                    .map(parse_dependency_type)
+                    .transpose()?,
                 linked_architecture_entity: args.linked_architecture_entity,
                 search_text: args.search,
             };
@@ -155,7 +172,16 @@ pub(crate) async fn handle_task(
                 || filter.risk.is_some()
                 || filter.assignee_type.is_some()
                 || filter.tags.is_some()
-                || filter.linked_requirement.is_some()
+                || filter.labels.is_some()
+                || filter.area.is_some()
+                || !filter.linked_requirements.is_empty()
+                || filter.requirement_search_text.is_some()
+                || filter.epic_id.is_some()
+                || filter.parent_task_id.is_some()
+                || filter.has_parent.is_some()
+                || filter.has_children.is_some()
+                || filter.related_task_id.is_some()
+                || filter.relation_type.is_some()
                 || filter.linked_architecture_entity.is_some()
                 || filter.search_text.is_some();
 
@@ -223,6 +249,11 @@ pub(crate) async fn handle_task(
                     priority: parse_priority_opt(args.priority.as_deref())?,
                     created_by: Some(protocol::ACTOR_CLI.to_string()),
                     tags: Vec::new(),
+                    labels: args.label,
+                    area: args.area,
+                    external_ref: args.external_ref,
+                    epic_id: args.epic_id,
+                    parent_task_id: args.parent_task_id,
                     linked_requirements: args.linked_requirement,
                     linked_architecture_entities: args.linked_architecture_entity,
                 })
@@ -244,6 +275,22 @@ pub(crate) async fn handle_task(
                     },
                     assignee: args.assignee,
                     tags: None,
+                    labels: if args.label.is_empty() {
+                        None
+                    } else {
+                        Some(args.label)
+                    },
+                    area: args.area,
+                    external_ref: args.external_ref,
+                    epic_id: args.epic_id,
+                    parent_task_id: args.parent_task_id,
+                    linked_requirements: if args.replace_linked_requirements
+                        || !args.linked_requirement.is_empty()
+                    {
+                        Some(args.linked_requirement)
+                    } else {
+                        None
+                    },
                     updated_by: Some(protocol::ACTOR_CLI.to_string()),
                     deadline: None,
                     linked_architecture_entities: if args.replace_linked_architecture_entities

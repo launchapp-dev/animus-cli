@@ -71,6 +71,7 @@ impl std::str::FromStr for TaskStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskType {
+    #[serde(alias = "story")]
     Feature,
     #[serde(alias = "bug")]
     Bugfix,
@@ -83,6 +84,7 @@ pub enum TaskType {
     Test,
     Chore,
     Experiment,
+    Spike,
 }
 
 impl TaskType {
@@ -96,6 +98,7 @@ impl TaskType {
             Self::Test => "test",
             Self::Chore => "chore",
             Self::Experiment => "experiment",
+            Self::Spike => "spike",
         }
     }
 }
@@ -232,6 +235,42 @@ impl std::str::FromStr for RequirementStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EpicStatus {
+    #[default]
+    Draft,
+    Active,
+    Done,
+    Archived,
+}
+
+impl std::fmt::Display for EpicStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Draft => "draft",
+            Self::Active => "active",
+            Self::Done => "done",
+            Self::Archived => "archived",
+        })
+    }
+}
+
+impl std::str::FromStr for EpicStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let normalized = s.trim().to_ascii_lowercase().replace('_', "-");
+        Ok(match normalized.as_str() {
+            "draft" => Self::Draft,
+            "active" => Self::Active,
+            "done" => Self::Done,
+            "archived" => Self::Archived,
+            _ => return Err(format!("unknown epic status: {s}")),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RequirementLinks {
     #[serde(default)]
@@ -268,6 +307,27 @@ pub struct CodebaseInsight {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpicItem {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub priority: RequirementPriority,
+    #[serde(default)]
+    pub status: EpicStatus,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub linked_requirement_ids: Vec<String>,
+    #[serde(default)]
+    pub linked_task_ids: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequirementItem {
     pub id: String,
     pub title: String,
@@ -291,11 +351,19 @@ pub struct RequirementItem {
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(default)]
+    pub external_ref: Option<String>,
+    #[serde(default)]
     pub links: RequirementLinks,
     #[serde(default)]
     pub comments: Vec<RequirementComment>,
     #[serde(default)]
     pub relative_path: Option<String>,
+    #[serde(default)]
+    pub linked_epic_ids: Vec<String>,
     #[serde(default)]
     pub linked_task_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -375,6 +443,10 @@ pub enum DependencyType {
     BlocksBy,
     BlockedBy,
     RelatedTo,
+    ParentChild,
+    Duplicate,
+    CausedBy,
+    SplitFrom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -497,6 +569,10 @@ pub struct OrchestratorTask {
     #[serde(default)]
     pub estimated_effort: Option<String>,
     #[serde(default)]
+    pub epic_id: Option<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
     pub linked_requirements: Vec<String>,
     #[serde(default)]
     pub linked_architecture_entities: Vec<String>,
@@ -506,6 +582,12 @@ pub struct OrchestratorTask {
     pub checklist: Vec<ChecklistItem>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(default)]
+    pub external_ref: Option<String>,
     #[serde(default)]
     pub workflow_metadata: WorkflowMetadata,
     #[serde(default)]
@@ -627,6 +709,16 @@ pub struct TaskCreateInput {
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(default)]
+    pub external_ref: Option<String>,
+    #[serde(default)]
+    pub epic_id: Option<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
     pub linked_requirements: Vec<String>,
     #[serde(default)]
     pub linked_architecture_entities: Vec<String>,
@@ -647,6 +739,18 @@ pub struct TaskUpdateInput {
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(default)]
+    pub external_ref: Option<String>,
+    #[serde(default)]
+    pub epic_id: Option<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub linked_requirements: Option<Vec<String>>,
+    #[serde(default)]
     pub updated_by: Option<String>,
     #[serde(default)]
     pub deadline: Option<String>,
@@ -662,8 +766,33 @@ pub struct TaskFilter {
     pub risk: Option<RiskLevel>,
     pub assignee_type: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub linked_requirement: Option<String>,
+    pub labels: Option<Vec<String>>,
+    pub area: Option<String>,
+    #[serde(default)]
+    pub linked_requirements: Vec<String>,
+    pub requirement_search_text: Option<String>,
+    pub epic_id: Option<String>,
+    pub parent_task_id: Option<String>,
+    pub has_parent: Option<bool>,
+    pub has_children: Option<bool>,
+    pub related_task_id: Option<String>,
+    pub relation_type: Option<DependencyType>,
     pub linked_architecture_entity: Option<String>,
+    pub search_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RequirementFilter {
+    pub status: Option<RequirementStatus>,
+    pub priority: Option<RequirementPriority>,
+    pub requirement_type: Option<RequirementType>,
+    pub category: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
+    pub area: Option<String>,
+    pub source: Option<String>,
+    pub linked_epic_id: Option<String>,
+    pub linked_task_id: Option<String>,
     pub search_text: Option<String>,
 }
 

@@ -3,9 +3,9 @@ use clap::{Args, ValueEnum};
 pub(crate) const INPUT_JSON_PRECEDENCE_HELP: &str =
     "JSON payload for this command. When provided, values in this payload override individual CLI flags.";
 pub(crate) const TASK_TYPE_HELP: &str =
-    "Task type: feature|bugfix|hotfix|refactor|docs|test|chore|experiment.";
+    "Task type: feature|story|spike|bugfix|hotfix|refactor|docs|test|chore|experiment.";
 pub(crate) const TASK_TYPE_FILTER_HELP: &str =
-    "Task type filter: feature|bugfix|hotfix|refactor|docs|test|chore|experiment.";
+    "Task type filter: feature|story|spike|bugfix|hotfix|refactor|docs|test|chore|experiment.";
 pub(crate) const TASK_STATUS_HELP: &str =
     "Task status: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled.";
 pub(crate) const TASK_STATUS_FILTER_HELP: &str =
@@ -22,7 +22,7 @@ pub(crate) const REQUIREMENT_TYPE_HELP: &str =
     "Requirement type: product|functional|non-functional|nonfunctional|non_functional|technical|other.";
 pub(crate) const TASK_RISK_FILTER_HELP: &str = "Risk filter: high|medium|low.";
 pub(crate) const DEPENDENCY_TYPE_HELP: &str =
-    "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to.";
+    "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to|parent-child|duplicate|caused-by|split-from.";
 
 pub(crate) fn parse_positive_u64(value: &str) -> Result<u64, String> {
     let parsed = value

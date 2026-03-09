@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use orchestrator_core::{
-    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementPriority,
-    RequirementStatus, RequirementType, RiskLevel, TaskFilter, TaskStatus, TaskType,
-    VisionDocument, VisionDraftInput,
+    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementFilter,
+    RequirementPriority, RequirementStatus, RequirementType, RiskLevel, TaskFilter, TaskStatus,
+    TaskType, VisionDocument, VisionDraftInput,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -179,11 +179,22 @@ pub(super) fn build_task_filter(
     risk: Option<String>,
     assignee_type: Option<String>,
     tags: Vec<String>,
-    linked_requirement: Option<String>,
+    labels: Vec<String>,
+    linked_requirements: Vec<String>,
+    requirement_search: Option<String>,
+    epic_id: Option<String>,
+    parent_task_id: Option<String>,
+    has_parent: Option<bool>,
+    has_children: Option<bool>,
+    area: Option<String>,
+    related_task_id: Option<String>,
+    relation_type: Option<String>,
     linked_architecture_entity: Option<String>,
     search: Option<String>,
 ) -> Result<TaskFilter, WebApiError> {
     let normalized_tags = normalize_string_list(tags);
+    let normalized_labels = normalize_string_list(labels);
+    let normalized_linked_requirements = normalize_string_list(linked_requirements);
 
     Ok(TaskFilter {
         task_type: parse_task_type_opt(task_type.as_deref())?,
@@ -200,8 +211,66 @@ pub(super) fn build_task_filter(
         } else {
             Some(normalized_tags)
         },
-        linked_requirement: normalize_optional_string(linked_requirement),
+        labels: if normalized_labels.is_empty() {
+            None
+        } else {
+            Some(normalized_labels)
+        },
+        area: normalize_optional_string(area),
+        linked_requirements: normalized_linked_requirements,
+        requirement_search_text: normalize_optional_string(requirement_search),
+        epic_id: normalize_optional_string(epic_id),
+        parent_task_id: normalize_optional_string(parent_task_id),
+        has_parent,
+        has_children,
+        related_task_id: normalize_optional_string(related_task_id),
+        relation_type: relation_type
+            .as_deref()
+            .map(parse_dependency_type)
+            .transpose()?,
         linked_architecture_entity: normalize_optional_string(linked_architecture_entity),
+        search_text: normalize_optional_string(search),
+    })
+}
+
+pub(super) fn build_requirement_filter(
+    status: Option<String>,
+    priority: Option<String>,
+    requirement_type: Option<String>,
+    category: Option<String>,
+    tags: Vec<String>,
+    labels: Vec<String>,
+    area: Option<String>,
+    source: Option<String>,
+    epic_id: Option<String>,
+    linked_task_id: Option<String>,
+    search: Option<String>,
+) -> Result<RequirementFilter, WebApiError> {
+    let normalized_tags = normalize_string_list(tags);
+    let normalized_labels = normalize_string_list(labels);
+
+    Ok(RequirementFilter {
+        status: status
+            .as_deref()
+            .map(parse_requirement_status)
+            .transpose()?,
+        priority: parse_requirement_priority_opt(priority.as_deref())?,
+        requirement_type: parse_requirement_type_opt(requirement_type.as_deref())?,
+        category: normalize_optional_string(category),
+        tags: if normalized_tags.is_empty() {
+            None
+        } else {
+            Some(normalized_tags)
+        },
+        labels: if normalized_labels.is_empty() {
+            None
+        } else {
+            Some(normalized_labels)
+        },
+        area: normalize_optional_string(area),
+        source: normalize_optional_string(source),
+        linked_epic_id: normalize_optional_string(epic_id),
+        linked_task_id: normalize_optional_string(linked_task_id),
         search_text: normalize_optional_string(search),
     })
 }
@@ -213,7 +282,16 @@ pub(super) fn is_empty_task_filter(filter: &TaskFilter) -> bool {
         && filter.risk.is_none()
         && filter.assignee_type.is_none()
         && filter.tags.is_none()
-        && filter.linked_requirement.is_none()
+        && filter.labels.is_none()
+        && filter.area.is_none()
+        && filter.linked_requirements.is_empty()
+        && filter.requirement_search_text.is_none()
+        && filter.epic_id.is_none()
+        && filter.parent_task_id.is_none()
+        && filter.has_parent.is_none()
+        && filter.has_children.is_none()
+        && filter.related_task_id.is_none()
+        && filter.relation_type.is_none()
         && filter.linked_architecture_entity.is_none()
         && filter.search_text.is_none()
 }
@@ -310,6 +388,7 @@ pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
 
     let normalized = normalize_enum_key(value);
     let parsed = match normalized.as_str() {
+        "story" => TaskType::Feature,
         "feature" => TaskType::Feature,
         "bugfix" => TaskType::Bugfix,
         "hotfix" => TaskType::Hotfix,
@@ -318,6 +397,7 @@ pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
         "test" => TaskType::Test,
         "chore" => TaskType::Chore,
         "experiment" => TaskType::Experiment,
+        "spike" => TaskType::Spike,
         _ => {
             return Err(WebApiError::new(
                 "invalid_input",
@@ -381,6 +461,10 @@ pub(super) fn parse_dependency_type(value: &str) -> Result<DependencyType, WebAp
         "blocks-by" | "blocksby" => DependencyType::BlocksBy,
         "blocked-by" | "blockedby" => DependencyType::BlockedBy,
         "related-to" | "relatedto" => DependencyType::RelatedTo,
+        "parent-child" | "parentchild" => DependencyType::ParentChild,
+        "duplicate" => DependencyType::Duplicate,
+        "caused-by" | "causedby" => DependencyType::CausedBy,
+        "split-from" | "splitfrom" => DependencyType::SplitFrom,
         _ => {
             return Err(WebApiError::new(
                 "invalid_input",
@@ -478,6 +562,14 @@ mod tests {
             Ok(Some(TaskType::Feature))
         ));
         assert!(matches!(
+            parse_task_type_opt(Some(" story ")),
+            Ok(Some(TaskType::Feature))
+        ));
+        assert!(matches!(
+            parse_task_type_opt(Some(" SPIKE ")),
+            Ok(Some(TaskType::Spike))
+        ));
+        assert!(matches!(
             parse_priority_opt(Some(" HIGH ")),
             Ok(Some(Priority::High))
         ));
@@ -501,6 +593,14 @@ mod tests {
             parse_dependency_type("related-to"),
             Ok(DependencyType::RelatedTo)
         ));
+        assert!(matches!(
+            parse_dependency_type("parent-child"),
+            Ok(DependencyType::ParentChild)
+        ));
+        assert!(matches!(
+            parse_dependency_type("split_from"),
+            Ok(DependencyType::SplitFrom)
+        ));
     }
 
     #[test]
@@ -517,7 +617,16 @@ mod tests {
                 " api ".to_string(),
                 "".to_string(),
             ],
-            Some(" REQ-1 ".to_string()),
+            vec![],
+            vec![" REQ-1 ".to_string(), " REQ-1 ".to_string()],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some(" entity-1 ".to_string()),
             Some(" shipping blocker ".to_string()),
         )
@@ -532,7 +641,7 @@ mod tests {
             filter.tags,
             Some(vec!["backend".to_string(), "api".to_string()])
         );
-        assert_eq!(filter.linked_requirement.as_deref(), Some("REQ-1"));
+        assert_eq!(filter.linked_requirements, vec!["REQ-1".to_string()]);
         assert_eq!(
             filter.linked_architecture_entity.as_deref(),
             Some("entity-1")
@@ -549,7 +658,16 @@ mod tests {
             None,
             Some("   ".to_string()),
             vec![" ".to_string()],
-            Some(" ".to_string()),
+            vec![],
+            vec![" ".to_string()],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some("\t".to_string()),
             Some("\n".to_string()),
         )
@@ -567,6 +685,15 @@ mod tests {
             None,
             Some("robot".to_string()),
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
             None,

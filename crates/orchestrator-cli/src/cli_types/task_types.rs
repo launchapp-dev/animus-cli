@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{ArgAction, Args, Subcommand};
 
 use super::{
     parse_percentage_u8, parse_positive_u64, parse_positive_usize, IdArgs, TaskIdArgs,
@@ -177,10 +177,56 @@ pub(crate) struct TaskListArgs {
     pub(crate) tag: Vec<String>,
     #[arg(
         long,
-        value_name = "REQ_ID",
-        help = "Filter tasks linked to a requirement id."
+        value_name = "LABEL",
+        help = "Match tasks that include all provided labels. Repeat to require multiple labels."
     )]
-    pub(crate) linked_requirement: Option<String>,
+    pub(crate) label: Vec<String>,
+    #[arg(
+        long,
+        value_name = "REQ_ID",
+        help = "Filter tasks linked to requirement ids. Repeat to match any of the provided ids."
+    )]
+    pub(crate) linked_requirement: Vec<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Search linked requirement id, title, description, tags, and labels."
+    )]
+    pub(crate) requirement_search: Option<String>,
+    #[arg(
+        long,
+        value_name = "EPIC_ID",
+        help = "Filter tasks linked to an epic id."
+    )]
+    pub(crate) epic_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Filter tasks by exact parent task id."
+    )]
+    pub(crate) parent_task_id: Option<String>,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Only return tasks that have a parent task."
+    )]
+    pub(crate) has_parent: bool,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Only return tasks that have child tasks."
+    )]
+    pub(crate) has_children: bool,
+    #[arg(long, value_name = "AREA", help = "Filter tasks by area.")]
+    pub(crate) area: Option<String>,
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Filter tasks related to the provided task id."
+    )]
+    pub(crate) related_task_id: Option<String>,
+    #[arg(long, value_name = "TYPE", help = DEPENDENCY_TYPE_HELP)]
+    pub(crate) relation_type: Option<String>,
     #[arg(
         long,
         value_name = "ENTITY_ID",
@@ -265,6 +311,32 @@ pub(crate) struct TaskCreateArgs {
     )]
     pub(crate) linked_requirement: Vec<String>,
     #[arg(
+        long = "label",
+        value_name = "LABEL",
+        help = "Labels to assign to the new task. Repeat to add multiple values."
+    )]
+    pub(crate) label: Vec<String>,
+    #[arg(long, value_name = "AREA", help = "Area assigned to the new task.")]
+    pub(crate) area: Option<String>,
+    #[arg(
+        long = "external-ref",
+        value_name = "REF",
+        help = "External tracking reference for the task."
+    )]
+    pub(crate) external_ref: Option<String>,
+    #[arg(
+        long = "epic-id",
+        value_name = "EPIC_ID",
+        help = "Epic linked to the new task."
+    )]
+    pub(crate) epic_id: Option<String>,
+    #[arg(
+        long = "parent-task-id",
+        value_name = "TASK_ID",
+        help = "Parent task id for creating a subtask."
+    )]
+    pub(crate) parent_task_id: Option<String>,
+    #[arg(
         long = "linked-architecture-entity",
         value_name = "ENTITY_ID",
         help = "Link architecture entity ids to the new task. Repeat to add multiple ids."
@@ -292,6 +364,44 @@ pub(crate) struct TaskUpdateArgs {
         help = "Updated assignee value for the task."
     )]
     pub(crate) assignee: Option<String>,
+    #[arg(
+        long = "label",
+        value_name = "LABEL",
+        help = "Labels to assign to the task. Repeat to add multiple values."
+    )]
+    pub(crate) label: Vec<String>,
+    #[arg(long, value_name = "AREA", help = "Updated area value for the task.")]
+    pub(crate) area: Option<String>,
+    #[arg(
+        long = "external-ref",
+        value_name = "REF",
+        help = "Updated external tracking reference for the task."
+    )]
+    pub(crate) external_ref: Option<String>,
+    #[arg(
+        long = "epic-id",
+        value_name = "EPIC_ID",
+        help = "Updated epic id for the task."
+    )]
+    pub(crate) epic_id: Option<String>,
+    #[arg(
+        long = "parent-task-id",
+        value_name = "TASK_ID",
+        help = "Updated parent task id for the task."
+    )]
+    pub(crate) parent_task_id: Option<String>,
+    #[arg(
+        long = "linked-requirement",
+        value_name = "REQ_ID",
+        help = "Requirement ids to link. Repeat to provide multiple values."
+    )]
+    pub(crate) linked_requirement: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Replace all linked requirement ids with the provided --linked-requirement values."
+    )]
+    pub(crate) replace_linked_requirements: bool,
     #[arg(
         long = "linked-architecture-entity",
         value_name = "ENTITY_ID",
