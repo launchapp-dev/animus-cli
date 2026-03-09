@@ -1,3 +1,4 @@
+mod project_requirement_workflow_status;
 mod project_task_terminal_workflow_status;
 
 use std::path::Path;
@@ -12,6 +13,7 @@ use crate::{
     ScheduleRunState, TaskStatus,
 };
 
+pub use project_requirement_workflow_status::project_requirement_workflow_status;
 pub use project_task_terminal_workflow_status::project_task_terminal_workflow_status;
 
 pub async fn project_task_status(

@@ -14,7 +14,7 @@ pub(crate) async fn handle_workflow_execute(
     json: bool,
 ) -> Result<()> {
     if args.requirement_id.is_some() && args.workflow_ref.is_none() {
-        args.workflow_ref = super::preferred_requirement_workflow_ref(project_root);
+        args.workflow_ref = Some(super::resolve_requirement_workflow_ref(project_root)?);
     }
 
     let stream_level = if args.quiet {

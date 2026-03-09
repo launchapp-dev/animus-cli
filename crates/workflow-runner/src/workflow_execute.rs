@@ -9,7 +9,7 @@ use tokio::process::Command;
 
 use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config,
+    ensure_workflow_config_compiled, load_workflow_config, project_requirement_workflow_status,
     providers::{BuiltinGitProvider, GitProvider},
     resolve_workflow_rework_attempts, resolve_workflow_verdict_routing,
     services::ServiceHub,
@@ -403,6 +403,9 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
 
     let total_duration = workflow_start.elapsed();
     let all_phases_completed = phase_idx >= phases_to_run.len();
+    if all_phases_completed {
+        project_requirement_success_status(hub.clone(), &subject, workflow_ref).await?;
+    }
     let post_success = if all_phases_completed {
         if let Some(ref t) = task {
             execute_post_success_actions(
@@ -499,6 +502,18 @@ async fn resolve_execution_subject_context(
             task: None,
         }),
     }
+}
+
+async fn project_requirement_success_status(
+    hub: Arc<dyn ServiceHub>,
+    subject: &WorkflowSubject,
+    workflow_ref: &str,
+) -> Result<()> {
+    let WorkflowSubject::Requirement { id } = subject else {
+        return Ok(());
+    };
+
+    project_requirement_workflow_status(hub, id, workflow_ref).await
 }
 
 fn has_matching_phase(phases: &[String], target: &str) -> Option<usize> {
@@ -1081,7 +1096,8 @@ mod tests {
     use chrono::Utc;
     use orchestrator_core::{
         InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority,
-        RequirementStatus,
+        RequirementStatus, REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
     };
 
     #[tokio::test]
@@ -1131,5 +1147,99 @@ mod tests {
             "Create implementation-ready tasks from this requirement."
         );
         assert!(context.task.is_none());
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_planned_for_plan_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-200".to_string(),
+                title: "Plan requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &WorkflowSubject::Requirement {
+                id: "REQ-200".to_string(),
+            },
+            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub
+            .planning()
+            .get_requirement("REQ-200")
+            .await
+            .expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::Planned);
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_in_progress_for_run_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-201".to_string(),
+                title: "Run requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &WorkflowSubject::Requirement {
+                id: "REQ-201".to_string(),
+            },
+            REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub
+            .planning()
+            .get_requirement("REQ-201")
+            .await
+            .expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::InProgress);
     }
 }
