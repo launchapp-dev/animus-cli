@@ -9,8 +9,10 @@ pub use orchestrator_providers::linear;
 
 pub use git::BuiltinGitProvider;
 pub use orchestrator_providers::{
-    BuiltinRequirementsProvider, BuiltinTaskProvider, CreatePrInput, GitHubProvider, GitProvider,
-    MergeResult, PullRequestInfo, RequirementsProvider, TaskProvider, WorktreeInfo,
+    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver,
+    BuiltinTaskProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, ProjectAdapter,
+    PullRequestInfo, RequirementsProvider, SubjectContext, SubjectResolver, TaskProvider,
+    WorktreeInfo,
 };
 #[cfg(feature = "gitlab")]
 pub use orchestrator_providers::{GitLabConfig, GitLabGitProvider};

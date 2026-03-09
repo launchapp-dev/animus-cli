@@ -4,7 +4,7 @@ use protocol::orchestrator::{
     DependencyType, OrchestratorTask, RequirementItem, RequirementsDraftInput,
     RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
     RequirementsRefineInput, TaskCreateInput, TaskFilter, TaskStatistics, TaskStatus,
-    TaskUpdateInput,
+    TaskUpdateInput, WorkflowSubject,
 };
 
 #[async_trait]
@@ -72,6 +72,33 @@ pub trait RequirementsProvider: Send + Sync {
         &self,
         input: RequirementsExecutionInput,
     ) -> Result<RequirementsExecutionResult>;
+}
+
+#[derive(Debug, Clone)]
+pub struct SubjectContext {
+    pub subject_id: String,
+    pub subject_title: String,
+    pub subject_description: String,
+    pub task: Option<OrchestratorTask>,
+}
+
+#[async_trait]
+pub trait SubjectResolver: Send + Sync {
+    async fn resolve_subject_context(
+        &self,
+        subject: &WorkflowSubject,
+        fallback_title: Option<&str>,
+        fallback_description: Option<&str>,
+    ) -> Result<SubjectContext>;
+}
+
+#[async_trait]
+pub trait ProjectAdapter: Send + Sync {
+    async fn ensure_execution_cwd(
+        &self,
+        project_root: &str,
+        task: Option<&OrchestratorTask>,
+    ) -> Result<String>;
 }
 
 #[async_trait]
@@ -150,7 +177,10 @@ pub mod jira;
 #[cfg(feature = "linear")]
 pub mod linear;
 
-pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
+pub use builtin::{
+    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver,
+    BuiltinTaskProvider,
+};
 pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, PullRequestInfo,
     WorktreeInfo,

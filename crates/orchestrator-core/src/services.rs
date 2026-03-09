@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::providers::{BuiltinGitProvider, GitProvider};
 use crate::providers::{
-    BuiltinRequirementsProvider, BuiltinTaskProvider, RequirementsProvider, TaskProvider,
+    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver,
+    BuiltinTaskProvider, ProjectAdapter, RequirementsProvider, SubjectResolver, TaskProvider,
 };
 use crate::types::{
     AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem,
@@ -223,9 +224,11 @@ pub trait ServiceHub: Send + Sync {
     fn projects(&self) -> Arc<dyn ProjectServiceApi>;
     fn tasks(&self) -> Arc<dyn TaskServiceApi>;
     fn task_provider(&self) -> Arc<dyn TaskProvider>;
+    fn subject_resolver(&self) -> Arc<dyn SubjectResolver>;
     fn workflows(&self) -> Arc<dyn WorkflowServiceApi>;
     fn planning(&self) -> Arc<dyn PlanningServiceApi>;
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider>;
+    fn project_adapter(&self) -> Arc<dyn ProjectAdapter>;
     fn review(&self) -> Arc<dyn ReviewServiceApi>;
 }
 
@@ -873,6 +876,10 @@ impl ServiceHub for InMemoryServiceHub {
         Arc::new(BuiltinTaskProvider::new(Arc::new(self.clone())))
     }
 
+    fn subject_resolver(&self) -> Arc<dyn SubjectResolver> {
+        Arc::new(BuiltinSubjectResolver::new(Arc::new(self.clone())))
+    }
+
     fn workflows(&self) -> Arc<dyn WorkflowServiceApi> {
         Arc::new(self.clone())
     }
@@ -883,6 +890,10 @@ impl ServiceHub for InMemoryServiceHub {
 
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
         Arc::new(BuiltinRequirementsProvider::new(Arc::new(self.clone())))
+    }
+
+    fn project_adapter(&self) -> Arc<dyn ProjectAdapter> {
+        Arc::new(BuiltinProjectAdapter::new(Arc::new(self.clone())))
     }
 
     fn review(&self) -> Arc<dyn ReviewServiceApi> {
@@ -907,6 +918,10 @@ impl ServiceHub for FileServiceHub {
         Arc::new(BuiltinTaskProvider::new(Arc::new(self.clone())))
     }
 
+    fn subject_resolver(&self) -> Arc<dyn SubjectResolver> {
+        Arc::new(BuiltinSubjectResolver::new(Arc::new(self.clone())))
+    }
+
     fn workflows(&self) -> Arc<dyn WorkflowServiceApi> {
         Arc::new(self.clone())
     }
@@ -917,6 +932,10 @@ impl ServiceHub for FileServiceHub {
 
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
         Arc::new(BuiltinRequirementsProvider::new(Arc::new(self.clone())))
+    }
+
+    fn project_adapter(&self) -> Arc<dyn ProjectAdapter> {
+        Arc::new(BuiltinProjectAdapter::new(Arc::new(self.clone())))
     }
 
     fn review(&self) -> Arc<dyn ReviewServiceApi> {

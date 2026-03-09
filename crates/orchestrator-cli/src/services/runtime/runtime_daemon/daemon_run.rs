@@ -161,7 +161,6 @@ pub(super) async fn handle_daemon_run(
             auto_prune_worktrees_after_merge_original,
         );
     }
-
     run_result
 }
 

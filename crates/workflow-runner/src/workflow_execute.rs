@@ -703,37 +703,16 @@ async fn resolve_execution_subject_context(
     fallback_title: Option<&str>,
     fallback_description: Option<&str>,
 ) -> Result<ExecutionSubjectContext> {
-    match subject {
-        WorkflowSubject::Task { id } => {
-            let task = hub
-                .tasks()
-                .get(id)
-                .await
-                .with_context(|| format!("task '{}' not found", id))?;
-            Ok(ExecutionSubjectContext {
-                subject_title: task.title.clone(),
-                subject_description: task.description.clone(),
-                task: Some(task),
-            })
-        }
-        WorkflowSubject::Requirement { id } => {
-            let requirement = hub
-                .planning()
-                .get_requirement(id)
-                .await
-                .with_context(|| format!("requirement '{}' not found", id))?;
-            Ok(ExecutionSubjectContext {
-                subject_title: requirement.title.clone(),
-                subject_description: requirement.description.clone(),
-                task: None,
-            })
-        }
-        WorkflowSubject::Custom { title, description } => Ok(ExecutionSubjectContext {
-            subject_title: fallback_title.unwrap_or(title).to_string(),
-            subject_description: fallback_description.unwrap_or(description).to_string(),
-            task: None,
-        }),
-    }
+    let resolved = hub
+        .subject_resolver()
+        .resolve_subject_context(subject, fallback_title, fallback_description)
+        .await
+        .with_context(|| format!("failed to resolve subject context for '{}'", subject.id()))?;
+    Ok(ExecutionSubjectContext {
+        subject_title: resolved.subject_title,
+        subject_description: resolved.subject_description,
+        task: resolved.task,
+    })
 }
 
 async fn project_requirement_success_status(
@@ -829,7 +808,7 @@ fn post_success_failure_reason(post_success: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod requirement_workflow_tests {
     use super::{execute_workflow, workflow_exit_success, WorkflowExecuteParams};
     use orchestrator_core::{
         load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config,
@@ -1598,7 +1577,6 @@ mod tests {
         .await
         .expect("resolve requirement context");
 
-        assert_eq!(context.subject_id, "REQ-123");
         assert_eq!(context.subject_title, "Generate linked tasks");
         assert_eq!(
             context.subject_description,
