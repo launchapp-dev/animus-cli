@@ -106,7 +106,7 @@ use agent_inputs::*;
 use common_types::*;
 #[cfg(test)]
 use compaction::compact_json_str;
-use compaction::{compact_json_text, compact_mcp_value};
+use compaction::compact_json_text;
 use daemon::{
     build_daemon_config_set_args, build_daemon_events_poll_result, build_daemon_logs_result,
     build_daemon_start_args,

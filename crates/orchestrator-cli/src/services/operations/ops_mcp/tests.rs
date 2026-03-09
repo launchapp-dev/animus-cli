@@ -1965,7 +1965,7 @@ fn compact_json_str_ignores_non_json_text() {
 }
 
 #[test]
-fn extract_cli_success_data_compacts_nested_json_strings() {
+fn extract_cli_success_data_preserves_nested_json_strings() {
     let data = extract_cli_success_data(Some(json!({
         "schema": CLI_SCHEMA_ID,
         "ok": true,
@@ -1978,10 +1978,28 @@ fn extract_cli_success_data_compacts_nested_json_strings() {
     assert_eq!(
         data.pointer("/runtime_contract_json")
             .and_then(Value::as_str),
-        Some(r#"{"mcp":{"enabled":true}}"#)
+        Some("{\n  \"mcp\": { \"enabled\": true }\n}")
     );
     assert_eq!(
         data.pointer("/label").and_then(Value::as_str),
         Some("unchanged")
+    );
+}
+
+#[test]
+fn build_cli_error_payload_preserves_json_like_error_text() {
+    let mut result = sample_cli_failure_result();
+    result.stdout_json = Some(json!({
+        "schema": CLI_SCHEMA_ID,
+        "ok": false,
+        "error": {
+            "message": "{\n  \"detail\": \"keep formatting\"\n}"
+        }
+    }));
+
+    let payload = build_cli_error_payload("ao.task.get", &result);
+    assert_eq!(
+        payload.pointer("/error/message").and_then(Value::as_str),
+        Some("{\n  \"detail\": \"keep formatting\"\n}")
     );
 }

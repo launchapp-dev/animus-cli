@@ -1,15 +1,13 @@
-use super::{compact_mcp_value, CliExecutionResult};
+use super::CliExecutionResult;
 use serde_json::{json, Value};
 
 pub(super) fn extract_cli_success_data(stdout_json: Option<Value>) -> Value {
-    compact_mcp_value(
-        stdout_json
-            .map(|envelope| match envelope {
-                Value::Object(mut map) => map.remove("data").unwrap_or(Value::Object(map)),
-                other => other,
-            })
-            .unwrap_or(Value::Null),
-    )
+    stdout_json
+        .map(|envelope| match envelope {
+            Value::Object(mut map) => map.remove("data").unwrap_or(Value::Object(map)),
+            other => other,
+        })
+        .unwrap_or(Value::Null)
 }
 
 pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionResult) -> Value {
@@ -26,7 +24,7 @@ pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionRes
     if !stderr.is_empty() {
         payload["stderr"] = json!(stderr);
     }
-    compact_mcp_value(payload)
+    payload
 }
 
 pub(super) fn batch_item_error_from_result(result: &CliExecutionResult) -> Value {
@@ -42,7 +40,7 @@ pub(super) fn batch_item_error_from_result(result: &CliExecutionResult) -> Value
     if !stderr.is_empty() {
         payload["stderr"] = json!(stderr);
     }
-    compact_mcp_value(payload)
+    payload
 }
 
 #[cfg(test)]
@@ -65,5 +63,5 @@ pub(super) fn build_cli_error_payload(tool_name: &str, result: &CliExecutionResu
         payload["stderr"] = json!(stderr);
     }
 
-    compact_mcp_value(payload)
+    payload
 }
