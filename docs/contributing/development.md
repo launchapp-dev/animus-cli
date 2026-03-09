@@ -76,6 +76,19 @@ See the [Crate Map](../architecture/crate-map.md) for detailed descriptions of e
 | `async-graphql` | GraphQL API (optional feature) |
 | `croner` | Cron expression parsing for schedules |
 
+## Documentation Site
+
+The docs are powered by [VitePress](https://vitepress.dev/) with Mermaid diagram support.
+
+```bash
+npm install                  # Install docs dependencies
+npm run docs:dev             # Start dev server (http://localhost:5173)
+npm run docs:build           # Build static site to docs/.vitepress/dist/
+npm run docs:preview         # Preview production build locally
+```
+
+All documentation lives in `docs/` as plain Markdown. The VitePress config is at `docs/.vitepress/config.mts`. Mermaid diagrams in fenced code blocks render automatically.
+
 ## Project Conventions
 
 - All CLI `--json` output follows the `ao.cli.v1` envelope: `{ schema, ok, data/error }`
