@@ -39,7 +39,7 @@ pub(crate) fn print_ok(message: &str, json: bool) {
         };
         println!(
             "{}",
-            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
+            serialize_compact_json(&envelope).unwrap_or_else(|_| {
                 format!(
                     "{{\"schema\":\"{}\",\"ok\":true,\"data\":{{\"message\":\"ok\"}}}}",
                     CLI_SCHEMA_ID
@@ -58,7 +58,7 @@ pub(crate) fn print_value<T: serde::Serialize>(value: T, json: bool) -> Result<(
             ok: true,
             data: value,
         };
-        println!("{}", serde_json::to_string_pretty(&envelope)?);
+        println!("{}", serialize_compact_json(&envelope)?);
     } else {
         println!("{}", serde_json::to_string_pretty(&value)?);
     }
@@ -91,12 +91,9 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
                 details,
             },
         };
-        eprintln!(
-            "{}",
-            serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| {
-                format!("{{\"schema\":\"{}\",\"ok\":false,\"error\":{{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}}}", CLI_SCHEMA_ID)
-            })
-        );
+        eprintln!("{}", serialize_compact_json(&envelope).unwrap_or_else(|_| {
+            format!("{{\"schema\":\"{}\",\"ok\":false,\"error\":{{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}}}", CLI_SCHEMA_ID)
+        }));
     } else {
         eprintln!("error: {}", err);
         if kind == CliErrorKind::InvalidInput && should_emit_help_hint(&err.to_string()) {
@@ -107,6 +104,10 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
 
 fn should_emit_help_hint(message: &str) -> bool {
     !message.to_ascii_lowercase().contains("--help")
+}
+
+fn serialize_compact_json<T: Serialize>(value: &T) -> Result<String> {
+    Ok(serde_json::to_string(value)?)
 }
 
 pub(crate) fn dry_run_envelope(
@@ -209,5 +210,20 @@ mod tests {
     fn should_emit_help_hint_is_case_insensitive() {
         assert!(!should_emit_help_hint("Run with --HELP for usage"));
         assert!(should_emit_help_hint("invalid priority value"));
+    }
+
+    #[test]
+    fn serialize_compact_json_omits_pretty_print_whitespace() {
+        let payload = json!({
+            "schema": CLI_SCHEMA_ID,
+            "ok": true,
+            "data": { "message": "ok" }
+        });
+        let serialized = serialize_compact_json(&payload).expect("json should serialize");
+        assert!(!serialized.contains('\n'));
+        assert_eq!(
+            serialized,
+            r#"{"data":{"message":"ok"},"ok":true,"schema":"ao.cli.v1"}"#
+        );
     }
 }
