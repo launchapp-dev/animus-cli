@@ -1453,6 +1453,11 @@ mod tests {
                     priority: None,
                     created_by: Some("test".to_string()),
                     tags: Vec::new(),
+                    labels: Vec::new(),
+                    area: None,
+                    external_ref: None,
+                    epic_id: None,
+                    parent_task_id: None,
                     linked_requirements: Vec::new(),
                     linked_architecture_entities: Vec::new(),
                 })

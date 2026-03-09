@@ -221,7 +221,7 @@ mod tests {
                 assert_eq!(args.priority.as_deref(), Some("high"));
                 assert_eq!(args.assignee_type.as_deref(), Some("human"));
                 assert_eq!(args.tag, vec!["api".to_string()]);
-                assert_eq!(args.linked_requirement.as_deref(), Some("REQ-123"));
+                assert_eq!(args.linked_requirement, vec!["REQ-123".to_string()]);
                 assert_eq!(args.linked_architecture_entity.as_deref(), Some("ARCH-42"));
                 assert_eq!(args.search.as_deref(), Some("critical path"));
             }

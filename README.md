@@ -114,7 +114,17 @@ Enforced by CI: `.github/workflows/rust-only-dependency-policy.yml`
 CI/CD via `.github/workflows/release.yml`:
 - **Tag push** (`v*`) — builds + publishes GitHub Release
 - **Branch push** (`version/**`) — builds preview artifacts only
+- always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`
 
 Targets: `x86_64-linux`, `x86_64-macos`, `aarch64-macos`, `x86_64-windows`
 
 Archives: `ao-<version>-<target>.tar.gz` (`.zip` on Windows), with `SHA256SUMS.txt`.
+
+| Runner | Target | Archive |
+|---|---|---|
+| `ubuntu-latest` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| `macos-15-intel` | `x86_64-apple-darwin` | `.tar.gz` |
+| `macos-14` | `aarch64-apple-darwin` | `.tar.gz` |
+| `windows-latest` | `x86_64-pc-windows-msvc` | `.zip` |
+
+- release publish job emits `dist/release-assets/SHA256SUMS.txt` for all archives
