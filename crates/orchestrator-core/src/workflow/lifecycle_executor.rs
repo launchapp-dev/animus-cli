@@ -382,6 +382,7 @@ impl WorkflowLifecycleExecutor {
             subject: input.subject.clone(),
             task_id: input.task_id,
             workflow_ref: input.workflow_ref,
+            input: input.input,
             status: ms.to_workflow_status(),
             current_phase_index: 0,
             phases,

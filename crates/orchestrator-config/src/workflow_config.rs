@@ -1277,6 +1277,14 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                         phase_id
                     ));
                 }
+                if let Some(timeout_secs) = manual.timeout_secs {
+                    if timeout_secs == 0 {
+                        errors.push(format!(
+                            "phase_definitions['{}'].manual.timeout_secs must be greater than 0",
+                            phase_id
+                        ));
+                    }
+                }
                 if definition.command.is_some() {
                     errors.push(format!(
                         "phase_definitions['{}'] mode 'manual' must not include command block",
@@ -1590,6 +1598,8 @@ struct YamlManualDefinition {
     instructions: String,
     #[serde(default)]
     approval_note_required: Option<bool>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1689,6 +1699,7 @@ fn yaml_phase_to_execution_definition(
         (PhaseExecutionMode::Manual, Some(m)) => Some(PhaseManualDefinition {
             instructions: m.instructions,
             approval_note_required: m.approval_note_required.unwrap_or(false),
+            timeout_secs: m.timeout_secs,
         }),
         (PhaseExecutionMode::Manual, None) => {
             return Err(anyhow!(
@@ -3211,6 +3222,7 @@ phases:
     manual:
       instructions: "Review and approve the deployment plan"
       approval_note_required: true
+      timeout_secs: 3600
 
 workflows:
   - id: standard
@@ -3231,6 +3243,7 @@ workflows:
             "Review and approve the deployment plan"
         );
         assert!(manual.approval_note_required);
+        assert_eq!(manual.timeout_secs, Some(3600));
     }
 
     #[test]

@@ -9,9 +9,10 @@ use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
-    workflow_ref_for_task, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
-    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
+    services::ServiceHub, workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager,
+    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+    STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -209,7 +210,7 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
     ))
 }
 
-pub(super) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String> {
+pub(crate) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String> {
     let root = Path::new(project_root);
     ensure_workflow_config_compiled(root)?;
     let workflow_config = load_workflow_config(root)?;
@@ -334,7 +335,20 @@ pub(crate) async fn handle_workflow(
             execute::handle_workflow_execute(args, hub, project_root, json).await?;
             Ok(())
         }
-        WorkflowCommand::Resume(args) => print_value(workflows.resume(&args.id).await?, json),
+        WorkflowCommand::Resume(args) => {
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Resume {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
+        }
         WorkflowCommand::ResumeStatus(args) => {
             let workflow = workflows.get(&args.id).await?;
             let manager = WorkflowResumeManager::new(project_root)?;
@@ -373,7 +387,18 @@ pub(crate) async fn handle_workflow(
                 "workflow pause",
                 "--id",
             )?;
-            print_value(workflows.pause(&args.id).await?, json)
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Pause {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
         }
         WorkflowCommand::Cancel(args) => {
             let workflow = workflows.get(&args.id).await?;
@@ -399,11 +424,33 @@ pub(crate) async fn handle_workflow(
                 "workflow cancel",
                 "--id",
             )?;
-            print_value(workflows.cancel(&args.id).await?, json)
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Cancel {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
         }
         WorkflowCommand::Phase { command } => match command {
             WorkflowPhaseCommand::Approve(args) => print_value(
                 phases::approve_manual_phase(
+                    hub.clone(),
+                    project_root,
+                    &args.id,
+                    &args.phase,
+                    &args.note,
+                )
+                .await?,
+                json,
+            ),
+            WorkflowPhaseCommand::Reject(args) => print_value(
+                phases::reject_manual_phase(
                     hub.clone(),
                     project_root,
                     &args.id,
@@ -563,11 +610,34 @@ mod requirement_workflow_tests {
             .expect("requirement workflow should resolve");
         assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
     }
+    #[test]
+    fn apply_requirement_workflow_default_errors_when_requirement_workflow_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
+            .expect_err("missing requirement workflow should fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
+            "error should mention missing requirement workflow"
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::config::*;
+    use super::*;
+    use orchestrator_core::{
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
+        write_workflow_config, InMemoryServiceHub, Priority, RequirementItem, RequirementLinks,
+        RequirementPriority, RequirementStatus, TaskCreateInput, TaskType, WorkflowDefinition,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn set_state_machine_payload_reports_actionable_json_error() {
@@ -585,5 +655,198 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("invalid --input-json payload"));
         assert!(message.contains("workflow agent-runtime set --help"));
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_builds_task_dispatch_with_concrete_workflow_ref() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "dispatch me".to_string(),
+                description: "task dispatch builder test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let dispatch = resolve_workflow_run_dispatch(
+            hub,
+            "/tmp/unused",
+            Some(task.id.clone()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("dispatch should resolve");
+
+        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(
+            dispatch.workflow_ref,
+            orchestrator_core::workflow_ref_for_task(&task)
+        );
+        assert_eq!(dispatch.trigger_source, "manual-cli-run");
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_uses_requirement_workflow_default() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.workflows.push(WorkflowDefinition {
+            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
+            name: "Requirement Task Generation".to_string(),
+            description: "test workflow".to_string(),
+            phases: vec!["requirements".to_string().into()],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        write_workflow_config(temp.path(), &workflow_config).expect("write config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
+            .expect("write runtime config");
+
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = chrono::Utc::now();
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-39".to_string(),
+                title: "Dispatch requirement".to_string(),
+                description: "requirement dispatch builder test".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: vec!["starts workflow".to_string()],
+                priority: RequirementPriority::Must,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("requirement should be created");
+
+        let dispatch = resolve_workflow_run_dispatch(
+            hub,
+            temp.path().to_string_lossy().as_ref(),
+            None,
+            Some("REQ-39".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("dispatch should resolve");
+
+        assert_eq!(dispatch.subject_id(), "REQ-39");
+        assert_eq!(
+            dispatch.workflow_ref,
+            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
+        );
+        assert_eq!(dispatch.trigger_source, "manual-cli-run");
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_from_input_accepts_legacy_workflow_run_input() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "legacy input".to_string(),
+                description: "legacy workflow run input should still work".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let dispatch = resolve_workflow_run_dispatch_from_input(
+            hub,
+            "/tmp/unused",
+            WorkflowRunInput::for_task(task.id.clone(), None),
+        )
+        .await
+        .expect("legacy input should resolve");
+
+        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(
+            dispatch.workflow_ref,
+            orchestrator_core::workflow_ref_for_task(&task)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_from_input_preserves_subject_input() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "dispatch input".to_string(),
+                description: "workflow run input should preserve dispatch input".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let dispatch = resolve_workflow_run_dispatch_from_input(
+            hub,
+            "/tmp/unused",
+            WorkflowRunInput::for_task(task.id, None)
+                .with_input(Some(serde_json::json!({"scope":"req-39"}))),
+        )
+        .await
+        .expect("dispatch should resolve");
+
+        assert_eq!(dispatch.input, Some(serde_json::json!({"scope":"req-39"})));
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_from_raw_input_accepts_legacy_task_payload() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "legacy raw input".to_string(),
+                description: "legacy workflow run payload should be upgraded".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let raw = format!(
+            "{{\"task_id\":\"{}\",\"input_json\":\"{{\\\"k\\\":\\\"v\\\"}}\"}}",
+            task.id
+        );
+        let dispatch = resolve_workflow_run_dispatch_from_raw_input(hub, "/tmp/unused", &raw)
+            .await
+            .expect("legacy raw payload should resolve");
+
+        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(dispatch.input, Some(serde_json::json!({"k":"v"})));
     }
 }

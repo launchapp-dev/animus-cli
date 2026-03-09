@@ -1490,6 +1490,8 @@ pub struct OrchestratorWorkflow {
     pub workflow_ref: Option<String>,
     #[serde(default = "default_workflow_subject")]
     pub subject: WorkflowSubject,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
     pub status: WorkflowStatus,
     pub current_phase_index: usize,
     #[serde(default)]

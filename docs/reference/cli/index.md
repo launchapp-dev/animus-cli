@@ -1,6 +1,6 @@
-# AO CLI — Complete Command Surface Map
+# CLI Command Surface
 
-> Auto-generated reference of every `ao` command, subcommand, and key flags.
+Complete reference of every `ao` command, subcommand, and key flag. This tree is the authoritative map of the CLI surface area. For global flags that apply to all commands, see [Global Flags](global-flags.md). For exit code semantics, see [Exit Codes](exit-codes.md).
 
 ## Global Flags
 

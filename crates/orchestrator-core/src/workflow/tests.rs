@@ -17,6 +17,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         subject: crate::types::WorkflowSubject::Task {
             id: "TASK-1".to_string(),
         },
+        input: None,
         status,
         current_phase_index: 0,
         phases: vec![WorkflowPhaseExecution {

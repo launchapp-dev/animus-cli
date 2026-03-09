@@ -60,6 +60,11 @@ pub(crate) async fn handle_workflow_execute(
         title: args.title,
         description: args.description,
         workflow_ref: args.workflow_ref,
+        input: args
+            .input_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?,
         model: args.model,
         tool: args.tool,
         phase_timeout_secs: args.phase_timeout_secs,

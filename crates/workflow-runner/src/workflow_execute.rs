@@ -8,12 +8,13 @@ use tokio::process::Command;
 
 use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config, project_requirement_workflow_status,
+    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
+    project_requirement_workflow_status,
     providers::{BuiltinGitProvider, GitProvider},
     register_workflow_runner_pid,
     services::ServiceHub,
     unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow,
-    PhaseDecisionVerdict, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
+    PhaseDecisionVerdict, WorkflowEvent, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
 };
 
 use crate::executor::{
@@ -46,6 +47,7 @@ pub struct WorkflowExecuteParams {
     pub title: Option<String>,
     pub description: Option<String>,
     pub workflow_ref: Option<String>,
+    pub input: Option<Value>,
     pub model: Option<String>,
     pub tool: Option<String>,
     pub phase_timeout_secs: Option<u64>,
@@ -97,6 +99,51 @@ impl Drop for WorkflowRunnerPidGuard {
     }
 }
 
+struct WorkflowDispatchInputGuard {
+    dispatch_input_original: Option<String>,
+    schedule_input_original: Option<String>,
+}
+
+impl WorkflowDispatchInputGuard {
+    fn install(workflow: &OrchestratorWorkflow) -> Self {
+        let dispatch_input_original = std::env::var("AO_DISPATCH_INPUT").ok();
+        let schedule_input_original = std::env::var("AO_SCHEDULE_INPUT").ok();
+
+        match &workflow.input {
+            Some(input) => {
+                std::env::set_var("AO_DISPATCH_INPUT", input.to_string());
+                if workflow.subject.id().starts_with("schedule:") {
+                    std::env::set_var("AO_SCHEDULE_INPUT", input.to_string());
+                } else {
+                    std::env::remove_var("AO_SCHEDULE_INPUT");
+                }
+            }
+            None => {
+                std::env::remove_var("AO_DISPATCH_INPUT");
+                std::env::remove_var("AO_SCHEDULE_INPUT");
+            }
+        }
+
+        Self {
+            dispatch_input_original,
+            schedule_input_original,
+        }
+    }
+}
+
+impl Drop for WorkflowDispatchInputGuard {
+    fn drop(&mut self) {
+        match &self.dispatch_input_original {
+            Some(value) => std::env::set_var("AO_DISPATCH_INPUT", value),
+            None => std::env::remove_var("AO_DISPATCH_INPUT"),
+        }
+        match &self.schedule_input_original {
+            Some(value) => std::env::set_var("AO_SCHEDULE_INPUT", value),
+            None => std::env::remove_var("AO_SCHEDULE_INPUT"),
+        }
+    }
+}
+
 pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
     let stream_level = params.stream_level.as_deref().unwrap_or("quiet");
     std::env::set_var("AO_STREAM_PHASE_OUTPUT", stream_level);
@@ -134,6 +181,7 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
     };
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(&params.project_root, &workflow.id)
         .context("failed to register active workflow execution")?;
+    let _dispatch_input_guard = WorkflowDispatchInputGuard::install(&workflow);
 
     let mut subject_context = resolve_execution_subject_context(
         hub.clone(),
@@ -458,10 +506,18 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         continue;
                     }
                     PhaseExecutionOutcome::NeedsResearch { reason } => {
-                        workflow = hub
-                            .workflows()
-                            .request_research(&workflow.id, reason.clone())
-                            .await?;
+                        let outcome = dispatch_workflow_event(
+                            hub.clone(),
+                            &params.project_root,
+                            WorkflowEvent::ResearchRequested {
+                                workflow_id: workflow.id.clone(),
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await?;
+                        workflow = outcome.workflow.ok_or_else(|| {
+                            anyhow!("workflow '{}' not found for research request", workflow.id)
+                        })?;
                         reported_workflow_status = workflow.status;
                         phases_to_run = workflow
                             .phases
@@ -485,7 +541,17 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         continue;
                     }
                     PhaseExecutionOutcome::ManualPending { .. } => {
-                        workflow = hub.workflows().pause(&workflow.id).await?;
+                        let outcome = dispatch_workflow_event(
+                            hub.clone(),
+                            &params.project_root,
+                            WorkflowEvent::Pause {
+                                workflow_id: workflow.id.clone(),
+                            },
+                        )
+                        .await?;
+                        workflow = outcome.workflow.ok_or_else(|| {
+                            anyhow!("workflow '{}' not found for manual pause", workflow.id)
+                        })?;
                         reported_workflow_status = workflow.status;
                         emit(PhaseEvent::Completed {
                             phase_id: &phase_id,
@@ -681,16 +747,19 @@ fn validate_existing_workflow_subject(
 fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
     let workflow_ref = params.workflow_ref.clone();
     match (&params.task_id, &params.requirement_id, &params.title) {
-        (Some(task_id), _, _) => Ok(WorkflowRunInput::for_task(task_id.clone(), workflow_ref)),
+        (Some(task_id), _, _) => Ok(WorkflowRunInput::for_task(task_id.clone(), workflow_ref)
+            .with_input(params.input.clone())),
         (None, Some(req_id), _) => Ok(WorkflowRunInput::for_requirement(
             req_id.clone(),
             workflow_ref,
-        )),
+        )
+        .with_input(params.input.clone())),
         (None, None, Some(title)) => Ok(WorkflowRunInput::for_custom(
             title.clone(),
             params.description.clone().unwrap_or_default(),
             workflow_ref,
-        )),
+        )
+        .with_input(params.input.clone())),
         _ => Err(anyhow!(
             "one of --task-id, --requirement-id, or --title must be provided"
         )),
@@ -918,6 +987,7 @@ mod requirement_workflow_tests {
         definition.manual = Some(PhaseManualDefinition {
             instructions: "Wait for approval".to_string(),
             approval_note_required: false,
+            timeout_secs: None,
         });
         runtime.phases.insert(current_phase.clone(), definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
@@ -930,6 +1000,7 @@ mod requirement_workflow_tests {
             title: None,
             description: None,
             workflow_ref: None,
+            input: None,
             model: None,
             tool: None,
             phase_timeout_secs: None,

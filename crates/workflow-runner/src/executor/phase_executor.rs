@@ -1264,7 +1264,17 @@ fn build_command_template_vars(context: &CommandExecutionContext<'_>) -> HashMap
         }
     }
 
-    if let Ok(schedule_input) = std::env::var("AO_SCHEDULE_INPUT") {
+    if let Some(dispatch_input) = std::env::var("AO_DISPATCH_INPUT")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        vars.entry("dispatch_input".to_string())
+            .or_insert(dispatch_input.clone());
+        if context.subject_id.starts_with("schedule:") {
+            vars.entry("schedule_input".to_string())
+                .or_insert(dispatch_input);
+        }
+    } else if let Ok(schedule_input) = std::env::var("AO_SCHEDULE_INPUT") {
         if !schedule_input.is_empty() {
             vars.entry("schedule_input".to_string())
                 .or_insert(schedule_input.clone());
@@ -1442,6 +1452,32 @@ mod command_phase_tests {
     use super::*;
     use std::fs;
 
+    struct EnvVarGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: impl Into<String>, value: Option<&str>) -> Self {
+            let key = key.into();
+            let original = std::env::var(&key).ok();
+            match value {
+                Some(value) => std::env::set_var(&key, value),
+                None => std::env::remove_var(&key),
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(&self.key, value),
+                None => std::env::remove_var(&self.key),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn command_phase_expands_context_vars_in_args_env_and_cwd() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1536,6 +1572,46 @@ mod command_phase_tests {
             fs::canonicalize(stdout_lines[5]).expect("canonicalize reported cwd"),
             fs::canonicalize(&command_cwd).expect("canonicalize expected cwd")
         );
+    }
+
+    #[test]
+    fn command_template_vars_prefer_dispatch_input_and_alias_schedule_subjects() {
+        let _dispatch_input =
+            EnvVarGuard::set("AO_DISPATCH_INPUT", Some("{\"source\":\"dispatch\"}"));
+        let _schedule_input =
+            EnvVarGuard::set("AO_SCHEDULE_INPUT", Some("{\"source\":\"schedule\"}"));
+
+        let schedule_context = CommandExecutionContext {
+            project_root: "/tmp/project",
+            execution_cwd: "/tmp/project/task-root",
+            workflow_id: "wf-123",
+            phase_id: "implementation",
+            workflow_ref: "ops",
+            subject_id: "schedule:nightly",
+            subject_title: "Nightly",
+            subject_description: "Nightly schedule",
+            pipeline_vars: None,
+        };
+        let schedule_vars = build_command_template_vars(&schedule_context);
+        assert_eq!(
+            schedule_vars.get("dispatch_input").map(String::as_str),
+            Some("{\"source\":\"dispatch\"}")
+        );
+        assert_eq!(
+            schedule_vars.get("schedule_input").map(String::as_str),
+            Some("{\"source\":\"dispatch\"}")
+        );
+
+        let custom_context = CommandExecutionContext {
+            subject_id: "custom:ops",
+            ..schedule_context
+        };
+        let custom_vars = build_command_template_vars(&custom_context);
+        assert_eq!(
+            custom_vars.get("dispatch_input").map(String::as_str),
+            Some("{\"source\":\"dispatch\"}")
+        );
+        assert!(!custom_vars.contains_key("schedule_input"));
     }
 }
 

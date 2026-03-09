@@ -17,10 +17,11 @@ pub fn build_runner_command_from_dispatch(
         protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
             cmd.arg("--title").arg(title);
             cmd.arg("--description").arg(description);
-            if let Some(input) = &dispatch.input {
-                cmd.env("AO_SCHEDULE_INPUT", input.to_string());
-            }
         }
+    }
+
+    if let Some(input) = &dispatch.input {
+        cmd.arg("--input-json").arg(input.to_string());
     }
 
     cmd.arg("--workflow-ref")
@@ -39,7 +40,7 @@ mod tests {
     use super::build_runner_command_from_dispatch;
 
     #[test]
-    fn runner_command_uses_subject_and_workflow_ref_from_dispatch() {
+    fn runner_command_uses_subject_workflow_ref_and_input_from_dispatch() {
         let dispatch = SubjectDispatch::for_custom(
             "schedule:nightly",
             "nightly dispatch",
@@ -63,6 +64,8 @@ mod tests {
                 "schedule:nightly",
                 "--description",
                 "nightly dispatch",
+                "--input-json",
+                "{\"nightly\":true}",
                 "--workflow-ref",
                 "ops",
                 "--project-root",

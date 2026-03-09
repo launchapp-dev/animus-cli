@@ -158,6 +158,7 @@ mod tests {
             current_phase: None,
             phases: vec![],
             workflow_ref: None,
+            input: None,
             current_phase_index: 0,
             machine_state: WorkflowMachineState::Idle,
             started_at: Utc::now(),

@@ -51,6 +51,7 @@ where
     let snapshot = hooks.capture_snapshot(root).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
     let mut execution_outcome = ProjectTickExecutionOutcome::default();
+    let _ = hooks.reconcile_manual_timeouts(root).await?;
     let (executed_workflow_phases, failed_workflow_phases) =
         hooks.reconcile_completed_processes(root).await?;
     execution_outcome.executed_workflow_phases = executed_workflow_phases;

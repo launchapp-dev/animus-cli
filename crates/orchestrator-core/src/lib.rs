@@ -18,6 +18,7 @@ pub mod task_gate;
 pub mod types;
 pub mod workflow;
 pub mod workflow_config;
+pub mod workflow_events;
 pub mod workflow_runner_registry;
 
 pub use agent_runtime_config::{
@@ -131,6 +132,7 @@ pub use workflow_config::{
     WorkflowSchedule, WorkflowVariable, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
     WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
+pub use workflow_events::{dispatch_workflow_event, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{
     active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid,
 };

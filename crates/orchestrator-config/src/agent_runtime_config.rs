@@ -306,6 +306,8 @@ pub struct PhaseManualDefinition {
     pub instructions: String,
     #[serde(default)]
     pub approval_note_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1443,6 +1445,15 @@ fn validate_phase_definition(
                 ));
             }
 
+            if let Some(timeout_secs) = manual.timeout_secs {
+                if timeout_secs == 0 {
+                    return Err(anyhow!(
+                        "phases['{}'].manual.timeout_secs must be greater than 0",
+                        phase_id
+                    ));
+                }
+            }
+
             if definition.agent_id.is_some() {
                 return Err(anyhow!(
                     "phases['{}'] mode 'manual' must not include agent_id",
@@ -2196,6 +2207,7 @@ mod tests {
                 manual: Some(PhaseManualDefinition {
                     instructions: "Wait for approval".to_string(),
                     approval_note_required: false,
+                    timeout_secs: None,
                 }),
             },
         );

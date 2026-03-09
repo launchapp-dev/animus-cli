@@ -103,7 +103,13 @@ pub fn build_phase_prompt(
         }
     }
 
-    if let Ok(schedule_input) = std::env::var("AO_SCHEDULE_INPUT") {
+    if let Some(dispatch_input) = std::env::var("AO_DISPATCH_INPUT")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        phase_prompt.push_str("\n\nDispatch input:\n");
+        phase_prompt.push_str(&dispatch_input);
+    } else if let Ok(schedule_input) = std::env::var("AO_SCHEDULE_INPUT") {
         if !schedule_input.is_empty() {
             phase_prompt.push_str("\n\nSchedule trigger input:\n");
             phase_prompt.push_str(&schedule_input);

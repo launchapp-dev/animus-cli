@@ -35,5 +35,10 @@ crates/orchestrator-web-server/web-ui/.smoke-artifacts/
 .ao/*
 !.ao/workflows/
 
+# Node / docs site
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # Claude Code worktrees
 .claude/worktrees/

@@ -19,6 +19,8 @@ impl Default for DispatchQueueEntryStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchQueueEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<String>,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch: Option<SubjectDispatch>,
@@ -41,6 +43,7 @@ pub struct DispatchQueueState {
 impl DispatchQueueEntry {
     pub fn from_dispatch(dispatch: SubjectDispatch) -> Self {
         Self {
+            subject_id: Some(dispatch.subject_id().to_string()),
             task_id: dispatch.task_id().unwrap_or_default().to_string(),
             dispatch: Some(dispatch),
             status: DispatchQueueEntryStatus::Pending,
@@ -51,10 +54,18 @@ impl DispatchQueueEntry {
     }
 
     pub fn subject_id(&self) -> &str {
-        self.dispatch
-            .as_ref()
-            .map(|dispatch| dispatch.subject_id())
-            .unwrap_or(self.task_id.as_str())
+        if let Some(subject_id) = self
+            .subject_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return subject_id;
+        }
+        if let Some(dispatch) = &self.dispatch {
+            return dispatch.subject_id();
+        }
+        self.task_id.as_str()
     }
 
     pub fn task_id(&self) -> Option<&str> {

@@ -1,14 +1,15 @@
 use super::*;
 #[cfg(test)]
 use crate::services::runtime::workflow_mutation_surface::daemon_workflow_assignment;
-use crate::services::runtime::workflow_mutation_surface::start_task_workflow_for_dispatch;
+use crate::services::runtime::workflow_mutation_surface::start_workflow_for_dispatch;
 use orchestrator_core::{
     dependency_gate_issues_for_task, should_skip_task_dispatch, workflow_ref_for_task,
 };
 pub use orchestrator_daemon_runtime::{
-    active_workflow_subject_ids, active_workflow_task_ids, is_terminally_completed_workflow,
-    load_dispatch_queue_state, mark_dispatch_queue_entry_assigned, plan_ready_dispatch,
-    DispatchCandidate, DispatchQueueEntryStatus, DispatchQueueState, DispatchSelectionSource,
+    active_workflow_subject_ids, active_workflow_task_ids, execute_dispatch_plan_via_runner,
+    is_terminally_completed_workflow, load_dispatch_queue_state,
+    mark_dispatch_queue_entry_assigned, plan_ready_dispatch, DispatchCandidate, DispatchNotice,
+    DispatchNoticeSink, DispatchQueueEntryStatus, DispatchQueueState, DispatchSelectionSource,
     DispatchWorkflowStart, DispatchWorkflowStartSummary, SubjectDispatch,
 };
 #[cfg(test)]
@@ -73,47 +74,41 @@ pub async fn run_ready_task_workflows_for_project(
             break;
         }
 
-        let Some(task_id) = planned_start.task_id() else {
-            continue;
-        };
-        let Some(task) = task_lookup.get(task_id).cloned() else {
-            continue;
-        };
-        let dependency_issues =
-            dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-        if !dependency_issues.is_empty() {
-            eprintln!(
-                "{}: skipping queued task dispatch for {} until dependency gates clear",
-                protocol::ACTOR_DAEMON,
-                task.id
-            );
-            continue;
+        if let Some(task_id) = planned_start.task_id() {
+            let Some(task) = task_lookup.get(task_id).cloned() else {
+                continue;
+            };
+            let dependency_issues =
+                dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+            if !dependency_issues.is_empty() {
+                eprintln!(
+                    "{}: skipping queued task dispatch for {} until dependency gates clear",
+                    protocol::ACTOR_DAEMON,
+                    task.id
+                );
+                continue;
+            }
         }
 
-        let workflow = start_task_workflow_for_dispatch(
-            hub.clone(),
-            project_root,
-            &task,
-            &planned_start.dispatch.workflow_ref,
-        )
-        .await?;
+        let workflow =
+            start_workflow_for_dispatch(hub.clone(), project_root, &planned_start.dispatch).await?;
         if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
             if let Err(error) = mark_dispatch_queue_entry_assigned(
                 project_root,
                 &planned_start.dispatch,
-                workflow.id.as_str(),
+                Some(workflow.id.as_str()),
             ) {
                 eprintln!(
                     "{}: failed to mark dispatch queue entry assigned for task {}: {}",
                     protocol::ACTOR_DAEMON,
-                    task.id,
+                    planned_start.dispatch.subject_id(),
                     error
                 );
             }
         }
         started_workflows.push(DispatchWorkflowStart {
             dispatch: planned_start.dispatch.clone(),
-            workflow_id: workflow.id.clone(),
+            workflow_id: Some(workflow.id.clone()),
             selection_source: planned_start.selection_source,
         });
     }
@@ -162,10 +157,10 @@ pub async fn dispatch_ready_tasks_via_runner(
         &prepared.fallback_candidates,
         &prepared.completed_subject_ids,
     );
-    let mut started_workflows = Vec::new();
+    let mut planned_starts = Vec::new();
 
     for planned_start in plan.ordered_starts {
-        if started_workflows.len() >= limit {
+        if planned_starts.len() >= limit {
             break;
         }
 
@@ -184,43 +179,43 @@ pub async fn dispatch_ready_tasks_via_runner(
             }
         }
 
-        match process_manager.spawn_workflow_runner(&planned_start.dispatch, root) {
-            Ok(_) => {
-                if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
-                    if let Err(error) = mark_dispatch_queue_entry_assigned(
-                        root,
-                        &planned_start.dispatch,
-                        planned_start.dispatch.subject_id(),
-                    ) {
-                        eprintln!(
-                            "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
-                            protocol::ACTOR_DAEMON,
-                            planned_start.dispatch.subject_id(),
-                            error
-                        );
-                    }
-                }
-                started_workflows.push(DispatchWorkflowStart {
-                    dispatch: planned_start.dispatch.clone(),
-                    workflow_id: planned_start.dispatch.subject_id().to_string(),
-                    selection_source: planned_start.selection_source,
-                });
-            }
-            Err(error) => {
+        planned_starts.push(planned_start);
+    }
+
+    let mut notice_sink = CliDispatchNoticeSink;
+    Ok(execute_dispatch_plan_via_runner(
+        root,
+        process_manager,
+        &planned_starts,
+        limit,
+        &mut notice_sink,
+    ))
+}
+
+struct CliDispatchNoticeSink;
+
+impl DispatchNoticeSink for CliDispatchNoticeSink {
+    fn notice(&mut self, notice: DispatchNotice) {
+        match notice {
+            DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
                 eprintln!(
-                    "{}: failed to start workflow runner for subject {}: {}",
+                    "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
                     protocol::ACTOR_DAEMON,
-                    planned_start.dispatch.subject_id(),
+                    dispatch.subject_id(),
                     error
                 );
             }
+            DispatchNotice::Failed { dispatch, error } => {
+                eprintln!(
+                    "{}: failed to start workflow runner for subject {}: {}",
+                    protocol::ACTOR_DAEMON,
+                    dispatch.subject_id(),
+                    error
+                );
+            }
+            _ => {}
         }
     }
-
-    Ok(DispatchWorkflowStartSummary {
-        started: started_workflows.len(),
-        started_workflows,
-    })
 }
 
 struct PreparedReadyDispatchCandidates {
@@ -237,10 +232,10 @@ fn prepare_ready_dispatch_candidates(
     requested_at: chrono::DateTime<chrono::Utc>,
 ) -> PreparedReadyDispatchCandidates {
     let active_task_ids = active_workflow_task_ids(workflows);
-    let completed_task_ids: std::collections::HashSet<String> = workflows
+    let completed_subject_id_set: std::collections::HashSet<String> = workflows
         .iter()
         .filter(|workflow| is_terminally_completed_workflow(workflow))
-        .map(|workflow| workflow.task_id.clone())
+        .map(|workflow| workflow.subject.id().to_string())
         .collect();
     let task_lookup: std::collections::HashMap<&str, &orchestrator_core::OrchestratorTask> =
         tasks.iter().map(|task| (task.id.as_str(), task)).collect();
@@ -292,9 +287,9 @@ fn prepare_ready_dispatch_candidates(
     }
 
     for task in tasks {
-        if should_include_completed_task(
+        if should_include_completed_subject(
             task,
-            &completed_task_ids,
+            &completed_subject_id_set,
             &mut completed_subject_ids,
             &mut seen_completed_ids,
         ) {
@@ -357,13 +352,13 @@ fn is_dispatch_eligible(
     true
 }
 
-fn should_include_completed_task(
+fn should_include_completed_subject(
     task: &orchestrator_core::OrchestratorTask,
-    completed_task_ids: &std::collections::HashSet<String>,
+    completed_subject_ids: &std::collections::HashSet<String>,
     completed_targets: &mut Vec<String>,
     seen_completed_ids: &mut std::collections::HashSet<String>,
 ) -> bool {
-    if !completed_task_ids.contains(&task.id) {
+    if !completed_subject_ids.contains(&task.id) {
         return false;
     }
     if seen_completed_ids.insert(task.id.clone()) {

@@ -15,6 +15,10 @@ pub trait ProjectTickHooks {
 
     async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)>;
 
+    async fn reconcile_manual_timeouts(&mut self, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         root: &str,
