@@ -10,8 +10,8 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
     ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
-    workflow_ref_for_task, WorkflowResumeManager, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
-    STANDARD_WORKFLOW_REF,
+    workflow_ref_for_task, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -63,6 +63,47 @@ async fn resolve_workflow_run_dispatch(
         _ => Err(anyhow!(
             "--task-id, --requirement-id, and --title are mutually exclusive"
         )),
+    }
+}
+
+async fn resolve_workflow_run_dispatch_from_input(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    input: WorkflowRunInput,
+) -> Result<protocol::SubjectDispatch> {
+    match input.subject {
+        WorkflowSubject::Task { id } => {
+            let task = hub.tasks().get(&id).await?;
+            Ok(protocol::SubjectDispatch::for_task_with_metadata(
+                task.id.clone(),
+                input
+                    .workflow_ref
+                    .unwrap_or_else(|| workflow_ref_for_task(&task)),
+                "manual-cli-run",
+                Utc::now(),
+            ))
+        }
+        WorkflowSubject::Requirement { id } => {
+            hub.planning().get_requirement(&id).await?;
+            Ok(protocol::SubjectDispatch::for_requirement(
+                id,
+                input
+                    .workflow_ref
+                    .unwrap_or(resolve_requirement_workflow_ref(project_root)?),
+                "manual-cli-run",
+            ))
+        }
+        WorkflowSubject::Custom { title, description } => {
+            Ok(protocol::SubjectDispatch::for_custom(
+                title,
+                description,
+                input
+                    .workflow_ref
+                    .unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+                None,
+                "manual-cli-run",
+            ))
+        }
     }
 }
 
@@ -146,11 +187,18 @@ pub(crate) async fn handle_workflow(
         },
         WorkflowCommand::Run(args) => {
             let dispatch = match args.input_json {
-                Some(raw) => serde_json::from_str::<protocol::SubjectDispatch>(&raw).with_context(
-                    || {
-                        "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"
-                    },
-                )?,
+                Some(raw) => {
+                    if let Ok(dispatch) = serde_json::from_str::<protocol::SubjectDispatch>(&raw) {
+                        dispatch
+                    } else {
+                        let input = serde_json::from_str::<WorkflowRunInput>(&raw)
+                            .with_context(|| {
+                                "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"
+                            })?;
+                        resolve_workflow_run_dispatch_from_input(hub.clone(), project_root, input)
+                            .await?
+                    }
+                }
                 None => {
                     resolve_workflow_run_dispatch(
                         hub.clone(),
@@ -545,5 +593,38 @@ mod tests {
             REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
         );
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
+    }
+
+    #[tokio::test]
+    async fn resolve_workflow_run_dispatch_from_input_accepts_legacy_workflow_run_input() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "legacy input".to_string(),
+                description: "legacy workflow run input should still work".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let dispatch = resolve_workflow_run_dispatch_from_input(
+            hub,
+            "/tmp/unused",
+            WorkflowRunInput::for_task(task.id.clone(), None),
+        )
+        .await
+        .expect("legacy input should resolve");
+
+        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(
+            dispatch.workflow_ref,
+            orchestrator_core::workflow_ref_for_task(&task)
+        );
     }
 }

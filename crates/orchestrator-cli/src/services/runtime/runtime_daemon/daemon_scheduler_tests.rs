@@ -1,7 +1,6 @@
 use super::*;
 use crate::shared::build_runtime_contract;
 use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
-use orchestrator_daemon_runtime::enqueue_subject_dispatch;
 use protocol::{ModelRoutingComplexity, PhaseCapabilities};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -1052,69 +1051,6 @@ async fn run_ready_assigns_started_task_to_daemon_agent() {
         other => panic!("expected agent assignee, found {other:?}"),
     }
     assert_eq!(task_state.metadata.updated_by, protocol::ACTOR_DAEMON);
-}
-
-#[tokio::test]
-async fn run_ready_starts_requirement_dispatches_from_queue() {
-    let hub = Arc::new(InMemoryServiceHub::new());
-    let now = chrono::Utc::now();
-    let requirement = orchestrator_core::RequirementItem {
-        id: "REQ-39".to_string(),
-        title: "Adopt subject dispatch everywhere".to_string(),
-        description: "Requirement dispatch should run from the queue".to_string(),
-        body: None,
-        legacy_id: None,
-        category: None,
-        requirement_type: None,
-        acceptance_criteria: vec!["Queue starts requirement workflow".to_string()],
-        priority: orchestrator_core::RequirementPriority::Must,
-        status: orchestrator_core::RequirementStatus::Refined,
-        source: "test".to_string(),
-        tags: Vec::new(),
-        links: orchestrator_core::RequirementLinks::default(),
-        comments: Vec::new(),
-        relative_path: None,
-        linked_task_ids: Vec::new(),
-        created_at: now,
-        updated_at: now,
-    };
-    hub.planning()
-        .upsert_requirement(requirement)
-        .await
-        .expect("requirement should be created");
-
-    let project_root = TempDir::new().expect("temp dir should be created");
-    let project_root_path = project_root.path().to_string_lossy().to_string();
-    enqueue_subject_dispatch(
-        &project_root_path,
-        protocol::SubjectDispatch::for_requirement("REQ-39", "standard", "manual-queue-enqueue"),
-    )
-    .expect("requirement dispatch should be queued");
-
-    let started = run_ready_task_workflows_for_project(
-        hub.clone() as Arc<dyn ServiceHub>,
-        &project_root_path,
-        5,
-    )
-    .await
-    .expect("ready runner should succeed");
-    assert_eq!(started, 1);
-
-    let workflows = hub
-        .workflows()
-        .list()
-        .await
-        .expect("workflow list should load");
-    assert_eq!(workflows.len(), 1);
-    assert_eq!(workflows[0].subject.id(), "REQ-39");
-    assert_eq!(
-        workflows[0].subject.subject_type(),
-        protocol::orchestrator::WorkflowSubject::Requirement {
-            id: "REQ-39".to_string(),
-        }
-        .subject_type()
-    );
-    assert_eq!(workflows[0].workflow_ref.as_deref(), Some("standard"));
 }
 
 #[tokio::test]

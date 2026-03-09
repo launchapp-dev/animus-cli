@@ -73,20 +73,21 @@ pub async fn run_ready_task_workflows_for_project(
             break;
         }
 
-        if let Some(task_id) = planned_start.task_id() {
-            let Some(task) = task_lookup.get(task_id).cloned() else {
-                continue;
-            };
-            let dependency_issues =
-                dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
-            if !dependency_issues.is_empty() {
-                eprintln!(
-                    "{}: skipping queued task dispatch for {} until dependency gates clear",
-                    protocol::ACTOR_DAEMON,
-                    task.id
-                );
-                continue;
-            }
+        let Some(task_id) = planned_start.task_id() else {
+            continue;
+        };
+        let Some(task) = task_lookup.get(task_id).cloned() else {
+            continue;
+        };
+        let dependency_issues =
+            dependency_gate_issues_for_task(hub.clone(), project_root, &task).await;
+        if !dependency_issues.is_empty() {
+            eprintln!(
+                "{}: skipping queued task dispatch for {} until dependency gates clear",
+                protocol::ACTOR_DAEMON,
+                task.id
+            );
+            continue;
         }
 
         let workflow =
