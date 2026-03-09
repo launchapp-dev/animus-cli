@@ -311,6 +311,14 @@ struct DaemonStartInput {
     #[serde(default)]
     auto_run_ready: Option<bool>,
     #[serde(default)]
+    auto_merge: Option<bool>,
+    #[serde(default)]
+    auto_pr: Option<bool>,
+    #[serde(default)]
+    auto_commit_before_merge: Option<bool>,
+    #[serde(default)]
+    auto_prune_worktrees_after_merge: Option<bool>,
+    #[serde(default)]
     startup_cleanup: Option<bool>,
     #[serde(default)]
     resume_interrupted: Option<bool>,
@@ -3073,6 +3081,18 @@ fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_flag(&mut args, "--autonomous", input.autonomous);
     push_bool_set(&mut args, "--ai-task-generation", input.ai_task_generation);
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
+    push_bool_set(&mut args, "--auto-merge", input.auto_merge);
+    push_bool_set(&mut args, "--auto-pr", input.auto_pr);
+    push_bool_set(
+        &mut args,
+        "--auto-commit-before-merge",
+        input.auto_commit_before_merge,
+    );
+    push_bool_set(
+        &mut args,
+        "--auto-prune-worktrees-after-merge",
+        input.auto_prune_worktrees_after_merge,
+    );
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);

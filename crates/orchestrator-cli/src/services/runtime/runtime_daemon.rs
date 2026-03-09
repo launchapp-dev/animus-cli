@@ -449,6 +449,22 @@ fn spawn_autonomous_daemon_run(
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log))
         .stdin(Stdio::null());
+    if let Some(auto_merge) = args.auto_merge {
+        command.arg("--auto-merge").arg(auto_merge.to_string());
+    }
+    if let Some(auto_pr) = args.auto_pr {
+        command.arg("--auto-pr").arg(auto_pr.to_string());
+    }
+    if let Some(auto_commit_before_merge) = args.auto_commit_before_merge {
+        command
+            .arg("--auto-commit-before-merge")
+            .arg(auto_commit_before_merge.to_string());
+    }
+    if let Some(auto_prune_worktrees_after_merge) = args.auto_prune_worktrees_after_merge {
+        command
+            .arg("--auto-prune-worktrees-after-merge")
+            .arg(auto_prune_worktrees_after_merge.to_string());
+    }
     if let Some(phase_timeout_secs) = args.phase_timeout_secs {
         command
             .arg("--phase-timeout-secs")

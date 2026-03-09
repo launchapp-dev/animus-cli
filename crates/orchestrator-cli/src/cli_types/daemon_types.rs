@@ -89,6 +89,30 @@ pub(crate) struct DaemonStartArgs {
     #[arg(
         long,
         action = ArgAction::Set,
+        help = "Override auto-merge behavior for daemon runs."
+    )]
+    pub(crate) auto_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for daemon runs."
+    )]
+    pub(crate) auto_pr: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for daemon runs."
+    )]
+    pub(crate) auto_commit_before_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override automatic pruning of completed task worktrees after successful merges."
+    )]
+    pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
         default_value_t = true,
         help = "Run startup cleanup before scheduling."
     )]
@@ -177,6 +201,30 @@ pub(crate) struct DaemonRunArgs {
         help = "Automatically run ready tasks."
     )]
     pub(crate) auto_run_ready: bool,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-merge behavior for this daemon run."
+    )]
+    pub(crate) auto_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-PR behavior for this daemon run."
+    )]
+    pub(crate) auto_pr: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override auto-commit-before-merge behavior for this daemon run."
+    )]
+    pub(crate) auto_commit_before_merge: Option<bool>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Override automatic pruning of completed task worktrees after successful merges."
+    )]
+    pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
     #[arg(
         long,
         action = ArgAction::Set,
