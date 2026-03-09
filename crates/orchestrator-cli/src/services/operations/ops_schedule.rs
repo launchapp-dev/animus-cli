@@ -4,11 +4,12 @@ use crate::{not_found_error, print_ok, print_value, ScheduleCommand};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    load_schedule_state, load_workflow_config, project_schedule_completion_status,
-    project_schedule_dispatch_attempt,
+    load_schedule_state, load_workflow_config, project_schedule_dispatch_attempt,
+    project_schedule_execution_fact,
 };
 use orchestrator_daemon_runtime::{
-    build_runner_command_from_dispatch, ScheduleDispatch as RuntimeScheduleDispatch,
+    build_completion_reconciliation_plan, build_runner_command_from_dispatch, CompletedProcess,
+    RunnerEvent, ScheduleDispatch as RuntimeScheduleDispatch, SubjectDispatch,
 };
 use serde::Serialize;
 
@@ -124,14 +125,14 @@ fn fire_schedule(project_root: &str, schedule_id: &str) -> Result<()> {
         "manual-schedule-fire",
         |schedule_id, dispatch| {
             let mut cmd = build_runner_command_from_dispatch(dispatch, project_root);
-            cmd.stdout(Stdio::null()).stderr(Stdio::inherit());
+            cmd.stdout(Stdio::null()).stderr(Stdio::piped());
             let child = cmd.spawn().with_context(|| {
                 format!(
                     "failed to spawn ao-workflow-runner for schedule '{}'",
                     schedule_id
                 )
             })?;
-            spawn_completion_writeback(project_root, schedule_id, child);
+            spawn_completion_writeback(project_root, schedule_id, dispatch.clone(), child);
             Ok(())
         },
     )?;
@@ -143,18 +144,61 @@ fn fire_schedule(project_root: &str, schedule_id: &str) -> Result<()> {
 fn spawn_completion_writeback(
     project_root: &str,
     schedule_id: &str,
+    dispatch: SubjectDispatch,
     mut child: std::process::Child,
 ) {
     let root = project_root.to_string();
     let sched_id = schedule_id.to_string();
     std::thread::spawn(move || {
-        let status = match child.wait() {
-            Ok(exit) if exit.success() => "completed",
-            Ok(_) => "failed",
-            Err(_) => "failed",
+        let mut stderr_lines = Vec::new();
+        if let Some(stderr) = child.stderr.take() {
+            use std::io::BufRead as _;
+            let reader = std::io::BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                eprintln!("{line}");
+                stderr_lines.push(line);
+            }
+        }
+
+        let exit_code = child.wait().ok().and_then(|exit| exit.code());
+        let events = parse_runner_events(&stderr_lines);
+        let completed = CompletedProcess {
+            subject_id: dispatch.subject_id().to_string(),
+            task_id: dispatch.task_id().map(|value| value.to_string()),
+            workflow_id: latest_runner_workflow_id(&events),
+            workflow_ref: Some(dispatch.workflow_ref.clone()),
+            workflow_status: latest_runner_workflow_status(&events),
+            schedule_id: Some(sched_id.clone()),
+            exit_code,
+            success: exit_code == Some(0),
+            failure_reason: None,
+            events,
         };
-        project_schedule_completion_status(&root, &sched_id, status);
+        let plan = build_completion_reconciliation_plan(vec![completed]);
+        if let Some(fact) = plan.execution_facts.first() {
+            project_schedule_execution_fact(&root, fact);
+        }
     });
+}
+
+fn parse_runner_events(lines: &[String]) -> Vec<RunnerEvent> {
+    lines
+        .iter()
+        .filter_map(|line| serde_json::from_str::<RunnerEvent>(line).ok())
+        .collect()
+}
+
+fn latest_runner_workflow_id(events: &[RunnerEvent]) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| event.workflow_id.clone())
+}
+
+fn latest_runner_workflow_status(
+    events: &[RunnerEvent],
+) -> Option<orchestrator_core::WorkflowStatus> {
+    events.iter().rev().find_map(|event| event.workflow_status)
 }
 
 #[cfg(test)]

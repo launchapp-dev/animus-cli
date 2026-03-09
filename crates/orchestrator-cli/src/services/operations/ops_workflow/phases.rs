@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use orchestrator_core::{
-    register_workflow_runner_pid, services::ServiceHub, unregister_workflow_runner_pid,
+    dispatch_workflow_event, register_workflow_runner_pid, services::ServiceHub,
+    unregister_workflow_runner_pid, WorkflowEvent,
 };
 use workflow_runner::workflow_execute::{execute_workflow, WorkflowExecuteParams};
 
@@ -270,66 +271,21 @@ pub(crate) async fn approve_manual_phase(
     phase_id: &str,
     note: &str,
 ) -> Result<Value> {
-    let workflow = hub.workflows().get(workflow_id).await?;
-    let current_phase = workflow
-        .current_phase
-        .clone()
-        .or_else(|| {
-            workflow
-                .phases
-                .get(workflow.current_phase_index)
-                .map(|phase| phase.phase_id.clone())
-        })
-        .ok_or_else(|| anyhow!("workflow '{}' has no active phase", workflow_id))?;
-
-    if !current_phase.eq_ignore_ascii_case(phase_id) {
-        return Err(anyhow!(
-            "workflow '{}' active phase is '{}' (requested '{}')",
-            workflow_id,
-            current_phase,
-            phase_id
-        ));
-    }
-
-    let runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
-    let definition = runtime
-        .phase_execution(phase_id)
-        .ok_or_else(|| anyhow!("phase '{}' is not configured", phase_id))?;
-
-    if !matches!(
-        definition.mode,
-        orchestrator_core::PhaseExecutionMode::Manual
-    ) {
-        return Err(anyhow!("phase '{}' is not in manual mode", phase_id));
-    }
-
-    let manual = definition
-        .manual
-        .as_ref()
-        .ok_or_else(|| anyhow!("phase '{}' missing manual configuration", phase_id))?;
-
-    if manual.approval_note_required && note.trim().is_empty() {
-        return Err(anyhow!(
-            "phase '{}' requires a non-empty approval note",
-            phase_id
-        ));
-    }
-
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(project_root, workflow_id)?;
     let approval_timestamp = Utc::now().to_rfc3339();
-    let workflow = match workflow.status {
-        orchestrator_core::WorkflowStatus::Paused => hub.workflows().resume(workflow_id).await?,
-        orchestrator_core::WorkflowStatus::Running => workflow,
-        status => {
-            return Err(anyhow!(
-                "workflow '{}' is not waiting for manual approval (status: {})",
-                workflow_id,
-                format!("{status:?}").to_ascii_lowercase()
-            ));
-        }
-    };
-
-    let updated = hub.workflows().complete_current_phase(workflow_id).await?;
+    let outcome = dispatch_workflow_event(
+        hub.clone(),
+        project_root,
+        WorkflowEvent::ApproveManualPhase {
+            workflow_id: workflow_id.to_string(),
+            phase_id: phase_id.to_string(),
+            note: Some(note.to_string()),
+        },
+    )
+    .await?;
+    let updated = outcome
+        .workflow
+        .ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
 
     let mut store = read_manual_approvals(project_root)?;
     store.approvals.push(ManualApprovalRecord {
@@ -342,7 +298,7 @@ pub(crate) async fn approve_manual_phase(
     write_manual_approvals(project_root, &store)?;
 
     let mut continued_execution = None;
-    if updated.status == orchestrator_core::WorkflowStatus::Running {
+    if outcome.requires_continuation {
         let continuation = match execute_workflow(WorkflowExecuteParams {
             project_root: project_root.to_string(),
             workflow_id: Some(updated.id.clone()),
@@ -407,7 +363,7 @@ pub(crate) async fn approve_manual_phase(
         "workflow-phase-manual-approved",
         serde_json::json!({
             "workflow_id": workflow_id,
-            "task_id": workflow.task_id,
+            "task_id": updated.task_id,
             "phase_id": phase_id,
             "note": note,
         }),
@@ -424,9 +380,63 @@ pub(crate) async fn approve_manual_phase(
     }))
 }
 
+pub(crate) async fn reject_manual_phase(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    note: &str,
+) -> Result<Value> {
+    let outcome = dispatch_workflow_event(
+        hub.clone(),
+        project_root,
+        WorkflowEvent::RejectManualPhase {
+            workflow_id: workflow_id.to_string(),
+            phase_id: phase_id.to_string(),
+            note: Some(note.to_string()),
+        },
+    )
+    .await?;
+    let updated = outcome
+        .workflow
+        .ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
+
+    project_terminal_workflow_result(
+        hub.clone(),
+        project_root,
+        updated.subject.id(),
+        Some(updated.task_id.as_str()),
+        updated.workflow_ref.as_deref(),
+        Some(updated.id.as_str()),
+        updated.status,
+        updated.failure_reason.as_deref(),
+    )
+    .await;
+
+    emit_daemon_event(
+        project_root,
+        "workflow-phase-manual-rejected",
+        serde_json::json!({
+            "workflow_id": workflow_id,
+            "task_id": updated.task_id,
+            "phase_id": phase_id,
+            "note": note,
+        }),
+    )?;
+
+    Ok(serde_json::json!({
+        "workflow": updated,
+        "manual_rejection": {
+            "phase_id": phase_id,
+            "note": note,
+            "rejected_at": Utc::now().to_rfc3339(),
+        },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::approve_manual_phase;
+    use super::{approve_manual_phase, reject_manual_phase};
     use orchestrator_core::{
         load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config,
         FileServiceHub, PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput,
@@ -540,6 +550,7 @@ mod tests {
         current_definition.manual = Some(PhaseManualDefinition {
             instructions: "Approve this step".to_string(),
             approval_note_required: false,
+            timeout_secs: None,
         });
         runtime
             .phases
@@ -555,6 +566,7 @@ mod tests {
         next_definition.manual = Some(PhaseManualDefinition {
             instructions: "Approve the resumed phase".to_string(),
             approval_note_required: false,
+            timeout_secs: None,
         });
         runtime.phases.insert(next_phase.clone(), next_definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
@@ -598,5 +610,89 @@ mod tests {
             response["continued_execution"]["phase_results"][0]["phase_id"].as_str(),
             Some(next_phase.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn reject_manual_phase_fails_workflow() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "manual rejection".to_string(),
+                description: "reject approval".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks()
+            .set_status(&task.id, TaskStatus::InProgress, false)
+            .await
+            .expect("task should be in progress");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+        let current_phase = workflow
+            .current_phase
+            .clone()
+            .expect("workflow should have current phase");
+
+        let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
+        let mut definition = runtime
+            .phase_execution(&current_phase)
+            .cloned()
+            .expect("current phase should exist");
+        definition.mode = PhaseExecutionMode::Manual;
+        definition.agent_id = None;
+        definition.command = None;
+        definition.manual = Some(PhaseManualDefinition {
+            instructions: "Approve or reject".to_string(),
+            approval_note_required: false,
+            timeout_secs: None,
+        });
+        runtime.phases.insert(current_phase.clone(), definition);
+        write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
+
+        let paused = hub
+            .workflows()
+            .pause(&workflow.id)
+            .await
+            .expect("workflow should pause");
+        assert_eq!(paused.status, WorkflowStatus::Paused);
+
+        reject_manual_phase(
+            hub.clone(),
+            &project_root,
+            &workflow.id,
+            &current_phase,
+            "rejected",
+        )
+        .await
+        .expect("manual rejection should succeed");
+
+        let updated = hub
+            .workflows()
+            .get(&workflow.id)
+            .await
+            .expect("workflow should reload");
+        let rejected_phase = updated
+            .phases
+            .iter()
+            .find(|phase| phase.phase_id == current_phase)
+            .expect("rejected phase should remain in workflow");
+
+        assert_eq!(rejected_phase.status, WorkflowPhaseStatus::Failed);
+        assert_eq!(updated.status, WorkflowStatus::Failed);
     }
 }

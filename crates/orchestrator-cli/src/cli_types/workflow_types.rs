@@ -65,6 +65,8 @@ pub(crate) enum WorkflowCommand {
 pub(crate) enum WorkflowPhaseCommand {
     /// Approve a pending phase gate.
     Approve(WorkflowPhaseApproveArgs),
+    /// Reject a pending phase gate.
+    Reject(WorkflowPhaseRejectArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,6 +327,16 @@ pub(crate) struct WorkflowPhaseApproveArgs {
     #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
     #[arg(long, value_name = "TEXT", help = "Approval note for the phase gate.")]
+    pub(crate) note: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowPhaseRejectArgs {
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
+    pub(crate) phase: String,
+    #[arg(long, value_name = "TEXT", help = "Rejection note for the phase gate.")]
     pub(crate) note: String,
 }
 

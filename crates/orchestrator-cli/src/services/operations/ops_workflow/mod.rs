@@ -9,9 +9,10 @@ use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
-    workflow_ref_for_task, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
-    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
+    services::ServiceHub, workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager,
+    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+    STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -312,7 +313,20 @@ pub(crate) async fn handle_workflow(
             execute::handle_workflow_execute(args, hub, project_root, json).await?;
             Ok(())
         }
-        WorkflowCommand::Resume(args) => print_value(workflows.resume(&args.id).await?, json),
+        WorkflowCommand::Resume(args) => {
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Resume {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
+        }
         WorkflowCommand::ResumeStatus(args) => {
             let workflow = workflows.get(&args.id).await?;
             let manager = WorkflowResumeManager::new(project_root)?;
@@ -351,7 +365,18 @@ pub(crate) async fn handle_workflow(
                 "workflow pause",
                 "--id",
             )?;
-            print_value(workflows.pause(&args.id).await?, json)
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Pause {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
         }
         WorkflowCommand::Cancel(args) => {
             let workflow = workflows.get(&args.id).await?;
@@ -377,11 +402,33 @@ pub(crate) async fn handle_workflow(
                 "workflow cancel",
                 "--id",
             )?;
-            print_value(workflows.cancel(&args.id).await?, json)
+            let outcome = dispatch_workflow_event(
+                hub.clone(),
+                project_root,
+                WorkflowEvent::Cancel {
+                    workflow_id: args.id.clone(),
+                },
+            )
+            .await?;
+            let workflow = outcome
+                .workflow
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(workflow, json)
         }
         WorkflowCommand::Phase { command } => match command {
             WorkflowPhaseCommand::Approve(args) => print_value(
                 phases::approve_manual_phase(
+                    hub.clone(),
+                    project_root,
+                    &args.id,
+                    &args.phase,
+                    &args.note,
+                )
+                .await?,
+                json,
+            ),
+            WorkflowPhaseCommand::Reject(args) => print_value(
+                phases::reject_manual_phase(
                     hub.clone(),
                     project_root,
                     &args.id,

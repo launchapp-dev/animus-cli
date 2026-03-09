@@ -18,6 +18,7 @@ pub mod task_gate;
 pub mod types;
 pub mod workflow;
 pub mod workflow_config;
+pub mod workflow_events;
 pub mod workflow_runner_registry;
 
 pub use agent_runtime_config::{
@@ -116,6 +117,7 @@ pub use workflow::{
     REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
     STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
+pub use workflow_events::{dispatch_workflow_event, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_config::{
     builtin_workflow_config, compile_and_write_yaml_workflows, compile_yaml_workflow_files,
     ensure_workflow_config_compiled, ensure_workflow_config_file, expand_variables,

@@ -10,11 +10,12 @@ pub use daemon::{
 };
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan,
-    build_runner_command_from_dispatch, is_terminally_completed_workflow, plan_ready_dispatch,
-    ready_dispatch_limit, ready_dispatch_limit_for_options, workflow_current_phase_id,
-    CompletedProcess, CompletionReconciliationPlan, DispatchCandidate, DispatchSelectionSource,
-    DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
-    ReadyDispatchPlan,
+    build_runner_command_from_dispatch, execute_dispatch_plan_via_runner,
+    is_terminally_completed_workflow, plan_ready_dispatch, ready_dispatch_limit,
+    ready_dispatch_limit_for_options, workflow_current_phase_id, CompletedProcess,
+    CompletionReconciliationPlan, DispatchCandidate, DispatchNotice, DispatchNoticeSink,
+    DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary,
+    NoopDispatchNoticeSink, PlannedDispatchStart, ProcessManager, ReadyDispatchPlan,
 };
 pub use protocol::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
 pub use queue::{
@@ -26,8 +27,9 @@ pub use queue::{
 };
 pub use schedule::{ScheduleDispatch, ScheduleDispatchOutcome};
 pub use tick::{
-    run_project_tick, run_project_tick_at, ProjectTickContext, ProjectTickExecutionOutcome,
-    ProjectTickHooks, ProjectTickPlan, ProjectTickPreparation, ProjectTickRunMode,
-    ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, ProjectTickTime,
-    TickSummaryBuilder,
+    default_slim_project_tick_driver, run_project_tick, run_project_tick_at,
+    DefaultProjectTickServices, DefaultSlimProjectTickDriver, ProjectTickContext,
+    ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickPlan, ProjectTickPreparation,
+    ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
+    ProjectTickTime, TickSummaryBuilder,
 };

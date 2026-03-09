@@ -6,12 +6,13 @@ use orchestrator_core::{
     project_schedule_dispatch_attempt, services::ServiceHub, DaemonStatus, DaemonTickMetrics,
     FileServiceHub,
 };
-use orchestrator_daemon_runtime::{
-    CompletedProcess, DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProcessManager,
-    ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
-    ScheduleDispatch, SubjectDispatch, TickSummaryBuilder,
-};
 use serde_json::Value;
+
+use crate::{
+    CompletedProcess, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStartSummary,
+    ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary,
+    ProjectTickSummaryInput, ScheduleDispatch, TickSummaryBuilder,
+};
 
 #[async_trait::async_trait(?Send)]
 pub trait DefaultProjectTickServices {
@@ -43,6 +44,14 @@ pub trait DefaultProjectTickServices {
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<(usize, usize)>;
 
+    async fn reconcile_manual_timeouts(
+        &mut self,
+        _hub: Arc<dyn ServiceHub>,
+        _root: &str,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -66,6 +75,18 @@ pub trait DefaultProjectTickServices {
         let metrics = DaemonTickMetrics::collect(hub, args.stale_threshold_hours).await?;
         TickSummaryBuilder::build(args, input, metrics)
     }
+
+    fn record_schedule_dispatch_attempt(
+        &mut self,
+        project_root: &str,
+        schedule_id: &str,
+        run_at: DateTime<Utc>,
+        status: &str,
+    ) {
+        project_schedule_dispatch_attempt(project_root, schedule_id, run_at, status);
+    }
+
+    fn dispatch_notice(&mut self, _notice: DispatchNotice) {}
 }
 
 pub type DefaultSlimProjectTickDriver<'a, S> = DefaultSlimProjectTickHooks<'a, S>;
@@ -94,23 +115,6 @@ impl<S> DefaultSlimProjectTickHooks<'_, S> {
     }
 }
 
-fn spawn_schedule_pipeline(
-    process_manager: &mut ProcessManager,
-    project_root: &str,
-    schedule_id: &str,
-    dispatch: &SubjectDispatch,
-) -> Result<()> {
-    process_manager.spawn_workflow_runner(dispatch, project_root)?;
-
-    eprintln!(
-        "{}: schedule '{}' fired workflow '{}'",
-        protocol::ACTOR_DAEMON,
-        schedule_id,
-        dispatch.workflow_ref
-    );
-    Ok(())
-}
-
 #[async_trait::async_trait(?Send)]
 impl<S> ProjectTickHooks for DefaultSlimProjectTickHooks<'_, S>
 where
@@ -119,10 +123,34 @@ where
     fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>) {
         let outcomes =
             ScheduleDispatch::process_due_schedules(root, now, |schedule_id, dispatch| {
-                spawn_schedule_pipeline(self.process_manager, root, schedule_id, dispatch)
+                match self
+                    .process_manager
+                    .spawn_workflow_runner(dispatch, root)
+                {
+                    Ok(()) => {
+                        self.services.dispatch_notice(DispatchNotice::ScheduleDispatched {
+                            schedule_id: schedule_id.to_string(),
+                            dispatch: dispatch.clone(),
+                        });
+                        Ok(())
+                    }
+                    Err(error) => {
+                        self.services.dispatch_notice(DispatchNotice::ScheduleDispatchFailed {
+                            schedule_id: schedule_id.to_string(),
+                            dispatch: dispatch.clone(),
+                            error: error.to_string(),
+                        });
+                        Err(error)
+                    }
+                }
             });
         for outcome in outcomes {
-            project_schedule_dispatch_attempt(root, &outcome.schedule_id, now, &outcome.status);
+            self.services.record_schedule_dispatch_attempt(
+                root,
+                &outcome.schedule_id,
+                now,
+                &outcome.status,
+            );
         }
     }
 
@@ -136,6 +164,11 @@ where
         self.services
             .reconcile_completed_processes(hub, root, completed_processes)
             .await
+    }
+
+    async fn reconcile_manual_timeouts(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.reconcile_manual_timeouts(hub, root).await
     }
 
     async fn dispatch_ready_tasks(

@@ -8,12 +8,13 @@ use tokio::process::Command;
 
 use orchestrator_config::workflow_config::MergeStrategy;
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config, project_requirement_workflow_status,
+    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
+    project_requirement_workflow_status,
     providers::{BuiltinGitProvider, GitProvider},
     register_workflow_runner_pid,
     services::ServiceHub,
     unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow,
-    PhaseDecisionVerdict, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
+    PhaseDecisionVerdict, WorkflowEvent, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
 };
 
 use crate::executor::{
@@ -505,10 +506,18 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         continue;
                     }
                     PhaseExecutionOutcome::NeedsResearch { reason } => {
-                        workflow = hub
-                            .workflows()
-                            .request_research(&workflow.id, reason.clone())
-                            .await?;
+                        let outcome = dispatch_workflow_event(
+                            hub.clone(),
+                            &params.project_root,
+                            WorkflowEvent::ResearchRequested {
+                                workflow_id: workflow.id.clone(),
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await?;
+                        workflow = outcome.workflow.ok_or_else(|| {
+                            anyhow!("workflow '{}' not found for research request", workflow.id)
+                        })?;
                         reported_workflow_status = workflow.status;
                         phases_to_run = workflow
                             .phases
@@ -532,7 +541,17 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
                         continue;
                     }
                     PhaseExecutionOutcome::ManualPending { .. } => {
-                        workflow = hub.workflows().pause(&workflow.id).await?;
+                        let outcome = dispatch_workflow_event(
+                            hub.clone(),
+                            &params.project_root,
+                            WorkflowEvent::Pause {
+                                workflow_id: workflow.id.clone(),
+                            },
+                        )
+                        .await?;
+                        workflow = outcome.workflow.ok_or_else(|| {
+                            anyhow!("workflow '{}' not found for manual pause", workflow.id)
+                        })?;
                         reported_workflow_status = workflow.status;
                         emit(PhaseEvent::Completed {
                             phase_id: &phase_id,
@@ -968,6 +987,7 @@ mod requirement_workflow_tests {
         definition.manual = Some(PhaseManualDefinition {
             instructions: "Wait for approval".to_string(),
             approval_note_required: false,
+            timeout_secs: None,
         });
         runtime.phases.insert(current_phase.clone(), definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");

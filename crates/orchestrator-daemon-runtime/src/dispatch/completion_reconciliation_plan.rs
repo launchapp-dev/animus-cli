@@ -17,7 +17,7 @@ pub fn build_completion_reconciliation_plan(
         let workflow_success = completed
             .workflow_status
             .map(workflow_status_is_success)
-            .unwrap_or(completed.success);
+            .unwrap_or(false);
         let failure_reason = completion_failure_reason(&completed);
 
         match completed.workflow_status {
@@ -30,9 +30,6 @@ pub fn build_completion_reconciliation_plan(
                 plan.failed_workflow_phases = plan.failed_workflow_phases.saturating_add(1);
             }
             Some(WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused) => {}
-            None if completed.success => {
-                plan.executed_workflow_phases = plan.executed_workflow_phases.saturating_add(1);
-            }
             None => {
                 plan.failed_workflow_phases = plan.failed_workflow_phases.saturating_add(1);
             }
@@ -80,9 +77,8 @@ fn completion_failure_reason(completed: &CompletedProcess) -> Option<String> {
             "workflow runner cancelled: {}",
             completion_reason(completed)
         )),
-        None if completed.success => None,
         None => Some(format!(
-            "workflow runner failed: {}",
+            "workflow runner exited without workflow status: {}",
             completion_reason(completed)
         )),
     }
@@ -231,5 +227,29 @@ mod tests {
             plan.execution_facts[0].failure_reason.as_deref(),
             Some("workflow runner cancelled: operator cancelled the workflow")
         );
+    }
+
+    #[test]
+    fn missing_workflow_status_is_not_inferred_from_exit_code() {
+        let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
+            subject_id: "TASK-505".to_string(),
+            task_id: Some("TASK-505".to_string()),
+            workflow_id: None,
+            workflow_ref: Some("standard".to_string()),
+            workflow_status: None,
+            schedule_id: None,
+            exit_code: Some(0),
+            success: true,
+            failure_reason: None,
+            events: Vec::new(),
+        }]);
+
+        assert_eq!(plan.executed_workflow_phases, 0);
+        assert_eq!(plan.failed_workflow_phases, 1);
+        assert!(!plan.execution_facts[0].success);
+        assert!(plan.execution_facts[0]
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("without workflow status")));
     }
 }

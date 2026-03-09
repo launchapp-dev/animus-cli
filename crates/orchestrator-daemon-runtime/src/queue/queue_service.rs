@@ -63,11 +63,14 @@ pub fn enqueue_subject_dispatch(
     if state.entries.iter().any(|entry| {
         entry.subject_id() == subject_id
             && entry.status != DispatchQueueEntryStatus::Unknown
-            && entry
-                .dispatch
-                .as_ref()
-                .map(|existing| existing.workflow_ref == dispatch.workflow_ref)
-                .unwrap_or_else(|| entry.task_id() == dispatch.task_id())
+            && if let Some(existing) = entry.dispatch.as_ref() {
+                existing.workflow_ref == dispatch.workflow_ref
+            } else {
+                match (entry.task_id(), dispatch.task_id()) {
+                    (Some(existing), Some(incoming)) => existing == incoming,
+                    _ => false,
+                }
+            }
     }) {
         return Ok(QueueEnqueueResult {
             enqueued: false,

@@ -432,4 +432,35 @@ mod tests {
             _ => panic!("expected workflow phase approve command"),
         }
     }
+
+    #[test]
+    fn parses_workflow_phase_reject_from_workflow_module() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "phase",
+            "reject",
+            "--id",
+            "WF-002",
+            "--phase",
+            "testing",
+            "--note",
+            "gate rejected",
+        ])
+        .expect("workflow phase reject should parse");
+
+        match cli.command {
+            Command::Workflow {
+                command:
+                    WorkflowCommand::Phase {
+                        command: WorkflowPhaseCommand::Reject(args),
+                    },
+            } => {
+                assert_eq!(args.id, "WF-002");
+                assert_eq!(args.phase, "testing");
+                assert_eq!(args.note, "gate rejected");
+            }
+            _ => panic!("expected workflow phase reject command"),
+        }
+    }
 }

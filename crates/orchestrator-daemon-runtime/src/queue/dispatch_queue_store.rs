@@ -77,7 +77,7 @@ pub fn save_dispatch_queue_state(project_root: &str, state: &DispatchQueueState)
 pub fn mark_dispatch_queue_entry_assigned(
     project_root: &str,
     dispatch: &SubjectDispatch,
-    workflow_id: &str,
+    workflow_id: Option<&str>,
 ) -> Result<bool> {
     let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
@@ -102,7 +102,9 @@ pub fn mark_dispatch_queue_entry_assigned(
             continue;
         }
         entry.status = DispatchQueueEntryStatus::Assigned;
-        entry.workflow_id = Some(workflow_id.to_string());
+        if let Some(workflow_id) = workflow_id {
+            entry.workflow_id = Some(workflow_id.to_string());
+        }
         entry.assigned_at = Some(Utc::now().to_rfc3339());
         updated = true;
         break;

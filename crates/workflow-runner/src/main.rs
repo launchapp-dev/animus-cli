@@ -135,18 +135,27 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         Err(_) => 1,
     };
 
-    let completion = RunnerEvent {
-        event: "runner_complete",
-        task_id: subject_id,
-        workflow_id: result.as_ref().ok().map(|value| value.workflow_id.clone()),
-        workflow_ref: result.as_ref().ok().and_then(|value| {
+    let workflow_ref = match &result {
+        Ok(value) => {
             if value.workflow_ref.trim().is_empty() {
                 args.workflow_ref.clone()
             } else {
                 Some(value.workflow_ref.clone())
             }
-        }),
-        workflow_status: result.as_ref().ok().map(|value| value.workflow_status),
+        }
+        Err(_) => args.workflow_ref.clone(),
+    };
+    let workflow_status = match &result {
+        Ok(value) => Some(value.workflow_status),
+        Err(_) => Some(WorkflowStatus::Failed),
+    };
+
+    let completion = RunnerEvent {
+        event: "runner_complete",
+        task_id: subject_id,
+        workflow_id: result.as_ref().ok().map(|value| value.workflow_id.clone()),
+        workflow_ref,
+        workflow_status,
         exit_code: Some(exit_code),
     };
     eprintln!("{}", serde_json::to_string(&completion).unwrap_or_default());

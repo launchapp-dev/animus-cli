@@ -2,9 +2,10 @@ use super::*;
 use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
 use orchestrator_core::{
-    dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
-    is_merge_gate_block, project_task_blocked_with_reason, project_task_status,
-    services::ServiceHub, TaskStatus, WorkflowResumeManager, WorkflowStatus,
+    dependency_blocked_reason, dependency_gate_issues_for_task, dispatch_workflow_event,
+    is_dependency_gate_block, is_merge_gate_block, project_task_blocked_with_reason,
+    project_task_status, services::ServiceHub, TaskStatus, WorkflowEvent, WorkflowResumeManager,
+    WorkflowStatus,
 };
 use orchestrator_daemon_runtime::{active_workflow_task_ids, is_terminally_completed_workflow};
 use orchestrator_git_ops::is_branch_merged;
@@ -178,7 +179,18 @@ pub async fn reconcile_stale_in_progress_tasks_for_project(
         if age_minutes < threshold_minutes {
             continue;
         }
-        project_task_status(hub.clone(), &task.id, TaskStatus::Ready).await?;
+        let _ = dispatch_workflow_event(
+            hub.clone(),
+            project_root,
+            WorkflowEvent::StaleReset {
+                task_id: task.id.clone(),
+                reason: Some(format!(
+                    "stale in-progress task exceeded {} minutes",
+                    threshold_minutes
+                )),
+            },
+        )
+        .await?;
         reconciled = reconciled.saturating_add(1);
     }
 
@@ -196,19 +208,28 @@ pub async fn resume_interrupted_workflows_for_project(
 
     let mut resumed = 0usize;
     for (workflow, _) in resumable {
-        let updated = hub.workflows().resume(&workflow.id).await?;
-        resumed = resumed.saturating_add(1);
-        project_terminal_workflow_result(
+        let outcome = dispatch_workflow_event(
             hub.clone(),
             root,
-            &updated.task_id,
-            Some(updated.task_id.as_str()),
-            updated.workflow_ref.as_deref(),
-            Some(updated.id.as_str()),
-            updated.status,
-            None,
+            WorkflowEvent::Resume {
+                workflow_id: workflow.id.clone(),
+            },
         )
-        .await;
+        .await?;
+        if let Some(updated) = outcome.workflow {
+            resumed = resumed.saturating_add(1);
+            project_terminal_workflow_result(
+                hub.clone(),
+                root,
+                &updated.task_id,
+                Some(updated.task_id.as_str()),
+                updated.workflow_ref.as_deref(),
+                Some(updated.id.as_str()),
+                updated.status,
+                None,
+            )
+            .await;
+        }
     }
 
     Ok((cleaned, resumed))
@@ -377,6 +398,7 @@ mod tests {
         definition.manual = Some(PhaseManualDefinition {
             instructions: "Approve this step".to_string(),
             approval_note_required: false,
+            timeout_secs: None,
         });
         runtime.phases.insert(current_phase.clone(), definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");

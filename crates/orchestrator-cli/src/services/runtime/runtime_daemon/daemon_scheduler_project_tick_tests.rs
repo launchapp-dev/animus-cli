@@ -1,12 +1,18 @@
 use super::reconciliation_test_support::reconcile_stale_in_progress_tasks_for_project;
 use super::task_dispatch::run_ready_task_workflows_for_project;
 use super::*;
+use crate::services::runtime::runtime_daemon::daemon_reconciliation::reconcile_manual_phase_timeouts;
 use crate::services::runtime::execution_fact_projection::reconcile_completed_processes;
 use chrono::Utc;
 use orchestrator_core::ServiceHub;
-use orchestrator_core::{Priority, TaskCreateInput, TaskType, WorkflowStatus};
+use orchestrator_core::{
+    FileServiceHub, PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput,
+    TaskStatus, TaskType, WorkflowRunInput, WorkflowStatus,
+};
 use orchestrator_daemon_runtime::CompletedProcess;
+use serde_json::json;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 use workflow_runner::executor::parse_merge_conflict_recovery_response;
 
@@ -113,6 +119,7 @@ async fn run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned() {
         &DispatchQueueState {
             entries: vec![
                 DispatchQueueEntry {
+                    subject_id: None,
                     task_id: queue_task.id.clone(),
                     dispatch: None,
                     status: DispatchQueueEntryStatus::Pending,
@@ -121,6 +128,7 @@ async fn run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned() {
                     held_at: None,
                 },
                 DispatchQueueEntry {
+                    subject_id: None,
                     task_id: fallback_task.id.clone(),
                     dispatch: None,
                     status: DispatchQueueEntryStatus::Pending,
@@ -161,7 +169,7 @@ async fn run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned() {
     assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
     assert_eq!(
         queue_entry.workflow_id.as_deref(),
-        Some(started.workflow_id.as_str())
+        started.workflow_id.as_deref()
     );
 
     let fallback_entry = queue_state
@@ -170,6 +178,65 @@ async fn run_ready_prefers_dispatch_queue_and_marks_selected_entry_assigned() {
         .find(|entry| entry.task_id == fallback_task.id)
         .expect("fallback queue entry should remain present");
     assert_eq!(fallback_entry.status, DispatchQueueEntryStatus::Pending);
+}
+
+#[tokio::test]
+async fn run_ready_dispatches_custom_subjects_from_queue() {
+    let _lock = crate::shared::test_env_lock()
+        .lock()
+        .expect("env lock should be available");
+    let home = TempDir::new().expect("home temp dir");
+    let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+
+    let hub = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+    let project_root = TempDir::new().expect("project temp dir");
+    let project_root_str = project_root.path().to_string_lossy().to_string();
+
+    let dispatch = SubjectDispatch::for_custom(
+        "custom-dispatch",
+        "non-task workflow",
+        orchestrator_core::STANDARD_WORKFLOW_REF,
+        Some(json!({"scope":"non-task"})),
+        "manual-queue-enqueue",
+    );
+
+    save_dispatch_queue_state(
+        &project_root_str,
+        &DispatchQueueState {
+            entries: vec![DispatchQueueEntry::from_dispatch(dispatch.clone())],
+        },
+    )
+    .expect("queue state should be stored");
+
+    let summary = run_ready_task_workflows_for_project(
+        hub.clone() as Arc<dyn ServiceHub>,
+        &project_root_str,
+        1,
+    )
+    .await
+    .expect("ready runner should succeed");
+
+    assert_eq!(summary.started, 1);
+    assert_eq!(summary.started_workflows.len(), 1);
+    let started = &summary.started_workflows[0];
+    assert_eq!(started.task_id(), None);
+    assert_eq!(started.subject_id(), "custom-dispatch");
+    assert!(started.workflow_id.is_some());
+    assert_eq!(
+        started.selection_source,
+        DispatchSelectionSource::DispatchQueue
+    );
+
+    let queue_state = load_dispatch_queue_state(&project_root_str)
+        .expect("queue should load")
+        .expect("queue should exist");
+    let queue_entry = queue_state
+        .entries
+        .iter()
+        .find(|entry| entry.subject_id() == "custom-dispatch")
+        .expect("custom queue entry should remain present");
+    assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
+    assert_eq!(queue_entry.workflow_id.as_deref(), started.workflow_id.as_deref());
 }
 
 #[tokio::test]
@@ -226,6 +293,7 @@ async fn run_ready_uses_fallback_headroom_after_dispatching_queue_entries() {
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: queue_task.id.clone(),
                 dispatch: None,
                 status: DispatchQueueEntryStatus::Pending,
@@ -275,7 +343,7 @@ async fn run_ready_uses_fallback_headroom_after_dispatching_queue_entries() {
     assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
     assert_eq!(
         queue_entry.workflow_id.as_deref(),
-        Some(summary.started_workflows[0].workflow_id.as_str())
+        summary.started_workflows[0].workflow_id.as_deref()
     );
 }
 
@@ -353,6 +421,7 @@ async fn run_ready_dispatches_multiple_tasks_from_dispatch_queue_before_fallback
         &DispatchQueueState {
             entries: vec![
                 DispatchQueueEntry {
+                    subject_id: None,
                     task_id: queue_task_one.id.clone(),
                     dispatch: None,
                     status: DispatchQueueEntryStatus::Pending,
@@ -361,6 +430,7 @@ async fn run_ready_dispatches_multiple_tasks_from_dispatch_queue_before_fallback
                     held_at: None,
                 },
                 DispatchQueueEntry {
+                    subject_id: None,
                     task_id: queue_task_two.id.clone(),
                     dispatch: None,
                     status: DispatchQueueEntryStatus::Pending,
@@ -416,7 +486,7 @@ async fn run_ready_dispatches_multiple_tasks_from_dispatch_queue_before_fallback
         assert_eq!(queue_entry.status, DispatchQueueEntryStatus::Assigned);
         assert_eq!(
             queue_entry.workflow_id.as_deref(),
-            Some(started.workflow_id.as_str())
+            started.workflow_id.as_deref()
         );
     }
 }
@@ -471,6 +541,7 @@ async fn run_ready_falls_back_when_queue_has_no_dispatchable_entries() {
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: queue_only_task.id.clone(),
                 dispatch: None,
                 status: DispatchQueueEntryStatus::Pending,
@@ -593,6 +664,7 @@ async fn reconcile_completed_processes_removes_assigned_queue_entries_on_complet
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: task.id.clone(),
                 dispatch: Some(dispatch.clone()),
                 status: DispatchQueueEntryStatus::Assigned,
@@ -677,6 +749,7 @@ async fn reconcile_completed_processes_removes_assigned_queue_entries_on_failure
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: task.id.clone(),
                 dispatch: Some(dispatch.clone()),
                 status: DispatchQueueEntryStatus::Assigned,
@@ -762,6 +835,7 @@ async fn reconcile_stale_in_progress_removes_assigned_queue_entries_for_failed_w
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: task.id.clone(),
                 dispatch: None,
                 status: DispatchQueueEntryStatus::Assigned,
@@ -842,6 +916,7 @@ async fn reconcile_stale_in_progress_removes_assigned_queue_entries_for_cancelle
         &project_root_str,
         &DispatchQueueState {
             entries: vec![DispatchQueueEntry {
+                subject_id: None,
                 task_id: task.id.clone(),
                 dispatch: None,
                 status: DispatchQueueEntryStatus::Assigned,
@@ -1061,4 +1136,80 @@ async fn priority_ordering_high_first() {
         Some(high_task.id.as_str()),
         "high priority should start first"
     );
+}
+
+#[tokio::test]
+async fn reconcile_manual_phase_timeouts_fails_workflow() {
+    let temp = TempDir::new().expect("temp dir should be created");
+    let project_root = temp.path().to_string_lossy().to_string();
+    let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+    let task = hub
+        .tasks()
+        .create(TaskCreateInput {
+            title: "manual timeout".to_string(),
+            description: "manual phase timeout".to_string(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("test".to_string()),
+            tags: Vec::new(),
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+        })
+        .await
+        .expect("task should be created");
+    hub.tasks()
+        .set_status(&task.id, TaskStatus::InProgress, false)
+        .await
+        .expect("task should be in progress");
+
+    let workflow = hub
+        .workflows()
+        .run(WorkflowRunInput::for_task(task.id.clone(), None))
+        .await
+        .expect("workflow should start");
+    let current_phase = workflow
+        .current_phase
+        .clone()
+        .expect("workflow should have current phase");
+
+    let mut runtime = orchestrator_core::load_agent_runtime_config(temp.path())
+        .expect("runtime config should load");
+    let mut definition = runtime
+        .phase_execution(&current_phase)
+        .cloned()
+        .expect("current phase should exist");
+    definition.mode = PhaseExecutionMode::Manual;
+    definition.agent_id = None;
+    definition.command = None;
+    definition.manual = Some(PhaseManualDefinition {
+        instructions: "Approve or reject".to_string(),
+        approval_note_required: false,
+        timeout_secs: Some(1),
+    });
+    runtime.phases.insert(current_phase.clone(), definition);
+    orchestrator_core::write_agent_runtime_config(temp.path(), &runtime)
+        .expect("runtime config should write");
+
+    let paused = hub
+        .workflows()
+        .pause(&workflow.id)
+        .await
+        .expect("workflow should pause");
+    assert_eq!(paused.status, WorkflowStatus::Paused);
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let reconciled =
+        reconcile_manual_phase_timeouts(hub.clone() as Arc<dyn ServiceHub>, &project_root)
+            .await
+            .expect("manual timeout reconciliation should succeed");
+    assert_eq!(reconciled, 1);
+
+    let updated = hub
+        .workflows()
+        .get(&workflow.id)
+        .await
+        .expect("workflow should reload");
+    assert_eq!(updated.status, WorkflowStatus::Failed);
 }

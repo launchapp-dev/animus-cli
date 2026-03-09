@@ -23,3 +23,7 @@ pub use project_tick_summary_input::ProjectTickSummaryInput;
 pub use project_tick_time::ProjectTickTime;
 pub use run_project_tick::{run_project_tick, run_project_tick_at};
 pub use tick_summary_builder::TickSummaryBuilder;
+mod default_project_tick_driver;
+pub use default_project_tick_driver::{
+    default_slim_project_tick_driver, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
+};
