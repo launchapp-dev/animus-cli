@@ -95,6 +95,20 @@ When an agent completes a phase, it produces a `PhaseDecision`. The decision det
 
 The workflow-runner evaluates the decision against the phase's guards and transitions to determine the actual next step.
 
+## Target Contract Direction
+
+The long-term model is that every phase, not just agent review phases, ends in
+the same verdict-driven control contract. The shared core should stay stable:
+
+- `verdict`
+- `reason`
+- `confidence`
+- `risk`
+- `evidence`
+
+Each phase can then add YAML-defined phase-local fields such as `skip_reason`,
+`exit_code`, or `failing_tests`. See [Phase Contracts](../architecture/phase-contracts.md).
+
 ---
 
 ## Rework Loops

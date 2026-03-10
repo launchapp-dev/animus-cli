@@ -85,6 +85,7 @@ graph TD
 - [Subject Dispatch Daemon](subject-dispatch-daemon.md) -- How the daemon schedules and dispatches workflow subjects
 - [Tool-Driven Mutation Surfaces](tool-driven-mutation-surfaces.md) -- How state mutations are channeled through tool abstractions
 - [Workflow-First CLI](workflow-first-cli.md) -- Why workflows are the primary execution primitive
+- [Phase Contracts](phase-contracts.md) -- Universal phase verdicts, YAML-defined fields, and runtime validation
 
 ## Deep Dives
 

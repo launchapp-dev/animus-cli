@@ -21,8 +21,7 @@ agents:
 
       The implementation agent reads the task description and checklist to know
       what to fix — if you don't update the task, the rework will be blind.
-      Before finishing, emit exactly one JSON line with your workflow verdict:
-      {"kind":"phase_decision","phase_id":"po-review","verdict":"advance|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"requirements_met","description":"All acceptance criteria were verified against the implementation"}]}
+      Use the runtime-provided phase contract instructions for the final structured verdict output.
     model: claude-sonnet-4-6
     tool: claude
 
@@ -46,8 +45,7 @@ agents:
 
       Do NOT change the task title. Focus on making the description implementation-ready.
       If the task is already well-specified, leave it unchanged and note that.
-      Before finishing, emit exactly one JSON line with your workflow verdict:
-      {"kind":"phase_decision","phase_id":"refine-requirements","verdict":"advance|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"requirements_met","description":"Task description and checklist were refined into implementation-ready acceptance criteria"}]}
+      Use the runtime-provided phase contract instructions for the final structured verdict output.
     model: claude-sonnet-4-6
     tool: claude
 
@@ -67,8 +65,7 @@ agents:
       for DONE/OBSOLETE/DUPLICATE verdicts. For KEEP, leave the status unchanged.
       Search the codebase thoroughly before making your verdict.
       Be concise: one verdict line, then 1-2 sentences of justification.
-      Before finishing, emit exactly one JSON line with your workflow verdict:
-      {"kind":"phase_decision","phase_id":"triage","verdict":"advance|skip|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"code_review_clean","description":"Task validity assessment completed"}]}
+      Use the runtime-provided phase contract instructions for the final structured verdict output.
       Use "advance" for KEEP, "skip" for DONE/OBSOLETE/DUPLICATE when the task should not continue.
     model: claude-sonnet-4-6
     tool: claude
@@ -131,6 +128,23 @@ phase_catalog:
     tags: [brain, planning, tasks]
 
 phases:
+  triage:
+    mode: agent
+    agent: triager
+    directive: "Evaluate whether the current task is still valid, already done, obsolete, or a duplicate."
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        skip_reason:
+          type: string
+          description: "When verdict is skip, explain whether the task is already_done, duplicate, no_longer_valid, or out_of_scope."
+        recommended_task_status:
+          type: string
+          enum: [done, cancelled]
+          description: "When verdict is skip, use done for already_done, otherwise cancelled."
+
   brain-requirement-scan:
     mode: command
     directive: "List top requirement candidates that need work"

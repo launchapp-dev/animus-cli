@@ -22,6 +22,8 @@ pub struct PersistedPhaseOutput {
     pub evidence: Vec<orchestrator_core::PhaseEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guardrail_violations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
 }
 
 pub fn phase_output_dir(project_root: &str, workflow_id: &str) -> PathBuf {
@@ -42,11 +44,12 @@ pub fn persist_phase_output(
     let dir = phase_output_dir(project_root, workflow_id);
     std::fs::create_dir_all(&dir)?;
 
-    let (verdict, confidence, reason, commit_message, evidence, guardrail_violations) =
+    let (verdict, confidence, reason, commit_message, evidence, guardrail_violations, payload) =
         match outcome {
             PhaseExecutionOutcome::Completed {
                 commit_message,
                 phase_decision,
+                result_payload,
             } => {
                 let (v, c, r, ev, gv) = match phase_decision {
                     Some(decision) => (
@@ -68,7 +71,15 @@ pub fn persist_phase_output(
                         Vec::new(),
                     ),
                 };
-                (v, c, r, commit_message.clone(), ev, gv)
+                (
+                    v,
+                    c,
+                    r,
+                    commit_message.clone(),
+                    ev,
+                    gv,
+                    result_payload.clone(),
+                )
             }
             PhaseExecutionOutcome::NeedsResearch { reason } => (
                 Some("rework".to_string()),
@@ -77,6 +88,7 @@ pub fn persist_phase_output(
                 None,
                 Vec::new(),
                 Vec::new(),
+                None,
             ),
             PhaseExecutionOutcome::ManualPending { instructions, .. } => (
                 Some("manual_pending".to_string()),
@@ -85,6 +97,7 @@ pub fn persist_phase_output(
                 None,
                 Vec::new(),
                 Vec::new(),
+                None,
             ),
         };
 
@@ -97,6 +110,7 @@ pub fn persist_phase_output(
         commit_message,
         evidence,
         guardrail_violations,
+        payload,
     };
 
     let payload = serde_json::to_string_pretty(&output)?;
@@ -489,6 +503,7 @@ mod tests {
                 commit_message: None,
                 target_phase: None,
             }),
+            result_payload: None,
         };
 
         persist_phase_output(project_root, workflow_id, "research", &outcome).unwrap();
@@ -534,6 +549,7 @@ mod tests {
                 commit_message: None,
                 target_phase: None,
             }),
+            result_payload: None,
         };
         persist_phase_output(project_root, workflow_id, "research", &research_outcome).unwrap();
 
@@ -551,6 +567,7 @@ mod tests {
                 commit_message: None,
                 target_phase: None,
             }),
+            result_payload: None,
         };
         persist_phase_output(project_root, workflow_id, "implementation", &impl_outcome).unwrap();
 
@@ -595,6 +612,7 @@ mod tests {
                 commit_message: None,
                 evidence: vec![],
                 guardrail_violations: vec![],
+                payload: None,
             },
             PersistedPhaseOutput {
                 phase_id: "implementation".to_string(),
@@ -605,6 +623,7 @@ mod tests {
                 commit_message: Some("feat: add feature".to_string()),
                 evidence: vec![],
                 guardrail_violations: vec![],
+                payload: None,
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
@@ -630,6 +649,7 @@ mod tests {
                 commit_message: None,
                 evidence: vec![],
                 guardrail_violations: vec![],
+                payload: None,
             },
             PersistedPhaseOutput {
                 phase_id: "recent".to_string(),
@@ -640,6 +660,7 @@ mod tests {
                 commit_message: None,
                 evidence: vec![],
                 guardrail_violations: vec![],
+                payload: None,
             },
         ];
         let result = format_prior_phase_outputs(&outputs);

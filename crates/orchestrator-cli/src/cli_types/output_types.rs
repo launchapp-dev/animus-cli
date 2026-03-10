@@ -4,6 +4,8 @@ use clap::{Args, Subcommand};
 pub(crate) enum OutputCommand {
     /// Read run event payloads.
     Run(OutputRunArgs),
+    /// Read persisted workflow phase outputs.
+    PhaseOutputs(OutputPhaseOutputsArgs),
     /// List artifacts for an execution id.
     Artifacts(OutputArtifactsArgs),
     /// Download an artifact payload.
@@ -22,6 +24,14 @@ pub(crate) enum OutputCommand {
 pub(crate) struct OutputRunArgs {
     #[arg(long)]
     pub(crate) run_id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct OutputPhaseOutputsArgs {
+    #[arg(long)]
+    pub(crate) workflow_id: String,
+    #[arg(long)]
+    pub(crate) phase_id: Option<String>,
 }
 
 #[derive(Debug, Args)]

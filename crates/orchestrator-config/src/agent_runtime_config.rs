@@ -16,10 +16,34 @@ const BUILTIN_AGENT_RUNTIME_CONFIG_JSON: &str = include_str!(concat!(
 ));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseFieldDefinition {
+    #[serde(rename = "type")]
+    pub field_type: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, rename = "enum", skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<PhaseFieldDefinition>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, PhaseFieldDefinition>,
+}
+
+impl PhaseFieldDefinition {
+    pub fn has_nested_fields(&self) -> bool {
+        !self.fields.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseOutputContract {
     pub kind: String,
     #[serde(default)]
     pub required_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, PhaseFieldDefinition>,
 }
 
 impl PhaseOutputContract {
@@ -27,6 +51,10 @@ impl PhaseOutputContract {
         self.required_fields
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(field))
+            || self
+                .fields
+                .iter()
+                .any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
     }
 }
 
@@ -42,6 +70,8 @@ pub struct PhaseDecisionContract {
     pub allow_missing_decision: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_json_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, PhaseFieldDefinition>,
 }
 
 pub const DEFAULT_MAX_REWORK_ATTEMPTS: u32 = 3;
@@ -102,6 +132,52 @@ fn default_max_risk() -> crate::types::WorkflowDecisionRisk {
 }
 fn default_true() -> bool {
     true
+}
+
+fn validate_phase_field_definition(path: String, field: &PhaseFieldDefinition) -> Result<()> {
+    let field_type = field.field_type.trim();
+    if field_type.is_empty() {
+        return Err(anyhow!("{path}.type must not be empty"));
+    }
+
+    match field_type {
+        "string" | "number" | "integer" | "boolean" | "array" | "object" | "null" => {}
+        other => {
+            return Err(anyhow!(
+                "{path}.type must be one of string, number, integer, boolean, array, object, null (got '{}')",
+                other
+            ));
+        }
+    }
+
+    if field
+        .enum_values
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err(anyhow!("{path}.enum must not contain empty values"));
+    }
+
+    if field_type != "array" && field.items.is_some() {
+        return Err(anyhow!("{path}.items is only allowed when type='array'"));
+    }
+
+    if field_type != "object" && field.has_nested_fields() {
+        return Err(anyhow!("{path}.fields is only allowed when type='object'"));
+    }
+
+    if let Some(items) = field.items.as_ref() {
+        validate_phase_field_definition(format!("{path}.items"), items)?;
+    }
+
+    for (nested_name, nested_field) in &field.fields {
+        if nested_name.trim().is_empty() {
+            return Err(anyhow!("{path}.fields must not contain empty field names"));
+        }
+        validate_phase_field_definition(format!("{path}.fields['{}']", nested_name), nested_field)?;
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -764,6 +840,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
     let implementation_output_contract = PhaseOutputContract {
         kind: "implementation_result".to_string(),
         required_fields: vec!["commit_message".to_string()],
+        fields: BTreeMap::new(),
     };
     let swe_mcp_servers = vec!["ao".to_string()];
     let swe_tool_policy = AgentToolPolicy {
@@ -1041,6 +1118,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                         extra_json_schema: None,
+                        fields: BTreeMap::new(),
                     }),
                     retry: None,
                     command: None,
@@ -1150,6 +1228,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                         extra_json_schema: None,
+                        fields: BTreeMap::new(),
                     }),
                     retry: None,
                     command: None,
@@ -1173,6 +1252,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                         extra_json_schema: None,
+                        fields: BTreeMap::new(),
                     }),
                     retry: None,
                     command: None,
@@ -1196,6 +1276,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
                         extra_json_schema: None,
+                        fields: BTreeMap::new(),
                     }),
                     retry: None,
                     command: None,
@@ -1489,6 +1570,15 @@ fn validate_phase_definition(
                 phase_id
             ));
         }
+        for (field_name, field) in &contract.fields {
+            validate_phase_field_definition(
+                format!(
+                    "phases['{}'].output_contract.fields['{}']",
+                    phase_id, field_name
+                ),
+                field,
+            )?;
+        }
     }
 
     if let Some(contract) = definition.decision_contract.as_ref() {
@@ -1505,6 +1595,15 @@ fn validate_phase_definition(
                     phase_id
                 ));
             }
+        }
+        for (field_name, field) in &contract.fields {
+            validate_phase_field_definition(
+                format!(
+                    "phases['{}'].decision_contract.fields['{}']",
+                    phase_id, field_name
+                ),
+                field,
+            )?;
         }
     }
 
@@ -1951,6 +2050,7 @@ mod tests {
                     max_risk: crate::types::WorkflowDecisionRisk::Medium,
                     allow_missing_decision: false,
                     extra_json_schema: None,
+                    fields: BTreeMap::new(),
                 }),
                 retry: None,
                 command: None,
@@ -2212,6 +2312,7 @@ mod tests {
         default_phase.output_contract = Some(PhaseOutputContract {
             kind: "phase_result".to_string(),
             required_fields: Vec::new(),
+            fields: BTreeMap::new(),
         });
 
         assert!(config.is_structured_output_phase("custom-phase"));

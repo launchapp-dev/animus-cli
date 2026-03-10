@@ -2,6 +2,9 @@
 
 AO workflows are defined in `.ao/workflows/*.yaml` files. These YAML files are compiled into the effective workflow configuration via `ao workflow config compile`. This document is the formal specification of the YAML format.
 
+For the target direction of phase output contracts, universal verdicts, and
+YAML-defined phase-local fields, see [Phase Contracts](../architecture/phase-contracts.md).
+
 ## Top-Level Structure
 
 A workflow YAML file can contain any combination of these top-level sections:
@@ -179,6 +182,20 @@ variables:
 | `phases` | PhaseEntry[] | yes | Ordered list of phase entries |
 | `post_success` | PostSuccessConfig | no | Actions to perform after all phases succeed |
 | `variables` | Variable[] | no | Variables used by this workflow |
+
+## Phase Output Contracts
+
+Today, workflow YAML supports execution configuration such as `decision_contract`,
+`output_contract`, and `output_json_schema`. The intended long-term direction is
+to keep YAML as the authored surface while moving toward a simpler phase contract
+model:
+
+- every phase emits the same universal verdict-driven envelope
+- YAML defines extra phase-local fields and their descriptions
+- the runtime composes and validates an effective contract in memory
+- users do not manage standalone JSON schema files
+
+See [Phase Contracts](../architecture/phase-contracts.md) for the target model.
 
 ### Phase Entry Types
 

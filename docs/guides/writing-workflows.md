@@ -2,6 +2,9 @@
 
 AO workflows are defined in YAML and live in `.ao/workflows/`. They describe agents, phases, pipelines, and post-success hooks that the daemon executes against tasks.
 
+For the target design of universal phase verdicts and YAML-defined phase-local
+fields, see [Phase Contracts](../architecture/phase-contracts.md).
+
 ## File Location
 
 Place workflow files in your project's `.ao/workflows/` directory:
@@ -111,6 +114,10 @@ Categories include: `planning`, `development`, `review`, `verification`.
 ## Phases
 
 Phases define how work is executed. There are two modes: agent-driven and command-driven.
+
+Longer term, every phase should also participate in the same universal
+verdict-driven output model, with YAML declaring any additional phase-specific
+fields that the phase emits.
 
 ### Agent-Driven Phases
 

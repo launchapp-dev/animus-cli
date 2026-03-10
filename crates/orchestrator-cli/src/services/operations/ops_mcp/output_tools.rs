@@ -23,6 +23,27 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.output.phase-outputs",
+        description = "Get persisted workflow phase outputs. Purpose: Inspect structured phase payloads, decisions, and diagnostics for a workflow. Prerequisites: Workflow must have completed at least one phase. Example: {\"workflow_id\": \"wf-123\"} or {\"workflow_id\": \"wf-123\", \"phase_id\": \"unit-test\"}. Sequencing: Use after a workflow phase runs, or before diagnosis/rework phases.",
+        input_schema = ao_schema_for_type::<OutputPhaseOutputsInput>()
+    )]
+    async fn ao_output_phase_outputs(
+        &self,
+        params: Parameters<OutputPhaseOutputsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let mut args = vec![
+            "output".to_string(),
+            "phase-outputs".to_string(),
+            "--workflow-id".to_string(),
+            input.workflow_id,
+        ];
+        push_opt(&mut args, "--phase-id", input.phase_id);
+        self.run_tool("ao.output.phase-outputs", args, input.project_root)
+            .await
+    }
+
+    #[tool(
         name = "ao.output.monitor",
         description = "Monitor output for a run, task, or phase. Purpose: Stream real-time output from running agents. Prerequisites: Run/task/phase must be active. Example: {\"run_id\": \"abc123\"} or {\"task_id\": \"TASK-001\", \"phase_id\": \"implementation\"}. Sequencing: Use after ao.agent.run or ao.workflow.run to monitor progress.",
         input_schema = ao_schema_for_type::<OutputMonitorInput>()

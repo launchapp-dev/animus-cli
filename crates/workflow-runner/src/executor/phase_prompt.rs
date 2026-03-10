@@ -6,6 +6,7 @@ use super::runtime_contract_builder::{
     load_phase_capabilities, phase_decision_contract_for, phase_output_contract_for,
     phase_system_prompt_for,
 };
+use serde_json::{Map, Value};
 
 pub(super) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -53,6 +54,10 @@ pub fn build_phase_prompt(
         .as_ref()
         .map(phase_decision_extra_field_rule)
         .unwrap_or_default();
+    let result_field_description_rule = phase_contract
+        .as_ref()
+        .map(phase_output_field_rule)
+        .unwrap_or_default();
     let structured_result_rule = match (phase_contract.as_ref(), phase_decision_contract.as_ref()) {
         (Some(contract), Some(_)) => {
             let required_fields = if contract.required_fields.is_empty() {
@@ -69,11 +74,16 @@ pub fn build_phase_prompt(
                         .join(", ")
                 )
             };
+            let result_example = phase_result_example_for_prompt(
+                contract,
+                phase_id,
+                phase_decision_contract.as_ref(),
+            );
             format!(
-                "- Before finishing, emit one JSON line as the FINAL line of output with your phase result and nested phase decision:\n  {{\"kind\":\"{}\"{} ,\"phase_decision\":{{\"kind\":\"phase_decision\",\"phase_id\":\"{phase_id}\",\"verdict\":\"advance|rework|fail|skip\",\"confidence\":0.0-1.0,\"risk\":\"low|medium|high\",\"reason\":\"...\",\"evidence\":[{{\"kind\":\"...\",\"description\":\"...\"}}]}}}}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.",
-                contract.kind,
-                required_result_placeholders(&contract.required_fields),
+                "- Before finishing, emit one JSON line as the FINAL line of output with your phase result and nested phase decision:\n  {}\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.",
+                result_example,
                 required_fields,
+                result_field_description_rule,
             )
         }
         (Some(contract), None) => {
@@ -101,7 +111,7 @@ pub fn build_phase_prompt(
                         .join(", ")
                 )
             };
-            format!("{result_rule}{required_fields}")
+            format!("{result_rule}{required_fields}\n{result_field_description_rule}")
         }
         (None, _) => String::new(),
     };
@@ -134,8 +144,10 @@ pub fn build_phase_prompt(
         } else {
             "\n- A missing phase_decision is invalid. Do not finish without emitting it."
         };
+        let decision_example = phase_decision_example_for_prompt(phase_id, Some(contract));
         format!(
-            "- Before finishing, emit one JSON line with your phase assessment as the FINAL line of output:\n  {{\"kind\":\"phase_decision\",\"phase_id\":\"{phase_id}\",\"verdict\":\"advance|rework|fail|skip\",\"confidence\":0.0-1.0,\"risk\":\"low|medium|high\",\"reason\":\"...\",\"evidence\":[{{\"kind\":\"...\",\"description\":\"...\"}}]}}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Set verdict to \"skip\" to close the task without further work. Use with a reason from: \"already_done\", \"duplicate\", \"no_longer_valid\", \"out_of_scope\".\n- Confidence must be at least {} unless you truly cannot justify a decision.\n- Risk must not exceed {:?} unless you are explicitly failing the phase.\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.{}",
+            "- Before finishing, emit one JSON line with your phase assessment as the FINAL line of output:\n  {}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Set verdict to \"skip\" to close the task without further work. Use with a reason from: \"already_done\", \"duplicate\", \"no_longer_valid\", \"out_of_scope\".\n- Confidence must be at least {} unless you truly cannot justify a decision.\n- Risk must not exceed {:?} unless you are explicitly failing the phase.\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.{}",
+            decision_example,
             contract.min_confidence,
             contract.max_risk,
             required_evidence,
@@ -213,38 +225,170 @@ pub fn build_phase_prompt(
     phase_prompt
 }
 
-fn required_result_placeholders(required_fields: &[String]) -> String {
-    if required_fields.is_empty() {
-        String::new()
-    } else {
+fn phase_decision_example_for_prompt(
+    phase_id: &str,
+    contract: Option<&orchestrator_core::PhaseDecisionContract>,
+) -> String {
+    let mut object = Map::new();
+    object.insert(
+        "kind".to_string(),
+        Value::String("phase_decision".to_string()),
+    );
+    object.insert("phase_id".to_string(), Value::String(phase_id.to_string()));
+    object.insert(
+        "verdict".to_string(),
+        Value::String("advance|rework|fail|skip".to_string()),
+    );
+    object.insert("confidence".to_string(), serde_json::json!("0.0-1.0"));
+    object.insert(
+        "risk".to_string(),
+        Value::String("low|medium|high".to_string()),
+    );
+    object.insert("reason".to_string(), Value::String("...".to_string()));
+    object.insert(
+        "evidence".to_string(),
+        Value::Array(vec![serde_json::json!({
+            "kind": "...",
+            "description": "..."
+        })]),
+    );
+    if let Some(contract) = contract {
+        for (field_name, field) in &contract.fields {
+            object.insert(
+                field_name.clone(),
+                phase_field_placeholder(field_name, field),
+            );
+        }
+    }
+    serde_json::to_string(&Value::Object(object))
+        .unwrap_or_else(|_| "{\"kind\":\"phase_decision\"}".to_string())
+}
+
+fn phase_result_example_for_prompt(
+    contract: &orchestrator_core::PhaseOutputContract,
+    phase_id: &str,
+    decision_contract: Option<&orchestrator_core::PhaseDecisionContract>,
+) -> String {
+    let mut object = Map::new();
+    object.insert("kind".to_string(), Value::String(contract.kind.clone()));
+    for field_name in &contract.required_fields {
+        object.insert(
+            field_name.clone(),
+            Value::String(format!("<{}>", field_name.replace('_', " "))),
+        );
+    }
+    for (field_name, field) in &contract.fields {
+        object.insert(
+            field_name.clone(),
+            phase_field_placeholder(field_name, field),
+        );
+    }
+    object.insert(
+        "phase_decision".to_string(),
+        serde_json::from_str::<Value>(&phase_decision_example_for_prompt(
+            phase_id,
+            decision_contract,
+        ))
+        .unwrap_or_else(|_| Value::Object(Map::new())),
+    );
+    serde_json::to_string(&Value::Object(object)).unwrap_or_else(|_| {
         format!(
-            ",{}",
-            required_fields
-                .iter()
-                .map(|field| format!("\"{field}\":\"<{}>\"", field.replace('_', " ")))
-                .collect::<Vec<_>>()
-                .join(",")
+            "{{\"kind\":\"{}\",\"phase_decision\":{{\"kind\":\"phase_decision\"}}}}",
+            contract.kind
         )
+    })
+}
+
+fn phase_field_placeholder(
+    field_name: &str,
+    field: &orchestrator_core::agent_runtime_config::PhaseFieldDefinition,
+) -> Value {
+    match field.field_type.as_str() {
+        "string" => field
+            .enum_values
+            .first()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or_else(|| Value::String(format!("<{}>", field_name.replace('_', " ")))),
+        "number" => serde_json::json!(0.0),
+        "integer" => serde_json::json!(0),
+        "boolean" => Value::Bool(false),
+        "array" => Value::Array(vec![field
+            .items
+            .as_ref()
+            .map(|item| phase_field_placeholder(field_name, item))
+            .unwrap_or_else(|| Value::String("...".to_string()))]),
+        "object" => {
+            let mut map = Map::new();
+            for (nested_name, nested_field) in &field.fields {
+                map.insert(
+                    nested_name.clone(),
+                    phase_field_placeholder(nested_name, nested_field),
+                );
+            }
+            Value::Object(map)
+        }
+        _ => Value::String(format!("<{}>", field_name.replace('_', " "))),
     }
 }
 
-fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionContract) -> String {
-    let Some(schema) = contract.extra_json_schema.as_ref() else {
+fn phase_output_field_rule(contract: &orchestrator_core::PhaseOutputContract) -> String {
+    if contract.fields.is_empty() {
         return String::new();
-    };
+    }
 
+    let mut lines =
+        vec!["- The top-level result object may include these config-defined fields:".to_string()];
+    for (field_name, field) in &contract.fields {
+        lines.push(format!(
+            "  - `{field_name}` ({}){}{}",
+            field.field_type,
+            if field.required { ", required" } else { "" },
+            field
+                .description
+                .as_deref()
+                .map(|value| format!(": {value}"))
+                .unwrap_or_default()
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionContract) -> String {
     let mut lines = Vec::new();
-    let required_fields = schema
-        .get("required")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
+    let mut required_fields = contract
+        .fields
+        .iter()
+        .filter_map(|(field_name, field)| {
+            if field.required {
+                Some(field_name.clone())
+            } else {
+                None
+            }
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
+    if let Some(schema) = contract.extra_json_schema.as_ref() {
+        let extra_required = schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for field_name in extra_required {
+            if !required_fields
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&field_name))
+            {
+                required_fields.push(field_name);
+            }
+        }
+    }
+
     if !required_fields.is_empty() {
         lines.push(format!(
             "- The `phase_decision` object must also include these config-required fields: {}.",
@@ -256,15 +400,31 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
         ));
     }
 
-    let property_names = schema
-        .get("properties")
-        .and_then(serde_json::Value::as_object)
-        .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let optional_fields = property_names
-        .into_iter()
-        .filter(|field| !required_fields.iter().any(|required| required == field))
+    let mut optional_fields = contract
+        .fields
+        .keys()
+        .filter(|field| !required_fields.iter().any(|required| required == *field))
+        .cloned()
         .collect::<Vec<_>>();
+    if let Some(schema) = contract.extra_json_schema.as_ref() {
+        let property_names = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for field_name in property_names {
+            if !required_fields
+                .iter()
+                .any(|required| required == &field_name)
+                && !optional_fields
+                    .iter()
+                    .any(|existing| existing == &field_name)
+            {
+                optional_fields.push(field_name);
+            }
+        }
+    }
+    let optional_fields = optional_fields.into_iter().collect::<Vec<_>>();
     if !optional_fields.is_empty() {
         lines.push(format!(
             "- The `phase_decision` object may include these additional config-defined fields when relevant: {}.",
@@ -274,6 +434,22 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+
+    if !contract.fields.is_empty() {
+        lines.push("- Decision field descriptions:".to_string());
+        for (field_name, field) in &contract.fields {
+            let detail = field
+                .description
+                .as_deref()
+                .unwrap_or("No description provided.");
+            lines.push(format!(
+                "  - `{field_name}` ({}){}: {}",
+                field.field_type,
+                if field.required { ", required" } else { "" },
+                detail
+            ));
+        }
     }
 
     lines.join("\n")
@@ -348,5 +524,71 @@ mod tests {
         assert!(prompt.contains("\"phase_decision\":{"));
         assert!(prompt.contains("nested phase decision"));
         assert!(prompt.contains("FINAL line of output"));
+    }
+
+    #[test]
+    fn decision_prompt_renders_configured_field_descriptions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path();
+        let mut workflow = orchestrator_core::builtin_workflow_config();
+        let default_agent = orchestrator_core::builtin_agent_runtime_config()
+            .agent_profile("default")
+            .expect("default agent profile")
+            .clone();
+        workflow
+            .agent_profiles
+            .insert("default".to_string(), default_agent);
+        workflow.phase_definitions.insert(
+            "triage".to_string(),
+            orchestrator_core::PhaseExecutionDefinition {
+                mode: orchestrator_core::PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(orchestrator_core::PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.6,
+                    max_risk: orchestrator_core::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: false,
+                    extra_json_schema: None,
+                    fields: std::collections::BTreeMap::from([(
+                        "skip_reason".to_string(),
+                        orchestrator_core::agent_runtime_config::PhaseFieldDefinition {
+                            field_type: "string".to_string(),
+                            required: false,
+                            description: Some(
+                                "When verdict is skip, explain why the task should stop."
+                                    .to_string(),
+                            ),
+                            enum_values: vec![],
+                            items: None,
+                            fields: std::collections::BTreeMap::new(),
+                        },
+                    )]),
+                }),
+                retry: None,
+                command: None,
+                manual: None,
+            },
+        );
+        orchestrator_core::write_workflow_config(project_root, &workflow).expect("write config");
+        let prompt = build_phase_prompt(
+            project_root.to_str().expect("project root"),
+            project_root.to_str().expect("project root"),
+            "wf-1",
+            "TASK-1",
+            "Task title",
+            "Task description",
+            "triage",
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("skip_reason"));
+        assert!(prompt.contains("When verdict is skip, explain why the task should stop."));
     }
 }

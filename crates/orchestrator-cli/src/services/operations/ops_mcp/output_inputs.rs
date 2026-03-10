@@ -33,3 +33,12 @@ pub(super) struct OutputJsonlInput {
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct OutputPhaseOutputsInput {
+    pub(super) workflow_id: String,
+    #[serde(default)]
+    pub(super) phase_id: Option<String>,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}

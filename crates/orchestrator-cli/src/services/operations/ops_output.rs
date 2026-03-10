@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use workflow_runner::executor::phase_output::{phase_output_dir, PersistedPhaseOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ArtifactInfoCli {
@@ -157,6 +158,60 @@ fn list_artifact_infos(project_root: &str, execution_id: &str) -> Result<Vec<Art
     Ok(artifacts)
 }
 
+fn ensure_safe_workflow_id(workflow_id: &str) -> Result<()> {
+    if workflow_id.is_empty()
+        || workflow_id.contains('/')
+        || workflow_id.contains('\\')
+        || workflow_id.contains("..")
+    {
+        anyhow::bail!("workflow id contains unsafe path segments");
+    }
+    Ok(())
+}
+
+pub(crate) fn get_phase_outputs(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: Option<&str>,
+) -> Result<Vec<PersistedPhaseOutput>> {
+    ensure_safe_workflow_id(workflow_id)?;
+    if let Some(phase_id) = phase_id {
+        ensure_safe_workflow_id(phase_id)?;
+    }
+
+    let dir = phase_output_dir(project_root, workflow_id);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut outputs = Vec::new();
+    if let Some(phase_id) = phase_id {
+        let file_path = dir.join(format!("{phase_id}.json"));
+        if !file_path.exists() {
+            return Ok(outputs);
+        }
+        let content = fs::read_to_string(&file_path)?;
+        outputs.push(serde_json::from_str::<PersistedPhaseOutput>(&content)?);
+        return Ok(outputs);
+    }
+
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        outputs.push(serde_json::from_str::<PersistedPhaseOutput>(&content)?);
+    }
+    outputs.sort_by(|left, right| {
+        left.completed_at
+            .cmp(&right.completed_at)
+            .then_with(|| left.phase_id.cmp(&right.phase_id))
+    });
+    Ok(outputs)
+}
+
 pub(crate) async fn handle_output(
     command: OutputCommand,
     project_root: &str,
@@ -179,6 +234,14 @@ pub(crate) async fn handle_output(
                 .collect();
             print_value(events, json)
         }
+        OutputCommand::PhaseOutputs(args) => print_value(
+            serde_json::json!({
+                "workflow_id": args.workflow_id,
+                "phase_id": args.phase_id,
+                "outputs": get_phase_outputs(project_root, &args.workflow_id, args.phase_id.as_deref())?,
+            }),
+            json,
+        ),
         OutputCommand::Artifacts(args) => {
             print_value(list_artifact_infos(project_root, &args.execution_id)?, json)
         }
@@ -552,5 +615,80 @@ mod tests {
         let err = get_run_jsonl_entries("/tmp/project", "../escape")
             .expect_err("unsafe run id should be rejected");
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn get_phase_outputs_reads_persisted_payloads() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let workflow_id = "wf-phase-output-test";
+        let output_dir = phase_output_dir(project_root.to_string_lossy().as_ref(), workflow_id);
+        std::fs::create_dir_all(&output_dir).expect("phase output dir should exist");
+
+        let implementation = PersistedPhaseOutput {
+            phase_id: "implementation".to_string(),
+            completed_at: "2026-03-10T00:00:00Z".to_string(),
+            verdict: Some("advance".to_string()),
+            confidence: Some(0.9),
+            reason: Some("Implemented".to_string()),
+            commit_message: Some("feat: implement contract".to_string()),
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            payload: Some(serde_json::json!({
+                "kind": "implementation_result",
+                "verdict": "advance",
+                "changed_files": ["src/lib.rs"]
+            })),
+        };
+        let unit_test = PersistedPhaseOutput {
+            phase_id: "unit-test".to_string(),
+            completed_at: "2026-03-10T00:05:00Z".to_string(),
+            verdict: Some("rework".to_string()),
+            confidence: Some(1.0),
+            reason: Some("Tests failed".to_string()),
+            commit_message: None,
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            payload: Some(serde_json::json!({
+                "kind": "phase_result",
+                "verdict": "rework",
+                "failure_category": "tests_failed"
+            })),
+        };
+        std::fs::write(
+            output_dir.join("implementation.json"),
+            serde_json::to_string_pretty(&implementation).expect("serialize output"),
+        )
+        .expect("implementation output should be written");
+        std::fs::write(
+            output_dir.join("unit-test.json"),
+            serde_json::to_string_pretty(&unit_test).expect("serialize output"),
+        )
+        .expect("unit-test output should be written");
+
+        let all_outputs =
+            get_phase_outputs(project_root.to_string_lossy().as_ref(), workflow_id, None)
+                .expect("phase outputs should load");
+        assert_eq!(all_outputs.len(), 2);
+        assert_eq!(all_outputs[0].phase_id, "implementation");
+        assert_eq!(all_outputs[1].phase_id, "unit-test");
+
+        let unit_test_only = get_phase_outputs(
+            project_root.to_string_lossy().as_ref(),
+            workflow_id,
+            Some("unit-test"),
+        )
+        .expect("single phase output should load");
+        assert_eq!(unit_test_only.len(), 1);
+        assert_eq!(unit_test_only[0].phase_id, "unit-test");
+        assert_eq!(
+            unit_test_only[0]
+                .payload
+                .as_ref()
+                .and_then(|value| value.get("failure_category"))
+                .and_then(Value::as_str),
+            Some("tests_failed")
+        );
     }
 }

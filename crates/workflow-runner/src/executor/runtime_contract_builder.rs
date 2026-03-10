@@ -3,6 +3,130 @@ use std::path::Path;
 
 use super::phase_executor::load_agent_runtime_config;
 
+fn merge_schema_into(base: &mut Value, overlay: &Value) {
+    if let Some(extra_properties) = overlay.get("properties").and_then(Value::as_object) {
+        let properties = base
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .expect("schema properties should be an object");
+        for (key, value) in extra_properties {
+            properties.insert(key.clone(), value.clone());
+        }
+    }
+
+    if let Some(extra_required) = overlay.get("required").and_then(Value::as_array) {
+        let required = base
+            .get_mut("required")
+            .and_then(Value::as_array_mut)
+            .expect("schema required should be an array");
+        for field in extra_required {
+            if !required.contains(field) {
+                required.push(field.clone());
+            }
+        }
+    }
+}
+
+fn phase_field_schema(
+    definition: &orchestrator_core::agent_runtime_config::PhaseFieldDefinition,
+) -> Value {
+    let mut schema = serde_json::json!({
+        "type": definition.field_type
+    });
+
+    if !definition.enum_values.is_empty() {
+        schema
+            .as_object_mut()
+            .expect("field schema should be object")
+            .insert(
+                "enum".to_string(),
+                Value::Array(
+                    definition
+                        .enum_values
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+    }
+
+    if let Some(items) = definition.items.as_ref() {
+        schema
+            .as_object_mut()
+            .expect("field schema should be object")
+            .insert("items".to_string(), phase_field_schema(items));
+    }
+
+    if !definition.fields.is_empty() {
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+        for (name, nested) in &definition.fields {
+            properties.insert(name.clone(), phase_field_schema(nested));
+            if nested.required {
+                required.push(Value::String(name.clone()));
+            }
+        }
+        let object = schema
+            .as_object_mut()
+            .expect("field schema should be object");
+        object.insert("properties".to_string(), Value::Object(properties));
+        if !required.is_empty() {
+            object.insert("required".to_string(), Value::Array(required));
+        }
+        object.insert("additionalProperties".to_string(), Value::Bool(true));
+    }
+
+    schema
+}
+
+fn apply_contract_fields(
+    schema: &mut Value,
+    fields: &std::collections::BTreeMap<
+        String,
+        orchestrator_core::agent_runtime_config::PhaseFieldDefinition,
+    >,
+    required_fields: &[String],
+) {
+    let mut property_updates: Vec<(String, Value)> = Vec::new();
+    let mut required_updates: Vec<String> = Vec::new();
+
+    for field_name in required_fields {
+        required_updates.push(field_name.clone());
+        property_updates.push((field_name.clone(), serde_json::json!({})));
+    }
+
+    for (field_name, field) in fields {
+        property_updates.push((field_name.clone(), phase_field_schema(field)));
+        if field.required {
+            required_updates.push(field_name.clone());
+        }
+    }
+
+    {
+        let properties = schema
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .expect("schema properties should be an object");
+        for (field_name, field_schema) in property_updates {
+            properties.insert(field_name, field_schema);
+        }
+    }
+
+    {
+        let required = schema
+            .get_mut("required")
+            .and_then(Value::as_array_mut)
+            .expect("schema required should be an array");
+        for field_name in required_updates {
+            let entry = Value::String(field_name);
+            if !required.contains(&entry) {
+                required.push(entry);
+            }
+        }
+    }
+}
+
 pub(super) fn phase_agent_id_for(project_root: &str, phase_id: &str) -> Option<String> {
     let workflow_override =
         orchestrator_core::load_workflow_config_or_default(Path::new(project_root))
@@ -57,9 +181,29 @@ pub(super) fn phase_output_contract_for(
 }
 
 pub(super) fn phase_output_json_schema_for(project_root: &str, phase_id: &str) -> Option<Value> {
-    load_agent_runtime_config(project_root)
-        .phase_output_json_schema(phase_id)
-        .cloned()
+    let config = load_agent_runtime_config(project_root);
+    let contract = config.phase_output_contract(phase_id).cloned();
+    let explicit_schema = config.phase_output_json_schema(phase_id).cloned();
+
+    match (contract, explicit_schema) {
+        (None, None) => None,
+        (Some(contract), explicit_schema) => {
+            let mut schema = serde_json::json!({
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": { "const": contract.kind }
+                },
+                "additionalProperties": true
+            });
+            apply_contract_fields(&mut schema, &contract.fields, &contract.required_fields);
+            if let Some(explicit_schema) = explicit_schema.as_ref() {
+                merge_schema_into(&mut schema, explicit_schema);
+            }
+            Some(schema)
+        }
+        (None, Some(explicit_schema)) => Some(explicit_schema),
+    }
 }
 
 pub(super) fn phase_decision_contract_for(
@@ -119,28 +263,9 @@ pub(super) fn phase_decision_json_schema_for(project_root: &str, phase_id: &str)
         "additionalProperties": true
     });
 
+    apply_contract_fields(&mut schema, &contract.fields, &[]);
     if let Some(extra_schema) = contract.extra_json_schema.as_ref() {
-        if let Some(extra_properties) = extra_schema.get("properties").and_then(Value::as_object) {
-            let properties = schema
-                .get_mut("properties")
-                .and_then(Value::as_object_mut)
-                .expect("phase decision schema properties should be an object");
-            for (key, value) in extra_properties {
-                properties.insert(key.clone(), value.clone());
-            }
-        }
-
-        if let Some(extra_required) = extra_schema.get("required").and_then(Value::as_array) {
-            let required = schema
-                .get_mut("required")
-                .and_then(Value::as_array_mut)
-                .expect("phase decision schema required should be an array");
-            for field in extra_required {
-                if !required.contains(field) {
-                    required.push(field.clone());
-                }
-            }
-        }
+        merge_schema_into(&mut schema, extra_schema);
     }
 
     Some(schema)
@@ -852,5 +977,70 @@ mod tests {
             required, required_decision,
             "phase_decision requiredness should follow the phase decision contract"
         );
+    }
+
+    #[test]
+    fn phase_response_schema_includes_yaml_declared_decision_fields() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow = orchestrator_core::builtin_workflow_config();
+        let default_agent = orchestrator_core::builtin_agent_runtime_config()
+            .agent_profile("default")
+            .expect("default agent profile")
+            .clone();
+        workflow
+            .agent_profiles
+            .insert("default".to_string(), default_agent);
+        workflow.phase_definitions.insert(
+            "triage".to_string(),
+            orchestrator_core::PhaseExecutionDefinition {
+                mode: orchestrator_core::PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(orchestrator_core::PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.6,
+                    max_risk: orchestrator_core::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: false,
+                    extra_json_schema: None,
+                    fields: std::collections::BTreeMap::from([(
+                        "skip_reason".to_string(),
+                        orchestrator_core::agent_runtime_config::PhaseFieldDefinition {
+                            field_type: "string".to_string(),
+                            required: true,
+                            description: Some("Reason for skipping.".to_string()),
+                            enum_values: vec!["already_done".to_string(), "duplicate".to_string()],
+                            items: None,
+                            fields: std::collections::BTreeMap::new(),
+                        },
+                    )]),
+                }),
+                retry: None,
+                command: None,
+                manual: None,
+            },
+        );
+        orchestrator_core::write_workflow_config(temp.path(), &workflow).expect("write config");
+
+        let schema =
+            phase_response_json_schema_for(temp.path().to_str().expect("project root"), "triage")
+                .expect("triage should expose response schema");
+
+        assert_eq!(
+            schema["properties"]["skip_reason"]["type"],
+            serde_json::json!("string")
+        );
+        assert_eq!(
+            schema["properties"]["skip_reason"]["enum"],
+            serde_json::json!(["already_done", "duplicate"])
+        );
+        assert!(schema["required"]
+            .as_array()
+            .expect("required array")
+            .contains(&Value::String("skip_reason".to_string())));
     }
 }

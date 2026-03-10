@@ -145,6 +145,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
         if let PhaseExecutionOutcome::Completed {
             commit_message: resolved_commit,
             phase_decision: Some(decision),
+            ..
         } = &run_result.outcome
         {
             commit_message = resolved_commit
@@ -298,6 +299,8 @@ pub enum PhaseExecutionOutcome {
         commit_message: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase_decision: Option<orchestrator_core::PhaseDecision>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_payload: Option<Value>,
     },
     NeedsResearch {
         reason: String,
@@ -447,6 +450,62 @@ pub fn parse_phase_decision_from_text(text: &str) -> Option<orchestrator_core::P
     None
 }
 
+fn parse_phase_decision_payload_from_payload(payload: &Value) -> Option<Value> {
+    match payload {
+        Value::Array(items) => items
+            .iter()
+            .find_map(parse_phase_decision_payload_from_payload),
+        Value::Object(object) => {
+            let is_decision = object
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|v| v.eq_ignore_ascii_case("phase_decision"))
+                .unwrap_or(false);
+            if is_decision {
+                return Some(payload.clone());
+            }
+
+            for key in [
+                "proposal",
+                "data",
+                "payload",
+                "result",
+                "output",
+                "item",
+                "phase_decision",
+            ] {
+                if let Some(value) = object.get(key) {
+                    if let Some(decision) = parse_phase_decision_payload_from_payload(value) {
+                        return Some(decision);
+                    }
+                }
+            }
+
+            for key in ["text", "message", "content", "output_text", "delta"] {
+                if let Some(raw) = object.get(key).and_then(Value::as_str) {
+                    if let Some(decision) = parse_phase_decision_payload_from_text(raw) {
+                        return Some(decision);
+                    }
+                }
+            }
+
+            None
+        }
+        Value::String(text) => parse_phase_decision_payload_from_text(text),
+        _ => None,
+    }
+}
+
+fn parse_phase_decision_payload_from_text(text: &str) -> Option<Value> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Some(decision) = parse_phase_decision_payload_from_payload(&payload) {
+            return Some(decision);
+        }
+    }
+
+    None
+}
+
 fn parse_commit_message_from_payload_for_kind(
     payload: &Value,
     expected_kind: &str,
@@ -516,6 +575,62 @@ fn parse_commit_message_from_text_for_kind(text: &str, expected_kind: &str) -> O
     None
 }
 
+fn parse_result_payload_from_payload_for_kind(
+    payload: &Value,
+    expected_kind: &str,
+) -> Option<Value> {
+    match payload {
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| parse_result_payload_from_payload_for_kind(item, expected_kind)),
+        Value::Object(object) => {
+            let kind = object
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if kind.eq_ignore_ascii_case(expected_kind) {
+                return Some(payload.clone());
+            }
+
+            for key in ["proposal", "data", "payload", "result", "output", "item"] {
+                if let Some(value) = object.get(key) {
+                    if let Some(result_payload) =
+                        parse_result_payload_from_payload_for_kind(value, expected_kind)
+                    {
+                        return Some(result_payload);
+                    }
+                }
+            }
+
+            for key in ["text", "message", "content", "output_text", "delta"] {
+                if let Some(raw) = object.get(key).and_then(Value::as_str) {
+                    if let Some(result_payload) =
+                        parse_result_payload_from_text_for_kind(raw, expected_kind)
+                    {
+                        return Some(result_payload);
+                    }
+                }
+            }
+
+            None
+        }
+        Value::String(text) => parse_result_payload_from_text_for_kind(text, expected_kind),
+        _ => None,
+    }
+}
+
+fn parse_result_payload_from_text_for_kind(text: &str, expected_kind: &str) -> Option<Value> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Some(result_payload) =
+            parse_result_payload_from_payload_for_kind(&payload, expected_kind)
+        {
+            return Some(result_payload);
+        }
+    }
+
+    None
+}
+
 pub fn parse_commit_message_from_text(text: &str) -> Option<String> {
     parse_commit_message_from_text_for_kind(text, "implementation_result")
 }
@@ -560,7 +675,6 @@ pub async fn run_workflow_phase_attempt(
         .and_then(|v| v.as_str())
         .unwrap_or("codex");
     let parse_commit_message = phase_requires_commit_message_with_config(project_root, phase_id);
-    let expected_result_kind = phase_result_kind_for(project_root, phase_id);
     let config_dir = runner_config_dir(Path::new(project_root));
     let stream = connect_runner(&config_dir).await.with_context(|| {
         format!(
@@ -575,7 +689,9 @@ pub async fn run_workflow_phase_attempt(
     let mut pending_research_reason: Option<String> = None;
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
+    let mut pending_result_payload: Option<Value> = None;
     let parse_phase_decision = phase_decision_contract_for(project_root, phase_id).is_some();
+    let expected_result_kind = phase_result_kind_for(project_root, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
     let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
@@ -632,6 +748,15 @@ pub async fn run_workflow_phase_attempt(
                         pending_phase_decision = Some(decision);
                     }
                 }
+                if pending_result_payload.is_none() {
+                    pending_result_payload = parse_result_payload_from_text_for_kind(
+                        &text,
+                        expected_result_kind.as_str(),
+                    );
+                }
+                if pending_result_payload.is_none() && parse_phase_decision {
+                    pending_result_payload = parse_phase_decision_payload_from_text(&text);
+                }
                 if stream_to_stderr {
                     use std::io::Write as _;
                     if let Some(formatted) =
@@ -674,6 +799,15 @@ pub async fn run_workflow_phase_attempt(
                         }
                         pending_phase_decision = Some(decision);
                     }
+                }
+                if pending_result_payload.is_none() {
+                    pending_result_payload = parse_result_payload_from_text_for_kind(
+                        &content,
+                        expected_result_kind.as_str(),
+                    );
+                }
+                if pending_result_payload.is_none() && parse_phase_decision {
+                    pending_result_payload = parse_phase_decision_payload_from_text(&content);
                 }
                 if stream_verbose {
                     use std::io::Write as _;
@@ -728,6 +862,7 @@ pub async fn run_workflow_phase_attempt(
                 return Ok(PhaseExecutionOutcome::Completed {
                     commit_message: pending_commit_message,
                     phase_decision: pending_phase_decision,
+                    result_payload: pending_result_payload,
                 });
             }
             AgentRunEvent::ToolCall { tool_info, .. } => {
@@ -1026,7 +1161,10 @@ pub async fn run_workflow_phase_with_agent(
                 Some(PhaseExecutionOutcome::Completed {
                     phase_decision,
                     commit_message,
-                }) => phase_decision.is_some() || commit_message.is_some(),
+                    result_payload,
+                }) => {
+                    phase_decision.is_some() || commit_message.is_some() || result_payload.is_some()
+                }
                 Some(PhaseExecutionOutcome::NeedsResearch { .. }) => true,
                 Some(PhaseExecutionOutcome::ManualPending { .. }) => true,
                 None => false,
@@ -1340,6 +1478,7 @@ fn resolve_command_cwd(
 #[derive(Debug, Clone)]
 struct CommandExecutionResult {
     exit_code: i32,
+    program: String,
     args: Vec<String>,
     stdout: String,
     stderr: String,
@@ -1348,6 +1487,206 @@ struct CommandExecutionResult {
     parsed_payload: Option<Value>,
     phase_decision: Option<orchestrator_core::PhaseDecision>,
     failure_summary: Option<String>,
+}
+
+fn summarize_output_excerpt(text: &str, max_len: usize) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let excerpt = if trimmed.chars().count() > max_len {
+        let mut shortened = trimmed.chars().take(max_len).collect::<String>();
+        shortened.push_str("...");
+        shortened
+    } else {
+        trimmed.to_string()
+    };
+    Some(excerpt)
+}
+
+fn command_phase_evidence_kind(
+    phase_id: &str,
+    program: &str,
+    args: &[String],
+    success: bool,
+) -> orchestrator_core::PhaseEvidenceKind {
+    let normalized_phase = phase_id.to_ascii_lowercase();
+    let normalized_program = program.to_ascii_lowercase();
+    let normalized_args = args
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let looks_like_test = normalized_phase.contains("test")
+        || normalized_program.contains("cargo") && normalized_args.iter().any(|arg| arg == "test");
+
+    if looks_like_test {
+        if success {
+            orchestrator_core::PhaseEvidenceKind::TestsPassed
+        } else {
+            orchestrator_core::PhaseEvidenceKind::TestsFailed
+        }
+    } else {
+        orchestrator_core::PhaseEvidenceKind::Custom
+    }
+}
+
+fn command_failure_category(phase_id: &str, program: &str, args: &[String]) -> String {
+    let normalized_phase = phase_id.to_ascii_lowercase();
+    let normalized_program = program.to_ascii_lowercase();
+    let normalized_args = args
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    if normalized_phase.contains("test")
+        || normalized_program.contains("cargo") && normalized_args.iter().any(|arg| arg == "test")
+    {
+        "tests_failed".to_string()
+    } else if normalized_phase.contains("lint")
+        || normalized_program.contains("clippy")
+        || normalized_program.contains("rustfmt")
+        || normalized_args
+            .iter()
+            .any(|arg| arg.contains("clippy") || arg.contains("fmt"))
+    {
+        "lint_failed".to_string()
+    } else if normalized_phase.contains("build")
+        || normalized_program.contains("cargo") && normalized_args.iter().any(|arg| arg == "build")
+    {
+        "build_failed".to_string()
+    } else {
+        "command_failed".to_string()
+    }
+}
+
+fn extract_failing_tests(stdout: &str, stderr: &str) -> Vec<String> {
+    let mut failing = Vec::new();
+    for text in [stdout, stderr] {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("test ") {
+                if let Some((name, status)) = rest.split_once(" ... ") {
+                    if status.trim().starts_with("FAILED") {
+                        let candidate = name.trim().to_string();
+                        if !candidate.is_empty() && !failing.contains(&candidate) {
+                            failing.push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    failing
+}
+
+fn build_command_phase_decision(
+    phase_id: &str,
+    program: &str,
+    args: &[String],
+    exit_code: i32,
+    failure_summary: Option<&str>,
+) -> orchestrator_core::PhaseDecision {
+    let success = failure_summary.is_none();
+    let kind = command_phase_evidence_kind(phase_id, program, args, success);
+    let reason = failure_summary
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Command `{program}` completed successfully"));
+    let verdict = if success {
+        orchestrator_core::PhaseDecisionVerdict::Advance
+    } else {
+        orchestrator_core::PhaseDecisionVerdict::Rework
+    };
+    let risk = if success {
+        orchestrator_core::WorkflowDecisionRisk::Low
+    } else {
+        orchestrator_core::WorkflowDecisionRisk::Medium
+    };
+
+    orchestrator_core::PhaseDecision {
+        kind: "phase_decision".to_string(),
+        phase_id: phase_id.to_string(),
+        verdict,
+        confidence: 1.0,
+        risk,
+        reason: reason.clone(),
+        evidence: vec![orchestrator_core::PhaseEvidence {
+            kind,
+            description: format!("Command `{program}` exited with code {exit_code}"),
+            file_path: None,
+            value: Some(serde_json::json!({
+                "program": program,
+                "args": args,
+                "exit_code": exit_code
+            })),
+        }],
+        guardrail_violations: vec![],
+        commit_message: None,
+        target_phase: None,
+    }
+}
+
+fn build_command_result_payload(
+    phase_id: &str,
+    contract_kind: Option<&str>,
+    command_result: &CommandExecutionResult,
+    phase_decision: &orchestrator_core::PhaseDecision,
+) -> Value {
+    let mut payload = match command_result.parsed_payload.clone() {
+        Some(Value::Object(map)) => Value::Object(map),
+        Some(other) => serde_json::json!({ "raw_payload": other }),
+        None => serde_json::json!({}),
+    };
+
+    payload["kind"] = Value::String(
+        payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(contract_kind.unwrap_or("phase_result"))
+            .to_string(),
+    );
+    payload["phase_id"] = Value::String(phase_id.to_string());
+    payload["verdict"] =
+        Value::String(format!("{:?}", phase_decision.verdict).to_ascii_lowercase());
+    payload["reason"] = Value::String(phase_decision.reason.clone());
+    payload["confidence"] = serde_json::json!(phase_decision.confidence);
+    payload["risk"] = Value::String(format!("{:?}", phase_decision.risk).to_ascii_lowercase());
+    payload["evidence"] =
+        serde_json::to_value(&phase_decision.evidence).unwrap_or(Value::Array(vec![]));
+    payload["exit_code"] = serde_json::json!(command_result.exit_code);
+    payload["command"] = serde_json::json!({
+        "program": command_result.program,
+        "args": command_result.args
+    });
+    payload["duration_ms"] = serde_json::json!(command_result.duration_ms);
+
+    if let Some(summary) = command_result.failure_summary.as_deref() {
+        payload["failure_summary"] = Value::String(summary.to_string());
+        payload["failure_category"] = Value::String(command_failure_category(
+            phase_id,
+            command_result.program.as_str(),
+            &command_result.args,
+        ));
+        let failing_tests = extract_failing_tests(&command_result.stdout, &command_result.stderr);
+        if !failing_tests.is_empty() {
+            payload["failing_tests"] = Value::Array(
+                failing_tests
+                    .into_iter()
+                    .map(Value::String)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    if let Some(stdout_excerpt) = summarize_output_excerpt(&command_result.stdout, 800) {
+        payload["stdout_excerpt"] = Value::String(stdout_excerpt);
+    }
+    if let Some(stderr_excerpt) = summarize_output_excerpt(&command_result.stderr, 800) {
+        payload["stderr_excerpt"] = Value::String(stderr_excerpt);
+    }
+
+    payload
 }
 
 #[derive(Debug)]
@@ -1517,6 +1856,7 @@ async fn run_workflow_phase_with_command(
         }
         return Ok(CommandExecutionResult {
             exit_code,
+            program: command.program.clone(),
             args,
             stdout,
             stderr,
@@ -1542,6 +1882,7 @@ async fn run_workflow_phase_with_command(
 
     Ok(CommandExecutionResult {
         exit_code,
+        program: command.program.clone(),
         args,
         stdout,
         stderr,
@@ -2032,7 +2373,11 @@ pub async fn run_workflow_phase(
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
                 match &outcome {
-                    PhaseExecutionOutcome::Completed { commit_message, .. } => {
+                    PhaseExecutionOutcome::Completed {
+                        commit_message,
+                        result_payload,
+                        ..
+                    } => {
                         if definition
                             .output_contract
                             .as_ref()
@@ -2057,14 +2402,18 @@ pub async fn run_workflow_phase(
                             ));
                         }
 
-                        if let Some(schema) = definition.output_json_schema.as_ref() {
-                            let payload = serde_json::json!({
-                                "kind": definition
-                                    .output_contract
-                                    .as_ref()
-                                    .map(|contract| contract.kind.as_str())
-                                    .unwrap_or("phase_result"),
-                                "commit_message": commit_message,
+                        let phase_schema = phase_response_json_schema_for(project_root, phase_id)
+                            .or_else(|| phase_output_json_schema_for(project_root, phase_id));
+                        if let Some(schema) = phase_schema.as_ref() {
+                            let payload = result_payload.clone().unwrap_or_else(|| {
+                                serde_json::json!({
+                                    "kind": definition
+                                        .output_contract
+                                        .as_ref()
+                                        .map(|contract| contract.kind.as_str())
+                                        .unwrap_or("phase_result"),
+                                    "commit_message": commit_message,
+                                })
                             });
                             if let Err(error) = validate_basic_json_schema(&payload, schema) {
                                 signals.push(PhaseExecutionSignal {
@@ -2128,45 +2477,42 @@ pub async fn run_workflow_phase(
                     "workflow_id": workflow_id,
                     "subject_id": subject_id,
                     "phase_id": phase_id,
-                    "program": command.program,
-                    "args": command_result.args,
-                    "cwd": command_result.cwd,
+                    "program": command_result.program,
+                    "args": command_result.args.clone(),
+                    "cwd": command_result.cwd.clone(),
                     "exit_code": command_result.exit_code,
                     "duration_ms": command_result.duration_ms,
-                    "stdout": command_result.stdout,
-                    "stderr": command_result.stderr,
-                    "parsed_payload": command_result.parsed_payload,
-                    "phase_decision": command_result.phase_decision,
+                    "stdout": command_result.stdout.clone(),
+                    "stderr": command_result.stderr.clone(),
+                    "parsed_payload": command_result.parsed_payload.clone(),
+                    "phase_decision": command_result.phase_decision.clone(),
                 }),
             });
 
-            if let Some(failure_summary) = command_result.failure_summary {
-                let decision = command_result.phase_decision.unwrap_or_else(|| {
-                    orchestrator_core::PhaseDecision {
-                        kind: "phase_decision".to_string(),
-                        phase_id: phase_id.to_string(),
-                        verdict: orchestrator_core::PhaseDecisionVerdict::Rework,
-                        confidence: 1.0,
-                        risk: orchestrator_core::WorkflowDecisionRisk::Low,
-                        reason: failure_summary,
-                        evidence: vec![orchestrator_core::PhaseEvidence {
-                            kind: orchestrator_core::PhaseEvidenceKind::TestsFailed,
-                            description: format!(
-                                "Command `{}` exited with code {}",
-                                command.program, command_result.exit_code
-                            ),
-                            file_path: None,
-                            value: None,
-                        }],
-                        guardrail_violations: vec![],
-                        commit_message: None,
-                        target_phase: None,
-                    }
+            if let Some(ref failure_summary) = command_result.failure_summary {
+                let decision = command_result.phase_decision.clone().unwrap_or_else(|| {
+                    build_command_phase_decision(
+                        phase_id,
+                        command_result.program.as_str(),
+                        &command_result.args,
+                        command_result.exit_code,
+                        Some(failure_summary.as_str()),
+                    )
                 });
+                let result_payload = build_command_result_payload(
+                    phase_id,
+                    definition
+                        .output_contract
+                        .as_ref()
+                        .map(|contract| contract.kind.as_str()),
+                    &command_result,
+                    &decision,
+                );
 
                 let outcome = PhaseExecutionOutcome::Completed {
                     commit_message: None,
                     phase_decision: Some(decision),
+                    result_payload: Some(result_payload),
                 };
 
                 persist_phase_output(project_root, workflow_id, phase_id, &outcome)?;
@@ -2189,10 +2535,30 @@ pub async fn run_workflow_phase(
                 });
             }
 
+            let decision = command_result.phase_decision.clone().unwrap_or_else(|| {
+                build_command_phase_decision(
+                    phase_id,
+                    command_result.program.as_str(),
+                    &command_result.args,
+                    command_result.exit_code,
+                    None,
+                )
+            });
+            let result_payload = build_command_result_payload(
+                phase_id,
+                definition
+                    .output_contract
+                    .as_ref()
+                    .map(|contract| contract.kind.as_str()),
+                &command_result,
+                &decision,
+            );
+
             Ok(PhaseExecutionRunResult {
                 outcome: PhaseExecutionOutcome::Completed {
                     commit_message: None,
-                    phase_decision: command_result.phase_decision,
+                    phase_decision: Some(decision),
+                    result_payload: Some(result_payload),
                 },
                 metadata,
                 signals,
