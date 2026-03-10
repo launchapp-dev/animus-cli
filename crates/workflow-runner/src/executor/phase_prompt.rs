@@ -239,7 +239,7 @@ fn phase_decision_example_for_prompt(
         "verdict".to_string(),
         Value::String("advance|rework|fail|skip".to_string()),
     );
-    object.insert("confidence".to_string(), serde_json::json!("0.0-1.0"));
+    object.insert("confidence".to_string(), serde_json::json!(0.95));
     object.insert(
         "risk".to_string(),
         Value::String("low|medium|high".to_string()),
@@ -590,5 +590,25 @@ mod tests {
 
         assert!(prompt.contains("skip_reason"));
         assert!(prompt.contains("When verdict is skip, explain why the task should stop."));
+    }
+
+    #[test]
+    fn decision_prompt_example_uses_numeric_confidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_str().expect("project root");
+        let prompt = build_phase_prompt(
+            project_root,
+            project_root,
+            "wf-1",
+            "TASK-1",
+            "Task title",
+            "Task description",
+            "triage",
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("\"confidence\":0.95"));
+        assert!(!prompt.contains("\"confidence\":\"0.0-1.0\""));
     }
 }

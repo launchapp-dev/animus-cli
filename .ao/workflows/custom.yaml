@@ -145,6 +145,103 @@ phases:
           enum: [done, cancelled]
           description: "When verdict is skip, use done for already_done, otherwise cancelled."
 
+  refine-requirements:
+    mode: agent
+    agent: requirements-refiner
+    directive: "Refine the current task into implementation-ready scope with concrete acceptance criteria, checklist items, relevant code references, and constraints."
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        refined_scope:
+          type: string
+          description: "Concise summary of the refined task scope and implementation boundaries."
+        acceptance_criteria_added:
+          type: array
+          description: "Acceptance criteria or checklist items that were added or clarified."
+          items:
+            type: string
+        relevant_files:
+          type: array
+          description: "Repository files or modules the implementation phase should inspect or edit."
+          items:
+            type: string
+
+  implementation:
+    mode: agent
+    directive: "Implement production-quality code for this task. Keep changes focused and executable."
+    output_contract:
+      kind: implementation_result
+      required_fields: [commit_message]
+      fields:
+        summary:
+          type: string
+          description: "Short summary of the completed implementation work."
+        changed_files:
+          type: array
+          description: "Files changed by the implementation phase."
+          items:
+            type: string
+        validation_commands:
+          type: array
+          description: "Commands the implementation phase ran to validate the change."
+          items:
+            type: string
+    decision_contract:
+      required_evidence: [files_modified]
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        residual_risks:
+          type: array
+          description: "Known risks or follow-up concerns that remain after implementation."
+          items:
+            type: string
+
+  code-review:
+    mode: agent
+    directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
+    decision_contract:
+      required_evidence: [code_review_clean]
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        review_summary:
+          type: string
+          description: "Short review summary explaining why the branch is approved or sent back."
+        blocking_issues:
+          type: array
+          description: "Concrete blocking defects or rework items discovered during review."
+          items:
+            type: string
+
+  po-review:
+    mode: agent
+    agent: po-reviewer
+    directive: "Review the delivered work against product intent and acceptance criteria. Do not edit code. If gaps remain, set verdict to rework and update the task/checklist through AO MCP with precise next actions."
+    decision_contract:
+      required_evidence: [requirements_met]
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        requirements_verified:
+          type: array
+          description: "Acceptance criteria or product requirements confirmed as satisfied."
+          items:
+            type: string
+        unmet_requirements:
+          type: array
+          description: "Acceptance criteria or product requirements still missing or only partially satisfied."
+          items:
+            type: string
+        product_summary:
+          type: string
+          description: "Short product-facing assessment of the delivered behavior and remaining gaps."
+
   brain-requirement-scan:
     mode: command
     directive: "List top requirement candidates that need work"
@@ -166,6 +263,23 @@ phases:
   unit-test:
     mode: command
     directive: "Run the workspace test suite"
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
+          description: "Process exit code returned by the test command."
+        failure_summary:
+          type: string
+          description: "High-level summary of the failing test command when verdict is rework."
+        failing_tests:
+          type: array
+          description: "Failing test names extracted from the command output when available."
+          items:
+            type: string
+        suggested_fix_focus:
+          type: string
+          description: "Short summary of what the next repair loop should focus on."
     command:
       cwd_mode: task_root
       program: cargo
@@ -175,6 +289,18 @@ phases:
   lint:
     mode: command
     directive: "Run clippy with deny warnings"
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
+          description: "Process exit code returned by the lint command."
+        failure_summary:
+          type: string
+          description: "High-level summary of the lint failure when verdict is rework."
+        suggested_fix_focus:
+          type: string
+          description: "Short summary of what the next repair loop should focus on."
     command:
       cwd_mode: task_root
       program: cargo

@@ -393,6 +393,41 @@ pub fn parse_research_reason_from_text(text: &str) -> Option<String> {
     None
 }
 
+fn normalize_phase_decision_payload(payload: &Value) -> Value {
+    match payload {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(normalize_phase_decision_payload)
+                .collect::<Vec<_>>(),
+        ),
+        Value::Object(object) => {
+            let mut normalized = serde_json::Map::new();
+            for (key, value) in object {
+                normalized.insert(key.clone(), normalize_phase_decision_payload(value));
+            }
+
+            let is_phase_decision = normalized
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|value| value.eq_ignore_ascii_case("phase_decision"))
+                .unwrap_or(false);
+            if is_phase_decision {
+                if let Some(confidence) = normalized.get_mut("confidence") {
+                    if let Some(raw) = confidence.as_str() {
+                        if let Ok(parsed) = raw.trim().parse::<f64>() {
+                            *confidence = serde_json::json!(parsed);
+                        }
+                    }
+                }
+            }
+
+            Value::Object(normalized)
+        }
+        _ => payload.clone(),
+    }
+}
+
 fn parse_phase_decision_from_payload(payload: &Value) -> Option<orchestrator_core::PhaseDecision> {
     match payload {
         Value::Array(items) => items.iter().find_map(parse_phase_decision_from_payload),
@@ -403,8 +438,9 @@ fn parse_phase_decision_from_payload(payload: &Value) -> Option<orchestrator_cor
                 .map(|v| v.eq_ignore_ascii_case("phase_decision"))
                 .unwrap_or(false);
             if is_decision {
+                let normalized = normalize_phase_decision_payload(payload);
                 if let Ok(decision) =
-                    serde_json::from_value::<orchestrator_core::PhaseDecision>(payload.clone())
+                    serde_json::from_value::<orchestrator_core::PhaseDecision>(normalized)
                 {
                     return Some(decision);
                 }
@@ -462,7 +498,7 @@ fn parse_phase_decision_payload_from_payload(payload: &Value) -> Option<Value> {
                 .map(|v| v.eq_ignore_ascii_case("phase_decision"))
                 .unwrap_or(false);
             if is_decision {
-                return Some(payload.clone());
+                return Some(normalize_phase_decision_payload(payload));
             }
 
             for key in [
@@ -589,7 +625,7 @@ fn parse_result_payload_from_payload_for_kind(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if kind.eq_ignore_ascii_case(expected_kind) {
-                return Some(payload.clone());
+                return Some(normalize_phase_decision_payload(payload));
             }
 
             for key in ["proposal", "data", "payload", "result", "output", "item"] {
@@ -2119,6 +2155,53 @@ mod command_phase_tests {
             decision.verdict,
             orchestrator_core::PhaseDecisionVerdict::Rework
         ));
+    }
+
+    #[test]
+    fn parse_phase_decision_coerces_numeric_confidence_strings() {
+        let decision = parse_phase_decision_from_payload(&serde_json::json!({
+            "kind": "phase_decision",
+            "phase_id": "triage",
+            "verdict": "skip",
+            "confidence": "0.95",
+            "risk": "low",
+            "reason": "already done",
+            "evidence": [],
+            "skip_reason": "already_done"
+        }))
+        .expect("phase decision should parse");
+
+        assert!(matches!(
+            decision.verdict,
+            orchestrator_core::PhaseDecisionVerdict::Skip
+        ));
+        assert!((decision.confidence - 0.95).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_phase_decision_payload_normalizes_nested_confidence_strings() {
+        let payload = parse_result_payload_from_payload_for_kind(
+            &serde_json::json!({
+                "kind": "implementation_result",
+                "summary": "done",
+                "phase_decision": {
+                    "kind": "phase_decision",
+                    "phase_id": "implementation",
+                    "verdict": "advance",
+                    "confidence": "0.91",
+                    "risk": "low",
+                    "reason": "implemented",
+                    "evidence": []
+                }
+            }),
+            "implementation_result",
+        )
+        .expect("result payload should parse");
+
+        assert_eq!(
+            payload["phase_decision"]["confidence"],
+            serde_json::json!(0.91)
+        );
     }
 
     #[test]
