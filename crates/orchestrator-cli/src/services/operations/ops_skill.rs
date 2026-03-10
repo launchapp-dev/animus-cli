@@ -494,9 +494,14 @@ fn handle_publish(args: SkillPublishArgs, project_root: &str, json: bool) -> Res
 }
 
 fn handle_registry_add(args: SkillRegistryAddArgs, project_root: &str, json: bool) -> Result<()> {
-    let id = sanitize_required(&args.id, "registry id")?;
+    let id = sanitize_required(&args.id, "id")?;
+    let url = sanitize_required(&args.url, "url")?;
     let mut state = load_skill_registry_state(project_root)?;
-    let existing = state.registries.iter().find(|entry| entry.id == id).cloned();
+    let existing = state
+        .registries
+        .iter()
+        .find(|entry| entry.id == id)
+        .cloned();
     let default_priority = state
         .registries
         .iter()
@@ -504,26 +509,29 @@ fn handle_registry_add(args: SkillRegistryAddArgs, project_root: &str, json: boo
         .max()
         .unwrap_or(0)
         .saturating_add(1);
-    let priority = args
-        .priority
-        .unwrap_or_else(|| existing.as_ref().map(|e| e.priority).unwrap_or(default_priority));
-    let url = args
-        .url
-        .or_else(|| existing.as_ref().and_then(|e| e.url.clone()));
+    let priority = args.priority.unwrap_or_else(|| {
+        existing
+            .as_ref()
+            .map(|e| e.priority)
+            .unwrap_or(default_priority)
+    });
     state.registries.retain(|entry| entry.id != id);
-    state.registries.push(SkillRegistrySourceConfig {
+    let registry = SkillRegistrySourceConfig {
         id: id.clone(),
         priority,
         available: true,
-        url: url.clone(),
+        url: Some(url),
+    };
+    state.registries.push(SkillRegistrySourceConfig {
+        id: registry.id.clone(),
+        priority: registry.priority,
+        available: registry.available,
+        url: registry.url.clone(),
     });
     let changed = save_skill_registry_state_if_changed(project_root, &state)?;
     print_value(
         serde_json::json!({
-            "id": id,
-            "priority": priority,
-            "url": url,
-            "available": true,
+            "registry": registry,
             "registry_changed": changed,
         }),
         json,
@@ -535,7 +543,7 @@ fn handle_registry_remove(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let id = sanitize_required(&args.id, "registry id")?;
+    let id = sanitize_required(&args.id, "id")?;
     let mut state = load_skill_registry_state(project_root)?;
     if !state.registries.iter().any(|entry| entry.id == id) {
         return Err(not_found_error(format!("registry not found: {}", id)));
@@ -544,7 +552,7 @@ fn handle_registry_remove(
     let changed = save_skill_registry_state_if_changed(project_root, &state)?;
     print_value(
         serde_json::json!({
-            "removed": id,
+            "removed_id": id,
             "registry_changed": changed,
         }),
         json,
@@ -552,7 +560,8 @@ fn handle_registry_remove(
 }
 
 fn handle_registry_list(project_root: &str, json: bool) -> Result<()> {
-    let state = load_skill_registry_state(project_root)?;
+    let mut state = load_skill_registry_state(project_root)?;
+    state.normalize();
     print_value(&state.registries, json)
 }
 

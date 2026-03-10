@@ -21,6 +21,8 @@ agents:
 
       The implementation agent reads the task description and checklist to know
       what to fix — if you don't update the task, the rework will be blind.
+      Before finishing, emit exactly one JSON line with your workflow verdict:
+      {"kind":"phase_decision","phase_id":"po-review","verdict":"advance|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"requirements_met","description":"All acceptance criteria were verified against the implementation"}]}
     model: claude-sonnet-4-6
     tool: claude
 
@@ -44,6 +46,8 @@ agents:
 
       Do NOT change the task title. Focus on making the description implementation-ready.
       If the task is already well-specified, leave it unchanged and note that.
+      Before finishing, emit exactly one JSON line with your workflow verdict:
+      {"kind":"phase_decision","phase_id":"refine-requirements","verdict":"advance|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"requirements_met","description":"Task description and checklist were refined into implementation-ready acceptance criteria"}]}
     model: claude-sonnet-4-6
     tool: claude
 
@@ -63,6 +67,9 @@ agents:
       for DONE/OBSOLETE/DUPLICATE verdicts. For KEEP, leave the status unchanged.
       Search the codebase thoroughly before making your verdict.
       Be concise: one verdict line, then 1-2 sentences of justification.
+      Before finishing, emit exactly one JSON line with your workflow verdict:
+      {"kind":"phase_decision","phase_id":"triage","verdict":"advance|skip|rework|fail","confidence":0.0-1.0,"risk":"low|medium|high","reason":"...","evidence":[{"kind":"code_review_clean","description":"Task validity assessment completed"}]}
+      Use "advance" for KEEP, "skip" for DONE/OBSOLETE/DUPLICATE when the task should not continue.
     model: claude-sonnet-4-6
     tool: claude
 
@@ -128,6 +135,7 @@ phases:
     mode: command
     directive: "List top requirement candidates that need work"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["run", "-p", "orchestrator-cli", "--", "--project-root", ".", "requirements", "list", "--json", "--limit", "10"]
       timeout_secs: 300
@@ -136,6 +144,7 @@ phases:
     mode: command
     directive: "Pick the next highest-priority task candidate"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["run", "-p", "orchestrator-cli", "--", "--project-root", ".", "task", "next", "--json"]
       timeout_secs: 300
@@ -144,6 +153,7 @@ phases:
     mode: command
     directive: "Run the workspace test suite"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["test", "--workspace"]
       timeout_secs: 600
@@ -152,6 +162,7 @@ phases:
     mode: command
     directive: "Run clippy with deny warnings"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120

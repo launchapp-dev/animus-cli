@@ -34,7 +34,7 @@ pub(crate) struct SkillRegistryAddArgs {
     #[arg(long, help = "Registry identifier.")]
     pub(crate) id: String,
     #[arg(long, help = "Registry URL (for example https://registry.mcp.run).")]
-    pub(crate) url: Option<String>,
+    pub(crate) url: String,
     #[arg(long, help = "Search priority (lower value means higher priority).")]
     pub(crate) priority: Option<u32>,
 }

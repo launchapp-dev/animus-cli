@@ -529,3 +529,110 @@ fn skill_error_contract_maps_registry_unavailable_to_exit_code_5() -> Result<()>
 
     Ok(())
 }
+
+#[test]
+fn skill_registry_add_remove_and_list_follow_contract() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let added = harness.run_json_ok(&[
+        "skill",
+        "registry",
+        "add",
+        "--id",
+        "mirror",
+        "--url",
+        "https://mirror.example.com",
+    ])?;
+    assert_eq!(
+        added.pointer("/data/registry/id").and_then(Value::as_str),
+        Some("mirror")
+    );
+    assert_eq!(
+        added.pointer("/data/registry/url").and_then(Value::as_str),
+        Some("https://mirror.example.com")
+    );
+    assert_eq!(
+        added
+            .pointer("/data/registry/available")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        added
+            .pointer("/data/registry_changed")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let listed = harness.run_json_ok(&["skill", "registry", "list"])?;
+    let registries = listed
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .context("registry list should return an array payload")?;
+    assert!(
+        registries
+            .iter()
+            .any(|entry| entry.get("id").and_then(Value::as_str) == Some("mirror")),
+        "registry list should include the added mirror entry"
+    );
+
+    let removed = harness.run_json_ok(&["skill", "registry", "remove", "--id", "mirror"])?;
+    assert_eq!(
+        removed.pointer("/data/removed_id").and_then(Value::as_str),
+        Some("mirror")
+    );
+    assert_eq!(
+        removed
+            .pointer("/data/registry_changed")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let (missing_url_payload, missing_url_status) = harness.run_json_err_with_exit(&[
+        "skill",
+        "registry",
+        "add",
+        "--id",
+        "blank-url",
+        "--url",
+        "   ",
+    ])?;
+    assert_eq!(
+        missing_url_status, 2,
+        "blank registry url should be invalid input"
+    );
+    assert_eq!(
+        missing_url_payload
+            .pointer("/error/message")
+            .and_then(Value::as_str),
+        Some("invalid url")
+    );
+
+    let (blank_id_payload, blank_id_status) =
+        harness.run_json_err_with_exit(&["skill", "registry", "remove", "--id", "   "])?;
+    assert_eq!(
+        blank_id_status, 2,
+        "blank registry id should be invalid input"
+    );
+    assert_eq!(
+        blank_id_payload
+            .pointer("/error/message")
+            .and_then(Value::as_str),
+        Some("invalid id")
+    );
+
+    let (missing_id_payload, missing_id_status) =
+        harness.run_json_err_with_exit(&["skill", "registry", "remove", "--id", "missing"])?;
+    assert_eq!(
+        missing_id_status, 3,
+        "unknown registry id should be not found"
+    );
+    assert_eq!(
+        missing_id_payload
+            .pointer("/error/message")
+            .and_then(Value::as_str),
+        Some("registry not found: missing")
+    );
+
+    Ok(())
+}
