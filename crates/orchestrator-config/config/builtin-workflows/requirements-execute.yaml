@@ -1,0 +1,34 @@
+tools_allowlist:
+  - ao
+
+phase_catalog:
+  builtin-requirements-execute-command:
+    label: Requirements Execute
+    description: Materialize tasks from a requirement using the builtin planning command.
+    category: planning
+    tags: ["planning", "requirements", "builtin"]
+
+phases:
+  builtin-requirements-execute-command:
+    mode: command
+    command:
+      program: ao
+      args:
+        - --json
+        - --project-root
+        - "{{project_root}}"
+        - execute
+        - run
+        - --id
+        - "{{subject_id}}"
+        - --input-json
+        - "{{dispatch_input}}"
+      cwd_mode: project_root
+      parse_json_output: true
+
+workflows:
+  - id: builtin/requirements-execute
+    name: Builtin Requirements Execute
+    description: Create and queue tasks from requirement subjects through the shipped workflow.
+    phases:
+      - builtin-requirements-execute-command

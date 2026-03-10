@@ -549,15 +549,13 @@ fn phase_ui_definition(
     }
 }
 
-pub fn builtin_workflow_config() -> WorkflowConfig {
-    static BUILTIN_CONFIG: OnceLock<WorkflowConfig> = OnceLock::new();
-    BUILTIN_CONFIG
-        .get_or_init(|| WorkflowConfig {
-            schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
-            version: WORKFLOW_CONFIG_VERSION,
-            default_workflow_ref: "standard".to_string(),
-            checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
-            phase_catalog: BTreeMap::from([
+fn builtin_workflow_config_base() -> WorkflowConfig {
+    WorkflowConfig {
+        schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
+        version: WORKFLOW_CONFIG_VERSION,
+        default_workflow_ref: "standard".to_string(),
+        checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
+        phase_catalog: BTreeMap::from([
                 (
                     "requirements".to_string(),
                     phase_ui_definition(
@@ -630,50 +628,106 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
                         &["qa", "testing"],
                     ),
                 ),
-            ]),
-            workflows: vec![
-                WorkflowDefinition {
-                    id: "standard".to_string(),
-                    name: "Standard".to_string(),
-                    description:
-                        "Default execution flow across requirements, implementation, review, and testing."
-                            .to_string(),
-                    phases: vec![
-                        "requirements".to_string().into(),
-                        "implementation".to_string().into(),
-                        "code-review".to_string().into(),
-                        "testing".to_string().into(),
-                    ],
-                    post_success: None,
-                    variables: Vec::new(),
-                },
-                WorkflowDefinition {
-                    id: "ui-ux-standard".to_string(),
-                    name: "UI UX Standard".to_string(),
-                    description:
-                        "Frontend-oriented flow with UX research, wireframes, and mockup review gates."
-                            .to_string(),
-                    phases: vec![
-                        "requirements".to_string().into(),
-                        "ux-research".to_string().into(),
-                        "wireframe".to_string().into(),
-                        "mockup-review".to_string().into(),
-                        "implementation".to_string().into(),
-                        "code-review".to_string().into(),
-                        "testing".to_string().into(),
-                    ],
-                    post_success: None,
-                    variables: Vec::new(),
-                },
-            ],
-            phase_definitions: BTreeMap::new(),
-            agent_profiles: BTreeMap::new(),
-            tools_allowlist: Vec::new(),
-            mcp_servers: BTreeMap::new(),
-            tools: BTreeMap::new(),
-            integrations: None,
-            schedules: Vec::new(),
-            daemon: None,
+        ]),
+        workflows: vec![
+            WorkflowDefinition {
+                id: "standard".to_string(),
+                name: "Standard".to_string(),
+                description:
+                    "Default execution flow across requirements, implementation, review, and testing."
+                        .to_string(),
+                phases: vec![
+                    "requirements".to_string().into(),
+                    "implementation".to_string().into(),
+                    "code-review".to_string().into(),
+                    "testing".to_string().into(),
+                ],
+                post_success: None,
+                variables: Vec::new(),
+            },
+            WorkflowDefinition {
+                id: "ui-ux-standard".to_string(),
+                name: "UI UX Standard".to_string(),
+                description:
+                    "Frontend-oriented flow with UX research, wireframes, and mockup review gates."
+                        .to_string(),
+                phases: vec![
+                    "requirements".to_string().into(),
+                    "ux-research".to_string().into(),
+                    "wireframe".to_string().into(),
+                    "mockup-review".to_string().into(),
+                    "implementation".to_string().into(),
+                    "code-review".to_string().into(),
+                    "testing".to_string().into(),
+                ],
+                post_success: None,
+                variables: Vec::new(),
+            },
+        ],
+        phase_definitions: BTreeMap::new(),
+        agent_profiles: BTreeMap::new(),
+        tools_allowlist: Vec::new(),
+        mcp_servers: BTreeMap::new(),
+        tools: BTreeMap::new(),
+        integrations: None,
+        schedules: Vec::new(),
+        daemon: None,
+    }
+}
+
+fn builtin_workflow_yaml_overlays() -> [(&'static str, &'static str); 5] {
+    [
+        (
+            "vision-draft",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/config/builtin-workflows/vision-draft.yaml"
+            )),
+        ),
+        (
+            "vision-refine",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/config/builtin-workflows/vision-refine.yaml"
+            )),
+        ),
+        (
+            "requirements-draft",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/config/builtin-workflows/requirements-draft.yaml"
+            )),
+        ),
+        (
+            "requirements-refine",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/config/builtin-workflows/requirements-refine.yaml"
+            )),
+        ),
+        (
+            "requirements-execute",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/config/builtin-workflows/requirements-execute.yaml"
+            )),
+        ),
+    ]
+}
+
+pub fn builtin_workflow_config() -> WorkflowConfig {
+    static BUILTIN_CONFIG: OnceLock<WorkflowConfig> = OnceLock::new();
+    BUILTIN_CONFIG
+        .get_or_init(|| {
+            let mut config = builtin_workflow_config_base();
+            for (name, yaml) in builtin_workflow_yaml_overlays() {
+                let overlay =
+                    parse_yaml_workflow_config_with_base(yaml, &config).unwrap_or_else(|error| {
+                        panic!("invalid builtin workflow YAML '{name}': {error}")
+                    });
+                config = merge_yaml_into_config(config, overlay);
+            }
+            config
         })
         .clone()
 }
@@ -1850,7 +1904,10 @@ fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeConfig> {
     })
 }
 
-pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
+fn parse_yaml_workflow_config_with_base(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+) -> Result<WorkflowConfig> {
     let yaml_file: YamlWorkflowFile =
         serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
 
@@ -1886,12 +1943,12 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
         phase_definitions.insert(phase_id, definition);
     }
 
-    let base = builtin_workflow_config();
-
     let default_workflow_ref = yaml_file
         .default_workflow_ref
-        .unwrap_or(base.default_workflow_ref);
-    let mut phase_catalog = yaml_file.phase_catalog.unwrap_or(base.phase_catalog);
+        .unwrap_or_else(|| base.default_workflow_ref.clone());
+    let mut phase_catalog = yaml_file
+        .phase_catalog
+        .unwrap_or_else(|| base.phase_catalog.clone());
     for (id, ui_def) in auto_phase_catalog {
         phase_catalog.entry(id).or_insert(ui_def);
     }
@@ -1902,7 +1959,7 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
         default_workflow_ref,
         phase_catalog,
         workflows: if workflows.is_empty() {
-            base.workflows
+            base.workflows.clone()
         } else {
             workflows
         },
@@ -1916,6 +1973,11 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
         schedules: yaml_file.schedules,
         daemon: yaml_file.daemon,
     })
+}
+
+pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
+    let base = builtin_workflow_config();
+    parse_yaml_workflow_config_with_base(yaml_str, &base)
 }
 
 pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
@@ -2137,6 +2199,22 @@ mod tests {
     fn builtin_workflow_config_is_valid() {
         let config = builtin_workflow_config();
         validate_workflow_config(&config).expect("builtin config should validate");
+    }
+
+    #[test]
+    fn builtin_workflow_config_includes_planning_workflow_refs() {
+        let config = builtin_workflow_config();
+        let workflow_ids = config
+            .workflows
+            .iter()
+            .map(|workflow| workflow.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(workflow_ids.contains(&"builtin/vision-draft"));
+        assert!(workflow_ids.contains(&"builtin/vision-refine"));
+        assert!(workflow_ids.contains(&"builtin/requirements-draft"));
+        assert!(workflow_ids.contains(&"builtin/requirements-refine"));
+        assert!(workflow_ids.contains(&"builtin/requirements-execute"));
     }
 
     #[test]

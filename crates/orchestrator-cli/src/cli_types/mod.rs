@@ -9,6 +9,7 @@ mod history_types;
 mod mcp_types;
 mod model_types;
 mod output_types;
+mod planning_types;
 mod queue_types;
 
 mod project_types;
@@ -38,6 +39,7 @@ pub(crate) use history_types::*;
 pub(crate) use mcp_types::*;
 pub(crate) use model_types::*;
 pub(crate) use output_types::*;
+pub(crate) use planning_types::*;
 pub(crate) use queue_types::*;
 
 pub(crate) use project_types::*;
@@ -182,6 +184,46 @@ mod tests {
                 assert_eq!(args.subject_ids, vec!["TASK-2", "TASK-1"]);
             }
             _ => panic!("expected queue reorder command"),
+        }
+    }
+
+    #[test]
+    fn parses_planning_vision_draft_facade_command() {
+        let cli = Cli::try_parse_from(["ao", "planning", "vision", "draft"])
+            .expect("planning vision draft should parse");
+
+        match cli.command {
+            Command::Planning {
+                command:
+                    PlanningCommand::Vision {
+                        command: VisionCommand::Draft(_),
+                    },
+            } => {}
+            _ => panic!("expected planning vision draft command"),
+        }
+    }
+
+    #[test]
+    fn parses_requirements_execute_command() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "requirements",
+            "execute",
+            "--id",
+            "REQ-101",
+            "--id",
+            "REQ-102",
+        ])
+        .expect("requirements execute should parse");
+
+        match cli.command {
+            Command::Requirements {
+                command: RequirementsCommand::Execute(args),
+            } => {
+                assert_eq!(args.requirement_ids, vec!["REQ-101", "REQ-102"]);
+                assert!(args.start_workflows);
+            }
+            _ => panic!("expected requirements execute command"),
         }
     }
 

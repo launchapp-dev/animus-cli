@@ -111,6 +111,15 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                Command::Planning { command } => {
+                    services::operations::handle_planning(
+                        command,
+                        hub.clone(),
+                        &project_root,
+                        cli.json,
+                    )
+                    .await
+                }
                 Command::Requirements { command } => {
                     services::operations::handle_requirements(
                         command,

@@ -9,6 +9,8 @@ use super::{
 pub(crate) enum RequirementsCommand {
     /// Draft requirements from project context.
     Draft(RequirementsDraftArgs),
+    /// Execute requirements into implementation tasks and optional workflows.
+    Execute(RequirementsExecuteArgs),
     /// List requirements.
     List,
     /// Get a requirement by id.
@@ -36,6 +38,27 @@ pub(crate) enum RequirementsCommand {
         #[command(subcommand)]
         command: RecommendationCommand,
     },
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RequirementsExecuteArgs {
+    #[arg(
+        long = "id",
+        visible_alias = "requirement-id",
+        visible_alias = "requirement-ids",
+        value_name = "REQ_ID",
+        num_args = 1..,
+        help = "Requirement identifiers. Repeat or pass multiple values."
+    )]
+    pub(crate) requirement_ids: Vec<String>,
+    #[arg(long)]
+    pub(crate) workflow_ref: Option<String>,
+    #[arg(long, action = ArgAction::Set, default_value_t = true)]
+    pub(crate) start_workflows: bool,
+    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    pub(crate) include_wont: bool,
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
+    pub(crate) input_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -68,7 +91,13 @@ pub(crate) struct RequirementsDraftArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementsRefineArgs {
-    #[arg(long = "id")]
+    #[arg(
+        long = "id",
+        visible_alias = "requirement-id",
+        visible_alias = "requirement-ids",
+        value_name = "REQ_ID",
+        num_args = 1..
+    )]
     pub(crate) requirement_ids: Vec<String>,
     #[arg(long)]
     pub(crate) focus: Option<String>,

@@ -1,0 +1,32 @@
+tools_allowlist:
+  - ao
+
+phase_catalog:
+  builtin-requirements-refine-command:
+    label: Requirements Refine
+    description: Refine requirements using the builtin planning command.
+    category: planning
+    tags: ["planning", "requirements", "builtin"]
+
+phases:
+  builtin-requirements-refine-command:
+    mode: command
+    command:
+      program: ao
+      args:
+        - --json
+        - --project-root
+        - "{{project_root}}"
+        - requirements
+        - refine
+        - --input-json
+        - "{{dispatch_input}}"
+      cwd_mode: project_root
+      parse_json_output: true
+
+workflows:
+  - id: builtin/requirements-refine
+    name: Builtin Requirements Refine
+    description: Refine requirements through the shipped planning workflow.
+    phases:
+      - builtin-requirements-refine-command

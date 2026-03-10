@@ -18,11 +18,12 @@ use crate::{parse_input_json_or, print_value, VisionCommand};
 
 use self::draft_runtime::{draft_vision_with_ai_complexity, VisionDraftAiOptions};
 use self::refinement_runtime::run_vision_refine;
-use self::types::VisionRefineInputPayload;
-
 pub(crate) use self::requirements_runtime::run_requirements_draft;
 pub(crate) use self::requirements_runtime::run_requirements_refine;
-pub(crate) use self::types::{RequirementsDraftInputPayload, RequirementsRefineInputPayload};
+pub(crate) use self::types::{
+    RequirementsDraftInputPayload, RequirementsRefineInputPayload, VisionDraftInputPayload,
+    VisionRefineInputPayload,
+};
 
 pub(crate) async fn handle_vision(
     command: VisionCommand,

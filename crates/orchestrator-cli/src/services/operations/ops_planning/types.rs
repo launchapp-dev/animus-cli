@@ -7,15 +7,53 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub(super) struct VisionRefineInputPayload {
-    pub(super) focus: Option<String>,
-    pub(super) use_ai: bool,
-    pub(super) tool: String,
-    pub(super) model: String,
-    pub(super) timeout_secs: Option<u64>,
-    pub(super) start_runner: bool,
-    pub(super) allow_heuristic_fallback: bool,
-    pub(super) preserve_core: bool,
+pub(crate) struct VisionDraftInputPayload {
+    pub(crate) project_name: Option<String>,
+    pub(crate) problem_statement: String,
+    pub(crate) target_users: Vec<String>,
+    pub(crate) goals: Vec<String>,
+    pub(crate) constraints: Vec<String>,
+    pub(crate) value_proposition: Option<String>,
+    pub(crate) use_ai_complexity: bool,
+    pub(crate) tool: String,
+    pub(crate) model: String,
+    pub(crate) timeout_secs: Option<u64>,
+    pub(crate) start_runner: bool,
+    pub(crate) allow_heuristic_fallback: bool,
+}
+
+impl Default for VisionDraftInputPayload {
+    fn default() -> Self {
+        Self {
+            project_name: None,
+            problem_statement: String::new(),
+            target_users: Vec::new(),
+            goals: Vec::new(),
+            constraints: Vec::new(),
+            value_proposition: None,
+            use_ai_complexity: true,
+            tool: "codex".to_string(),
+            model: default_model_for_tool("codex")
+                .expect("default model for codex should be configured")
+                .to_string(),
+            timeout_secs: Some(1200),
+            start_runner: true,
+            allow_heuristic_fallback: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct VisionRefineInputPayload {
+    pub(crate) focus: Option<String>,
+    pub(crate) use_ai: bool,
+    pub(crate) tool: String,
+    pub(crate) model: String,
+    pub(crate) timeout_secs: Option<u64>,
+    pub(crate) start_runner: bool,
+    pub(crate) allow_heuristic_fallback: bool,
+    pub(crate) preserve_core: bool,
 }
 
 impl Default for VisionRefineInputPayload {

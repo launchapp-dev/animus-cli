@@ -73,6 +73,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: VisionCommand,
     },
+    /// Planning facade spanning vision and requirements workflows.
+    Planning {
+        #[command(subcommand)]
+        command: PlanningCommand,
+    },
     /// Draft and manage project requirements.
     Requirements {
         #[command(subcommand)]
