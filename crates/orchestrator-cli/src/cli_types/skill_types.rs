@@ -12,6 +12,37 @@ pub(crate) enum SkillCommand {
     Update(SkillUpdateArgs),
     /// Publish a new skill version into the registry catalog.
     Publish(SkillPublishArgs),
+    /// Manage registered skill registry sources.
+    Registry {
+        #[command(subcommand)]
+        command: SkillRegistryCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum SkillRegistryCommand {
+    /// Register a new registry source or update an existing one.
+    Add(SkillRegistryAddArgs),
+    /// Remove a registered registry source.
+    Remove(SkillRegistryRemoveArgs),
+    /// List all registered registry sources.
+    List,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillRegistryAddArgs {
+    #[arg(long, help = "Registry identifier.")]
+    pub(crate) id: String,
+    #[arg(long, help = "Registry URL (for example https://registry.mcp.run).")]
+    pub(crate) url: String,
+    #[arg(long, help = "Search priority (lower value means higher priority).")]
+    pub(crate) priority: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillRegistryRemoveArgs {
+    #[arg(long, help = "Registry identifier to remove.")]
+    pub(crate) id: String,
 }
 
 #[derive(Debug, Args)]

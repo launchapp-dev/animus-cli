@@ -11,6 +11,8 @@ pub(super) struct SkillRegistrySourceConfig {
     pub(super) priority: u32,
     #[serde(default = "default_registry_available")]
     pub(super) available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
