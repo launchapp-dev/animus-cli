@@ -24,6 +24,7 @@ pub fn phase_directive_for(project_root: &str, phase_id: &str) -> String {
 
 pub fn build_phase_prompt(
     project_root: &str,
+    execution_cwd: &str,
     workflow_id: &str,
     subject_id: &str,
     subject_title: &str,
@@ -80,6 +81,7 @@ pub fn build_phase_prompt(
 
     let mut phase_prompt = WORKFLOW_PHASE_PROMPT_TEMPLATE
         .replace("__PROJECT_ROOT__", project_root)
+        .replace("__EXECUTION_CWD__", execution_cwd)
         .replace("__WORKFLOW_ID__", workflow_id)
         .replace("__SUBJECT_ID__", subject_id)
         .replace("__SUBJECT_TITLE__", subject_title)

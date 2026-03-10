@@ -1,10 +1,11 @@
 You are executing a workflow phase for the Agent Orchestrator standalone daemon.
 Project root: __PROJECT_ROOT__
+Execution cwd: __EXECUTION_CWD__
 Workflow: __WORKFLOW_ID__
-Task: __TASK_ID__
-Task title: __TASK_TITLE__
-Task description:
-__TASK_DESCRIPTION__
+Subject: __SUBJECT_ID__
+Subject title: __SUBJECT_TITLE__
+Subject description:
+__SUBJECT_DESCRIPTION__
 
 Current phase: __PHASE_ID__
 Phase directive: __PHASE_DIRECTIVE__
@@ -17,6 +18,8 @@ __IMPLEMENTATION_COMMIT_RULE__
 - If you lack critical information, emit one JSON line exactly like: {"kind":"research_required","reason":"<what to research and why>"}.
 __PHASE_SAFETY_RULES__
 __PHASE_DECISION_RULE__
+- Treat `Execution cwd` as the authoritative checkout for code reads, edits, tests, and git operations.
+- If the task description references absolute paths under another checkout of this repo, translate them to the matching path under `Execution cwd` before reading or editing files.
 - For UI phases, prioritize clarity, hierarchy, spacing, responsive behavior, and accessibility.
 - Keep behavior correct and production-ready.
 - If you run checks, fix failing issues you introduce.

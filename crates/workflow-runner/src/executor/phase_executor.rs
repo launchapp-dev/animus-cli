@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
@@ -803,6 +803,7 @@ pub async fn run_workflow_phase_with_agent(
     let parse_research_signal = !caps.is_research;
     let prompt = build_phase_prompt(
         project_root,
+        execution_cwd,
         workflow_id,
         subject_id,
         subject_title,
@@ -1333,7 +1334,50 @@ struct CommandExecutionResult {
     cwd: String,
     duration_ms: u64,
     parsed_payload: Option<Value>,
+    phase_decision: Option<orchestrator_core::PhaseDecision>,
     failure_summary: Option<String>,
+}
+
+#[derive(Debug)]
+struct CommandStreamCapture {
+    text: String,
+    phase_decision: Option<orchestrator_core::PhaseDecision>,
+}
+
+async fn capture_command_stream<R>(
+    reader: R,
+    stream_output: bool,
+    stream_verbose: bool,
+    use_colors: bool,
+) -> Result<CommandStreamCapture>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(reader).lines();
+    let mut text = String::new();
+    let mut phase_decision = None;
+
+    while let Some(line) = lines.next_line().await? {
+        text.push_str(&line);
+        text.push('\n');
+
+        if phase_decision.is_none() {
+            phase_decision = parse_phase_decision_from_text(&line);
+        }
+
+        if stream_output {
+            use std::io::Write as _;
+            let display =
+                format_output_chunk_for_display(&line, stream_verbose, use_colors, "command")
+                    .unwrap_or_else(|| format!("{line}\n"));
+            let _ = write!(std::io::stderr(), "{}", display);
+        }
+    }
+
+    Ok(CommandStreamCapture {
+        text,
+        phase_decision,
+    })
 }
 
 async fn run_workflow_phase_with_command(
@@ -1380,23 +1424,71 @@ async fn run_workflow_phase_with_command(
         process.env(key, value);
     }
 
-    let output = if let Some(timeout_secs) = command.timeout_secs {
-        timeout(Duration::from_secs(timeout_secs), process.output())
-            .await
-            .with_context(|| {
-                format!(
+    let mut child = process.spawn()?;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture stdout for command phase"))?;
+    let stderr_reader = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
+    let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
+    let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
+    let stream_verbose = stream_level == "verbose";
+    let stream_to_stderr = stream_normal || stream_verbose;
+    let use_colors = stream_to_stderr && {
+        use std::io::IsTerminal;
+        std::io::stderr().is_terminal()
+    };
+    let stdout_task = tokio::spawn(capture_command_stream(
+        stdout_reader,
+        stream_to_stderr,
+        stream_verbose,
+        use_colors,
+    ));
+    let stderr_task = tokio::spawn(capture_command_stream(
+        stderr_reader,
+        stream_to_stderr,
+        stream_verbose,
+        use_colors,
+    ));
+
+    let status = if let Some(timeout_secs) = command.timeout_secs {
+        match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+            Ok(status) => status?,
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                return Err(anyhow!(
                     "phase '{}' command '{}' timed out after {} seconds",
-                    context.phase_id, command.program, timeout_secs
-                )
-            })??
+                    context.phase_id,
+                    command.program,
+                    timeout_secs
+                ));
+            }
+        }
     } else {
-        process.output().await?
+        child.wait().await?
     };
 
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout_capture = stdout_task
+        .await
+        .map_err(|error| anyhow!("stdout capture task failed: {error}"))??;
+    let stderr_capture = stderr_task
+        .await
+        .map_err(|error| anyhow!("stderr capture task failed: {error}"))??;
+
+    let exit_code = status.code().unwrap_or(-1);
+    let stdout = stdout_capture.text;
+    let stderr = stderr_capture.text;
     let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let phase_decision = stdout_capture
+        .phase_decision
+        .or(stderr_capture.phase_decision)
+        .or_else(|| parse_phase_decision_from_text(&stdout))
+        .or_else(|| parse_phase_decision_from_text(&stderr));
 
     if !command.success_exit_codes.contains(&exit_code) {
         let mut failure_summary = format!(
@@ -1419,6 +1511,7 @@ async fn run_workflow_phase_with_command(
             cwd,
             duration_ms,
             parsed_payload: None,
+            phase_decision,
             failure_summary: Some(failure_summary),
         });
     }
@@ -1443,6 +1536,7 @@ async fn run_workflow_phase_with_command(
         cwd,
         duration_ms,
         parsed_payload,
+        phase_decision,
         failure_summary: None,
     })
 }
@@ -1572,6 +1666,106 @@ mod command_phase_tests {
             fs::canonicalize(stdout_lines[5]).expect("canonicalize reported cwd"),
             fs::canonicalize(&command_cwd).expect("canonicalize expected cwd")
         );
+        assert!(result.phase_decision.is_none());
+    }
+
+    #[tokio::test]
+    async fn command_phase_extracts_phase_decision_from_stdout() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let project_root = temp_dir.path().join("project");
+        fs::create_dir_all(&project_root).expect("create project root");
+
+        let mut runtime_config = orchestrator_core::AgentRuntimeConfig::default();
+        runtime_config.tools_allowlist = vec!["sh".to_string()];
+
+        let context = CommandExecutionContext {
+            project_root: project_root.to_str().expect("project root str"),
+            execution_cwd: project_root.to_str().expect("execution cwd str"),
+            workflow_id: "wf-123",
+            phase_id: "testing",
+            workflow_ref: "default",
+            subject_id: "TASK-1",
+            subject_title: "Task",
+            subject_description: "Task description",
+            pipeline_vars: None,
+        };
+        let command = orchestrator_core::PhaseCommandDefinition {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf '%s\n' '{\"kind\":\"phase_decision\",\"phase_id\":\"testing\",\"verdict\":\"advance\",\"confidence\":0.91,\"risk\":\"low\",\"reason\":\"checks passed\",\"evidence\":[]}'".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd_mode: orchestrator_core::CommandCwdMode::ProjectRoot,
+            cwd_path: None,
+            timeout_secs: Some(5),
+            success_exit_codes: vec![0],
+            parse_json_output: false,
+            expected_result_kind: None,
+            expected_schema: None,
+        };
+
+        let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
+            .await
+            .expect("command phase should run");
+
+        let decision = result.phase_decision.expect("phase decision should parse");
+        assert_eq!(decision.phase_id, "testing");
+        assert_eq!(decision.reason, "checks passed");
+        assert!(matches!(
+            decision.verdict,
+            orchestrator_core::PhaseDecisionVerdict::Advance
+        ));
+    }
+
+    #[tokio::test]
+    async fn command_phase_extracts_phase_decision_from_stderr_on_failure() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let project_root = temp_dir.path().join("project");
+        fs::create_dir_all(&project_root).expect("create project root");
+
+        let mut runtime_config = orchestrator_core::AgentRuntimeConfig::default();
+        runtime_config.tools_allowlist = vec!["sh".to_string()];
+
+        let context = CommandExecutionContext {
+            project_root: project_root.to_str().expect("project root str"),
+            execution_cwd: project_root.to_str().expect("execution cwd str"),
+            workflow_id: "wf-123",
+            phase_id: "lint",
+            workflow_ref: "default",
+            subject_id: "TASK-1",
+            subject_title: "Task",
+            subject_description: "Task description",
+            pipeline_vars: None,
+        };
+        let command = orchestrator_core::PhaseCommandDefinition {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf '%s\n' '{\"kind\":\"phase_decision\",\"phase_id\":\"lint\",\"verdict\":\"rework\",\"confidence\":0.72,\"risk\":\"medium\",\"reason\":\"formatting required\",\"evidence\":[]}' >&2; exit 3".to_string(),
+            ],
+            env: BTreeMap::new(),
+            cwd_mode: orchestrator_core::CommandCwdMode::ProjectRoot,
+            cwd_path: None,
+            timeout_secs: Some(5),
+            success_exit_codes: vec![0],
+            parse_json_output: false,
+            expected_result_kind: None,
+            expected_schema: None,
+        };
+
+        let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
+            .await
+            .expect("command phase should run");
+
+        assert!(result.failure_summary.is_some());
+        let decision = result.phase_decision.expect("phase decision should parse");
+        assert_eq!(decision.phase_id, "lint");
+        assert_eq!(decision.reason, "formatting required");
+        assert!(matches!(
+            decision.verdict,
+            orchestrator_core::PhaseDecisionVerdict::Rework
+        ));
     }
 
     #[test]
@@ -1930,30 +2124,33 @@ pub async fn run_workflow_phase(
                     "stdout": command_result.stdout,
                     "stderr": command_result.stderr,
                     "parsed_payload": command_result.parsed_payload,
+                    "phase_decision": command_result.phase_decision,
                 }),
             });
 
             if let Some(failure_summary) = command_result.failure_summary {
-                let decision = orchestrator_core::PhaseDecision {
-                    kind: "phase_decision".to_string(),
-                    phase_id: phase_id.to_string(),
-                    verdict: orchestrator_core::PhaseDecisionVerdict::Rework,
-                    confidence: 1.0,
-                    risk: orchestrator_core::WorkflowDecisionRisk::Low,
-                    reason: failure_summary,
-                    evidence: vec![orchestrator_core::PhaseEvidence {
-                        kind: orchestrator_core::PhaseEvidenceKind::TestsFailed,
-                        description: format!(
-                            "Command `{}` exited with code {}",
-                            command.program, command_result.exit_code
-                        ),
-                        file_path: None,
-                        value: None,
-                    }],
-                    guardrail_violations: vec![],
-                    commit_message: None,
-                    target_phase: None,
-                };
+                let decision = command_result.phase_decision.unwrap_or_else(|| {
+                    orchestrator_core::PhaseDecision {
+                        kind: "phase_decision".to_string(),
+                        phase_id: phase_id.to_string(),
+                        verdict: orchestrator_core::PhaseDecisionVerdict::Rework,
+                        confidence: 1.0,
+                        risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                        reason: failure_summary,
+                        evidence: vec![orchestrator_core::PhaseEvidence {
+                            kind: orchestrator_core::PhaseEvidenceKind::TestsFailed,
+                            description: format!(
+                                "Command `{}` exited with code {}",
+                                command.program, command_result.exit_code
+                            ),
+                            file_path: None,
+                            value: None,
+                        }],
+                        guardrail_violations: vec![],
+                        commit_message: None,
+                        target_phase: None,
+                    }
+                });
 
                 let outcome = PhaseExecutionOutcome::Completed {
                     commit_message: None,
@@ -1983,7 +2180,7 @@ pub async fn run_workflow_phase(
             Ok(PhaseExecutionRunResult {
                 outcome: PhaseExecutionOutcome::Completed {
                     commit_message: None,
-                    phase_decision: None,
+                    phase_decision: command_result.phase_decision,
                 },
                 metadata,
                 signals,
