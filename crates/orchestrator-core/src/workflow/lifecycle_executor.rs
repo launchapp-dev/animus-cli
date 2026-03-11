@@ -428,6 +428,7 @@ impl WorkflowLifecycleExecutor {
             task_id: input.task_id,
             workflow_ref: input.workflow_ref,
             input: input.input,
+            vars: input.vars,
             status: ms.to_workflow_status(),
             current_phase_index: 0,
             phases,

@@ -176,6 +176,7 @@ mod tests {
             phases: vec![],
             workflow_ref: None,
             input: None,
+            vars: HashMap::new(),
             current_phase_index: 0,
             machine_state: WorkflowMachineState::Idle,
             started_at: Utc::now(),

@@ -1686,6 +1686,20 @@ struct YamlCommandDefinition {
     expected_result_kind: Option<String>,
     #[serde(default)]
     expected_schema: Option<Value>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    failure_pattern: Option<String>,
+    #[serde(default)]
+    excerpt_max_chars: Option<usize>,
+    #[serde(default)]
+    on_success_verdict: Option<String>,
+    #[serde(default)]
+    on_failure_verdict: Option<String>,
+    #[serde(default)]
+    confidence: Option<f32>,
+    #[serde(default)]
+    failure_risk: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1723,6 +1737,8 @@ struct YamlPhaseDefinition {
     decision_contract: Option<crate::agent_runtime_config::PhaseDecisionContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retry: Option<crate::agent_runtime_config::PhaseRetryConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_tool: Option<String>,
 }
 
 fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
@@ -1773,6 +1789,13 @@ fn yaml_phase_to_execution_definition(
             parse_json_output: cmd.parse_json_output.unwrap_or(false),
             expected_result_kind: cmd.expected_result_kind,
             expected_schema: cmd.expected_schema,
+            category: cmd.category,
+            failure_pattern: cmd.failure_pattern,
+            excerpt_max_chars: cmd.excerpt_max_chars,
+            on_success_verdict: cmd.on_success_verdict,
+            on_failure_verdict: cmd.on_failure_verdict,
+            confidence: cmd.confidence,
+            failure_risk: cmd.failure_risk,
         }),
         (PhaseExecutionMode::Command, None) => {
             return Err(anyhow!(
@@ -1826,6 +1849,7 @@ fn yaml_phase_to_execution_definition(
         command,
         manual,
         system_prompt: yaml.system_prompt,
+        default_tool: yaml.default_tool,
     })
 }
 
@@ -1912,6 +1936,13 @@ fn phase_execution_definition_to_yaml(
                 parse_json_output: Some(command.parse_json_output),
                 expected_result_kind: command.expected_result_kind,
                 expected_schema: command.expected_schema,
+                category: command.category,
+                failure_pattern: command.failure_pattern,
+                excerpt_max_chars: command.excerpt_max_chars,
+                on_success_verdict: command.on_success_verdict,
+                on_failure_verdict: command.on_failure_verdict,
+                confidence: command.confidence,
+                failure_risk: command.failure_risk,
             }),
         manual: definition
             .manual
@@ -1929,6 +1960,7 @@ fn phase_execution_definition_to_yaml(
         output_json_schema: definition.output_json_schema.clone(),
         decision_contract: definition.decision_contract.clone(),
         retry: definition.retry.clone(),
+        default_tool: definition.default_tool.clone(),
     }
 }
 
@@ -4187,9 +4219,17 @@ workflows:
                     parse_json_output: false,
                     expected_result_kind: None,
                     expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
                 }),
                 manual: None,
                 system_prompt: None,
+                default_tool: None,
             },
         );
         let err =

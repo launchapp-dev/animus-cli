@@ -505,4 +505,66 @@ mod tests {
             _ => panic!("expected workflow phase reject command"),
         }
     }
+
+    #[test]
+    fn parses_workflow_prompt_render_for_ad_hoc_subjects() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "prompt",
+            "render",
+            "--title",
+            "Release Preview",
+            "--phase",
+            "implementation",
+            "--input-json",
+            "{\"ticket\":\"REL-9\"}",
+            "--var",
+            "release_name=Mercury",
+        ])
+        .expect("workflow prompt render should parse");
+
+        match cli.command {
+            Command::Workflow {
+                command:
+                    WorkflowCommand::Prompt {
+                        command: WorkflowPromptCommand::Render(args),
+                    },
+            } => {
+                assert_eq!(args.title.as_deref(), Some("Release Preview"));
+                assert_eq!(args.phase.as_deref(), Some("implementation"));
+                assert_eq!(args.input_json.as_deref(), Some("{\"ticket\":\"REL-9\"}"));
+                assert_eq!(args.vars, vec!["release_name=Mercury".to_string()]);
+            }
+            _ => panic!("expected workflow prompt render command"),
+        }
+    }
+
+    #[test]
+    fn parses_workflow_prompt_render_for_existing_workflow() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "prompt",
+            "render",
+            "--workflow-id",
+            "WF-123",
+            "--all-phases",
+        ])
+        .expect("workflow prompt render should parse");
+
+        match cli.command {
+            Command::Workflow {
+                command:
+                    WorkflowCommand::Prompt {
+                        command: WorkflowPromptCommand::Render(args),
+                    },
+            } => {
+                assert_eq!(args.workflow_id.as_deref(), Some("WF-123"));
+                assert!(args.all_phases);
+                assert!(args.vars.is_empty());
+            }
+            _ => panic!("expected workflow prompt render command"),
+        }
+    }
 }

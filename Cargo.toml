@@ -15,6 +15,7 @@ members = [
   "crates/orchestrator-web-server",
   "crates/oai-runner",
   "crates/workflow-runner",
+  "crates/workflow-runner-v2",
   "crates/orchestrator-providers",
 ]
 default-members = [

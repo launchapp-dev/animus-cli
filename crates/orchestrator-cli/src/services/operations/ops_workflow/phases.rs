@@ -308,6 +308,7 @@ pub(crate) async fn approve_manual_phase(
             description: None,
             workflow_ref: updated.workflow_ref.clone(),
             input: updated.input.clone(),
+            vars: updated.vars.clone(),
             model: None,
             tool: None,
             phase_timeout_secs: None,

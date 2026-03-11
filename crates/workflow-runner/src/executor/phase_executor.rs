@@ -21,7 +21,10 @@ use protocol::{AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION}
 
 use super::phase_git::commit_implementation_changes;
 use super::phase_output::{format_output_chunk_for_display, format_tool_call_for_display};
-use super::phase_prompt::{phase_requires_commit_message_with_config, phase_result_kind_for};
+use super::phase_prompt::{
+    phase_requires_commit_message_with_config, phase_result_kind_for, render_phase_prompt,
+    PhasePromptInputs,
+};
 
 pub use super::phase_output::persist_phase_output;
 pub use super::phase_prompt::build_phase_prompt;
@@ -120,6 +123,8 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             &request.phase_id,
             0,
             overrides.as_ref(),
+            None,
+            None,
             None,
         )
         .await;
@@ -919,6 +924,8 @@ pub async fn run_workflow_phase_with_agent(
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
     overrides: Option<&PhaseExecuteOverrides>,
     pipeline_vars: Option<&std::collections::HashMap<String, String>>,
+    dispatch_input: Option<&str>,
+    schedule_input: Option<&str>,
 ) -> Result<PhaseExecutionOutcome> {
     let caps = load_phase_capabilities(project_root, phase_id);
     let routing_complexity = routing_complexity(task_complexity);
@@ -943,7 +950,15 @@ pub async fn run_workflow_phase_with_agent(
         Some(project_root),
         &caps,
     );
-    let prompt = build_phase_prompt(
+    let prompt_inputs = PhasePromptInputs {
+        rework_context: overrides
+            .and_then(|o| o.rework_context.as_deref())
+            .map(ToOwned::to_owned),
+        pipeline_vars: pipeline_vars.cloned().unwrap_or_default(),
+        dispatch_input: dispatch_input.map(ToOwned::to_owned),
+        schedule_input: schedule_input.map(ToOwned::to_owned),
+    };
+    let prompt = render_phase_prompt(
         project_root,
         execution_cwd,
         workflow_id,
@@ -951,9 +966,9 @@ pub async fn run_workflow_phase_with_agent(
         subject_title,
         subject_description,
         phase_id,
-        overrides.and_then(|o| o.rework_context.as_deref()),
-        pipeline_vars,
-    );
+        prompt_inputs,
+    )
+    .final_prompt;
     let max_attempts = phase_runtime_settings
         .and_then(|settings| settings.max_attempts)
         .unwrap_or_else(phase_runner_attempts);
@@ -1365,6 +1380,8 @@ struct CommandExecutionContext<'a> {
     subject_title: &'a str,
     subject_description: &'a str,
     pipeline_vars: Option<&'a HashMap<String, String>>,
+    dispatch_input: Option<&'a str>,
+    schedule_input: Option<&'a str>,
 }
 
 fn build_command_template_vars(context: &CommandExecutionContext<'_>) -> HashMap<String, String> {
@@ -1394,23 +1411,18 @@ fn build_command_template_vars(context: &CommandExecutionContext<'_>) -> HashMap
         }
     }
 
-    if let Some(dispatch_input) = std::env::var("AO_DISPATCH_INPUT")
-        .ok()
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(dispatch_input) = context.dispatch_input.filter(|value| !value.is_empty()) {
         vars.entry("dispatch_input".to_string())
-            .or_insert(dispatch_input.clone());
+            .or_insert_with(|| dispatch_input.to_string());
         if context.subject_id.starts_with("schedule:") {
             vars.entry("schedule_input".to_string())
-                .or_insert(dispatch_input);
+                .or_insert_with(|| dispatch_input.to_string());
         }
-    } else if let Ok(schedule_input) = std::env::var("AO_SCHEDULE_INPUT") {
-        if !schedule_input.is_empty() {
-            vars.entry("schedule_input".to_string())
-                .or_insert(schedule_input.clone());
-            vars.entry("dispatch_input".to_string())
-                .or_insert(schedule_input);
-        }
+    } else if let Some(schedule_input) = context.schedule_input.filter(|value| !value.is_empty()) {
+        vars.entry("schedule_input".to_string())
+            .or_insert_with(|| schedule_input.to_string());
+        vars.entry("dispatch_input".to_string())
+            .or_insert_with(|| schedule_input.to_string());
     }
 
     vars
@@ -1878,32 +1890,6 @@ mod command_phase_tests {
     use super::*;
     use std::fs;
 
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: impl Into<String>, value: Option<&str>) -> Self {
-            let key = key.into();
-            let original = std::env::var(&key).ok();
-            match value {
-                Some(value) => std::env::set_var(&key, value),
-                None => std::env::remove_var(&key),
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => std::env::set_var(&self.key, value),
-                None => std::env::remove_var(&self.key),
-            }
-        }
-    }
-
     #[tokio::test]
     async fn command_phase_expands_context_vars_in_args_env_and_cwd() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -1933,6 +1919,8 @@ mod command_phase_tests {
             subject_title: "Subject Title",
             subject_description: "Refine queue state",
             pipeline_vars: Some(&pipeline_vars),
+            dispatch_input: None,
+            schedule_input: None,
         };
         let command = orchestrator_core::PhaseCommandDefinition {
             program: "sh".to_string(),
@@ -1961,6 +1949,13 @@ mod command_phase_tests {
             parse_json_output: false,
             expected_result_kind: None,
             expected_schema: None,
+            category: None,
+            failure_pattern: None,
+            excerpt_max_chars: None,
+            on_success_verdict: None,
+            on_failure_verdict: None,
+            confidence: None,
+            failure_risk: None,
         };
 
         let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
@@ -2020,6 +2015,8 @@ mod command_phase_tests {
             subject_title: "Task",
             subject_description: "Task description",
             pipeline_vars: None,
+            dispatch_input: None,
+            schedule_input: None,
         };
         let command = orchestrator_core::PhaseCommandDefinition {
             program: "sh".to_string(),
@@ -2035,6 +2032,13 @@ mod command_phase_tests {
             parse_json_output: false,
             expected_result_kind: None,
             expected_schema: None,
+            category: None,
+            failure_pattern: None,
+            excerpt_max_chars: None,
+            on_success_verdict: None,
+            on_failure_verdict: None,
+            confidence: None,
+            failure_risk: None,
         };
 
         let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
@@ -2069,6 +2073,8 @@ mod command_phase_tests {
             subject_title: "Task",
             subject_description: "Task description",
             pipeline_vars: None,
+            dispatch_input: None,
+            schedule_input: None,
         };
         let command = orchestrator_core::PhaseCommandDefinition {
             program: "sh".to_string(),
@@ -2084,6 +2090,13 @@ mod command_phase_tests {
             parse_json_output: false,
             expected_result_kind: None,
             expected_schema: None,
+            category: None,
+            failure_pattern: None,
+            excerpt_max_chars: None,
+            on_success_verdict: None,
+            on_failure_verdict: None,
+            confidence: None,
+            failure_risk: None,
         };
 
         let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
@@ -2149,11 +2162,6 @@ mod command_phase_tests {
 
     #[test]
     fn command_template_vars_prefer_dispatch_input_and_alias_schedule_subjects() {
-        let _dispatch_input =
-            EnvVarGuard::set("AO_DISPATCH_INPUT", Some("{\"source\":\"dispatch\"}"));
-        let _schedule_input =
-            EnvVarGuard::set("AO_SCHEDULE_INPUT", Some("{\"source\":\"schedule\"}"));
-
         let schedule_context = CommandExecutionContext {
             project_root: "/tmp/project",
             execution_cwd: "/tmp/project/task-root",
@@ -2164,6 +2172,8 @@ mod command_phase_tests {
             subject_title: "Nightly",
             subject_description: "Nightly schedule",
             pipeline_vars: None,
+            dispatch_input: Some("{\"source\":\"dispatch\"}"),
+            schedule_input: Some("{\"source\":\"schedule\"}"),
         };
         let schedule_vars = build_command_template_vars(&schedule_context);
         assert_eq!(
@@ -2257,6 +2267,8 @@ pub async fn run_workflow_phase(
     phase_attempt: u32,
     overrides: Option<&PhaseExecuteOverrides>,
     pipeline_vars: Option<&std::collections::HashMap<String, String>>,
+    dispatch_input: Option<&str>,
+    schedule_input: Option<&str>,
 ) -> Result<PhaseExecutionRunResult> {
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
@@ -2394,6 +2406,8 @@ pub async fn run_workflow_phase(
                 runtime_settings.as_ref(),
                 overrides,
                 pipeline_vars,
+                dispatch_input,
+                schedule_input,
             )
             .await?;
 
@@ -2492,6 +2506,8 @@ pub async fn run_workflow_phase(
                 subject_title,
                 subject_description,
                 pipeline_vars,
+                dispatch_input,
+                schedule_input,
             };
 
             let command_result =

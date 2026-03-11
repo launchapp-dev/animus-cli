@@ -90,6 +90,7 @@ fn save_workflow(
             task_id: task_id.to_string(),
             workflow_ref: None,
             input: None,
+            vars: HashMap::new(),
             status,
             current_phase_index: 0,
             phases: Vec::new(),

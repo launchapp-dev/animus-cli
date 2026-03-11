@@ -1,17 +1,13 @@
 use std::collections::HashMap;
 
-use super::phase_executor::load_agent_runtime_config;
-use super::phase_output::{
+use crate::config_context::RuntimeConfigContext;
+use crate::phase_output::{
     format_prior_phase_outputs, load_prior_phase_outputs, pipeline_phase_order_for_workflow,
-};
-use super::runtime_contract_builder::{
-    load_phase_capabilities, phase_decision_contract_for, phase_output_contract_for,
-    phase_system_prompt_for,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-pub(super) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
+pub(crate) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/runtime/workflow_phase.prompt"
 ));
@@ -56,16 +52,6 @@ pub struct RenderedPhasePrompt {
     pub final_prompt: String,
 }
 
-pub fn phase_directive_for(project_root: &str, phase_id: &str) -> String {
-    let config = load_agent_runtime_config(project_root);
-    config
-        .phase_directive(phase_id)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            "Execute the current workflow phase with production-quality output.".to_string()
-        })
-}
-
 pub fn build_phase_prompt(
     project_root: &str,
     execution_cwd: &str,
@@ -89,7 +75,9 @@ pub fn build_phase_prompt(
         dispatch_input,
         schedule_input,
     };
-    render_phase_prompt(
+    let ctx = RuntimeConfigContext::load(project_root);
+    render_phase_prompt_with_ctx(
+        &ctx,
         project_root,
         execution_cwd,
         workflow_id,
@@ -112,21 +100,46 @@ pub fn render_phase_prompt(
     phase_id: &str,
     inputs: PhasePromptInputs,
 ) -> RenderedPhasePrompt {
-    let caps = load_phase_capabilities(project_root, phase_id);
-    let phase_decision_contract = phase_decision_contract_for(project_root, phase_id);
+    let ctx = RuntimeConfigContext::load(project_root);
+    render_phase_prompt_with_ctx(
+        &ctx,
+        project_root,
+        execution_cwd,
+        workflow_id,
+        subject_id,
+        subject_title,
+        subject_description,
+        phase_id,
+        inputs,
+    )
+}
+
+pub fn render_phase_prompt_with_ctx(
+    ctx: &RuntimeConfigContext,
+    project_root: &str,
+    execution_cwd: &str,
+    workflow_id: &str,
+    subject_id: &str,
+    subject_title: &str,
+    subject_description: &str,
+    phase_id: &str,
+    inputs: PhasePromptInputs,
+) -> RenderedPhasePrompt {
+    let caps = ctx.phase_capabilities(phase_id);
+    let phase_decision_contract = ctx.phase_decision_contract(phase_id).cloned();
     let phase_action_rule = if caps.writes_files {
         "Requirements:\n- Make concrete file changes in this repository."
     } else {
         "Requirements:\n- This is a READ-ONLY phase. Do NOT create, edit, or write any files. Do NOT run commands that modify the repository.\n- Read and analyze the codebase to assess the task. Your only output should be your assessment and phase decision."
     };
-    let phase_contract = phase_output_contract_for(project_root, phase_id);
-    let require_commit_message = phase_requires_commit_message_with_config(project_root, phase_id);
+    let phase_contract = ctx.phase_output_contract(phase_id).cloned();
+    let require_commit_message = phase_requires_commit_message_with_ctx(ctx, phase_id);
     let product_change_rule = if caps.enforce_product_changes {
         "- For this phase, changes must include product source/config/test files outside `.ao/` unless the task is explicitly documentation-only."
     } else {
         ""
     };
-    let phase_directive = phase_directive_for(project_root, phase_id);
+    let phase_directive = ctx.phase_directive(phase_id);
     let phase_safety_rules = phase_safety_rules(&caps);
     let decision_extra_field_rule = phase_decision_contract
         .as_ref()
@@ -287,7 +300,7 @@ pub fn render_phase_prompt(
         phase_prompt.push_str(schedule_input);
     }
 
-    let system_prompt = phase_system_prompt_for(project_root, phase_id).and_then(|prompt| {
+    let system_prompt = ctx.phase_system_prompt(phase_id).and_then(|prompt| {
         let trimmed = prompt.trim();
         if trimmed.is_empty() {
             None
@@ -560,7 +573,7 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
     lines.join("\n")
 }
 
-pub(super) fn phase_safety_rules(caps: &protocol::PhaseCapabilities) -> &'static str {
+pub(crate) fn phase_safety_rules(caps: &protocol::PhaseCapabilities) -> &'static str {
     if caps.is_research {
         return "- For research phases, treat greenfield repositories as valid: missing app source files is not a blocker by itself.\n- Do targeted discovery only: inspect first-party code (`src/`, `apps/`, `db/`, `tests/`) and active `.ao` task/requirement docs; avoid broad recursive listings.\n- Do not scan dependency or checkpoint trees unless explicitly required: skip `node_modules/`, `.git/`, `.ao/workflow-state/checkpoints/`, and `.ao/runs/`.\n- If code context is limited, produce concrete assumptions, risks, and a build-ready plan in repository artifacts instead of stopping.";
     }
@@ -573,276 +586,19 @@ pub fn phase_requires_commit_message(phase_id: &str) -> bool {
 }
 
 pub fn phase_requires_commit_message_with_config(project_root: &str, phase_id: &str) -> bool {
-    phase_output_contract_for(project_root, phase_id)
+    let ctx = RuntimeConfigContext::load(project_root);
+    phase_requires_commit_message_with_ctx(&ctx, phase_id)
+}
+
+pub fn phase_requires_commit_message_with_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> bool {
+    ctx.phase_output_contract(phase_id)
         .map(|contract| contract.requires_field("commit_message"))
         .unwrap_or_else(|| phase_requires_commit_message(phase_id))
 }
 
-pub(super) fn phase_result_kind_for(project_root: &str, phase_id: &str) -> String {
-    phase_output_contract_for(project_root, phase_id)
-        .map(|contract| contract.kind)
+pub(crate) fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> String {
+    ctx.phase_output_contract(phase_id)
+        .map(|contract| contract.kind.clone())
         .filter(|kind| !kind.trim().is_empty())
         .unwrap_or_else(|| "implementation_result".to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::path::Path;
-
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: impl Into<String>, value: Option<&str>) -> Self {
-            let key = key.into();
-            let original = std::env::var(&key).ok();
-            match value {
-                Some(value) => std::env::set_var(&key, value),
-                None => std::env::remove_var(&key),
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => std::env::set_var(&self.key, value),
-                None => std::env::remove_var(&self.key),
-            }
-        }
-    }
-
-    fn write_prompt_test_config(project_root: &Path) {
-        let mut workflow = orchestrator_core::builtin_workflow_config();
-        let default_agent = orchestrator_core::builtin_agent_runtime_config()
-            .agent_profile("default")
-            .expect("default agent profile")
-            .clone();
-        workflow
-            .agent_profiles
-            .insert("default".to_string(), default_agent);
-        let phase = workflow.phase_definitions.entry("implementation".to_string()).or_insert(
-            orchestrator_core::PhaseExecutionDefinition {
-                mode: orchestrator_core::PhaseExecutionMode::Agent,
-                agent_id: Some("default".to_string()),
-                directive: None,
-                system_prompt: None,
-                runtime: None,
-                capabilities: None,
-                output_contract: None,
-                output_json_schema: None,
-                decision_contract: None,
-                retry: None,
-                skills: Vec::new(),
-                command: None,
-                manual: None,
-                default_tool: None,
-            },
-        );
-        phase.directive = Some("Implement {{release_name}} safely.".to_string());
-        phase.system_prompt = Some("System guidance for {{release_name}}.".to_string());
-        orchestrator_core::write_workflow_config(project_root, &workflow).expect("write config");
-    }
-
-    #[test]
-    fn triage_prompt_requires_final_phase_decision_line() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let project_root = temp.path().to_str().expect("project root");
-        let prompt = build_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "triage",
-            None,
-            None,
-        );
-
-        assert!(prompt.contains("FINAL line of output"));
-        assert!(prompt.contains("\"kind\":\"phase_decision\""));
-        assert!(prompt.contains("Put any prose summary BEFORE the JSON line"));
-    }
-
-    #[test]
-    fn implementation_prompt_requires_nested_phase_decision_in_final_json() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let project_root = temp.path().to_str().expect("project root");
-        let prompt = build_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "implementation",
-            None,
-            None,
-        );
-
-        assert!(prompt.contains("\"phase_decision\":{"));
-        assert!(prompt.contains("nested phase decision"));
-        assert!(prompt.contains("FINAL line of output"));
-    }
-
-    #[test]
-    fn decision_prompt_renders_configured_field_descriptions() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let project_root = temp.path();
-        let mut workflow = orchestrator_core::builtin_workflow_config();
-        let default_agent = orchestrator_core::builtin_agent_runtime_config()
-            .agent_profile("default")
-            .expect("default agent profile")
-            .clone();
-        workflow
-            .agent_profiles
-            .insert("default".to_string(), default_agent);
-        workflow.phase_definitions.insert(
-            "triage".to_string(),
-            orchestrator_core::PhaseExecutionDefinition {
-                mode: orchestrator_core::PhaseExecutionMode::Agent,
-                agent_id: Some("default".to_string()),
-                directive: None,
-                system_prompt: None,
-                runtime: None,
-                capabilities: None,
-                output_contract: None,
-                output_json_schema: None,
-                decision_contract: Some(orchestrator_core::PhaseDecisionContract {
-                    required_evidence: Vec::new(),
-                    min_confidence: 0.6,
-                    max_risk: orchestrator_core::WorkflowDecisionRisk::Medium,
-                    allow_missing_decision: false,
-                    extra_json_schema: None,
-                    fields: std::collections::BTreeMap::from([(
-                        "skip_reason".to_string(),
-                        orchestrator_core::agent_runtime_config::PhaseFieldDefinition {
-                            field_type: "string".to_string(),
-                            required: false,
-                            description: Some(
-                                "When verdict is skip, explain why the task should stop."
-                                    .to_string(),
-                            ),
-                            enum_values: vec![],
-                            items: None,
-                            fields: std::collections::BTreeMap::new(),
-                        },
-                    )]),
-                }),
-                retry: None,
-                skills: Vec::new(),
-                command: None,
-                manual: None,
-                default_tool: None,
-            },
-        );
-        orchestrator_core::write_workflow_config(project_root, &workflow).expect("write config");
-        let prompt = build_phase_prompt(
-            project_root.to_str().expect("project root"),
-            project_root.to_str().expect("project root"),
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "triage",
-            None,
-            None,
-        );
-
-        assert!(prompt.contains("skip_reason"));
-        assert!(prompt.contains("When verdict is skip, explain why the task should stop."));
-    }
-
-    #[test]
-    fn decision_prompt_example_uses_numeric_confidence() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let project_root = temp.path().to_str().expect("project root");
-        let prompt = build_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "triage",
-            None,
-            None,
-        );
-
-        assert!(prompt.contains("\"confidence\":0.95"));
-        assert!(!prompt.contains("\"confidence\":\"0.0-1.0\""));
-    }
-
-    #[test]
-    fn structured_render_matches_build_phase_prompt_output() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        write_prompt_test_config(temp.path());
-        let project_root = temp.path().to_str().expect("project root");
-        let mut pipeline_vars = HashMap::new();
-        pipeline_vars.insert("release_name".to_string(), "Mercury".to_string());
-        let _dispatch_input =
-            EnvVarGuard::set("AO_DISPATCH_INPUT", Some("{\"ticket\":\"REL-9\"}"));
-        let _schedule_input =
-            EnvVarGuard::set("AO_SCHEDULE_INPUT", Some("{\"window\":\"nightly\"}"));
-
-        let rendered = render_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "implementation",
-            PhasePromptInputs {
-                rework_context: Some("Fix the remaining release issues.".to_string()),
-                pipeline_vars: pipeline_vars.clone(),
-                dispatch_input: Some("{\"ticket\":\"REL-9\"}".to_string()),
-                schedule_input: Some("{\"window\":\"nightly\"}".to_string()),
-            },
-        );
-        let built = build_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "TASK-1",
-            "Task title",
-            "Task description",
-            "implementation",
-            Some("Fix the remaining release issues."),
-            Some(&pipeline_vars),
-        );
-
-        assert_eq!(rendered.final_prompt, built);
-    }
-
-    #[test]
-    fn structured_render_prefers_dispatch_input_over_schedule_input() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let project_root = temp.path().to_str().expect("project root");
-        let rendered = render_phase_prompt(
-            project_root,
-            project_root,
-            "wf-1",
-            "schedule:nightly",
-            "Nightly",
-            "Nightly schedule",
-            "implementation",
-            PhasePromptInputs {
-                rework_context: None,
-                pipeline_vars: HashMap::new(),
-                dispatch_input: Some("{\"source\":\"dispatch\"}".to_string()),
-                schedule_input: Some("{\"source\":\"schedule\"}".to_string()),
-            },
-        );
-
-        assert!(rendered.final_prompt.contains("Dispatch input:"));
-        assert!(rendered.final_prompt.contains("{\"source\":\"dispatch\"}"));
-        assert!(!rendered.final_prompt.contains("Schedule trigger input:"));
-    }
 }

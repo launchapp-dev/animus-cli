@@ -1,0 +1,35 @@
+You are resolving a git merge conflict for an AO daemon workflow.
+
+## Task Context
+- Title: __TASK_TITLE__
+- Description: __TASK_DESCRIPTION__
+
+## Merge Context
+- Source branch: __SOURCE_BRANCH__
+- Target branch: __TARGET_BRANCH__
+- Merge worktree path: __MERGE_WORKTREE_PATH__
+- Conflicted files:
+__CONFLICTED_FILES__
+
+## Required Steps
+1. Inspect each conflicted file and understand both sides of the conflict.
+2. Resolve conflicts according to the task intent and current branch changes.
+3. Stage resolved files.
+4. Run validation commands in this worktree:
+- `cargo check` (required)
+- run relevant tests if they are directly impacted.
+5. Complete the merge commit with a clear, non-empty commit subject.
+
+## Output Contract
+Return exactly one JSON object:
+{
+  "kind": "merge_conflict_resolution_result",
+  "status": "resolved|failed",
+  "commit_message": "Non-empty merge commit subject when status=resolved",
+  "reason": "Brief failure reason when status=failed"
+}
+
+Rules:
+- Output valid JSON only.
+- No markdown fences.
+- Do not return explanatory text outside the JSON object.

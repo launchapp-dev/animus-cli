@@ -55,6 +55,11 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowAgentRuntimeCommand,
     },
+    /// Inspect rendered workflow phase prompts.
+    Prompt {
+        #[command(subcommand)]
+        command: WorkflowPromptCommand,
+    },
     /// Execute a workflow synchronously (no daemon required).
     Execute(WorkflowExecuteArgs),
     /// Update a workflow definition by id.
@@ -79,6 +84,12 @@ pub(crate) enum WorkflowPhasesCommand {
     Upsert(WorkflowPhaseUpsertArgs),
     /// Remove a workflow phase definition (confirmation required).
     Remove(WorkflowPhaseRemoveArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkflowPromptCommand {
+    /// Render workflow phase prompt text and prompt sections.
+    Render(WorkflowPromptRenderArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -282,6 +293,72 @@ pub(crate) struct WorkflowExecuteArgs {
         help = "Show all agent output including thinking blocks and raw JSON."
     )]
     pub(crate) verbose: bool,
+    #[arg(
+        long = "var",
+        value_name = "KEY=VALUE",
+        help = "Workflow variable in KEY=VALUE format. Repeat for multiple variables."
+    )]
+    pub(crate) vars: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowPromptRenderArgs {
+    #[arg(
+        long,
+        value_name = "WORKFLOW_ID",
+        help = "Existing workflow id to render from persisted workflow state."
+    )]
+    pub(crate) workflow_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        help = "Task id for ad-hoc prompt rendering."
+    )]
+    pub(crate) task_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "REQ_ID",
+        help = "Requirement id for ad-hoc prompt rendering (alternative to --task-id)."
+    )]
+    pub(crate) requirement_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "TITLE",
+        help = "Custom workflow title for ad-hoc prompt rendering."
+    )]
+    pub(crate) title: Option<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Custom workflow description (used with --title)."
+    )]
+    pub(crate) description: Option<String>,
+    #[arg(
+        long,
+        value_name = "WORKFLOW_REF",
+        help = "Optional YAML workflow reference override for ad-hoc rendering."
+    )]
+    pub(crate) workflow_ref: Option<String>,
+    #[arg(
+        long,
+        value_name = "PHASE_ID",
+        help = "Specific phase to render. Defaults to the current phase for --workflow-id."
+    )]
+    pub(crate) phase: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Render every phase in the selected workflow/pipeline."
+    )]
+    pub(crate) all_phases: bool,
+    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
+    pub(crate) input_json: Option<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Optional rework/failure context override for ad-hoc rendering."
+    )]
+    pub(crate) rework_context: Option<String>,
     #[arg(
         long = "var",
         value_name = "KEY=VALUE",

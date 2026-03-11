@@ -17,6 +17,10 @@ pub(crate) async fn handle_workflow_execute(
     if args.requirement_id.is_some() && args.workflow_ref.is_none() {
         args.workflow_ref = Some(super::resolve_requirement_workflow_ref(project_root)?);
     }
+    if args.workflow_id.is_some() && !args.vars.is_empty() {
+        anyhow::bail!("--var cannot be used with --workflow-id; persisted workflow vars are authoritative for existing workflows");
+    }
+    let vars = super::parse_workflow_vars(&args.vars)?;
 
     let stream_level = if args.quiet {
         "quiet"
@@ -65,6 +69,7 @@ pub(crate) async fn handle_workflow_execute(
             .as_deref()
             .map(serde_json::from_str)
             .transpose()?,
+        vars,
         model: args.model,
         tool: args.tool,
         phase_timeout_secs: args.phase_timeout_secs,

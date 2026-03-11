@@ -845,6 +845,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         orchestrator_core::write_workflow_config(Path::new(project_root), &config).unwrap();
@@ -911,6 +912,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         orchestrator_core::write_workflow_config(Path::new(project_root), &config).unwrap();
@@ -1025,6 +1027,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         orchestrator_core::write_workflow_config(temp.path(), &workflow).expect("write config");

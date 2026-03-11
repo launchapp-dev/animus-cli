@@ -1363,6 +1363,8 @@ pub struct OrchestratorWorkflow {
     pub subject: WorkflowSubject,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub vars: HashMap<String, String>,
     pub status: WorkflowStatus,
     pub current_phase_index: usize,
     #[serde(default)]
@@ -1510,6 +1512,8 @@ pub struct SubjectDispatch {
     pub workflow_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub vars: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     pub trigger_source: String,
@@ -1531,6 +1535,7 @@ impl SubjectDispatch {
             subject: WorkflowSubject::Task { id: task_id.into() },
             workflow_ref: workflow_ref.into(),
             input: None,
+            vars: HashMap::new(),
             priority: None,
             trigger_source: trigger_source.into(),
             requested_at,
@@ -1548,6 +1553,7 @@ impl SubjectDispatch {
             },
             workflow_ref: workflow_ref.into(),
             input: None,
+            vars: HashMap::new(),
             priority: None,
             trigger_source: trigger_source.into(),
             requested_at: Utc::now(),
@@ -1568,6 +1574,7 @@ impl SubjectDispatch {
             },
             workflow_ref: workflow_ref.into(),
             input,
+            vars: HashMap::new(),
             priority: None,
             trigger_source: trigger_source.into(),
             requested_at: Utc::now(),
@@ -1597,6 +1604,11 @@ impl SubjectDispatch {
         self
     }
 
+    pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
+        self.vars = vars;
+        self
+    }
+
     pub fn to_workflow_run_input(&self) -> WorkflowRunInput {
         match &self.subject {
             WorkflowSubject::Task { id } => {
@@ -1612,6 +1624,7 @@ impl SubjectDispatch {
             ),
         }
         .with_input(self.input.clone())
+        .with_vars(self.vars.clone())
     }
 }
 
@@ -1678,6 +1691,8 @@ pub struct WorkflowRunInput {
     pub workflow_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "input_json")]
     pub input: Option<Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub vars: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1697,6 +1712,7 @@ impl WorkflowRunInput {
             task_id,
             workflow_ref,
             input: None,
+            vars: HashMap::new(),
             requirement_id: None,
             title: None,
             description: None,
@@ -1711,6 +1727,7 @@ impl WorkflowRunInput {
             task_id: String::new(),
             workflow_ref,
             input: None,
+            vars: HashMap::new(),
             requirement_id: Some(requirement_id),
             title: None,
             description: None,
@@ -1726,6 +1743,7 @@ impl WorkflowRunInput {
             task_id: String::new(),
             workflow_ref,
             input: None,
+            vars: HashMap::new(),
             requirement_id: None,
             title: Some(title),
             description: Some(description),
@@ -1764,6 +1782,11 @@ impl WorkflowRunInput {
 
     pub fn with_input(mut self, input: Option<Value>) -> Self {
         self.input = input;
+        self
+    }
+
+    pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
+        self.vars = vars;
         self
     }
 }

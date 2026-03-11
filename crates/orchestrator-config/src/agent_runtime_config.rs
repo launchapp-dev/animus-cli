@@ -376,6 +376,20 @@ pub struct PhaseCommandDefinition {
     pub expected_result_kind: Option<String>,
     #[serde(default)]
     pub expected_schema: Option<Value>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub failure_pattern: Option<String>,
+    #[serde(default)]
+    pub excerpt_max_chars: Option<usize>,
+    #[serde(default)]
+    pub on_success_verdict: Option<String>,
+    #[serde(default)]
+    pub on_failure_verdict: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    #[serde(default)]
+    pub failure_risk: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +428,8 @@ pub struct PhaseExecutionDefinition {
     pub command: Option<PhaseCommandDefinition>,
     #[serde(default)]
     pub manual: Option<PhaseManualDefinition>,
+    #[serde(default)]
+    pub default_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1102,6 +1118,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1127,6 +1144,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1152,6 +1170,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1170,6 +1189,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1188,6 +1208,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1206,6 +1227,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1242,6 +1264,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1267,6 +1290,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
             (
@@ -1292,6 +1316,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: Vec::new(),
                     command: None,
                     manual: None,
+                    default_tool: None,
                 },
             ),
         ]),
@@ -2067,6 +2092,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         workflow.tools.insert(
@@ -2365,6 +2391,13 @@ mod tests {
                 parse_json_output: false,
                 expected_result_kind: None,
                 expected_schema: None,
+                category: None,
+                failure_pattern: None,
+                excerpt_max_chars: None,
+                on_success_verdict: None,
+                on_failure_verdict: None,
+                confidence: None,
+                failure_risk: None,
             }),
             manual: None,
         };
@@ -2411,6 +2444,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         validate_agent_runtime_config(&config).expect("valid command-mode config");
@@ -2434,6 +2468,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2469,6 +2504,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2504,6 +2540,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2539,6 +2576,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2576,6 +2614,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2650,6 +2689,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
@@ -2790,6 +2830,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2827,6 +2868,7 @@ mod tests {
                     expected_schema: None,
                 }),
                 manual: None,
+                default_tool: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3165,6 +3207,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         assert_eq!(
@@ -3196,6 +3239,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         assert_eq!(
@@ -3227,6 +3271,7 @@ mod tests {
                 skills: Vec::new(),
                 command: None,
                 manual: None,
+                default_tool: None,
             },
         );
         assert_eq!(

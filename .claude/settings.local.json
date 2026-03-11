@@ -103,7 +103,12 @@
       "mcp__ao__ao_daemon_config",
       "mcp__ao__ao_requirements_create",
       "mcp__ao__ao_task_next",
-      "WebFetch(domain:spec.modelcontextprotocol.io)"
+      "WebFetch(domain:spec.modelcontextprotocol.io)",
+      "Bash(cargo info:*)",
+      "Bash(cargo outdated:*)",
+      "Bash(cargo install:*)",
+      "Bash(rustc --version && cargo --version && rustup show active-toolchain)",
+      "Bash(cargo update:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

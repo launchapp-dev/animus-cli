@@ -18,6 +18,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
             id: "TASK-1".to_string(),
         },
         input: None,
+        vars: std::collections::HashMap::new(),
         status,
         current_phase_index: 0,
         phases: vec![WorkflowPhaseExecution {

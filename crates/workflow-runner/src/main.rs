@@ -122,6 +122,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
             .as_deref()
             .map(serde_json::from_str)
             .transpose()?,
+        vars: std::collections::HashMap::new(),
         model: args.model,
         tool: args.tool,
         phase_timeout_secs: args.phase_timeout_secs,

@@ -1,6 +1,7 @@
 mod config;
 mod execute;
 mod phases;
+mod prompt;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use crate::{
     dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, print_value,
     WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand,
     WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand,
-    WorkflowStateMachineCommand,
+    WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
 
 async fn resolve_workflow_run_dispatch(
@@ -32,6 +33,7 @@ async fn resolve_workflow_run_dispatch(
     title: Option<String>,
     description: Option<String>,
     workflow_ref: Option<String>,
+    vars: std::collections::HashMap<String, String>,
 ) -> Result<protocol::SubjectDispatch> {
     match (task_id, requirement_id, title) {
         (Some(tid), None, None) => {
@@ -42,6 +44,7 @@ async fn resolve_workflow_run_dispatch(
                 "manual-cli-run",
                 Utc::now(),
             ))
+            .map(|dispatch| dispatch.with_vars(vars))
         }
         (None, Some(rid), None) => {
             hub.planning().get_requirement(&rid).await?;
@@ -50,14 +53,18 @@ async fn resolve_workflow_run_dispatch(
                 workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
                 "manual-cli-run",
             ))
+            .map(|dispatch| dispatch.with_vars(vars))
         }
-        (None, None, Some(t)) => Ok(protocol::SubjectDispatch::for_custom(
-            t,
-            description.unwrap_or_default(),
-            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
-            None,
-            "manual-cli-run",
-        )),
+        (None, None, Some(t)) => Ok(
+            protocol::SubjectDispatch::for_custom(
+                t,
+                description.unwrap_or_default(),
+                workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+                None,
+                "manual-cli-run",
+            )
+            .with_vars(vars),
+        ),
         (None, None, None) => Err(anyhow!(
             "one of --task-id, --requirement-id, or --title must be provided"
         )),
@@ -76,6 +83,7 @@ async fn resolve_workflow_run_dispatch_from_input(
         subject,
         workflow_ref,
         input,
+        vars,
         ..
     } = input;
     match subject {
@@ -88,6 +96,7 @@ async fn resolve_workflow_run_dispatch_from_input(
                 Utc::now(),
             )
             .with_input(input))
+            .map(|dispatch| dispatch.with_vars(vars))
         }
         WorkflowSubject::Requirement { id } => {
             hub.planning().get_requirement(&id).await?;
@@ -97,6 +106,7 @@ async fn resolve_workflow_run_dispatch_from_input(
                 "manual-cli-run",
             )
             .with_input(input))
+            .map(|dispatch| dispatch.with_vars(vars))
         }
         WorkflowSubject::Custom { title, description } => {
             Ok(protocol::SubjectDispatch::for_custom(
@@ -106,6 +116,7 @@ async fn resolve_workflow_run_dispatch_from_input(
                 input,
                 "manual-cli-run",
             ))
+            .map(|dispatch| dispatch.with_vars(vars))
         }
     }
 }
@@ -184,6 +195,26 @@ fn upgrade_legacy_workflow_run_input(raw: &str) -> Result<Option<WorkflowRunInpu
     };
 
     Ok(Some(run_input.with_input(input)))
+}
+
+fn parse_workflow_vars(raw_vars: &[String]) -> Result<std::collections::HashMap<String, String>> {
+    let mut vars = std::collections::HashMap::new();
+    for raw in raw_vars {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid --var value '{raw}'; expected KEY=VALUE"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!(
+                "invalid --var value '{raw}'; variable name must not be empty"
+            ));
+        }
+        if vars.contains_key(key) {
+            return Err(anyhow!("duplicate --var key '{}'", key));
+        }
+        vars.insert(key.to_string(), value.to_string());
+    }
+    Ok(vars)
 }
 
 async fn resolve_workflow_run_dispatch_from_raw_input(
@@ -295,6 +326,7 @@ pub(crate) async fn handle_workflow(
                         .await?
                 }
                 None => {
+                    let vars = parse_workflow_vars(&args.vars)?;
                     resolve_workflow_run_dispatch(
                         hub.clone(),
                         project_root,
@@ -303,6 +335,7 @@ pub(crate) async fn handle_workflow(
                         args.title,
                         args.description,
                         args.workflow_ref,
+                        vars,
                     )
                     .await?
                 }
@@ -313,6 +346,11 @@ pub(crate) async fn handle_workflow(
             execute::handle_workflow_execute(args, hub, project_root, json).await?;
             Ok(())
         }
+        WorkflowCommand::Prompt { command } => match command {
+            WorkflowPromptCommand::Render(args) => {
+                prompt::handle_workflow_prompt_render(args, hub, project_root, json).await
+            }
+        },
         WorkflowCommand::Resume(args) => {
             let outcome = dispatch_workflow_event(
                 hub.clone(),
@@ -662,6 +700,7 @@ mod tests {
             None,
             None,
             None,
+            std::collections::HashMap::new(),
         )
         .await
         .expect("dispatch should resolve");
@@ -724,6 +763,7 @@ mod tests {
             None,
             None,
             None,
+            std::collections::HashMap::new(),
         )
         .await
         .expect("dispatch should resolve");
@@ -800,6 +840,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_workflow_run_dispatch_from_input_preserves_vars() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+
+        let dispatch = resolve_workflow_run_dispatch_from_input(
+            hub,
+            "/tmp/unused",
+            WorkflowRunInput::for_custom(
+                "prompt preview".to_string(),
+                "inspect vars".to_string(),
+                None,
+            )
+            .with_vars(std::collections::HashMap::from([(
+                "release_name".to_string(),
+                "Mercury".to_string(),
+            )])),
+        )
+        .await
+        .expect("dispatch should resolve");
+
+        assert_eq!(
+            dispatch.vars.get("release_name").map(String::as_str),
+            Some("Mercury")
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_workflow_run_dispatch_from_raw_input_accepts_legacy_task_payload() {
         let hub = Arc::new(InMemoryServiceHub::new());
         let task = hub
@@ -827,5 +893,19 @@ mod tests {
 
         assert_eq!(dispatch.subject_id(), task.id);
         assert_eq!(dispatch.input, Some(serde_json::json!({"k":"v"})));
+    }
+
+    #[test]
+    fn parse_workflow_vars_rejects_invalid_pairs_and_duplicates() {
+        let invalid = parse_workflow_vars(&["missing-separator".to_string()])
+            .expect_err("missing '=' should fail");
+        assert!(invalid.to_string().contains("expected KEY=VALUE"));
+
+        let duplicate = parse_workflow_vars(&[
+            "release_name=Mercury".to_string(),
+            "release_name=Gemini".to_string(),
+        ])
+        .expect_err("duplicate keys should fail");
+        assert!(duplicate.to_string().contains("duplicate --var key"));
     }
 }
