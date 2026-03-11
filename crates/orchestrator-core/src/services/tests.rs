@@ -860,6 +860,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
                 output_json_schema: None,
                 decision_contract: None,
                 retry: None,
+                skills: Vec::new(),
                 command: None,
                 manual: None,
             },
@@ -878,6 +879,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             output_json_schema: None,
             decision_contract: None,
             retry: None,
+            skills: Vec::new(),
             command: None,
             manual: Some(crate::PhaseManualDefinition {
                 instructions: "approve qa signoff".to_string(),
