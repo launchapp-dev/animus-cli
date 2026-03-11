@@ -51,9 +51,9 @@ pub use config::Config;
 pub use error::{Error, Result};
 pub use parser::{extract_text_from_line, NormalizedTextEvent};
 pub use session::{
-    SessionBackend, SessionBackendInfo, SessionBackendKind, SessionBackendResolver,
-    SessionCapabilities, SessionEvent, SessionRequest, SessionRun, SessionStability,
-    SubprocessSessionBackend,
+    ClaudeSessionBackend, SessionBackend, SessionBackendInfo, SessionBackendKind,
+    SessionBackendResolver, SessionCapabilities, SessionEvent, SessionRequest, SessionRun,
+    SessionStability, SubprocessSessionBackend,
 };
 pub use tester::{CliTester, TestResult, TestSuite};
 pub use validator::{CliValidator, ValidationResult};

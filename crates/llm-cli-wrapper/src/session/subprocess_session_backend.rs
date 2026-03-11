@@ -56,6 +56,13 @@ impl SessionBackend for SubprocessSessionBackend {
         let session_id = Uuid::new_v4().to_string();
         let session_id_for_run = session_id.clone();
         let invocation = launch_invocation_for_request(&request)?;
+        let backend_label = request
+            .extras
+            .get("backend_label")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("subprocess")
+            .to_string();
+        let started_backend_label = backend_label.clone();
         let fallback_reason = request
             .extras
             .get("fallback_reason")
@@ -66,7 +73,7 @@ impl SessionBackend for SubprocessSessionBackend {
         tokio::spawn(async move {
             let _ = event_tx
                 .send(SessionEvent::Started {
-                    backend: "subprocess".to_string(),
+                    backend: started_backend_label.clone(),
                     session_id: Some(session_id),
                 })
                 .await;
@@ -88,7 +95,7 @@ impl SessionBackend for SubprocessSessionBackend {
         Ok(SessionRun {
             session_id: Some(session_id_for_run),
             events: event_rx,
-            selected_backend: "subprocess".to_string(),
+            selected_backend: backend_label,
             fallback_reason,
         })
     }

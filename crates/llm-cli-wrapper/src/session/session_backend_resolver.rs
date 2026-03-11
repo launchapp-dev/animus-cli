@@ -1,30 +1,41 @@
 use std::sync::Arc;
 
 use super::{
-    session_backend::SessionBackend, session_request::SessionRequest, session_run::SessionRun,
+    claude_session_backend::ClaudeSessionBackend, session_backend::SessionBackend,
+    session_request::SessionRequest, session_run::SessionRun,
     subprocess_session_backend::SubprocessSessionBackend,
 };
 use crate::error::Result;
 
 pub struct SessionBackendResolver {
+    claude: Arc<ClaudeSessionBackend>,
     subprocess: Arc<SubprocessSessionBackend>,
 }
 
 impl SessionBackendResolver {
     pub fn new() -> Self {
         Self {
+            claude: Arc::new(ClaudeSessionBackend::new()),
             subprocess: Arc::new(SubprocessSessionBackend::new()),
         }
     }
 
     pub fn fallback_reason(&self, request: &SessionRequest) -> Option<String> {
+        if request.tool.eq_ignore_ascii_case("claude") {
+            return None;
+        }
+
         Some(format!(
             "native backend not implemented for tool '{}'; using subprocess backend",
             request.tool
         ))
     }
 
-    pub fn resolve(&self, _request: &SessionRequest) -> Arc<dyn SessionBackend> {
+    pub fn resolve(&self, request: &SessionRequest) -> Arc<dyn SessionBackend> {
+        if request.tool.eq_ignore_ascii_case("claude") {
+            return self.claude.clone();
+        }
+
         self.subprocess.clone()
     }
 
@@ -60,8 +71,8 @@ mod tests {
     fn resolver_reports_subprocess_fallback_reason() {
         let resolver = SessionBackendResolver::new();
         let request = SessionRequest {
-            tool: "claude".to_string(),
-            model: "claude-sonnet".to_string(),
+            tool: "codex".to_string(),
+            model: "gpt-5".to_string(),
             prompt: "hello".to_string(),
             cwd: PathBuf::from("."),
             project_root: None,
@@ -75,6 +86,25 @@ mod tests {
             .fallback_reason(&request)
             .expect("fallback reason should exist");
         assert!(reason.contains("using subprocess backend"));
+    }
+
+    #[test]
+    fn resolver_selects_claude_backend_without_fallback() {
+        let resolver = SessionBackendResolver::new();
+        let request = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet".to_string(),
+            prompt: "hello".to_string(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            extras: json!({}),
+        };
+
+        assert!(resolver.fallback_reason(&request).is_none());
+        assert_eq!(resolver.resolve(&request).info().provider_tool, "claude");
     }
 
     #[tokio::test]
