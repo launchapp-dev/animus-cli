@@ -6,6 +6,11 @@ Library and companion CLI for discovering, validating, and normalizing the agent
 
 `llm-cli-wrapper` provides the thin abstraction layer AO uses to reason about heterogeneous agent tools in one consistent way. It exposes CLI metadata, health checks, capability flags, test suites, launch-contract parsing, and output normalization, and it also ships a small binary for manual inspection and testing.
 
+The next planned layer is a session-oriented backend facade for AO-owned native
+CLI backends, informed by external reference libraries and protected by a
+subprocess fallback path. See
+[`docs/architecture/llm-cli-wrapper-session-backends.md`](../../docs/architecture/llm-cli-wrapper-session-backends.md).
+
 ## Targets
 
 - Library: `cli_wrapper`
@@ -31,6 +36,7 @@ flowchart TD
     REG --> TEST
     REG --> PARSE
     REG --> LAUNCH
+    IFACE --> SESS["session facade (planned)"]
     TEST --> VALID
     CFG --> TEST
 
@@ -93,6 +99,7 @@ Built-in implementations that currently exist in `src/cli/`:
 - `src/cli/types.rs`: capability flags, metadata, statuses, and supported CLI enum.
 - `src/cli/launch.rs`: launch-contract parsing and machine-flag helpers.
 - `src/parser/`: text extraction and normalized event parsing.
+- `src/session/`: canonical session backend contract for native and fallback CLI sessions.
 - `src/tester/`: health checks and reusable test suites.
 - `src/validator/`: output validation helpers.
 - `src/config.rs`: optional TOML-backed wrapper configuration.
