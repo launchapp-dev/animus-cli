@@ -2325,6 +2325,7 @@ dependencies = [
  "dirs",
  "fs2",
  "llm-cli-wrapper",
+ "orchestrator-config",
  "orchestrator-core",
  "orchestrator-daemon-runtime",
  "orchestrator-git-ops",

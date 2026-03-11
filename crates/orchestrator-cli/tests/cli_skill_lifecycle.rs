@@ -387,8 +387,16 @@ fn skill_update_cli_constraints_override_lock_pins() -> Result<()> {
     );
 
     let listed = harness.run_json_ok(&["skill", "list"])?;
+    let listed_items = listed
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .expect("skill list should return an array");
+    let fmt_item = listed_items
+        .iter()
+        .find(|item| item.get("name").and_then(Value::as_str) == Some("fmt"))
+        .expect("installed fmt skill should be present in list output");
     assert_eq!(
-        listed.pointer("/data/0/version").and_then(Value::as_str),
+        fmt_item.get("version").and_then(Value::as_str),
         Some("1.1.0"),
         "list should reflect the updated installed version"
     );

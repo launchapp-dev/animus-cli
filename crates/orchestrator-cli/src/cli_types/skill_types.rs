@@ -2,12 +2,14 @@ use clap::{Args, Subcommand};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SkillCommand {
-    /// Search skill catalog entries.
+    /// Search skills across built-in, user, project, and registry sources.
     Search(SkillSearchArgs),
     /// Install a skill with deterministic resolution.
     Install(SkillInstallArgs),
-    /// List installed skills and lock alignment.
-    List,
+    /// List all available skills (built-in, user, project, and installed).
+    List(SkillListArgs),
+    /// Show details of a resolved skill definition.
+    Show(SkillShowArgs),
     /// Re-resolve one or all installed skills.
     Update(SkillUpdateArgs),
     /// Publish a new skill version into the registry catalog.
@@ -92,6 +94,18 @@ pub(crate) struct SkillUpdateArgs {
         help = "Allow pre-release versions during resolution."
     )]
     pub(crate) allow_prerelease: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillListArgs {
+    #[arg(long, help = "Filter by source: built-in, user, project, or installed.")]
+    pub(crate) source: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillShowArgs {
+    #[arg(long, help = "Skill name to show.")]
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Args)]
