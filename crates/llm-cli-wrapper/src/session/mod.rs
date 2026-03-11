@@ -1,4 +1,6 @@
 pub mod claude_session_backend;
+mod claude_session_parser;
+mod claude_session_transport;
 pub mod codex_session_backend;
 pub mod gemini_session_backend;
 pub mod session_backend;
