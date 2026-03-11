@@ -233,7 +233,7 @@ fn phase_execution_result_values(
     }
 }
 
-pub(super) fn load_agent_runtime_config(
+pub(crate) fn load_agent_runtime_config(
     project_root: &str,
 ) -> orchestrator_core::AgentRuntimeConfig {
     orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root))
@@ -1095,6 +1095,13 @@ pub async fn run_workflow_phase_with_agent(
                 inject_agent_tool_policy(&mut runtime_contract, project_root, phase_id);
                 inject_project_mcp_servers(&mut runtime_contract, project_root, phase_id);
                 inject_workflow_mcp_servers(&mut runtime_contract, project_root, phase_id);
+                if let Some(skill_result) = crate::skill_dispatch::resolve_and_apply_phase_skills(
+                    project_root, phase_id, target_tool_id,
+                ) {
+                    crate::skill_dispatch::inject_skill_overrides(
+                        &mut runtime_contract, target_tool_id, &skill_result,
+                    );
+                }
                 context
                     .as_object_mut()
                     .expect("json object")

@@ -100,7 +100,8 @@
       "Bash(GIT_EDITOR=true /opt/homebrew/bin/git rebase:*)",
       "mcp__ao__ao_workflow_config_get",
       "mcp__ao__ao_workflow_pipelines_list",
-      "mcp__ao__ao_daemon_config"
+      "mcp__ao__ao_daemon_config",
+      "mcp__ao__ao_requirements_create"
     ]
   },
   "enableAllProjectMcpServers": true,

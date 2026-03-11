@@ -571,6 +571,7 @@ mod tests {
                     )]),
                 }),
                 retry: None,
+                skills: Vec::new(),
                 command: None,
                 manual: None,
             },

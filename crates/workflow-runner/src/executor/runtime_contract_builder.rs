@@ -127,7 +127,7 @@ fn apply_contract_fields(
     }
 }
 
-pub(super) fn phase_agent_id_for(project_root: &str, phase_id: &str) -> Option<String> {
+pub(crate) fn phase_agent_id_for(project_root: &str, phase_id: &str) -> Option<String> {
     let workflow_override =
         orchestrator_core::load_workflow_config_or_default(Path::new(project_root))
             .config

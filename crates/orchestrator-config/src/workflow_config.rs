@@ -1818,6 +1818,7 @@ fn yaml_phase_to_execution_definition(
         output_json_schema: yaml.output_json_schema,
         decision_contract: yaml.decision_contract,
         retry: yaml.retry,
+        skills: Vec::new(),
         command,
         manual,
         system_prompt: yaml.system_prompt,
@@ -4166,6 +4167,7 @@ workflows:
                 output_json_schema: None,
                 decision_contract: None,
                 retry: None,
+                skills: Vec::new(),
                 command: Some(PhaseCommandDefinition {
                     program: "cargo".to_string(),
                     args: vec!["build".to_string()],
