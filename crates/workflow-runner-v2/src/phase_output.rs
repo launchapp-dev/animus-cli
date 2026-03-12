@@ -26,9 +26,13 @@ pub struct PersistedPhaseOutput {
     pub payload: Option<serde_json::Value>,
 }
 
+fn scoped_state_base(project_root: &str) -> PathBuf {
+    let path = Path::new(project_root);
+    protocol::scoped_state_root(path).unwrap_or_else(|| path.join(".ao"))
+}
+
 pub fn phase_output_dir(project_root: &str, workflow_id: &str) -> PathBuf {
-    Path::new(project_root)
-        .join(".ao")
+    scoped_state_base(project_root)
         .join("state")
         .join("workflows")
         .join(workflow_id)
@@ -207,8 +211,7 @@ fn load_workflow_state(
     project_root: &str,
     workflow_id: &str,
 ) -> Option<orchestrator_core::OrchestratorWorkflow> {
-    let workflow_path = Path::new(project_root)
-        .join(".ao")
+    let workflow_path = scoped_state_base(project_root)
         .join("workflow-state")
         .join(format!("{workflow_id}.json"));
     let contents = std::fs::read_to_string(&workflow_path).ok()?;
@@ -689,10 +692,12 @@ mod tests {
             "ao-test-pipeline-context-{}",
             Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&tmp).unwrap();
         let project_root = tmp.to_str().unwrap();
         let workflow_id = "wf-ctx-001";
 
-        let workflow_state_dir = tmp.join(".ao").join("workflow-state");
+        let state_base = scoped_state_base(project_root);
+        let workflow_state_dir = state_base.join("workflow-state");
         std::fs::create_dir_all(&workflow_state_dir).unwrap();
         let mut rework_counts = std::collections::HashMap::new();
         rework_counts.insert("code-review".to_string(), 2u32);
