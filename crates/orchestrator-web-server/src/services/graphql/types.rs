@@ -1,11 +1,11 @@
-#![allow(dead_code)]
-
 use async_graphql::{Enum, Object, SimpleObject, ID};
 use serde::Deserialize;
-use serde_json::Value;
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+// ---------------------------------------------------------------------------
+// Enum types
+// ---------------------------------------------------------------------------
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlTaskStatus {
     Backlog,
     Ready,
@@ -16,21 +16,22 @@ pub enum GqlTaskStatus {
     Cancelled,
 }
 
-fn parse_task_status(s: &str) -> GqlTaskStatus {
-    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "backlog" | "todo" => GqlTaskStatus::Backlog,
-        "ready" => GqlTaskStatus::Ready,
-        "in-progress" | "inprogress" => GqlTaskStatus::InProgress,
-        "blocked" => GqlTaskStatus::Blocked,
-        "on-hold" | "onhold" => GqlTaskStatus::OnHold,
-        "done" | "completed" => GqlTaskStatus::Done,
-        "cancelled" => GqlTaskStatus::Cancelled,
-        _ => GqlTaskStatus::Backlog,
+impl GqlTaskStatus {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "backlog" | "todo" => Self::Backlog,
+            "ready" => Self::Ready,
+            "in-progress" | "inprogress" => Self::InProgress,
+            "blocked" => Self::Blocked,
+            "on-hold" | "onhold" => Self::OnHold,
+            "done" | "completed" => Self::Done,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Backlog,
+        }
     }
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlTaskType {
     Feature,
     Bugfix,
@@ -42,22 +43,23 @@ pub enum GqlTaskType {
     Experiment,
 }
 
-fn parse_task_type(s: &str) -> GqlTaskType {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "feature" => GqlTaskType::Feature,
-        "bugfix" | "bug" => GqlTaskType::Bugfix,
-        "hotfix" | "hot-fix" => GqlTaskType::Hotfix,
-        "refactor" => GqlTaskType::Refactor,
-        "docs" | "documentation" | "doc" => GqlTaskType::Docs,
-        "test" | "tests" | "testing" => GqlTaskType::Test,
-        "chore" => GqlTaskType::Chore,
-        "experiment" => GqlTaskType::Experiment,
-        _ => GqlTaskType::Feature,
+impl GqlTaskType {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "feature" => Self::Feature,
+            "bugfix" | "bug" => Self::Bugfix,
+            "hotfix" | "hot-fix" => Self::Hotfix,
+            "refactor" => Self::Refactor,
+            "docs" | "documentation" | "doc" => Self::Docs,
+            "test" | "tests" | "testing" => Self::Test,
+            "chore" => Self::Chore,
+            "experiment" => Self::Experiment,
+            _ => Self::Feature,
+        }
     }
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlPriority {
     Critical,
     High,
@@ -65,18 +67,19 @@ pub enum GqlPriority {
     Low,
 }
 
-fn parse_priority(s: &str) -> GqlPriority {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "critical" => GqlPriority::Critical,
-        "high" => GqlPriority::High,
-        "medium" => GqlPriority::Medium,
-        "low" => GqlPriority::Low,
-        _ => GqlPriority::Medium,
+impl GqlPriority {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "critical" => Self::Critical,
+            "high" => Self::High,
+            "medium" => Self::Medium,
+            "low" => Self::Low,
+            _ => Self::Medium,
+        }
     }
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlWorkflowStatus {
     Pending,
     Running,
@@ -87,21 +90,46 @@ pub enum GqlWorkflowStatus {
     Cancelled,
 }
 
-fn parse_workflow_status(s: &str) -> GqlWorkflowStatus {
-    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "pending" => GqlWorkflowStatus::Pending,
-        "running" => GqlWorkflowStatus::Running,
-        "paused" => GqlWorkflowStatus::Paused,
-        "completed" => GqlWorkflowStatus::Completed,
-        "failed" => GqlWorkflowStatus::Failed,
-        "escalated" => GqlWorkflowStatus::Escalated,
-        "cancelled" => GqlWorkflowStatus::Cancelled,
-        _ => GqlWorkflowStatus::Pending,
+impl GqlWorkflowStatus {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "pending" => Self::Pending,
+            "running" => Self::Running,
+            "paused" => Self::Paused,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "escalated" => Self::Escalated,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Pending,
+        }
     }
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GqlDaemonStatusValue {
+    Starting,
+    Running,
+    Paused,
+    Stopping,
+    Stopped,
+    Crashed,
+}
+
+impl GqlDaemonStatusValue {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "paused" => Self::Paused,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            "crashed" => Self::Crashed,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlRequirementPriority {
     Must,
     Should,
@@ -109,18 +137,19 @@ pub enum GqlRequirementPriority {
     Wont,
 }
 
-fn parse_requirement_priority(s: &str) -> GqlRequirementPriority {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "must" => GqlRequirementPriority::Must,
-        "should" => GqlRequirementPriority::Should,
-        "could" => GqlRequirementPriority::Could,
-        "wont" => GqlRequirementPriority::Wont,
-        _ => GqlRequirementPriority::Should,
+impl GqlRequirementPriority {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "must" => Self::Must,
+            "should" => Self::Should,
+            "could" => Self::Could,
+            "wont" => Self::Wont,
+            _ => Self::Should,
+        }
     }
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GqlRequirementStatus {
     Draft,
     Refined,
@@ -135,22 +164,104 @@ pub enum GqlRequirementStatus {
     Deprecated,
 }
 
-fn parse_requirement_status(s: &str) -> GqlRequirementStatus {
-    match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
-        "draft" => GqlRequirementStatus::Draft,
-        "refined" => GqlRequirementStatus::Refined,
-        "planned" => GqlRequirementStatus::Planned,
-        "in-progress" => GqlRequirementStatus::InProgress,
-        "done" => GqlRequirementStatus::Done,
-        "po-review" => GqlRequirementStatus::PoReview,
-        "em-review" => GqlRequirementStatus::EmReview,
-        "needs-rework" => GqlRequirementStatus::NeedsRework,
-        "approved" => GqlRequirementStatus::Approved,
-        "implemented" => GqlRequirementStatus::Implemented,
-        "deprecated" => GqlRequirementStatus::Deprecated,
-        _ => GqlRequirementStatus::Draft,
+impl GqlRequirementStatus {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "draft" => Self::Draft,
+            "refined" => Self::Refined,
+            "planned" => Self::Planned,
+            "in-progress" => Self::InProgress,
+            "done" => Self::Done,
+            "po-review" => Self::PoReview,
+            "em-review" => Self::EmReview,
+            "needs-rework" => Self::NeedsRework,
+            "approved" => Self::Approved,
+            "implemented" => Self::Implemented,
+            "deprecated" => Self::Deprecated,
+            _ => Self::Draft,
+        }
     }
 }
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GqlRequirementType {
+    Product,
+    Functional,
+    NonFunctional,
+    Technical,
+    Other,
+}
+
+impl GqlRequirementType {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "product" => Self::Product,
+            "functional" => Self::Functional,
+            "non-functional" | "nonfunctional" => Self::NonFunctional,
+            "technical" => Self::Technical,
+            "other" => Self::Other,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GqlRiskLevel {
+    High,
+    Medium,
+    Low,
+}
+
+impl GqlRiskLevel {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "high" => Self::High,
+            "medium" => Self::Medium,
+            "low" => Self::Low,
+            _ => Self::Medium,
+        }
+    }
+}
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GqlScope {
+    Large,
+    Medium,
+    Small,
+}
+
+impl GqlScope {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "large" => Self::Large,
+            "medium" => Self::Medium,
+            "small" => Self::Small,
+            _ => Self::Medium,
+        }
+    }
+}
+
+#[derive(Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GqlComplexity {
+    High,
+    Medium,
+    Low,
+}
+
+impl GqlComplexity {
+    pub fn from_str_val(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "high" => Self::High,
+            "medium" => Self::Medium,
+            "low" => Self::Low,
+            _ => Self::Medium,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SimpleObject types (flat structs without nested resolvers)
+// ---------------------------------------------------------------------------
 
 #[derive(SimpleObject, Debug, Clone)]
 pub struct GqlPhaseExecution {
@@ -204,94 +315,38 @@ pub struct GqlChecklist {
 #[derive(SimpleObject, Debug, Clone)]
 pub struct GqlDependency {
     pub task_id: String,
+    #[graphql(name = "type")]
     pub dependency_type: String,
-}
-
-#[derive(SimpleObject, Debug, Clone)]
-pub struct GqlAssignee {
-    pub assignee_type: String,
-    pub role: Option<String>,
-    pub model: Option<String>,
-    pub user_id: Option<String>,
-}
-
-#[derive(SimpleObject, Debug, Clone)]
-pub struct GqlDaemonLog {
-    pub timestamp: String,
-    pub level: String,
-    pub message: String,
-}
-
-#[derive(SimpleObject, Debug, Clone)]
-pub struct GqlSystemInfo {
-    pub platform: String,
-    pub arch: String,
-    pub version: String,
-    pub daemon_running: bool,
-    pub daemon_status: String,
-    pub project_root: String,
-}
-
-#[derive(SimpleObject, Debug, Clone)]
-pub struct GqlQueueStats {
-    pub depth: i32,
-    pub pending: i32,
-    pub assigned: i32,
-    pub held: i32,
-    pub throughput_last_hour: i32,
-    pub avg_wait_time_secs: i32,
-}
-
-#[derive(SimpleObject, Debug, Clone)]
-pub struct GqlTaskStats {
-    pub total: i32,
-    pub in_progress: i32,
-    pub blocked: i32,
-    pub completed: i32,
-    pub by_status: String,
-    pub by_priority: String,
-    pub by_type: String,
 }
 
 #[derive(SimpleObject, Debug, Clone)]
 pub struct GqlWorkflowCheckpoint {
-    pub number: i32,
-    pub timestamp: String,
-    pub reason: String,
-    pub phase_id: Option<String>,
-    pub status: String,
-}
-
-// --- Raw deserialization structs ---
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawChecklist {
-    #[serde(default)]
     pub id: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub completed: bool,
+    pub phase: String,
+    pub timestamp: Option<String>,
+    pub data: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawDependency {
-    pub task_id: String,
-    #[serde(default)]
-    pub dependency_type: String,
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlDaemonLog {
+    pub timestamp: Option<String>,
+    pub level: Option<String>,
+    pub message: Option<String>,
+    pub fields: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawAssignee {
-    #[serde(rename = "type", default)]
-    pub assignee_type: String,
-    #[serde(default)]
-    pub role: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub user_id: Option<String>,
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlSystemInfo {
+    pub platform: Option<String>,
+    pub arch: Option<String>,
+    pub version: Option<String>,
+    pub daemon_status: Option<String>,
+    pub project_root: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Raw deserialization types
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawTask {
@@ -307,29 +362,35 @@ pub struct RawTask {
     #[serde(default)]
     pub risk: String,
     #[serde(default)]
-    pub complexity: String,
-    #[serde(default)]
     pub scope: String,
     #[serde(default)]
-    pub assignee: Option<RawAssignee>,
-    #[serde(default)]
-    pub checklist: Vec<RawChecklist>,
-    #[serde(default)]
-    pub dependencies: Vec<RawDependency>,
+    pub complexity: String,
     #[serde(default)]
     pub linked_requirements: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
-    pub metadata: Option<RawTaskMetadata>,
+    pub checklist: Vec<RawChecklist>,
+    #[serde(default)]
+    pub dependencies: Vec<RawDependency>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawTaskMetadata {
+pub struct RawChecklist {
     #[serde(default)]
-    pub created_at: Option<String>,
+    pub id: String,
     #[serde(default)]
-    pub updated_at: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawDependency {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default, rename = "dependency_type")]
+    pub dependency_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -344,19 +405,9 @@ pub struct RawRequirement {
     #[serde(rename = "type", default)]
     pub requirement_type: Option<String>,
     #[serde(default)]
-    pub category: Option<String>,
-    #[serde(default)]
-    pub acceptance_criteria: Vec<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
     pub linked_task_ids: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -370,18 +421,11 @@ pub struct RawWorkflow {
     #[serde(default)]
     pub current_phase: Option<String>,
     #[serde(default)]
-    pub current_phase_index: Option<u32>,
-    #[serde(default)]
     pub phases: Vec<RawPhaseExecution>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub decision_history: Vec<RawDecision>,
     #[serde(default)]
     pub total_reworks: u32,
-    #[serde(default)]
-    pub started_at: Option<String>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -418,96 +462,24 @@ pub struct RawDecision {
     pub risk: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawProject {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    #[serde(default)]
-    pub config: Option<RawProjectConfig>,
-    #[serde(default)]
-    pub metadata: Option<RawProjectMetadata>,
-    #[serde(default)]
-    pub archived: bool,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawProjectConfig {
-    #[serde(default)]
-    pub project_type: Option<String>,
-    #[serde(default)]
-    pub tech_stack: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawProjectMetadata {
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawVision {
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub markdown: Option<String>,
-    #[serde(default)]
-    pub problem_statement: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawQueueEntry {
-    #[serde(default)]
-    pub subject_id: Option<String>,
-    #[serde(default)]
-    pub task_id: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub workflow_id: Option<String>,
-    #[serde(default)]
-    pub assigned_at: Option<String>,
-    #[serde(default)]
-    pub held_at: Option<String>,
-    #[serde(default)]
-    pub task: Option<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RawDaemonStatus {
-    #[serde(default)]
-    pub healthy: bool,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub runner_connected: bool,
-    #[serde(default)]
-    pub active_agents: i64,
-    #[serde(default)]
-    pub max_agents: Option<i64>,
-    #[serde(default)]
-    pub project_root: Option<String>,
-    #[serde(default)]
-    pub daemon_pid: Option<i64>,
-}
-
-// --- Gql wrapper types ---
+// ---------------------------------------------------------------------------
+// Value-wrapping GQL object types
+// ---------------------------------------------------------------------------
 
 pub struct GqlTask(pub RawTask);
 pub struct GqlRequirement(pub RawRequirement);
 pub struct GqlWorkflow(pub RawWorkflow);
-pub struct GqlProject(pub RawProject);
-pub struct GqlVision(pub RawVision);
-pub struct GqlQueueEntry(pub RawQueueEntry);
-pub struct GqlDaemonStatus(pub RawDaemonStatus);
+
+pub struct GqlProject(pub serde_json::Value);
+pub struct GqlVision(pub serde_json::Value);
+pub struct GqlQueueEntry(pub serde_json::Value);
+pub struct GqlQueueStats(pub serde_json::Value);
+pub struct GqlTaskStats(pub serde_json::Value);
+pub struct GqlDaemonStatus(pub serde_json::Value);
+
+// ---------------------------------------------------------------------------
+// GqlTask Object impl
+// ---------------------------------------------------------------------------
 
 #[Object]
 impl GqlTask {
@@ -521,30 +493,37 @@ impl GqlTask {
         &self.0.description
     }
     async fn task_type(&self) -> GqlTaskType {
-        parse_task_type(&self.0.task_type)
+        GqlTaskType::from_str_val(&self.0.task_type)
+    }
+    async fn task_type_raw(&self) -> &str {
+        &self.0.task_type
     }
     async fn status(&self) -> GqlTaskStatus {
-        parse_task_status(&self.0.status)
+        GqlTaskStatus::from_str_val(&self.0.status)
+    }
+    async fn status_raw(&self) -> &str {
+        &self.0.status
     }
     async fn priority(&self) -> GqlPriority {
-        parse_priority(&self.0.priority)
+        GqlPriority::from_str_val(&self.0.priority)
     }
-    async fn risk(&self) -> &str {
-        &self.0.risk
+    async fn priority_raw(&self) -> &str {
+        &self.0.priority
     }
-    async fn complexity(&self) -> &str {
-        &self.0.complexity
+    async fn risk(&self) -> GqlRiskLevel {
+        GqlRiskLevel::from_str_val(&self.0.risk)
     }
-    async fn scope(&self) -> &str {
-        &self.0.scope
+    async fn scope(&self) -> GqlScope {
+        GqlScope::from_str_val(&self.0.scope)
     }
-    async fn assignee(&self) -> Option<GqlAssignee> {
-        self.0.assignee.as_ref().map(|a| GqlAssignee {
-            assignee_type: a.assignee_type.clone(),
-            role: a.role.clone(),
-            model: a.model.clone(),
-            user_id: a.user_id.clone(),
-        })
+    async fn complexity(&self) -> GqlComplexity {
+        GqlComplexity::from_str_val(&self.0.complexity)
+    }
+    async fn tags(&self) -> &[String] {
+        &self.0.tags
+    }
+    async fn linked_requirement_ids(&self) -> &[String] {
+        &self.0.linked_requirements
     }
     async fn checklist(&self) -> Vec<GqlChecklist> {
         self.0
@@ -567,24 +546,6 @@ impl GqlTask {
             })
             .collect()
     }
-    async fn tags(&self) -> &[String] {
-        &self.0.tags
-    }
-    async fn linked_requirement_ids(&self) -> &[String] {
-        &self.0.linked_requirements
-    }
-    async fn created_at(&self) -> Option<&str> {
-        self.0
-            .metadata
-            .as_ref()
-            .and_then(|m| m.created_at.as_deref())
-    }
-    async fn updated_at(&self) -> Option<&str> {
-        self.0
-            .metadata
-            .as_ref()
-            .and_then(|m| m.updated_at.as_deref())
-    }
     async fn requirements(
         &self,
         ctx: &async_graphql::Context<'_>,
@@ -602,6 +563,10 @@ impl GqlTask {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GqlRequirement Object impl
+// ---------------------------------------------------------------------------
+
 #[Object]
 impl GqlRequirement {
     async fn id(&self) -> ID {
@@ -614,22 +579,22 @@ impl GqlRequirement {
         &self.0.description
     }
     async fn priority(&self) -> GqlRequirementPriority {
-        parse_requirement_priority(&self.0.priority)
+        GqlRequirementPriority::from_str_val(&self.0.priority)
+    }
+    async fn priority_raw(&self) -> &str {
+        &self.0.priority
     }
     async fn status(&self) -> GqlRequirementStatus {
-        parse_requirement_status(&self.0.status)
+        GqlRequirementStatus::from_str_val(&self.0.status)
     }
-    async fn requirement_type(&self) -> Option<&str> {
-        self.0.requirement_type.as_deref()
+    async fn status_raw(&self) -> &str {
+        &self.0.status
     }
-    async fn category(&self) -> Option<&str> {
-        self.0.category.as_deref()
-    }
-    async fn acceptance_criteria(&self) -> &[String] {
-        &self.0.acceptance_criteria
-    }
-    async fn source(&self) -> Option<&str> {
-        self.0.source.as_deref()
+    async fn requirement_type(&self) -> Option<GqlRequirementType> {
+        self.0
+            .requirement_type
+            .as_deref()
+            .map(GqlRequirementType::from_str_val)
     }
     async fn tags(&self) -> &[String] {
         &self.0.tags
@@ -637,13 +602,11 @@ impl GqlRequirement {
     async fn linked_task_ids(&self) -> &[String] {
         &self.0.linked_task_ids
     }
-    async fn created_at(&self) -> Option<&str> {
-        self.0.created_at.as_deref()
-    }
-    async fn updated_at(&self) -> Option<&str> {
-        self.0.updated_at.as_deref()
-    }
 }
+
+// ---------------------------------------------------------------------------
+// GqlWorkflow Object impl
+// ---------------------------------------------------------------------------
 
 #[Object]
 impl GqlWorkflow {
@@ -657,22 +620,16 @@ impl GqlWorkflow {
         self.0.workflow_ref.as_deref()
     }
     async fn status(&self) -> GqlWorkflowStatus {
-        parse_workflow_status(&self.0.status)
+        GqlWorkflowStatus::from_str_val(&self.0.status)
+    }
+    async fn status_raw(&self) -> &str {
+        &self.0.status
     }
     async fn current_phase(&self) -> Option<&str> {
         self.0.current_phase.as_deref()
     }
-    async fn current_phase_index(&self) -> Option<i32> {
-        self.0.current_phase_index.map(|v| v as i32)
-    }
     async fn total_reworks(&self) -> i32 {
         self.0.total_reworks as i32
-    }
-    async fn started_at(&self) -> Option<&str> {
-        self.0.started_at.as_deref()
-    }
-    async fn completed_at(&self) -> Option<&str> {
-        self.0.completed_at.as_deref()
     }
     async fn phases(&self) -> Vec<GqlPhaseExecution> {
         self.0
@@ -716,125 +673,303 @@ impl GqlWorkflow {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GqlProject Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
+
 #[Object]
 impl GqlProject {
     async fn id(&self) -> ID {
-        ID(self.0.id.clone())
+        ID(self.0.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string())
     }
-    async fn name(&self) -> &str {
-        &self.0.name
+    async fn name(&self) -> Option<String> {
+        self.0.get("name").and_then(|v| v.as_str()).map(String::from)
     }
-    async fn path(&self) -> &str {
-        &self.0.path
+    async fn path(&self) -> Option<String> {
+        self.0.get("path").and_then(|v| v.as_str()).map(String::from)
     }
-    async fn description(&self) -> Option<&str> {
+    async fn description(&self) -> Option<String> {
         self.0
-            .metadata
-            .as_ref()
-            .and_then(|m| m.description.as_deref())
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
-    async fn project_type(&self) -> Option<&str> {
-        self.0
-            .config
-            .as_ref()
-            .and_then(|c| c.project_type.as_deref())
+    #[graphql(name = "type")]
+    async fn project_type(&self) -> Option<String> {
+        self.0.get("type").and_then(|v| v.as_str()).map(String::from)
     }
     async fn tech_stack(&self) -> Vec<String> {
         self.0
-            .config
-            .as_ref()
-            .map(|c| c.tech_stack.clone())
+            .get("tech_stack")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     }
     async fn archived(&self) -> bool {
-        self.0.archived
+        self.0
+            .get("archived")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
-    async fn created_at(&self) -> Option<&str> {
-        self.0.created_at.as_deref()
+    async fn metadata(&self) -> Option<String> {
+        self.0.get("metadata").map(|v| v.to_string())
     }
-    async fn updated_at(&self) -> Option<&str> {
-        self.0.updated_at.as_deref()
+    async fn tasks(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<GqlTask>> {
+        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
+        match api
+            .tasks_list(None, None, None, None, None, vec![], None, None, None)
+            .await
+        {
+            Ok(val) => {
+                let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
+                Ok(tasks.into_iter().map(GqlTask).collect())
+            }
+            Err(_) => Ok(vec![]),
+        }
+    }
+    async fn workflows(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<GqlWorkflow>> {
+        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
+        match api.workflows_list().await {
+            Ok(val) => {
+                let workflows: Vec<RawWorkflow> =
+                    serde_json::from_value(val).unwrap_or_default();
+                Ok(workflows.into_iter().map(GqlWorkflow).collect())
+            }
+            Err(_) => Ok(vec![]),
+        }
+    }
+    async fn requirements(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Vec<GqlRequirement>> {
+        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
+        match api.requirements_list().await {
+            Ok(val) => {
+                let reqs: Vec<RawRequirement> =
+                    serde_json::from_value(val).unwrap_or_default();
+                Ok(reqs.into_iter().map(GqlRequirement).collect())
+            }
+            Err(_) => Ok(vec![]),
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// GqlVision Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
 
 #[Object]
 impl GqlVision {
-    async fn id(&self) -> Option<&str> {
-        self.0.id.as_deref()
+    async fn title(&self) -> Option<String> {
+        self.0.get("title").and_then(|v| v.as_str()).map(String::from)
     }
-    async fn content(&self) -> Option<&str> {
-        self.0.markdown.as_deref()
+    async fn summary(&self) -> Option<String> {
+        self.0
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
-    async fn problem_statement(&self) -> Option<&str> {
-        self.0.problem_statement.as_deref()
+    async fn goals(&self) -> Vec<String> {
+        self.0
+            .get("goals")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
-    async fn created_at(&self) -> Option<&str> {
-        self.0.created_at.as_deref()
+    async fn target_audience(&self) -> Option<String> {
+        self.0
+            .get("target_audience")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
-    async fn updated_at(&self) -> Option<&str> {
-        self.0.updated_at.as_deref()
+    async fn success_criteria(&self) -> Vec<String> {
+        self.0
+            .get("success_criteria")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    async fn constraints(&self) -> Vec<String> {
+        self.0
+            .get("constraints")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    async fn raw(&self) -> String {
+        self.0.to_string()
     }
 }
 
+// ---------------------------------------------------------------------------
+// GqlQueueEntry Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
+
 #[Object]
 impl GqlQueueEntry {
-    async fn subject_id(&self) -> Option<&str> {
-        self.0.subject_id.as_deref()
-    }
-    async fn task_id(&self) -> Option<&str> {
-        self.0.task_id.as_deref()
-    }
-    async fn task_title(&self) -> Option<String> {
+    async fn task_id(&self) -> String {
         self.0
-            .task
-            .as_ref()
-            .and_then(|t| t.get("title"))
+            .get("task_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .unwrap_or("")
+            .to_string()
     }
-    async fn priority(&self) -> Option<String> {
+    async fn title(&self) -> Option<String> {
         self.0
-            .task
-            .as_ref()
-            .and_then(|t| t.get("priority"))
+            .get("title")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(String::from)
     }
-    async fn status(&self) -> Option<&str> {
-        self.0.status.as_deref()
+    async fn priority(&self) -> Option<GqlPriority> {
+        self.0
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(GqlPriority::from_str_val)
     }
-    async fn workflow_id(&self) -> Option<&str> {
-        self.0.workflow_id.as_deref()
+    async fn status(&self) -> Option<GqlTaskStatus> {
+        self.0
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(GqlTaskStatus::from_str_val)
     }
-    async fn assigned_at(&self) -> Option<&str> {
-        self.0.assigned_at.as_deref()
+    async fn wait_time(&self) -> Option<f64> {
+        self.0.get("wait_time").and_then(|v| v.as_f64())
     }
-    async fn held_at(&self) -> Option<&str> {
-        self.0.held_at.as_deref()
+    async fn position(&self) -> Option<i32> {
+        self.0
+            .get("position")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
     }
 }
+
+// ---------------------------------------------------------------------------
+// GqlQueueStats Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
+
+#[Object]
+impl GqlQueueStats {
+    async fn depth(&self) -> i32 {
+        self.0
+            .get("depth")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32
+    }
+    async fn ready_count(&self) -> i32 {
+        self.0
+            .get("ready_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32
+    }
+    async fn held_count(&self) -> i32 {
+        self.0
+            .get("held_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32
+    }
+    async fn avg_wait(&self) -> Option<f64> {
+        self.0.get("avg_wait").and_then(|v| v.as_f64())
+    }
+    async fn throughput(&self) -> Option<f64> {
+        self.0.get("throughput").and_then(|v| v.as_f64())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GqlTaskStats Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
+
+#[Object]
+impl GqlTaskStats {
+    async fn total(&self) -> i32 {
+        self.0
+            .get("total")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32
+    }
+    async fn by_status(&self) -> Option<String> {
+        self.0.get("by_status").map(|v| v.to_string())
+    }
+    async fn by_priority(&self) -> Option<String> {
+        self.0.get("by_priority").map(|v| v.to_string())
+    }
+    async fn by_type(&self) -> Option<String> {
+        self.0.get("by_type").map(|v| v.to_string())
+    }
+    async fn raw(&self) -> String {
+        self.0.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GqlDaemonStatus Object impl (wraps serde_json::Value)
+// ---------------------------------------------------------------------------
 
 #[Object]
 impl GqlDaemonStatus {
     async fn healthy(&self) -> bool {
-        self.0.healthy
+        self.0
+            .get("healthy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
-    async fn status(&self) -> &str {
-        &self.0.status
+    async fn status(&self) -> GqlDaemonStatusValue {
+        self.0
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(GqlDaemonStatusValue::from_str_val)
+            .unwrap_or(GqlDaemonStatusValue::Stopped)
+    }
+    async fn status_raw(&self) -> Option<String> {
+        self.0
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
     async fn runner_connected(&self) -> bool {
-        self.0.runner_connected
+        self.0
+            .get("runner_connected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     }
     async fn active_agents(&self) -> i32 {
-        self.0.active_agents as i32
+        self.0
+            .get("active_agents")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32
     }
     async fn max_agents(&self) -> Option<i32> {
-        self.0.max_agents.map(|v| v as i32)
+        self.0
+            .get("max_agents")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
     }
-    async fn project_root(&self) -> Option<&str> {
-        self.0.project_root.as_deref()
-    }
-    async fn daemon_pid(&self) -> Option<i32> {
-        self.0.daemon_pid.map(|v| v as i32)
+    async fn project_root(&self) -> Option<String> {
+        self.0
+            .get("project_root")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
 }

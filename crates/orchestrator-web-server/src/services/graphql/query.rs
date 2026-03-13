@@ -2,8 +2,9 @@ use async_graphql::{Context, Object, Result, ID};
 use orchestrator_web_api::WebApiService;
 
 use super::types::{
-    GqlAgentRun, GqlDaemonHealth, GqlRequirement, GqlTask, GqlWorkflow, RawRequirement, RawTask,
-    RawWorkflow,
+    GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlProject, GqlQueueEntry,
+    GqlQueueStats, GqlRequirement, GqlSystemInfo, GqlTask, GqlTaskStats, GqlVision, GqlWorkflow,
+    GqlWorkflowCheckpoint, RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -49,6 +50,39 @@ impl QueryRoot {
             Err(e) if e.code == "not_found" => Ok(None),
             Err(e) => Err(async_graphql::Error::new(e.message.clone())),
         }
+    }
+
+    async fn tasks_prioritized(&self, ctx: &Context<'_>) -> Result<Vec<GqlTask>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .tasks_prioritized()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
+        Ok(tasks.into_iter().map(GqlTask).collect())
+    }
+
+    async fn tasks_next(&self, ctx: &Context<'_>) -> Result<Option<GqlTask>> {
+        let api = ctx.data::<WebApiService>()?;
+        match api.tasks_next().await {
+            Ok(val) => {
+                let raw: RawTask = serde_json::from_value(val).map_err(|e| {
+                    async_graphql::Error::new(format!("failed to parse task: {e}"))
+                })?;
+                Ok(Some(GqlTask(raw)))
+            }
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(async_graphql::Error::new(e.message.clone())),
+        }
+    }
+
+    async fn task_stats(&self, ctx: &Context<'_>) -> Result<GqlTaskStats> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .tasks_stats()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(GqlTaskStats(val))
     }
 
     async fn requirements(&self, ctx: &Context<'_>) -> Result<Vec<GqlRequirement>> {
@@ -106,6 +140,37 @@ impl QueryRoot {
         }
     }
 
+    async fn workflow_checkpoints(
+        &self,
+        ctx: &Context<'_>,
+        workflow_id: ID,
+    ) -> Result<Vec<GqlWorkflowCheckpoint>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .workflows_checkpoints(&workflow_id)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let checkpoints: Vec<serde_json::Value> =
+            serde_json::from_value(val).unwrap_or_default();
+        Ok(checkpoints
+            .into_iter()
+            .map(|c| GqlWorkflowCheckpoint {
+                id: c
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                phase: c
+                    .get("phase")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                timestamp: c.get("timestamp").and_then(|v| v.as_str()).map(String::from),
+                data: c.get("data").map(|v| v.to_string()),
+            })
+            .collect())
+    }
+
     async fn daemon_health(&self, ctx: &Context<'_>) -> Result<GqlDaemonHealth> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
@@ -139,16 +204,44 @@ impl QueryRoot {
         })
     }
 
+    async fn daemon_status(&self, ctx: &Context<'_>) -> Result<GqlDaemonStatus> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .daemon_status()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(GqlDaemonStatus(val))
+    }
+
+    async fn daemon_logs(
+        &self,
+        ctx: &Context<'_>,
+        limit: Option<i32>,
+    ) -> Result<Vec<GqlDaemonLog>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .daemon_logs(limit.map(|l| l as usize))
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let logs: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
+        Ok(logs
+            .into_iter()
+            .map(|l| GqlDaemonLog {
+                timestamp: l.get("timestamp").and_then(|v| v.as_str()).map(String::from),
+                level: l.get("level").and_then(|v| v.as_str()).map(String::from),
+                message: l.get("message").and_then(|v| v.as_str()).map(String::from),
+                fields: l.get("fields").map(|v| v.to_string()),
+            })
+            .collect())
+    }
+
     async fn agent_runs(&self, ctx: &Context<'_>) -> Result<Vec<GqlAgentRun>> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
             .daemon_agents()
             .await
             .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
-        let agents = val
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let agents = val.as_array().cloned().unwrap_or_default();
         Ok(agents
             .iter()
             .filter_map(|a| {
@@ -179,5 +272,83 @@ impl QueryRoot {
                 })
             })
             .collect())
+    }
+
+    async fn projects(&self, ctx: &Context<'_>) -> Result<Vec<GqlProject>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .projects_list()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let projects: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
+        Ok(projects.into_iter().map(GqlProject).collect())
+    }
+
+    async fn project(&self, ctx: &Context<'_>, id: ID) -> Result<Option<GqlProject>> {
+        let api = ctx.data::<WebApiService>()?;
+        match api.projects_get(&id).await {
+            Ok(val) => Ok(Some(GqlProject(val))),
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(async_graphql::Error::new(e.message.clone())),
+        }
+    }
+
+    async fn projects_active(&self, ctx: &Context<'_>) -> Result<Vec<GqlProject>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .projects_active()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let projects: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
+        Ok(projects.into_iter().map(GqlProject).collect())
+    }
+
+    async fn vision(&self, ctx: &Context<'_>) -> Result<Option<GqlVision>> {
+        let api = ctx.data::<WebApiService>()?;
+        match api.vision_get().await {
+            Ok(val) => Ok(Some(GqlVision(val))),
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(async_graphql::Error::new(e.message.clone())),
+        }
+    }
+
+    async fn queue(&self, ctx: &Context<'_>) -> Result<Vec<GqlQueueEntry>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .queue_list()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let entries: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
+        Ok(entries.into_iter().map(GqlQueueEntry).collect())
+    }
+
+    async fn queue_stats(&self, ctx: &Context<'_>) -> Result<GqlQueueStats> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .queue_stats()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(GqlQueueStats(val))
+    }
+
+    async fn system_info(&self, ctx: &Context<'_>) -> Result<GqlSystemInfo> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .system_info()
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        Ok(GqlSystemInfo {
+            platform: val.get("platform").and_then(|v| v.as_str()).map(String::from),
+            arch: val.get("arch").and_then(|v| v.as_str()).map(String::from),
+            version: val.get("version").and_then(|v| v.as_str()).map(String::from),
+            daemon_status: val
+                .get("daemon_status")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            project_root: val
+                .get("project_root")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
     }
 }
