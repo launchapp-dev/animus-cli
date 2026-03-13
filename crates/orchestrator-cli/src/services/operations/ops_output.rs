@@ -619,7 +619,11 @@ mod tests {
 
     #[test]
     fn get_phase_outputs_reads_persisted_payloads() {
+        let _lock = crate::shared::test_env_lock()
+            .lock()
+            .expect("env lock should be available");
         let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
         std::fs::create_dir_all(&project_root).expect("project dir should be created");
         let workflow_id = "wf-phase-output-test";
