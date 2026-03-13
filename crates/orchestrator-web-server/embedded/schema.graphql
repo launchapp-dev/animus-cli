@@ -87,6 +87,12 @@ type GqlPhaseExecution {
 	errorMessage: String
 }
 
+type GqlPhaseOutput {
+	lines: [String!]!
+	phaseId: String!
+	hasMore: Boolean!
+}
+
 enum GqlPriority {
 	CRITICAL
 	HIGH
@@ -266,6 +272,13 @@ type GqlWorkflowCheckpoint {
 	data: String
 }
 
+type GqlWorkflowDefinition {
+	id: String!
+	name: String!
+	description: String
+	phases: [String!]!
+}
+
 enum GqlWorkflowStatus {
 	PENDING
 	RUNNING
@@ -294,7 +307,7 @@ type MutationRoot {
 	refineRequirement(id: String!, feedback: String): GqlRequirement!
 	runWorkflow(taskId: String!, workflowRef: String): GqlWorkflow!
 	pauseWorkflow(id: ID!): GqlWorkflow!
-	resumeWorkflow(id: ID!): GqlWorkflow!
+	resumeWorkflow(id: ID!, feedback: String): GqlWorkflow!
 	cancelWorkflow(id: ID!): GqlWorkflow!
 	approvePhase(workflowId: ID!, phaseId: String!, note: String): GqlWorkflow!
 	daemonStart: Boolean!
@@ -326,6 +339,9 @@ type QueryRoot {
 	workflows(status: String): [GqlWorkflow!]!
 	workflow(id: ID!): GqlWorkflow
 	workflowCheckpoints(workflowId: ID!): [GqlWorkflowCheckpoint!]!
+	phaseOutput(workflowId: ID!, phaseId: String, tail: Int): GqlPhaseOutput!
+	readyTasks(search: String, limit: Int): [GqlTask!]!
+	workflowDefinitions: [GqlWorkflowDefinition!]!
 	daemonHealth: GqlDaemonHealth!
 	daemonStatus: GqlDaemonStatus!
 	daemonLogs(limit: Int): [GqlDaemonLog!]!

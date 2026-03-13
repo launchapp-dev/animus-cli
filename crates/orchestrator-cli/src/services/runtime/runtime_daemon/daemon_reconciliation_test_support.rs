@@ -16,7 +16,7 @@ pub async fn reconcile_dependency_gate_tasks_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
 ) -> Result<usize> {
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = hub.workflows().list().await?;
     let active_task_ids = active_workflow_task_ids(&workflows);
 
     let mut changed = 0usize;
@@ -56,7 +56,7 @@ pub async fn reconcile_merge_gate_tasks_for_project(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
 ) -> Result<usize> {
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = hub.workflows().list().await?;
     let active_task_ids = active_workflow_task_ids(&workflows);
 
     let mut resolved = 0usize;
@@ -97,7 +97,7 @@ pub async fn reconcile_stale_in_progress_tasks_for_project(
     project_root: &str,
     stale_threshold_hours: u64,
 ) -> Result<usize> {
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = hub.workflows().list().await?;
     let active_task_ids = active_workflow_task_ids(&workflows);
     let completed_task_ids: std::collections::HashSet<String> = workflows
         .iter()
@@ -212,6 +212,7 @@ pub async fn resume_interrupted_workflows_for_project(
             root,
             WorkflowEvent::Resume {
                 workflow_id: workflow.id.clone(),
+                feedback: None,
             },
         )
         .await?;

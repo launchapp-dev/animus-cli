@@ -365,10 +365,15 @@ impl MutationRoot {
         Ok(GqlWorkflow(raw))
     }
 
-    async fn resume_workflow(&self, ctx: &Context<'_>, id: ID) -> Result<GqlWorkflow> {
+    async fn resume_workflow(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        feedback: Option<String>,
+    ) -> Result<GqlWorkflow> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
-            .workflows_resume(&id)
+            .workflows_resume(&id, feedback)
             .await
             .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
         let raw: RawWorkflow = serde_json::from_value(val)

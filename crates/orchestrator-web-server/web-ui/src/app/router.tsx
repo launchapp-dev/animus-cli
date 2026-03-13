@@ -26,6 +26,9 @@ const QueuePage = lazy(() => import("./queue-page").then((m) => ({ default: m.Qu
 const EventsPage = lazy(() => import("./events-page").then((m) => ({ default: m.EventsPage })));
 const ReviewHandoffPage = lazy(() => import("./review-page").then((m) => ({ default: m.ReviewHandoffPage })));
 const NotFoundPage = lazy(() => import("./not-found-page").then((m) => ({ default: m.NotFoundPage })));
+const TaskDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.TaskDispatchPage })));
+const RequirementDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.RequirementDispatchPage })));
+const CustomDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.CustomDispatchPage })));
 
 export const APP_ROUTE_PATHS = [
   "/",
@@ -43,6 +46,9 @@ export const APP_ROUTE_PATHS = [
   "/tasks/new",
   "/tasks/:taskId",
   "/workflows",
+  "/workflows/dispatch/task",
+  "/workflows/dispatch/requirements",
+  "/workflows/dispatch/custom",
   "/workflows/:workflowId",
   "/workflows/:workflowId/checkpoints/:checkpoint",
   "/queue",
@@ -116,6 +122,18 @@ const router = createBrowserRouter([
       {
         path: "workflows",
         element: withRouteSuspense(<WorkflowsPage />),
+      },
+      {
+        path: "workflows/dispatch/task",
+        element: withRouteSuspense(<TaskDispatchPage />),
+      },
+      {
+        path: "workflows/dispatch/requirements",
+        element: withRouteSuspense(<RequirementDispatchPage />),
+      },
+      {
+        path: "workflows/dispatch/custom",
+        element: withRouteSuspense(<CustomDispatchPage />),
       },
       {
         path: "workflows/:workflowId",

@@ -2567,6 +2567,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "orchestrator-config",
  "orchestrator-core",
  "orchestrator-daemon-runtime",
  "orchestrator-web-contracts",

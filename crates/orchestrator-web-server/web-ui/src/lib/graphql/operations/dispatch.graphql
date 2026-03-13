@@ -1,0 +1,18 @@
+query ReadyTasks($search: String, $limit: Int) {
+  readyTasks(search: $search, limit: $limit) {
+    id
+    title
+    statusRaw
+    priorityRaw
+    taskTypeRaw
+  }
+}
+
+query WorkflowDefinitions {
+  workflowDefinitions {
+    id
+    name
+    description
+    phases
+  }
+}

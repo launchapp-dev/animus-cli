@@ -357,6 +357,7 @@ pub(crate) async fn handle_workflow(
                 project_root,
                 WorkflowEvent::Resume {
                     workflow_id: args.id.clone(),
+                    feedback: None,
                 },
             )
             .await?;

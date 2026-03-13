@@ -264,6 +264,21 @@ impl GqlComplexity {
 // ---------------------------------------------------------------------------
 
 #[derive(SimpleObject, Debug, Clone)]
+pub struct GqlWorkflowDefinition {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub phases: Vec<String>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlPhaseOutput {
+    pub lines: Vec<String>,
+    pub phase_id: String,
+    pub has_more: bool,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
 pub struct GqlPhaseExecution {
     pub phase_id: String,
     pub status: String,

@@ -90,7 +90,7 @@ describe("task and workflow control center", () => {
     expect(screen.getByText("No tasks match filters.")).toBeTruthy();
   });
 
-  it("renders workflows with run form and action buttons", async () => {
+  it("renders workflows command center with active workflows", async () => {
     mocks.useQuery.mockReturnValue([
       {
         data: {
@@ -125,8 +125,8 @@ describe("task and workflow control center", () => {
     renderInRouter(<WorkflowsPage />);
 
     expect(screen.getByText("Workflows")).toBeTruthy();
-    expect(screen.getByText("wf-1")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeTruthy();
+    expect(screen.getByText("TASK-014")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New Workflow" })).toBeTruthy();
   });
 
   it("shows empty state when no workflows exist", () => {
@@ -141,14 +141,19 @@ describe("task and workflow control center", () => {
 
     renderInRouter(<WorkflowsPage />);
 
-    expect(screen.getByText("No workflows found.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeTruthy();
+    expect(screen.getByText("No workflows yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New Workflow" })).toBeTruthy();
   });
 
-  it("executes run workflow mutation", async () => {
+  it("shows stat cards with workflow counts", () => {
     mocks.useQuery.mockReturnValue([
       {
-        data: { workflows: [] },
+        data: {
+          workflows: [
+            { id: "wf-1", taskId: "TASK-1", workflowRef: null, status: "Running", statusRaw: "running", currentPhase: "impl", totalReworks: 0, phases: [] },
+            { id: "wf-2", taskId: "TASK-2", workflowRef: null, status: "Completed", statusRaw: "completed", currentPhase: null, totalReworks: 0, phases: [] },
+          ],
+        },
         fetching: false,
         error: null,
       },
@@ -157,14 +162,7 @@ describe("task and workflow control center", () => {
 
     renderInRouter(<WorkflowsPage />);
 
-    const input = screen.getByPlaceholderText("Task ID (e.g. TASK-014)");
-    fireEvent.change(input, { target: { value: "TASK-101" } });
-    fireEvent.click(screen.getByRole("button", { name: "Run Workflow" }));
-
-    await waitFor(() => {
-      expect(executeMutation).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: "TASK-101" }),
-      );
-    });
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Completed")).toBeTruthy();
   });
 });

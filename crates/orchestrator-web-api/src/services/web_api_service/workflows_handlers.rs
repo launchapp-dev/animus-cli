@@ -159,6 +159,25 @@ impl WebApiService {
         Ok(json!(self.context.hub.workflows().list().await?))
     }
 
+    pub async fn workflow_definitions(&self) -> Result<Value, WebApiError> {
+        let project_root = std::path::Path::new(&self.context.project_root);
+        let loaded = orchestrator_config::workflow_config::load_workflow_config_or_default(project_root);
+        let defs: Vec<Value> = loaded
+            .config
+            .workflows
+            .iter()
+            .map(|d| {
+                json!({
+                    "id": d.id,
+                    "name": if d.name.is_empty() { &d.id } else { &d.name },
+                    "description": d.description,
+                    "phases": d.phase_ids(),
+                })
+            })
+            .collect();
+        Ok(json!(defs))
+    }
+
     pub async fn project_workflows(&self, id: &str) -> Result<Value, WebApiError> {
         let project = self.context.hub.projects().get(id).await?;
         let hub = FileServiceHub::new(&project.path)?;
@@ -226,12 +245,17 @@ impl WebApiService {
         Ok(json!(workflow))
     }
 
-    pub async fn workflows_resume(&self, id: &str) -> Result<Value, WebApiError> {
+    pub async fn workflows_resume(
+        &self,
+        id: &str,
+        feedback: Option<String>,
+    ) -> Result<Value, WebApiError> {
         let outcome = dispatch_workflow_event(
             self.context.hub.clone(),
             &self.context.project_root,
             WorkflowEvent::Resume {
                 workflow_id: id.to_string(),
+                feedback,
             },
         )
         .await?;
@@ -307,6 +331,85 @@ impl WebApiService {
             json!({ "workflow_id": workflow.id, "phase_id": phase_id, "status": workflow.status }),
         );
         Ok(json!(workflow))
+    }
+
+    pub async fn workflows_phase_output(
+        &self,
+        workflow_id: &str,
+        phase_id: Option<&str>,
+        tail: Option<i32>,
+    ) -> Result<Value, WebApiError> {
+        if workflow_id.is_empty()
+            || workflow_id.contains('/')
+            || workflow_id.contains('\\')
+            || workflow_id.contains("..")
+        {
+            return Err(WebApiError::new(
+                "invalid_input",
+                "workflow id contains unsafe path segments".to_string(),
+                2,
+            ));
+        }
+        if let Some(pid) = phase_id {
+            if pid.contains('/') || pid.contains('\\') || pid.contains("..") {
+                return Err(WebApiError::new(
+                    "invalid_input",
+                    "phase id contains unsafe path segments".to_string(),
+                    2,
+                ));
+            }
+        }
+
+        let project_root = std::path::Path::new(&self.context.project_root);
+        let state_base = protocol::scoped_state_root(project_root)
+            .unwrap_or_else(|| project_root.join(".ao"));
+        let output_dir = state_base
+            .join("state")
+            .join("workflows")
+            .join(workflow_id)
+            .join("phase-outputs");
+
+        let resolved_phase_id = match phase_id {
+            Some(pid) => pid.to_string(),
+            None => {
+                let workflow = self.context.hub.workflows().get(workflow_id).await?;
+                workflow.current_phase.unwrap_or_else(|| {
+                    workflow
+                        .phases
+                        .last()
+                        .map(|p| p.phase_id.clone())
+                        .unwrap_or_else(|| "unknown".to_string())
+                })
+            }
+        };
+
+        let file_path = output_dir.join(format!("{resolved_phase_id}.json"));
+        if !file_path.exists() {
+            return Ok(json!({
+                "lines": Vec::<String>::new(),
+                "phase_id": resolved_phase_id,
+                "has_more": false,
+            }));
+        }
+
+        let content = std::fs::read_to_string(&file_path).map_err(|e| {
+            WebApiError::new("internal", format!("failed to read phase output: {e}"), 1)
+        })?;
+
+        let all_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let tail_count = tail.unwrap_or(50).max(1) as usize;
+        let has_more = all_lines.len() > tail_count;
+        let lines: Vec<String> = if has_more {
+            all_lines[all_lines.len() - tail_count..].to_vec()
+        } else {
+            all_lines
+        };
+
+        Ok(json!({
+            "lines": lines,
+            "phase_id": resolved_phase_id,
+            "has_more": has_more,
+        }))
     }
 }
 

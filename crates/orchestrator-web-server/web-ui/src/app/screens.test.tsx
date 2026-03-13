@@ -39,7 +39,7 @@ describe("ReviewHandoffPage", () => {
   it("renders the review handoff form with required fields", () => {
     render(<ReviewHandoffPage />);
 
-    expect(screen.getByText("Review Handoff")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Review Handoff" })).toBeTruthy();
     expect(screen.getByText("Target Role")).toBeTruthy();
     expect(screen.getByText("Question")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Submit Handoff" })).toBeTruthy();

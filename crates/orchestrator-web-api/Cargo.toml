@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0"
+orchestrator-config = { path = "../orchestrator-config" }
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-daemon-runtime = { path = "../orchestrator-daemon-runtime" }
 orchestrator-web-contracts = { path = "../orchestrator-web-contracts" }

@@ -763,7 +763,7 @@ async fn workflows_resume_handler(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    match state.api.workflows_resume(&id).await {
+    match state.api.workflows_resume(&id, None).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }

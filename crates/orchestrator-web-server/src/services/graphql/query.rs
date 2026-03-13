@@ -2,9 +2,9 @@ use async_graphql::{Context, Object, Result, ID};
 use orchestrator_web_api::WebApiService;
 
 use super::types::{
-    GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlProject, GqlQueueEntry,
-    GqlQueueStats, GqlRequirement, GqlSystemInfo, GqlTask, GqlTaskStats, GqlVision, GqlWorkflow,
-    GqlWorkflowCheckpoint, RawRequirement, RawTask, RawWorkflow,
+    GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlPhaseOutput, GqlProject,
+    GqlQueueEntry, GqlQueueStats, GqlRequirement, GqlSystemInfo, GqlTask, GqlTaskStats, GqlVision,
+    GqlWorkflow, GqlWorkflowCheckpoint, GqlWorkflowDefinition, RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -169,6 +169,105 @@ impl QueryRoot {
                 data: c.get("data").map(|v| v.to_string()),
             })
             .collect())
+    }
+
+    async fn phase_output(
+        &self,
+        ctx: &Context<'_>,
+        workflow_id: ID,
+        phase_id: Option<String>,
+        tail: Option<i32>,
+    ) -> Result<GqlPhaseOutput> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .workflows_phase_output(&workflow_id, phase_id.as_deref(), tail)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let lines: Vec<String> = val
+            .get("lines")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let resolved_phase_id = val
+            .get("phase_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let has_more = val
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Ok(GqlPhaseOutput {
+            lines,
+            phase_id: resolved_phase_id,
+            has_more,
+        })
+    }
+
+    async fn ready_tasks(
+        &self,
+        ctx: &Context<'_>,
+        search: Option<String>,
+        limit: Option<i32>,
+    ) -> Result<Vec<GqlTask>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .tasks_list(None, None, None, None, None, vec![], None, None, search)
+            .await
+            .map_err(|e| async_graphql::Error::new(e.message.clone()))?;
+        let all_tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
+        let priority_order = |p: &str| -> u8 {
+            match p.to_lowercase().as_str() {
+                "critical" => 0,
+                "high" => 1,
+                "medium" => 2,
+                "low" => 3,
+                _ => 4,
+            }
+        };
+        let mut ready: Vec<RawTask> = all_tasks
+            .into_iter()
+            .filter(|t| {
+                let s = t.status.to_lowercase();
+                s == "ready" || s == "backlog" || s == "todo"
+            })
+            .collect();
+        ready.sort_by(|a, b| priority_order(&a.priority).cmp(&priority_order(&b.priority)));
+        let max = limit.unwrap_or(25).max(1) as usize;
+        ready.truncate(max);
+        Ok(ready.into_iter().map(GqlTask).collect())
+    }
+
+    async fn workflow_definitions(&self, ctx: &Context<'_>) -> Result<Vec<GqlWorkflowDefinition>> {
+        let api = ctx.data::<WebApiService>()?;
+        match api.workflow_definitions().await {
+            Ok(val) => {
+                let defs: Vec<serde_json::Value> =
+                    serde_json::from_value(val).unwrap_or_default();
+                Ok(defs
+                    .into_iter()
+                    .map(|d| GqlWorkflowDefinition {
+                        id: d.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        name: d.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        description: d.get("description").and_then(|v| v.as_str()).map(String::from),
+                        phases: d
+                            .get("phases")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                    .collect())
+            }
+            Err(e) => Err(async_graphql::Error::new(e.message.clone())),
+        }
     }
 
     async fn daemon_health(&self, ctx: &Context<'_>) -> Result<GqlDaemonHealth> {

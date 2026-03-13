@@ -16,6 +16,7 @@ pub enum WorkflowEvent {
     },
     Resume {
         workflow_id: String,
+        feedback: Option<String>,
     },
     Cancel {
         workflow_id: String,
@@ -56,7 +57,18 @@ pub async fn dispatch_workflow_event(
                 ..WorkflowEventOutcome::default()
             })
         }
-        WorkflowEvent::Resume { workflow_id } => {
+        WorkflowEvent::Resume {
+            workflow_id,
+            feedback,
+        } => {
+            if let Some(ref feedback_text) = feedback {
+                if !feedback_text.trim().is_empty() {
+                    hub.workflows()
+                        .record_feedback(&workflow_id, feedback_text.clone())
+                        .await
+                        .ok();
+                }
+            }
             let workflow = hub.workflows().resume(&workflow_id).await?;
             Ok(WorkflowEventOutcome {
                 workflow: Some(workflow),

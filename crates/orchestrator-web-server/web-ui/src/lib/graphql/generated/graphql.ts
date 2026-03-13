@@ -114,6 +114,13 @@ export type GqlPhaseExecution = {
   status: Scalars['String']['output'];
 };
 
+export type GqlPhaseOutput = {
+  __typename?: 'GqlPhaseOutput';
+  hasMore: Scalars['Boolean']['output'];
+  lines: Array<Scalars['String']['output']>;
+  phaseId: Scalars['String']['output'];
+};
+
 export enum GqlPriority {
   Critical = 'CRITICAL',
   High = 'HIGH',
@@ -301,6 +308,14 @@ export type GqlWorkflowCheckpoint = {
   id: Scalars['String']['output'];
   phase: Scalars['String']['output'];
   timestamp?: Maybe<Scalars['String']['output']>;
+};
+
+export type GqlWorkflowDefinition = {
+  __typename?: 'GqlWorkflowDefinition';
+  description?: Maybe<Scalars['String']['output']>;
+  id: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  phases: Array<Scalars['String']['output']>;
 };
 
 export enum GqlWorkflowStatus {
@@ -494,6 +509,7 @@ export type MutationRootRefineVisionArgs = {
 
 
 export type MutationRootResumeWorkflowArgs = {
+  feedback?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
 };
 
@@ -558,11 +574,13 @@ export type QueryRoot = {
   daemonHealth: GqlDaemonHealth;
   daemonLogs: Array<GqlDaemonLog>;
   daemonStatus: GqlDaemonStatus;
+  phaseOutput: GqlPhaseOutput;
   project?: Maybe<GqlProject>;
   projects: Array<GqlProject>;
   projectsActive: Array<GqlProject>;
   queue: Array<GqlQueueEntry>;
   queueStats: GqlQueueStats;
+  readyTasks: Array<GqlTask>;
   requirement?: Maybe<GqlRequirement>;
   requirements: Array<GqlRequirement>;
   systemInfo: GqlSystemInfo;
@@ -574,6 +592,7 @@ export type QueryRoot = {
   vision?: Maybe<GqlVision>;
   workflow?: Maybe<GqlWorkflow>;
   workflowCheckpoints: Array<GqlWorkflowCheckpoint>;
+  workflowDefinitions: Array<GqlWorkflowDefinition>;
   workflows: Array<GqlWorkflow>;
 };
 
@@ -583,8 +602,21 @@ export type QueryRootDaemonLogsArgs = {
 };
 
 
+export type QueryRootPhaseOutputArgs = {
+  phaseId?: InputMaybe<Scalars['String']['input']>;
+  tail?: InputMaybe<Scalars['Int']['input']>;
+  workflowId: Scalars['ID']['input'];
+};
+
+
 export type QueryRootProjectArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryRootReadyTasksArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  search?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -676,6 +708,19 @@ export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type DashboardQuery = { __typename?: 'QueryRoot', taskStats: { __typename?: 'GqlTaskStats', total: number, byStatus?: string | null, byPriority?: string | null }, daemonHealth: { __typename?: 'GqlDaemonHealth', healthy: boolean, status: string, runnerConnected: boolean, daemonPid?: number | null, activeDaemons: number }, agentRuns: Array<{ __typename?: 'GqlAgentRun', runId: string, taskId?: string | null, taskTitle?: string | null, workflowId?: string | null, phaseId?: string | null, status: string }>, systemInfo: { __typename?: 'GqlSystemInfo', platform?: string | null, version?: string | null, daemonStatus?: string | null, projectRoot?: string | null } };
+
+export type ReadyTasksQueryVariables = Exact<{
+  search?: InputMaybe<Scalars['String']['input']>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
+}>;
+
+
+export type ReadyTasksQuery = { __typename?: 'QueryRoot', readyTasks: Array<{ __typename?: 'GqlTask', id: string, title: string, statusRaw: string, priorityRaw: string, taskTypeRaw: string }> };
+
+export type WorkflowDefinitionsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type WorkflowDefinitionsQuery = { __typename?: 'QueryRoot', workflowDefinitions: Array<{ __typename?: 'GqlWorkflowDefinition', id: string, name: string, description?: string | null, phases: Array<string> }> };
 
 export type DaemonEventsSubscriptionVariables = Exact<{
   eventType?: InputMaybe<Scalars['String']['input']>;
@@ -1128,6 +1173,27 @@ export const DashboardDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DashboardQuery, DashboardQueryVariables>;
+export const ReadyTasksDocument = new TypedDocumentString(`
+    query ReadyTasks($search: String, $limit: Int) {
+  readyTasks(search: $search, limit: $limit) {
+    id
+    title
+    statusRaw
+    priorityRaw
+    taskTypeRaw
+  }
+}
+    `) as unknown as TypedDocumentString<ReadyTasksQuery, ReadyTasksQueryVariables>;
+export const WorkflowDefinitionsDocument = new TypedDocumentString(`
+    query WorkflowDefinitions {
+  workflowDefinitions {
+    id
+    name
+    description
+    phases
+  }
+}
+    `) as unknown as TypedDocumentString<WorkflowDefinitionsQuery, WorkflowDefinitionsQueryVariables>;
 export const DaemonEventsDocument = new TypedDocumentString(`
     subscription DaemonEvents($eventType: String) {
   daemonEvents(eventType: $eventType) {
