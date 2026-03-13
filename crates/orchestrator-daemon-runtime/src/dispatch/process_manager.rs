@@ -15,21 +15,33 @@ struct WorkflowProcess {
     task_id: Option<String>,
     workflow_ref: String,
     schedule_id: Option<String>,
-    // std::sync::Mutex (not tokio): lock is never held across .await points
+    started_at: std::time::Instant,
     child: Arc<Mutex<Child>>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
-#[derive(Default)]
 pub struct ProcessManager {
     processes: Vec<WorkflowProcess>,
+    process_timeout_secs: Option<u64>,
+}
+
+impl Default for ProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProcessManager {
     pub fn new() -> Self {
         Self {
             processes: Vec::new(),
+            process_timeout_secs: None,
         }
+    }
+
+    pub fn with_timeout(mut self, timeout_secs: Option<u64>) -> Self {
+        self.process_timeout_secs = timeout_secs;
+        self
     }
 
     pub fn spawn_workflow_runner(
@@ -69,6 +81,7 @@ impl ProcessManager {
             task_id,
             workflow_ref,
             schedule_id,
+            started_at: std::time::Instant::now(),
             child: Arc::new(Mutex::new(child)),
             stderr_lines,
         });
@@ -77,10 +90,46 @@ impl ProcessManager {
     }
 
     pub fn check_running(&mut self) -> Vec<CompletedProcess> {
+        let timeout = self.process_timeout_secs;
+        self.check_running_with_timeout(timeout)
+    }
+
+    fn check_running_with_timeout(
+        &mut self,
+        timeout_secs: Option<u64>,
+    ) -> Vec<CompletedProcess> {
         let mut completed = Vec::new();
         let mut active = Vec::with_capacity(self.processes.len());
 
         for process in self.processes.drain(..) {
+            if let Some(timeout) = timeout_secs {
+                if process.started_at.elapsed().as_secs() > timeout {
+                    let pid = process
+                        .child
+                        .lock()
+                        .ok()
+                        .and_then(|c| c.id());
+                    if let Some(pid) = pid {
+                        protocol::graceful_kill_process(pid as i32);
+                    }
+                    completed.push(CompletedProcess {
+                        subject_id: process.subject_id,
+                        task_id: process.task_id,
+                        workflow_id: None,
+                        workflow_ref: Some(process.workflow_ref),
+                        workflow_status: Some(WorkflowStatus::Failed),
+                        schedule_id: process.schedule_id,
+                        exit_code: None,
+                        success: false,
+                        failure_reason: Some(format!(
+                            "workflow runner exceeded timeout of {} seconds",
+                            timeout
+                        )),
+                        events: parse_runner_events(&process.stderr_lines),
+                    });
+                    continue;
+                }
+            }
             let status = {
                 let mut maybe_child = match process.child.lock() {
                     Ok(guard) => guard,

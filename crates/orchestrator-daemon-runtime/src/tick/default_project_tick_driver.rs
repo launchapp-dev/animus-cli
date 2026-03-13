@@ -19,8 +19,8 @@ use crate::{
 pub trait DefaultProjectTickServices {
     async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        let requirements_before = hub.planning().list_requirements().await.unwrap_or_default();
-        let tasks_before = hub.tasks().list().await.unwrap_or_default();
+        let requirements_before = hub.planning().list_requirements().await?;
+        let tasks_before = hub.tasks().list().await?;
         let daemon = hub.daemon();
         let status = daemon.status().await?;
         let mut started_daemon = false;
@@ -75,7 +75,7 @@ pub trait DefaultProjectTickServices {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         let task_state_changes = collect_task_state_changes(
             &input.tasks_before,
-            &hub.tasks().list().await.unwrap_or_default(),
+            &hub.tasks().list().await?,
             &input.ready_started_workflows,
         );
         let metrics = DaemonTickMetrics::collect(hub, args.stale_threshold_hours).await?;

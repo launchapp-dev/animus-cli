@@ -86,6 +86,39 @@ fn is_zombie_process(pid: i32) -> bool {
     }
 }
 
+pub fn graceful_kill_process(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        let _ = kill(Pid::from_raw(-pid), Signal::SIGTERM);
+        let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+
+        for _ in 0..50 {
+            if !process_exists(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let _ = kill(Pid::from_raw(-pid), Signal::SIGKILL);
+        let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
+
+        std::thread::sleep(Duration::from_millis(100));
+        !process_exists(pid)
+    }
+
+    #[cfg(not(unix))]
+    {
+        kill_process(pid)
+    }
+}
+
 pub fn kill_process(pid: i32) -> bool {
     if pid <= 0 {
         return false;

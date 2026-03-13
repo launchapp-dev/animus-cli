@@ -976,7 +976,7 @@ pub async fn spawn_cli_process(
                                 run_id: run_id_for_select.clone(),
                                 error: error.clone(),
                             }).await;
-                            let killed = crate::cleanup::kill_process(pid as i32);
+                            let killed = crate::cleanup::graceful_kill_process(pid as i32);
                             if !killed {
                                 warn!(
                                     run_id = %run_id_for_select.0.as_str(),
@@ -1047,7 +1047,7 @@ pub async fn spawn_cli_process(
                                 output_chunks_total,
                                 "CLI run exceeded idle timeout; terminating process group"
                             );
-                            let killed = crate::cleanup::kill_process(pid as i32);
+                            let killed = crate::cleanup::graceful_kill_process(pid as i32);
                             if !killed {
                                 warn!(run_id = %run_id_for_select.0.as_str(), pid, "Failed to terminate idle-timed-out process");
                             }
@@ -1071,7 +1071,7 @@ pub async fn spawn_cli_process(
                         pid,
                         "Process cancelled by caller; terminating process group"
                     );
-                    let killed = crate::cleanup::kill_process(pid as i32);
+                    let killed = crate::cleanup::graceful_kill_process(pid as i32);
                     if !killed {
                         warn!(run_id = %run_id_for_select.0.as_str(), pid, "Failed to terminate cancelled process");
                     }
@@ -1124,7 +1124,7 @@ pub async fn spawn_cli_process(
                         timeout_secs,
                         "CLI process timed out; terminating process group"
                     );
-                    let killed = crate::cleanup::kill_process(pid as i32);
+                    let killed = crate::cleanup::graceful_kill_process(pid as i32);
                     if !killed {
                         warn!(run_id = %run_id.0.as_str(), pid, "Failed to terminate timed-out process");
                     }

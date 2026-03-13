@@ -120,7 +120,10 @@ fn save_daemon_runtime_state(project_root: &str, state: &DaemonRuntimeStateRecor
     }
     let content = serde_json::to_string_pretty(state)
         .context("failed to serialize daemon runtime state JSON")?;
-    fs::write(&path, format!("{content}\n"))
-        .with_context(|| format!("failed to write daemon runtime state at {}", path.display()))?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, format!("{content}\n"))
+        .with_context(|| format!("failed to write temp daemon state at {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("failed to persist daemon runtime state at {}", path.display()))?;
     Ok(())
 }

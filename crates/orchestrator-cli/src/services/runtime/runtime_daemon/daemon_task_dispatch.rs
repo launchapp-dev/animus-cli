@@ -35,7 +35,7 @@ pub async fn run_ready_task_workflows_for_project(
         return Ok(DispatchWorkflowStartSummary::default());
     }
 
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = hub.workflows().list().await?;
     let candidates = hub.tasks().list_prioritized().await?;
     let active_subject_ids = active_workflow_subject_ids(&workflows);
     let task_lookup: std::collections::HashMap<String, orchestrator_core::OrchestratorTask> =
@@ -127,7 +127,7 @@ pub async fn dispatch_ready_tasks_via_runner(
     limit: usize,
 ) -> Result<DispatchWorkflowStartSummary> {
     let candidates = hub.tasks().list_prioritized().await?;
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = hub.workflows().list().await?;
     let active_subject_ids = process_manager.active_subject_ids();
     let queue_state = match load_dispatch_queue_state(root) {
         Ok(state) => state,
