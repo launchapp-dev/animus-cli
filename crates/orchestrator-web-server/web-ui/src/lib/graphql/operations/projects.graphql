@@ -6,3 +6,17 @@ query Projects {
 query ProjectDetail($id: ID!) {
   project(id: $id) { id name path description type techStack archived }
 }
+
+mutation CreateProject($name: String!, $path: String!, $description: String, $projectType: String) {
+  createProject(name: $name, path: $path, description: $description, projectType: $projectType) { id name }
+}
+
+mutation UpdateProject($id: ID!, $name: String, $description: String, $projectType: String) {
+  updateProject(id: $id, name: $name, description: $description, projectType: $projectType) { id name }
+}
+
+mutation DeleteProject($id: ID!) { deleteProject(id: $id) }
+
+mutation LoadProject($id: ID!) { loadProject(id: $id) { id name } }
+
+mutation ArchiveProject($id: ID!) { archiveProject(id: $id) { id name archived } }

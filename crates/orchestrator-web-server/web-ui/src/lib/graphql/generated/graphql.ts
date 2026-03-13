@@ -760,6 +760,47 @@ export type ProjectDetailQueryVariables = Exact<{
 
 export type ProjectDetailQuery = { __typename?: 'QueryRoot', project?: { __typename?: 'GqlProject', id: string, name?: string | null, path?: string | null, description?: string | null, type?: string | null, techStack: Array<string>, archived: boolean } | null };
 
+export type CreateProjectMutationVariables = Exact<{
+  name: Scalars['String']['input'];
+  path: Scalars['String']['input'];
+  description?: InputMaybe<Scalars['String']['input']>;
+  projectType?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type CreateProjectMutation = { __typename?: 'MutationRoot', createProject: { __typename?: 'GqlProject', id: string, name?: string | null } };
+
+export type UpdateProjectMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+  name?: InputMaybe<Scalars['String']['input']>;
+  description?: InputMaybe<Scalars['String']['input']>;
+  projectType?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type UpdateProjectMutation = { __typename?: 'MutationRoot', updateProject: { __typename?: 'GqlProject', id: string, name?: string | null } };
+
+export type DeleteProjectMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type DeleteProjectMutation = { __typename?: 'MutationRoot', deleteProject: boolean };
+
+export type LoadProjectMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type LoadProjectMutation = { __typename?: 'MutationRoot', loadProject: { __typename?: 'GqlProject', id: string, name?: string | null } };
+
+export type ArchiveProjectMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type ArchiveProjectMutation = { __typename?: 'MutationRoot', archiveProject: { __typename?: 'GqlProject', id: string, name?: string | null, archived: boolean } };
+
 export type QueueQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -1213,6 +1254,54 @@ export const ProjectDetailDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ProjectDetailQuery, ProjectDetailQueryVariables>;
+export const CreateProjectDocument = new TypedDocumentString(`
+    mutation CreateProject($name: String!, $path: String!, $description: String, $projectType: String) {
+  createProject(
+    name: $name
+    path: $path
+    description: $description
+    projectType: $projectType
+  ) {
+    id
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<CreateProjectMutation, CreateProjectMutationVariables>;
+export const UpdateProjectDocument = new TypedDocumentString(`
+    mutation UpdateProject($id: ID!, $name: String, $description: String, $projectType: String) {
+  updateProject(
+    id: $id
+    name: $name
+    description: $description
+    projectType: $projectType
+  ) {
+    id
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateProjectMutation, UpdateProjectMutationVariables>;
+export const DeleteProjectDocument = new TypedDocumentString(`
+    mutation DeleteProject($id: ID!) {
+  deleteProject(id: $id)
+}
+    `) as unknown as TypedDocumentString<DeleteProjectMutation, DeleteProjectMutationVariables>;
+export const LoadProjectDocument = new TypedDocumentString(`
+    mutation LoadProject($id: ID!) {
+  loadProject(id: $id) {
+    id
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<LoadProjectMutation, LoadProjectMutationVariables>;
+export const ArchiveProjectDocument = new TypedDocumentString(`
+    mutation ArchiveProject($id: ID!) {
+  archiveProject(id: $id) {
+    id
+    name
+    archived
+  }
+}
+    `) as unknown as TypedDocumentString<ArchiveProjectMutation, ArchiveProjectMutationVariables>;
 export const QueueDocument = new TypedDocumentString(`
     query Queue {
   queue {

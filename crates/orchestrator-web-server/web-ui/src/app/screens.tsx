@@ -108,6 +108,16 @@ const PROJECT_DETAIL_QUERY = `
   }
 `;
 
+const CREATE_PROJECT = `mutation CreateProject($name: String!, $path: String!, $description: String, $projectType: String) {
+  createProject(name: $name, path: $path, description: $description, projectType: $projectType) { id name }
+}`;
+const UPDATE_PROJECT = `mutation UpdateProject($id: ID!, $name: String, $description: String, $projectType: String) {
+  updateProject(id: $id, name: $name, description: $description, projectType: $projectType) { id name }
+}`;
+const DELETE_PROJECT = `mutation DeleteProject($id: ID!) { deleteProject(id: $id) }`;
+const LOAD_PROJECT = `mutation LoadProject($id: ID!) { loadProject(id: $id) { id name } }`;
+const ARCHIVE_PROJECT = `mutation ArchiveProject($id: ID!) { archiveProject(id: $id) { id name archived } }`;
+
 const REQUIREMENT_DETAIL_QUERY = `
   query RequirementDetail($id: ID!) {
     requirement(id: $id) {
@@ -147,6 +157,7 @@ const DAEMON_CLEAR_LOGS = `mutation { daemonClearLogs }`;
 
 const QUEUE_HOLD = `mutation QueueHold($taskId: String!, $reason: String) { queueHold(taskId: $taskId, reason: $reason) }`;
 const QUEUE_RELEASE = `mutation QueueRelease($taskId: String!) { queueRelease(taskId: $taskId) }`;
+const QUEUE_REORDER = `mutation QueueReorder($taskIds: [String!]!) { queueReorder(taskIds: $taskIds) }`;
 
 const REVIEW_HANDOFF = `
   mutation ReviewHandoff($targetRole: String!, $question: String!, $context: String) {
@@ -1192,6 +1203,7 @@ export function QueuePage() {
   const [result, reexecute] = useQuery({ query: QUEUE_QUERY });
   const [, holdMut] = useMutation(QUEUE_HOLD);
   const [, releaseMut] = useMutation(QUEUE_RELEASE);
+  const [, reorderMut] = useMutation(QUEUE_REORDER);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const { data, fetching, error } = result;
@@ -1219,9 +1231,33 @@ export function QueuePage() {
     }
   };
 
+  const moveEntry = async (index: number, direction: -1 | 1) => {
+    const ids = entries.map((e: any) => e.taskId);
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= ids.length) return;
+    [ids[index], ids[newIndex]] = [ids[newIndex], ids[index]];
+    const { error: err } = await reorderMut({ taskIds: ids });
+    if (err) setFeedback({ kind: "error", message: err.message });
+    else reexecute({ requestPolicy: "network-only" });
+  };
+
+  const sortByPriority = async () => {
+    const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+    const sorted = [...entries].sort((a: any, b: any) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9));
+    const { error: err } = await reorderMut({ taskIds: sorted.map((e: any) => e.taskId) });
+    if (err) setFeedback({ kind: "error", message: err.message });
+    else {
+      setFeedback({ kind: "ok", message: "Queue reordered by priority." });
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Queue</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Queue</h1>
+        {entries.length > 1 && <Button size="sm" variant="outline" onClick={sortByPriority}>Sort by Priority</Button>}
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
         <StatCard label="Depth" value={stats?.depth ?? 0} />
@@ -1250,13 +1286,13 @@ export function QueuePage() {
                 <TableHead>Priority</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Wait</TableHead>
-                <TableHead className="w-32">Actions</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {entries.map((entry: any) => (
+              {entries.map((entry: any, i: number) => (
                 <TableRow key={entry.taskId}>
-                  <TableCell className="text-xs text-muted-foreground">{entry.position ?? "-"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{entry.position ?? i + 1}</TableCell>
                   <TableCell>
                     <Link to={`/tasks/${entry.taskId}`} className="font-mono text-xs underline">{entry.taskId}</Link>
                   </TableCell>
@@ -1266,6 +1302,8 @@ export function QueuePage() {
                   <TableCell className="text-xs text-muted-foreground">{entry.waitTime != null ? `${entry.waitTime.toFixed(0)}s` : "-"}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
+                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => moveEntry(i, -1)} disabled={i === 0} aria-label={`Move ${entry.taskId} up`}>↑</Button>
+                      <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => moveEntry(i, 1)} disabled={i === entries.length - 1} aria-label={`Move ${entry.taskId} down`}>↓</Button>
                       <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => onHold(entry.taskId)}>Hold</Button>
                       <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => onRelease(entry.taskId)}>Release</Button>
                     </div>
@@ -1400,8 +1438,14 @@ export function DaemonPage() {
 // ---------------------------------------------------------------------------
 
 export function ProjectsPage() {
-  const [result] = useQuery({ query: PROJECTS_QUERY });
+  const [result, reexecute] = useQuery({ query: PROJECTS_QUERY });
+  const [, createProject] = useMutation(CREATE_PROJECT);
   const { data, fetching, error } = result;
+  const [showCreate, setShowCreate] = useState(false);
+  const [name, setName] = useState("");
+  const [path, setPath] = useState("");
+  const [description, setDescription] = useState("");
+  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -1409,12 +1453,46 @@ export function ProjectsPage() {
   const projects = data?.projects ?? [];
   const active = data?.projectsActive ?? [];
 
+  const onCreateProject = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !path.trim()) return;
+    const { error: err } = await createProject({ name: name.trim(), path: path.trim(), description: description.trim() || undefined });
+    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
+    setFeedback({ kind: "ok", message: `Project "${name.trim()}" created.` });
+    setName(""); setPath(""); setDescription(""); setShowCreate(false);
+    reexecute({ requestPolicy: "network-only" });
+  };
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
+        <Button size="sm" onClick={() => setShowCreate(!showCreate)}>{showCreate ? "Cancel" : "New Project"}</Button>
+      </div>
       {active.length > 0 && (
         <p className="text-sm text-muted-foreground">Active: {active.map((p: any) => p.name).join(", ")}</p>
       )}
+
+      {feedback && (
+        <Alert variant={feedback.kind === "error" ? "destructive" : "default"}>
+          <AlertDescription>{feedback.message}</AlertDescription>
+        </Alert>
+      )}
+
+      {showCreate && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Create Project</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={onCreateProject} className="space-y-3">
+              <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} required />
+              <Input placeholder="Project path (e.g. /path/to/project)" value={path} onChange={(e) => setPath(e.target.value)} required />
+              <Input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+              <Button type="submit" size="sm">Create</Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
       {projects.length === 0 ? (
         <p className="text-sm text-muted-foreground py-8 text-center">No projects found.</p>
       ) : (
@@ -1439,7 +1517,19 @@ export function ProjectsPage() {
 
 export function ProjectDetailPage() {
   const { projectId } = useParams();
-  const [result] = useQuery({ query: PROJECT_DETAIL_QUERY, variables: { id: projectId } });
+  const navigate = useNavigate();
+  const [result, reexecute] = useQuery({ query: PROJECT_DETAIL_QUERY, variables: { id: projectId } });
+  const [, updateProject] = useMutation(UPDATE_PROJECT);
+  const [, deleteProject] = useMutation(DELETE_PROJECT);
+  const [, loadProject] = useMutation(LOAD_PROJECT);
+  const [, archiveProject] = useMutation(ARCHIVE_PROJECT);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editType, setEditType] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const [initialized, setInitialized] = useState(false);
 
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
@@ -1448,16 +1538,113 @@ export function ProjectDetailPage() {
   const project = data?.project;
   if (!project) return <PageError message={`Project ${projectId} not found.`} />;
 
+  if (project && !initialized) {
+    setEditName(project.name ?? "");
+    setEditDescription(project.description ?? "");
+    setEditType(project.type ?? "");
+    setInitialized(true);
+  }
+
+  const onSave = async (e: FormEvent) => {
+    e.preventDefault();
+    const { error: err } = await updateProject({
+      id: projectId,
+      name: editName.trim() || undefined,
+      description: editDescription.trim() || undefined,
+      projectType: editType.trim() || undefined,
+    });
+    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
+    setFeedback({ kind: "ok", message: "Project updated." });
+    setEditing(false);
+    setInitialized(false);
+    reexecute({ requestPolicy: "network-only" });
+  };
+
+  const onDelete = async () => {
+    const { error: err } = await deleteProject({ id: projectId });
+    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
+    navigate("/projects", { replace: true });
+  };
+
+  const onLoad = async () => {
+    const { error: err } = await loadProject({ id: projectId });
+    if (err) setFeedback({ kind: "error", message: err.message });
+    else setFeedback({ kind: "ok", message: "Project set as active." });
+  };
+
+  const onArchive = async () => {
+    const { error: err } = await archiveProject({ id: projectId });
+    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
+    setFeedback({ kind: "ok", message: "Project archived." });
+    setInitialized(false);
+    reexecute({ requestPolicy: "network-only" });
+  };
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-      {project.path && <p className="text-sm text-muted-foreground">{project.path}</p>}
-      {project.description && <p className="text-sm">{project.description}</p>}
-      <div className="flex gap-2 flex-wrap">
-        {project.type && <Badge variant="outline">{project.type}</Badge>}
-        {project.archived && <Badge variant="outline">archived</Badge>}
-        {(project.techStack ?? []).map((t: string) => <Badge key={t} variant="outline">{t}</Badge>)}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+          {project.path && <p className="text-sm text-muted-foreground">{project.path}</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          {project.type && <Badge variant="outline">{project.type}</Badge>}
+          {project.archived && <Badge variant="destructive">archived</Badge>}
+        </div>
       </div>
+
+      {feedback && (
+        <Alert variant={feedback.kind === "error" ? "destructive" : "default"}>
+          <AlertDescription>{feedback.message}</AlertDescription>
+        </Alert>
+      )}
+
+      {project.description && !editing && <p className="text-sm">{project.description}</p>}
+
+      {(project.techStack ?? []).length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          {project.techStack.map((t: string) => <Badge key={t} variant="outline">{t}</Badge>)}
+        </div>
+      )}
+
+      <div className="flex gap-2 flex-wrap">
+        <Button size="sm" variant="outline" onClick={() => setEditing(!editing)}>{editing ? "Cancel Edit" : "Edit"}</Button>
+        <Button size="sm" variant="outline" onClick={onLoad}>Set Active</Button>
+        {!project.archived && <Button size="sm" variant="outline" onClick={onArchive}>Archive</Button>}
+        {confirmDelete ? (
+          <>
+            <Button size="sm" variant="destructive" onClick={onDelete}>Confirm Delete</Button>
+            <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+          </>
+        ) : (
+          <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}>Delete</Button>
+        )}
+      </div>
+
+      {editing && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Edit Project</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={onSave} className="space-y-3">
+              <div>
+                <label className="text-sm font-medium">Name</label>
+                <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Description</label>
+                <Textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={3} />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Type</label>
+                <Input value={editType} onChange={(e) => setEditType(e.target.value)} placeholder="e.g., rust, node, python" />
+              </div>
+              <Button type="submit" size="sm">Save Changes</Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
+      <Link to="/projects"><Button variant="outline" size="sm">Back to Projects</Button></Link>
     </div>
   );
 }
