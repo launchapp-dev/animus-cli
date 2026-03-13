@@ -1,7 +1,9 @@
 mod event_persistence;
 mod lifecycle;
+mod mcp_policy;
 mod process;
 mod process_builder;
+mod process_signals;
 mod session_process;
 mod stream;
 mod stream_bridge;

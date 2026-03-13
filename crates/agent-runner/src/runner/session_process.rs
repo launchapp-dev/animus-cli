@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info};
 
-use super::process::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
+use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, resolve_idle_timeout_secs};
 
 pub(super) fn use_native_session_backend(tool: &str, _runtime_contract: Option<&Value>) -> bool {
