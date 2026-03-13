@@ -46,7 +46,7 @@ impl TaskServiceApi for InMemoryServiceHub {
             .tasks
             .get(id)
             .cloned()
-            .ok_or_else(|| anyhow!("task not found: {id}"))
+            .ok_or_else(|| not_found(format!("task not found: {id}")))
     }
 
     async fn create(&self, input: TaskCreateInput) -> Result<OrchestratorTask> {
@@ -198,7 +198,7 @@ impl TaskServiceApi for FileServiceHub {
             .tasks
             .get(id)
             .cloned()
-            .ok_or_else(|| anyhow!("task not found: {id}"))
+            .ok_or_else(|| not_found(format!("task not found: {id}")))
     }
 
     async fn create(&self, input: TaskCreateInput) -> Result<OrchestratorTask> {

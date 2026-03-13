@@ -69,6 +69,7 @@ impl DaemonEventLog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        rotate_if_needed(&path);
         append_line(&path, &serde_json::to_string(record)?)
     }
 
@@ -83,6 +84,19 @@ impl DaemonEventLog {
             data,
         };
         let _ = Self::append(&record);
+    }
+}
+
+const MAX_LOG_SIZE_BYTES: u64 = 5 * 1024 * 1024; // 5 MB
+
+fn rotate_if_needed(path: &Path) {
+    let size = match std::fs::metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(_) => return,
+    };
+    if size >= MAX_LOG_SIZE_BYTES {
+        let rotated = path.with_extension("jsonl.1");
+        let _ = std::fs::rename(path, rotated);
     }
 }
 

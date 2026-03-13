@@ -26,6 +26,19 @@ pub use protocol::orchestrator::{
 
 pub use protocol::RequirementPriority;
 pub use protocol::RequirementType;
+pub use protocol::{ClassifiedError, ErrorKind};
+
+pub fn not_found(message: impl Into<String>) -> anyhow::Error {
+    ClassifiedError::new(ErrorKind::NotFound, message).into()
+}
+
+pub fn invalid_input(message: impl Into<String>) -> anyhow::Error {
+    ClassifiedError::new(ErrorKind::InvalidInput, message).into()
+}
+
+pub fn conflict(message: impl Into<String>) -> anyhow::Error {
+    ClassifiedError::new(ErrorKind::Conflict, message).into()
+}
 
 pub trait RequirementPriorityExt {
     #[must_use]

@@ -57,7 +57,7 @@ pub(super) fn draft_requirements_and_record(
     codebase_insight: Option<&CodebaseInsight>,
 ) -> Result<(Vec<String>, usize)> {
     let Some(vision) = lock.vision.clone() else {
-        return Err(anyhow!("vision not found; run `ao vision draft` first"));
+        return Err(not_found("vision not found; run `ao vision draft` first"));
     };
 
     if !input.append_only {
@@ -137,7 +137,7 @@ pub(super) fn get_requirement(lock: &CoreState, id: &str) -> Result<RequirementI
     lock.requirements
         .get(id)
         .cloned()
-        .ok_or_else(|| anyhow!("requirement not found: {id}"))
+        .ok_or_else(|| not_found(format!("requirement not found: {id}")))
 }
 
 pub(super) fn requirements_by_ids_sorted(

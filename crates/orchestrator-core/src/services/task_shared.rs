@@ -136,7 +136,7 @@ pub(super) fn validate_linked_architecture_entities(
 ) -> Result<()> {
     for entity_id in entity_ids {
         if !architecture.has_entity(entity_id) {
-            return Err(anyhow!("linked architecture entity not found: {entity_id}"));
+            return Err(not_found(format!("linked architecture entity not found: {entity_id}")));
         }
     }
     Ok(())
@@ -575,7 +575,7 @@ pub(super) fn update_task_in_state(
     let task = state
         .tasks
         .get_mut(id)
-        .ok_or_else(|| anyhow!("task not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("task not found: {id}")))?;
     apply_task_update(task, input)?;
     let result = task.clone();
     state.dirty_tasks.insert(id.to_string());
@@ -600,7 +600,7 @@ pub(super) fn delete_task_in_state(
     state
         .tasks
         .remove(id)
-        .ok_or_else(|| anyhow!("task not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("task not found: {id}")))?;
     state.all_tasks_dirty = true;
     Ok(())
 }
@@ -612,7 +612,7 @@ fn get_task_mut<'a>(
     state
         .tasks
         .get_mut(id)
-        .ok_or_else(|| anyhow!("task not found: {id}"))
+        .ok_or_else(|| not_found(format!("task not found: {id}")))
 }
 
 fn bump_task_version(task: &mut OrchestratorTask, updated_by: String) {
@@ -700,7 +700,7 @@ pub(super) fn update_checklist_item_in_state(
         .checklist
         .iter_mut()
         .find(|item| item.id == item_id)
-        .ok_or_else(|| anyhow!("checklist item not found: {item_id}"))?;
+        .ok_or_else(|| not_found(format!("checklist item not found: {item_id}")))?;
     item.completed = completed;
     item.completed_at = if completed { Some(Utc::now()) } else { None };
     bump_task_version(task, updated_by);
@@ -717,7 +717,7 @@ pub(super) fn add_dependency_in_state(
     updated_by: String,
 ) -> Result<OrchestratorTask> {
     if !state.tasks.contains_key(dependency_id) {
-        return Err(anyhow!("dependency task not found: {dependency_id}"));
+        return Err(not_found(format!("dependency task not found: {dependency_id}")));
     }
     let task = get_task_mut(state, id)?;
     if !task.dependencies.iter().any(|existing| {

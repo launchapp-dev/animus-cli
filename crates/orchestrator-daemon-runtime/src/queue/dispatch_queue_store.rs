@@ -1,14 +1,28 @@
-use std::fs;
+use std::fs::{self, File};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use fs2::FileExt;
 use protocol::SubjectDispatch;
 use uuid::Uuid;
 
 use crate::{DispatchQueueEntry, DispatchQueueEntryStatus, DispatchQueueState};
 
 const DISPATCH_QUEUE_STATE_FILE: &str = "dispatch-queue.json";
+const DISPATCH_QUEUE_LOCK_FILE: &str = "dispatch-queue.lock";
+
+fn acquire_queue_lock(project_root: &str) -> Result<File> {
+    let lock_path = dispatch_queue_state_path(project_root)?
+        .with_file_name(DISPATCH_QUEUE_LOCK_FILE);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = File::create(&lock_path)?;
+    file.lock_exclusive()
+        .with_context(|| format!("failed to acquire dispatch queue lock at {}", lock_path.display()))?;
+    Ok(file)
+}
 
 pub fn dispatch_queue_state_path(project_root: &str) -> Result<PathBuf> {
     let runtime_root = protocol::scoped_state_root(std::path::Path::new(project_root))
@@ -79,6 +93,7 @@ pub fn mark_dispatch_queue_entry_assigned(
     dispatch: &SubjectDispatch,
     workflow_id: Option<&str>,
 ) -> Result<bool> {
+    let _lock = acquire_queue_lock(project_root)?;
     let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
     };
@@ -123,6 +138,7 @@ fn remove_terminal_dispatch_queue_entry(
     workflow_ref: Option<&str>,
     workflow_id: Option<&str>,
 ) -> Result<usize> {
+    let _lock = acquire_queue_lock(project_root)?;
     let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(0);
     };

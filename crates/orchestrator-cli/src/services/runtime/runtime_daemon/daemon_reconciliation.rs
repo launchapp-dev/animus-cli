@@ -16,10 +16,27 @@ pub async fn recover_orphaned_running_workflows(
 ) -> usize {
     let workflows = match hub.workflows().list().await {
         Ok(workflows) => workflows,
-        Err(_) => return 0,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to list workflows for orphan recovery: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            return 0;
+        }
     };
     let externally_active_workflows =
-        active_workflow_runner_ids(Path::new(project_root)).unwrap_or_default();
+        match active_workflow_runner_ids(Path::new(project_root)) {
+        Ok(ids) => ids,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to read active workflow runner ids: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            HashSet::new()
+        }
+    };
 
     let mut recovered = 0usize;
     for workflow in workflows {
@@ -46,8 +63,17 @@ pub async fn recover_orphaned_running_workflows(
             workflow.subject.id(),
             workflow.task_id
         );
-        let _ = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
-        recovered = recovered.saturating_add(1);
+        let cancelled =
+            cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
+        if cancelled {
+            recovered = recovered.saturating_add(1);
+        } else {
+            eprintln!(
+                "{}: failed to cancel orphaned workflow {}",
+                protocol::ACTOR_DAEMON,
+                workflow.id
+            );
+        }
     }
 
     recovered
@@ -58,7 +84,17 @@ pub async fn reconcile_manual_phase_timeouts(
     project_root: &str,
 ) -> Result<usize> {
     let runtime = load_agent_runtime_config_or_default(Path::new(project_root));
-    let workflows = hub.workflows().list().await.unwrap_or_default();
+    let workflows = match hub.workflows().list().await {
+        Ok(workflows) => workflows,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to list workflows for manual phase timeout reconciliation: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            return Ok(0);
+        }
+    };
     let mut reconciled = 0usize;
     let now = chrono::Utc::now();
 

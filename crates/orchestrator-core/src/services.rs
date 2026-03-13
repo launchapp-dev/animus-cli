@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
+use crate::types::not_found;
 use fs2::FileExt;
 use orchestrator_store::{write_json_if_missing, write_json_pretty};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
@@ -188,6 +189,7 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn mark_completed_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;
+    async fn record_feedback(&self, id: &str, feedback: String) -> Result<()>;
 }
 
 #[async_trait]

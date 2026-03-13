@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use orchestrator_web_contracts::classify_error;
+use protocol::classify_anyhow_error_kind;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ impl Error for WebApiError {}
 
 impl From<anyhow::Error> for WebApiError {
     fn from(value: anyhow::Error) -> Self {
-        let (code, exit_code) = classify_error(&value.to_string());
-        Self::new(code, value.to_string(), exit_code)
+        let kind = classify_anyhow_error_kind(&value);
+        Self::new(kind.code(), value.to_string(), kind.exit_code())
     }
 }

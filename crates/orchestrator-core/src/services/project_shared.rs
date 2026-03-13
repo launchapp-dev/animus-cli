@@ -9,7 +9,7 @@ pub(super) fn get_project(state: &CoreState, id: &str) -> Result<OrchestratorPro
         .projects
         .get(id)
         .cloned()
-        .ok_or_else(|| anyhow!("project not found: {id}"))
+        .ok_or_else(|| not_found(format!("project not found: {id}")))
 }
 
 pub(super) fn active_project(state: &CoreState) -> Option<OrchestratorProject> {
@@ -79,7 +79,7 @@ pub(super) fn load_project(state: &mut CoreState, id: &str) -> Result<Orchestrat
         .values()
         .find(|project| project.path == id)
         .cloned()
-        .ok_or_else(|| anyhow!("project not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
     state.active_project_id = Some(project.id.clone());
     Ok(project)
 }
@@ -93,7 +93,7 @@ pub(super) fn rename_project(
     let project = state
         .projects
         .get_mut(id)
-        .ok_or_else(|| anyhow!("project not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
     project.name = new_name.to_string();
     project.updated_at = now;
     Ok(project.clone())
@@ -107,7 +107,7 @@ pub(super) fn archive_project(
     let project = state
         .projects
         .get_mut(id)
-        .ok_or_else(|| anyhow!("project not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
     project.archived = true;
     project.updated_at = now;
     Ok(project.clone())
@@ -117,7 +117,7 @@ pub(super) fn remove_project(state: &mut CoreState, id: &str) -> Result<()> {
     state
         .projects
         .remove(id)
-        .ok_or_else(|| anyhow!("project not found: {id}"))?;
+        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
     if state.active_project_id.as_deref() == Some(id) {
         state.active_project_id = None;
     }

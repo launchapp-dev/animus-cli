@@ -74,7 +74,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
             .workflows
             .get(id)
             .cloned()
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))
     }
 
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>> {
@@ -105,7 +105,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         {
             Ok(workflow)
         } else {
-            Err(anyhow!("checkpoint not found: {id} #{checkpoint_number}"))
+            Err(not_found(format!("checkpoint not found: {id} #{checkpoint_number}")))
         }
     }
 
@@ -134,7 +134,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         let executor = WorkflowLifecycleExecutor::default();
         executor.resume(workflow);
         Ok(workflow.clone())
@@ -145,7 +145,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().pause(workflow);
         Ok(workflow.clone())
     }
@@ -155,7 +155,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().cancel(workflow);
         Ok(workflow.clone())
     }
@@ -173,7 +173,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default()
             .mark_current_phase_success_with_decision(workflow, decision);
         Ok(workflow.clone())
@@ -184,7 +184,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_current_phase_failed(workflow, error);
         Ok(workflow.clone())
     }
@@ -194,7 +194,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_completed_failed(workflow, error);
         Ok(workflow.clone())
     }
@@ -204,7 +204,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_merge_conflict(workflow, error);
         Ok(workflow.clone())
     }
@@ -214,9 +214,38 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let workflow = lock
             .workflows
             .get_mut(id)
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))?;
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().resolve_merge_conflict(workflow);
         Ok(workflow.clone())
+    }
+
+    async fn record_feedback(&self, id: &str, feedback: String) -> Result<()> {
+        let mut lock = self.state.write().await;
+        let workflow = lock
+            .workflows
+            .get_mut(id)
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        workflow
+            .decision_history
+            .push(crate::types::WorkflowDecisionRecord {
+                timestamp: chrono::Utc::now(),
+                phase_id,
+                source: crate::types::WorkflowDecisionSource::Fallback,
+                decision: crate::types::WorkflowDecisionAction::Advance,
+                target_phase: None,
+                reason: feedback,
+                confidence: 1.0,
+                risk: crate::types::WorkflowDecisionRisk::Low,
+                guardrail_violations: Vec::new(),
+                machine_version: None,
+                machine_hash: None,
+                machine_source: Some("human-feedback".to_string()),
+            });
+        Ok(())
     }
 }
 
@@ -249,7 +278,7 @@ impl WorkflowServiceApi for FileServiceHub {
             .workflows
             .get(id)
             .cloned()
-            .ok_or_else(|| anyhow!("workflow not found: {id}"))
+            .ok_or_else(|| not_found(format!("workflow not found: {id}")))
     }
 
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>> {
@@ -555,5 +584,37 @@ impl WorkflowServiceApi for FileServiceHub {
 
         Self::persist_snapshot(&self.state_file, &snapshot)?;
         Ok(workflow)
+    }
+
+    async fn record_feedback(&self, id: &str, feedback: String) -> Result<()> {
+        let manager = self.workflow_manager();
+        let mut workflow = manager.load(id)?;
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        workflow
+            .decision_history
+            .push(crate::types::WorkflowDecisionRecord {
+                timestamp: chrono::Utc::now(),
+                phase_id,
+                source: crate::types::WorkflowDecisionSource::Fallback,
+                decision: crate::types::WorkflowDecisionAction::Advance,
+                target_phase: None,
+                reason: feedback,
+                confidence: 1.0,
+                risk: crate::types::WorkflowDecisionRisk::Low,
+                guardrail_violations: Vec::new(),
+                machine_version: None,
+                machine_hash: None,
+                machine_source: Some("human-feedback".to_string()),
+            });
+        manager.save(&workflow)?;
+        self.mutate_persistent_state(|state| {
+            state.workflows.insert(id.to_string(), workflow.clone());
+            Ok(())
+        })
+        .await?;
+        Ok(())
     }
 }

@@ -105,7 +105,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
     async fn delete_requirement(&self, id: &str) -> Result<()> {
         let mut lock = self.state.write().await;
         if lock.requirements.remove(id).is_none() {
-            return Err(anyhow!("requirement not found: {id}"));
+            return Err(not_found(format!("requirement not found: {id}")));
         }
         lock.logs.push(LogEntry {
             timestamp: Utc::now(),
@@ -290,7 +290,7 @@ impl PlanningServiceApi for FileServiceHub {
         let (_, snapshot) = self
             .mutate_persistent_state(|state| {
                 if state.requirements.remove(id).is_none() {
-                    return Err(anyhow!("requirement not found: {id}"));
+                    return Err(not_found(format!("requirement not found: {id}")));
                 }
                 state.all_requirements_dirty = true;
                 state.logs.push(LogEntry {

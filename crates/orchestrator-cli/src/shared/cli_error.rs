@@ -1,35 +1,8 @@
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CliErrorKind {
-    InvalidInput,
-    NotFound,
-    Conflict,
-    Unavailable,
-    Internal,
-}
+use protocol::ErrorKind;
 
-impl CliErrorKind {
-    pub(crate) const fn code(self) -> &'static str {
-        match self {
-            Self::InvalidInput => "invalid_input",
-            Self::NotFound => "not_found",
-            Self::Conflict => "conflict",
-            Self::Unavailable => "unavailable",
-            Self::Internal => "internal",
-        }
-    }
-
-    pub(crate) const fn exit_code(self) -> i32 {
-        match self {
-            Self::InvalidInput => 2,
-            Self::NotFound => 3,
-            Self::Conflict => 4,
-            Self::Unavailable => 5,
-            Self::Internal => 1,
-        }
-    }
-}
+pub(crate) type CliErrorKind = ErrorKind;
 
 #[derive(Debug)]
 pub(crate) struct CliError {
@@ -94,22 +67,8 @@ pub(crate) fn classify_cli_error_kind(err: &anyhow::Error) -> CliErrorKind {
         if let Some(cli_error) = source.downcast_ref::<CliError>() {
             return cli_error.kind();
         }
-        if let Some(io_error) = source.downcast_ref::<std::io::Error>() {
-            match io_error.kind() {
-                std::io::ErrorKind::NotFound => return CliErrorKind::NotFound,
-                std::io::ErrorKind::AddrInUse
-                | std::io::ErrorKind::AddrNotAvailable
-                | std::io::ErrorKind::BrokenPipe
-                | std::io::ErrorKind::ConnectionAborted
-                | std::io::ErrorKind::ConnectionRefused
-                | std::io::ErrorKind::ConnectionReset
-                | std::io::ErrorKind::NotConnected
-                | std::io::ErrorKind::TimedOut => return CliErrorKind::Unavailable,
-                _ => {}
-            }
-        }
     }
-    CliErrorKind::Internal
+    protocol::classify_anyhow_error_kind(err)
 }
 
 pub(crate) fn extract_cli_error_details(err: &anyhow::Error) -> Option<serde_json::Value> {

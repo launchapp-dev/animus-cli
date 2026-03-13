@@ -15,6 +15,7 @@ struct WorkflowProcess {
     task_id: Option<String>,
     workflow_ref: String,
     schedule_id: Option<String>,
+    // std::sync::Mutex (not tokio): lock is never held across .await points
     child: Arc<Mutex<Child>>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
 }
