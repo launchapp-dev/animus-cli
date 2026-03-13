@@ -1113,14 +1113,6 @@ fn should_emit_manual_required(
     Ok(true)
 }
 
-fn to_mode_string(mode: &orchestrator_core::PhaseExecutionMode) -> String {
-    match mode {
-        orchestrator_core::PhaseExecutionMode::Agent => "agent".to_string(),
-        orchestrator_core::PhaseExecutionMode::Command => "command".to_string(),
-        orchestrator_core::PhaseExecutionMode::Manual => "manual".to_string(),
-    }
-}
-
 pub async fn run_workflow_phase(
     project_root: &str,
     execution_cwd: &str,
@@ -1178,7 +1170,7 @@ pub async fn run_workflow_phase(
 
     let mut metadata = PhaseExecutionMetadata {
         phase_id: phase_id.to_string(),
-        phase_mode: to_mode_string(&definition.mode),
+        phase_mode: definition.mode.to_string(),
         phase_definition_hash: hash_serializable(definition),
         agent_runtime_config_hash: runtime_loaded.metadata.hash.clone(),
         agent_runtime_schema: runtime_loaded.metadata.schema.clone(),
