@@ -312,11 +312,7 @@ impl WorkflowLifecycleExecutor {
             return;
         }
 
-        loop {
-            let phase = match workflow.phases.get(workflow.current_phase_index) {
-                Some(p) => p,
-                None => break,
-            };
+        while let Some(phase) = workflow.phases.get(workflow.current_phase_index) {
 
             if !matches!(
                 phase.status,
@@ -932,13 +928,13 @@ impl WorkflowLifecycleExecutor {
 
         match decision.verdict {
             PhaseDecisionVerdict::Fail => {
-                return GateEvaluationResult::Fail {
+                GateEvaluationResult::Fail {
                     reason: if decision.reason.is_empty() {
                         "agent declared phase failed".to_string()
                     } else {
                         decision.reason.clone()
                     },
-                };
+                }
             }
             PhaseDecisionVerdict::Rework => {
                 let phase_id = workflow
@@ -976,14 +972,14 @@ impl WorkflowLifecycleExecutor {
                         ),
                     };
                 }
-                return GateEvaluationResult::Rework {
+                GateEvaluationResult::Rework {
                     reason: if decision.reason.is_empty() {
                         "agent requested rework".to_string()
                     } else {
                         decision.reason.clone()
                     },
                     target_phase: Some(rework_target),
-                };
+                }
             }
             PhaseDecisionVerdict::Advance | PhaseDecisionVerdict::Skip => {
                 if decision.confidence < 0.5 && matches!(decision.risk, WorkflowDecisionRisk::High)

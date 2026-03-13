@@ -284,7 +284,7 @@ fn discover_profiles(model_filter: Option<&str>, tool_filter: Option<&str>) -> V
         .map(|(model_id, tool)| build_profile(&model_id, &tool))
         .collect();
 
-    profiles.sort_by(|left, right| profile_sort_rank(left).cmp(&profile_sort_rank(right)));
+    profiles.sort_by_key(profile_sort_rank);
     profiles
 }
 

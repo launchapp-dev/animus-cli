@@ -357,7 +357,7 @@ fn read_daemon_events(project_root: &str, limit: usize) -> Result<String, std::i
     let canonical_root = crate::services::runtime::canonicalize_lossy(project_root);
     let response =
         crate::services::runtime::poll_daemon_events(Some(limit), Some(canonical_root.as_str()))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
     let result = serde_json::json!({
         "events": response.events,
         "count": response.count,

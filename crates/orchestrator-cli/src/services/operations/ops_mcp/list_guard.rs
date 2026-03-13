@@ -12,8 +12,7 @@ use super::{
 pub(super) fn list_limit(limit: Option<usize>) -> usize {
     limit
         .unwrap_or(DEFAULT_MCP_LIST_LIMIT)
-        .max(1)
-        .min(MAX_MCP_LIST_LIMIT)
+        .clamp(1, MAX_MCP_LIST_LIMIT)
 }
 
 fn list_offset(offset: Option<usize>) -> usize {
@@ -23,15 +22,14 @@ fn list_offset(offset: Option<usize>) -> usize {
 pub(super) fn list_max_tokens(max_tokens: Option<usize>) -> usize {
     max_tokens
         .unwrap_or(DEFAULT_MCP_LIST_MAX_TOKENS)
-        .max(MIN_MCP_LIST_MAX_TOKENS)
-        .min(MAX_MCP_LIST_MAX_TOKENS)
+        .clamp(MIN_MCP_LIST_MAX_TOKENS, MAX_MCP_LIST_MAX_TOKENS)
 }
 
 fn estimate_json_tokens(value: &Value) -> usize {
     let char_count = serde_json::to_string(value)
         .map(|serialized| serialized.chars().count())
         .unwrap_or_default();
-    ((char_count + 3) / 4).max(1)
+    char_count.div_ceil(4).max(1)
 }
 
 pub(super) fn build_guarded_list_result(

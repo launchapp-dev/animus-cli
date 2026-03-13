@@ -154,7 +154,7 @@ fn spawn_completion_writeback(
         if let Some(stderr) = child.stderr.take() {
             use std::io::BufRead as _;
             let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 eprintln!("{line}");
                 stderr_lines.push(line);
             }

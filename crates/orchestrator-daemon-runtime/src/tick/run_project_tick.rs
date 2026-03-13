@@ -50,13 +50,15 @@ where
 
     let snapshot = hooks.capture_snapshot(root).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
-    let mut execution_outcome = ProjectTickExecutionOutcome::default();
-    execution_outcome.reconciled_stale_tasks = hooks.reconcile_manual_timeouts(root).await?;
+    let reconciled_stale_tasks = hooks.reconcile_manual_timeouts(root).await?;
     let (executed_workflow_phases, failed_workflow_phases) =
         hooks.reconcile_completed_processes(root).await?;
-    execution_outcome.executed_workflow_phases = executed_workflow_phases;
-    execution_outcome.failed_workflow_phases = failed_workflow_phases;
-
+    let mut execution_outcome = ProjectTickExecutionOutcome {
+        reconciled_stale_tasks,
+        executed_workflow_phases,
+        failed_workflow_phases,
+        ..Default::default()
+    };
     if preparation.ready_dispatch_limit > 0 {
         execution_outcome.ready_workflow_starts = hooks
             .dispatch_ready_tasks(root, preparation.ready_dispatch_limit)

@@ -118,7 +118,7 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|ev| {
+                .map(|ev| {
                     let kind_str = ev.get("kind").and_then(Value::as_str).unwrap_or("custom");
                     let kind: orchestrator_core::PhaseEvidenceKind = serde_json::from_value(Value::String(kind_str.to_string())).unwrap_or(orchestrator_core::PhaseEvidenceKind::Custom);
                     let description = ev
@@ -126,12 +126,12 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    Some(orchestrator_core::PhaseEvidence {
+                    orchestrator_core::PhaseEvidence {
                         kind,
                         description,
                         file_path: ev.get("file_path").and_then(Value::as_str).map(ToOwned::to_owned),
                         value: ev.get("value").cloned(),
-                    })
+                    }
                 })
                 .collect()
         })
@@ -203,7 +203,7 @@ fn extract_commit_message_from_payload(payload: &Value) -> Option<String> {
 }
 
 pub fn fallback_implementation_commit_message(phase_id: &str, subject_title: &str) -> String {
-    let phase_label = phase_id.replace('_', " ").replace('-', " ");
+    let phase_label = phase_id.replace(['_', '-'], " ");
     let title = subject_title.trim();
     if title.is_empty() {
         format!("chore: {phase_label} phase completed")

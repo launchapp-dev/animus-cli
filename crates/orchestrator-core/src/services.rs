@@ -324,6 +324,7 @@ impl FileServiceHub {
 
         let lock_file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&lock_path)
@@ -467,7 +468,7 @@ impl FileServiceHub {
             }
 
             let payload = Self::legacy_requirement_payload(&requirement);
-            if only_ids.is_none() || only_ids.map_or(false, |ids| ids.contains(&requirement.id)) {
+            if only_ids.is_none() || only_ids.is_some_and(|ids| ids.contains(&requirement.id)) {
                 std::fs::write(&full_path, serde_json::to_string_pretty(&payload)?)?;
             }
 
@@ -579,7 +580,7 @@ impl FileServiceHub {
                 "cancelled": task.cancelled,
                 "resource_requirements": task.resource_requirements,
             });
-            if only_ids.is_none() || only_ids.map_or(false, |ids| ids.contains(&task.id)) {
+            if only_ids.is_none() || only_ids.is_some_and(|ids| ids.contains(&task.id)) {
                 std::fs::write(
                     tasks_dir.join(format!("{}.json", task.id)),
                     serde_json::to_string_pretty(&payload)?,

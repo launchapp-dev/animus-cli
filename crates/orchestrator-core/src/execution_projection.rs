@@ -10,7 +10,7 @@ use protocol::SubjectExecutionFact;
 
 use crate::{
     load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask,
-    ScheduleRunState, TaskStatus, WorkflowStatus,
+    TaskStatus, WorkflowStatus,
 };
 
 pub use project_requirement_workflow_status::project_requirement_workflow_status;
@@ -162,7 +162,7 @@ fn update_schedule_state(
     let entry = state
         .schedules
         .entry(schedule_id.to_string())
-        .or_insert_with(ScheduleRunState::default);
+        .or_default();
     if let Some(run_at) = run_at {
         entry.last_run = Some(run_at);
     }
