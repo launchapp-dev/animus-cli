@@ -205,7 +205,7 @@ where
     }
 
     async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)> {
-        let completed_processes = self.process_manager.check_running();
+        let completed_processes = self.process_manager.check_running().await;
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services
             .reconcile_completed_processes(hub, root, completed_processes)

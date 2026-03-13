@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use protocol::orchestrator::WorkflowStatus;
 use protocol::SubjectDispatch;
 use tokio::process::{Child, Command};
+use tokio::task::JoinHandle;
 
 use crate::{build_runner_command_from_dispatch, CompletedProcess, RunnerEvent};
 
-#[derive(Debug, Clone)]
 struct WorkflowProcess {
     subject_id: String,
     task_id: Option<String>,
@@ -18,6 +18,7 @@ struct WorkflowProcess {
     started_at: std::time::Instant,
     child: Arc<Mutex<Child>>,
     stderr_lines: Arc<Mutex<Vec<String>>>,
+    stderr_reader: Option<JoinHandle<()>>,
 }
 
 pub struct ProcessManager {
@@ -58,9 +59,9 @@ impl ProcessManager {
             .context("failed to spawn ao-workflow-runner")?;
 
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        if let Some(stderr) = child.stderr.take() {
+        let stderr_reader = if let Some(stderr) = child.stderr.take() {
             let lines = stderr_lines.clone();
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
                 let reader = BufReader::new(stderr);
                 let mut line_stream = reader.lines();
@@ -69,8 +70,10 @@ impl ProcessManager {
                         buf.push(line);
                     }
                 }
-            });
-        }
+            }))
+        } else {
+            None
+        };
 
         let task_id = dispatch.task_id().map(String::from);
         let workflow_ref = dispatch.workflow_ref.clone();
@@ -84,24 +87,25 @@ impl ProcessManager {
             started_at: std::time::Instant::now(),
             child: Arc::new(Mutex::new(child)),
             stderr_lines,
+            stderr_reader,
         });
 
         Ok(())
     }
 
-    pub fn check_running(&mut self) -> Vec<CompletedProcess> {
+    pub async fn check_running(&mut self) -> Vec<CompletedProcess> {
         let timeout = self.process_timeout_secs;
-        self.check_running_with_timeout(timeout)
+        self.check_running_with_timeout(timeout).await
     }
 
-    fn check_running_with_timeout(
+    async fn check_running_with_timeout(
         &mut self,
         timeout_secs: Option<u64>,
     ) -> Vec<CompletedProcess> {
         let mut completed = Vec::new();
         let mut active = Vec::with_capacity(self.processes.len());
 
-        for process in self.processes.drain(..) {
+        for mut process in self.processes.drain(..) {
             if let Some(timeout) = timeout_secs {
                 if process.started_at.elapsed().as_secs() > timeout {
                     let pid = process
@@ -112,6 +116,7 @@ impl ProcessManager {
                     if let Some(pid) = pid {
                         protocol::graceful_kill_process(pid as i32);
                     }
+                    drain_stderr_reader(&mut process.stderr_reader).await;
                     completed.push(CompletedProcess {
                         subject_id: process.subject_id,
                         task_id: process.task_id,
@@ -158,6 +163,7 @@ impl ProcessManager {
 
             match status {
                 Ok(Some(status)) => {
+                    drain_stderr_reader(&mut process.stderr_reader).await;
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
                     let workflow_id = latest_runner_workflow_id(&events);
@@ -221,6 +227,12 @@ impl ProcessManager {
             .iter()
             .map(|process| process.subject_id.clone())
             .collect()
+    }
+}
+
+async fn drain_stderr_reader(handle: &mut Option<JoinHandle<()>>) {
+    if let Some(h) = handle.take() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), h).await;
     }
 }
 
@@ -337,7 +349,7 @@ mod tests {
             .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
             .expect("mock runner should be discovered from PATH and spawned");
         assert_eq!(manager.active_count(), 1);
-        let _ = manager.check_running();
+        let _ = manager.check_running().await;
     }
 
     #[test]
@@ -402,7 +414,7 @@ mod tests {
 
         let mut completed = Vec::new();
         for _ in 0..100 {
-            completed = manager.check_running();
+            completed = manager.check_running().await;
             if !completed.is_empty() {
                 break;
             }
