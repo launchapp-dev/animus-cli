@@ -157,6 +157,7 @@ export type GqlQueueStats = {
 
 export type GqlRequirement = {
   __typename?: 'GqlRequirement';
+  acceptanceCriteria: Array<Scalars['String']['output']>;
   description: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   linkedTaskIds: Array<Scalars['String']['output']>;
@@ -398,6 +399,7 @@ export type MutationRootCreateProjectArgs = {
 
 
 export type MutationRootCreateRequirementArgs = {
+  acceptanceCriteria?: InputMaybe<Array<Scalars['String']['input']>>;
   description?: InputMaybe<Scalars['String']['input']>;
   priority?: InputMaybe<Scalars['String']['input']>;
   requirementType?: InputMaybe<Scalars['String']['input']>;
@@ -515,6 +517,7 @@ export type MutationRootUpdateProjectArgs = {
 
 
 export type MutationRootUpdateRequirementArgs = {
+  acceptanceCriteria?: InputMaybe<Array<Scalars['String']['input']>>;
   description?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
   priority?: InputMaybe<Scalars['String']['input']>;
@@ -674,21 +677,21 @@ export type VisionQuery = { __typename?: 'QueryRoot', vision?: { __typename?: 'G
 export type RequirementsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type RequirementsQuery = { __typename?: 'QueryRoot', requirements: Array<{ __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string> }> };
+export type RequirementsQuery = { __typename?: 'QueryRoot', requirements: Array<{ __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string>, acceptanceCriteria: Array<string> }> };
 
 export type RequirementQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type RequirementQuery = { __typename?: 'QueryRoot', requirement?: { __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string> } | null };
+export type RequirementQuery = { __typename?: 'QueryRoot', requirement?: { __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string>, acceptanceCriteria: Array<string> } | null };
 
 export type RequirementDetailQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type RequirementDetailQuery = { __typename?: 'QueryRoot', requirement?: { __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string> } | null };
+export type RequirementDetailQuery = { __typename?: 'QueryRoot', requirement?: { __typename?: 'GqlRequirement', id: string, title: string, description: string, priority: GqlRequirementPriority, priorityRaw: string, status: GqlRequirementStatus, statusRaw: string, requirementType?: GqlRequirementType | null, tags: Array<string>, linkedTaskIds: Array<string>, acceptanceCriteria: Array<string> } | null };
 
 export type SaveVisionMutationVariables = Exact<{
   content: Scalars['String']['input'];
@@ -709,6 +712,7 @@ export type CreateRequirementMutationVariables = Exact<{
   description?: InputMaybe<Scalars['String']['input']>;
   priority?: InputMaybe<Scalars['String']['input']>;
   requirementType?: InputMaybe<Scalars['String']['input']>;
+  acceptanceCriteria?: InputMaybe<Array<Scalars['String']['input']> | Scalars['String']['input']>;
 }>;
 
 
@@ -721,6 +725,7 @@ export type UpdateRequirementMutationVariables = Exact<{
   priority?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<Scalars['String']['input']>;
   requirementType?: InputMaybe<Scalars['String']['input']>;
+  acceptanceCriteria?: InputMaybe<Array<Scalars['String']['input']> | Scalars['String']['input']>;
 }>;
 
 
@@ -1118,6 +1123,7 @@ export const RequirementsDocument = new TypedDocumentString(`
     requirementType
     tags
     linkedTaskIds
+    acceptanceCriteria
   }
 }
     `) as unknown as TypedDocumentString<RequirementsQuery, RequirementsQueryVariables>;
@@ -1134,6 +1140,7 @@ export const RequirementDocument = new TypedDocumentString(`
     requirementType
     tags
     linkedTaskIds
+    acceptanceCriteria
   }
 }
     `) as unknown as TypedDocumentString<RequirementQuery, RequirementQueryVariables>;
@@ -1150,6 +1157,7 @@ export const RequirementDetailDocument = new TypedDocumentString(`
     requirementType
     tags
     linkedTaskIds
+    acceptanceCriteria
   }
 }
     `) as unknown as TypedDocumentString<RequirementDetailQuery, RequirementDetailQueryVariables>;
@@ -1180,19 +1188,20 @@ export const RefineVisionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<RefineVisionMutation, RefineVisionMutationVariables>;
 export const CreateRequirementDocument = new TypedDocumentString(`
-    mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String) {
+    mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String, $acceptanceCriteria: [String!]) {
   createRequirement(
     title: $title
     description: $description
     priority: $priority
     requirementType: $requirementType
+    acceptanceCriteria: $acceptanceCriteria
   ) {
     id
   }
 }
     `) as unknown as TypedDocumentString<CreateRequirementMutation, CreateRequirementMutationVariables>;
 export const UpdateRequirementDocument = new TypedDocumentString(`
-    mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String) {
+    mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String, $acceptanceCriteria: [String!]) {
   updateRequirement(
     id: $id
     title: $title
@@ -1200,6 +1209,7 @@ export const UpdateRequirementDocument = new TypedDocumentString(`
     priority: $priority
     status: $status
     requirementType: $requirementType
+    acceptanceCriteria: $acceptanceCriteria
   ) {
     id
   }

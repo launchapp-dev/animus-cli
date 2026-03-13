@@ -3,17 +3,17 @@ query Vision {
 }
 
 query Requirements {
-  requirements { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds }
+  requirements { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds acceptanceCriteria }
 }
 
 query Requirement($id: ID!) {
-  requirement(id: $id) { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds }
+  requirement(id: $id) { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds acceptanceCriteria }
 }
 
 query RequirementDetail($id: ID!) {
   requirement(id: $id) {
     id title description priority priorityRaw status statusRaw
-    requirementType tags linkedTaskIds
+    requirementType tags linkedTaskIds acceptanceCriteria
   }
 }
 
@@ -25,12 +25,12 @@ mutation RefineVision($feedback: String) {
   refineVision(feedback: $feedback) { title summary goals targetAudience successCriteria constraints raw }
 }
 
-mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String) {
-  createRequirement(title: $title, description: $description, priority: $priority, requirementType: $requirementType) { id }
+mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String, $acceptanceCriteria: [String!]) {
+  createRequirement(title: $title, description: $description, priority: $priority, requirementType: $requirementType, acceptanceCriteria: $acceptanceCriteria) { id }
 }
 
-mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String) {
-  updateRequirement(id: $id, title: $title, description: $description, priority: $priority, status: $status, requirementType: $requirementType) { id }
+mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String, $acceptanceCriteria: [String!]) {
+  updateRequirement(id: $id, title: $title, description: $description, priority: $priority, status: $status, requirementType: $requirementType, acceptanceCriteria: $acceptanceCriteria) { id }
 }
 
 mutation DeleteRequirement($id: ID!) { deleteRequirement(id: $id) }

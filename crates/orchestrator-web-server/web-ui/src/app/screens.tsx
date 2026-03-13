@@ -1046,7 +1046,13 @@ export function WorkflowsPage() {
 
 export function WorkflowDetailPage() {
   const { workflowId } = useParams();
-  const [result] = useQuery({ query: WORKFLOW_DETAIL_QUERY, variables: { id: workflowId } });
+  const [result, reexecute] = useQuery({ query: WORKFLOW_DETAIL_QUERY, variables: { id: workflowId } });
+  const [, pauseWf] = useMutation(PAUSE_WORKFLOW);
+  const [, resumeWf] = useMutation(RESUME_WORKFLOW);
+  const [, cancelWf] = useMutation(CANCEL_WORKFLOW);
+  const [wfMessage, setWfMessage] = useState<string | null>(null);
+  const [wfOperating, setWfOperating] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
@@ -1058,19 +1064,70 @@ export function WorkflowDetailPage() {
   const checkpoints = data?.workflowCheckpoints ?? [];
   const decisions = wf.decisions ?? [];
 
+  const wfAction = async (label: string, fn: () => Promise<any>) => {
+    setWfOperating(true);
+    setWfMessage(null);
+    const res = await fn();
+    setWfOperating(false);
+    if (res.error) {
+      setWfMessage(`Error: ${res.error.message}`);
+    } else {
+      setWfMessage(`${label} successful.`);
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const isRunning = wf.statusRaw === "running";
+  const isPaused = wf.statusRaw === "paused";
+  const isTerminal = ["completed", "failed", "cancelled"].includes(wf.statusRaw);
+
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-muted-foreground font-mono">{wf.id}</p>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Workflow for <Link to={`/tasks/${wf.taskId}`} className="underline">{wf.taskId}</Link>
-        </h1>
-        <div className="flex gap-2 mt-2">
-          <Badge variant={statusColor(wf.statusRaw)}>{wf.statusRaw}</Badge>
-          {wf.workflowRef && <Badge variant="outline">{wf.workflowRef}</Badge>}
-          {wf.totalReworks > 0 && <Badge variant="outline">{wf.totalReworks} reworks</Badge>}
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-sm text-muted-foreground font-mono">{wf.id}</p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Workflow for <Link to={`/tasks/${wf.taskId}`} className="underline">{wf.taskId}</Link>
+          </h1>
+          <div className="flex gap-2 mt-2">
+            <Badge variant={statusColor(wf.statusRaw)}>{wf.statusRaw}</Badge>
+            {wf.workflowRef && <Badge variant="outline">{wf.workflowRef}</Badge>}
+            {wf.totalReworks > 0 && <Badge variant="outline">{wf.totalReworks} reworks</Badge>}
+          </div>
         </div>
+        {!isTerminal && (
+          <div className="flex items-center gap-2">
+            {isRunning && (
+              <Button variant="secondary" disabled={wfOperating} onClick={() => wfAction("Pause", () => pauseWf({ id: workflowId }))}>
+                Pause
+              </Button>
+            )}
+            {isPaused && (
+              <Button variant="secondary" disabled={wfOperating} onClick={() => wfAction("Resume", () => resumeWf({ id: workflowId }))}>
+                Resume
+              </Button>
+            )}
+            {confirmCancel ? (
+              <>
+                <Button variant="destructive" disabled={wfOperating} onClick={() => { setConfirmCancel(false); wfAction("Cancel", () => cancelWf({ id: workflowId })); }}>
+                  Confirm Cancel
+                </Button>
+                <Button variant="outline" onClick={() => setConfirmCancel(false)}>Back</Button>
+              </>
+            ) : (
+              <Button variant="destructive" disabled={wfOperating} onClick={() => setConfirmCancel(true)}>
+                Cancel Workflow
+              </Button>
+            )}
+          </div>
+        )}
       </div>
+
+      {wfMessage && (
+        <Alert variant={wfMessage.startsWith("Error") ? "destructive" : "default"}>
+          <AlertDescription>{wfMessage}</AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Phase Timeline</CardTitle></CardHeader>

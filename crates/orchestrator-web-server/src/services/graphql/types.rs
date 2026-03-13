@@ -408,6 +408,8 @@ pub struct RawRequirement {
     pub linked_task_ids: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -601,6 +603,9 @@ impl GqlRequirement {
     }
     async fn linked_task_ids(&self) -> &[String] {
         &self.0.linked_task_ids
+    }
+    async fn acceptance_criteria(&self) -> &[String] {
+        &self.0.acceptance_criteria
     }
 }
 

@@ -136,6 +136,7 @@ type GqlRequirement {
 	requirementType: GqlRequirementType
 	tags: [String!]!
 	linkedTaskIds: [String!]!
+	acceptanceCriteria: [String!]!
 }
 
 enum GqlRequirementPriority {
@@ -286,8 +287,8 @@ type MutationRoot {
 	checklistUpdate(id: ID!, itemId: String!, completed: Boolean, description: String): GqlTask!
 	dependencyAdd(id: ID!, dependsOn: String!, dependencyType: String): GqlTask!
 	dependencyRemove(id: ID!, dependsOn: String!): GqlTask!
-	createRequirement(title: String!, description: String, priority: String, requirementType: String): GqlRequirement!
-	updateRequirement(id: ID!, title: String, description: String, priority: String, status: String, requirementType: String): GqlRequirement!
+	createRequirement(title: String!, description: String, priority: String, requirementType: String, acceptanceCriteria: [String!]): GqlRequirement!
+	updateRequirement(id: ID!, title: String, description: String, priority: String, status: String, requirementType: String, acceptanceCriteria: [String!]): GqlRequirement!
 	deleteRequirement(id: ID!): Boolean!
 	draftRequirement(context: String): GqlRequirement!
 	refineRequirement(id: String!, feedback: String): GqlRequirement!

@@ -21,18 +21,18 @@ const REFINE_VISION = `mutation RefineVision($feedback: String) { refineVision(f
 
 const REQUIREMENTS_QUERY = `
   query Requirements {
-    requirements { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds }
+    requirements { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds acceptanceCriteria }
   }
 `;
 
 const REQUIREMENT_QUERY = `
   query Requirement($id: ID!) {
-    requirement(id: $id) { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds }
+    requirement(id: $id) { id title description priority priorityRaw status statusRaw requirementType tags linkedTaskIds acceptanceCriteria }
   }
 `;
 
-const CREATE_REQUIREMENT = `mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String) { createRequirement(title: $title, description: $description, priority: $priority, requirementType: $requirementType) { id } }`;
-const UPDATE_REQUIREMENT = `mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String) { updateRequirement(id: $id, title: $title, description: $description, priority: $priority, status: $status, requirementType: $requirementType) { id } }`;
+const CREATE_REQUIREMENT = `mutation CreateRequirement($title: String!, $description: String, $priority: String, $requirementType: String, $acceptanceCriteria: [String!]) { createRequirement(title: $title, description: $description, priority: $priority, requirementType: $requirementType, acceptanceCriteria: $acceptanceCriteria) { id } }`;
+const UPDATE_REQUIREMENT = `mutation UpdateRequirement($id: ID!, $title: String, $description: String, $priority: String, $status: String, $requirementType: String, $acceptanceCriteria: [String!]) { updateRequirement(id: $id, title: $title, description: $description, priority: $priority, status: $status, requirementType: $requirementType, acceptanceCriteria: $acceptanceCriteria) { id } }`;
 const DELETE_REQUIREMENT = `mutation DeleteRequirement($id: ID!) { deleteRequirement(id: $id) }`;
 const DRAFT_REQUIREMENT = `mutation DraftRequirement($context: String) { draftRequirement(context: $context) { id title } }`;
 const REFINE_REQUIREMENT = `mutation RefineRequirement($id: String!, $feedback: String) { refineRequirement(id: $id, feedback: $feedback) { id } }`;
@@ -316,8 +316,21 @@ export function PlanningRequirementCreatePage() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("should");
   const [reqType, setReqType] = useState("");
+  const [criteria, setCriteria] = useState<string[]>([]);
+  const [newCriterion, setNewCriterion] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const addCriterion = () => {
+    const val = newCriterion.trim();
+    if (!val) return;
+    setCriteria((prev) => [...prev, val]);
+    setNewCriterion("");
+  };
+
+  const removeCriterion = (index: number) => {
+    setCriteria((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -329,6 +342,7 @@ export function PlanningRequirementCreatePage() {
       description: description.trim() || null,
       priority,
       requirementType: reqType || null,
+      acceptanceCriteria: criteria.length > 0 ? criteria : null,
     });
     setSubmitting(false);
     if (result.error) {
@@ -368,6 +382,28 @@ export function PlanningRequirementCreatePage() {
                 <Input value={reqType} onChange={(e) => setReqType(e.target.value)} placeholder="e.g., functional, non-functional" />
               </div>
             </div>
+            <div>
+              <label className="text-sm font-medium">Acceptance Criteria</label>
+              {criteria.length > 0 && (
+                <ul className="mt-1 space-y-1">
+                  {criteria.map((c, i) => (
+                    <li key={i} className="flex items-center gap-2 text-sm">
+                      <span className="flex-1">{i + 1}. {c}</span>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => removeCriterion(i)}>Remove</Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex items-center gap-2 mt-2">
+                <Input
+                  value={newCriterion}
+                  onChange={(e) => setNewCriterion(e.target.value)}
+                  placeholder="Add acceptance criterion..."
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCriterion(); } }}
+                />
+                <Button type="button" variant="secondary" onClick={addCriterion}>Add</Button>
+              </div>
+            </div>
             <div className="flex items-center gap-3">
               <Button type="submit" disabled={submitting}>{submitting ? "Creating..." : "Create Requirement"}</Button>
               <Link to="/planning/requirements"><Button variant="outline">Cancel</Button></Link>
@@ -396,6 +432,8 @@ export function PlanningRequirementDetailPage() {
   const [priority, setPriority] = useState("should");
   const [status, setStatus] = useState("draft");
   const [reqType, setReqType] = useState("");
+  const [detailCriteria, setDetailCriteria] = useState<string[]>([]);
+  const [detailNewCriterion, setDetailNewCriterion] = useState("");
   const [refineFeedback, setRefineFeedback] = useState("");
   const [operating, setOperating] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -410,8 +448,20 @@ export function PlanningRequirementDetailPage() {
     setPriority(req.priorityRaw);
     setStatus(req.statusRaw);
     setReqType(req.requirementType ?? "");
+    setDetailCriteria(req.acceptanceCriteria ?? []);
     setInitialized(true);
   }
+
+  const addDetailCriterion = () => {
+    const val = detailNewCriterion.trim();
+    if (!val) return;
+    setDetailCriteria((prev) => [...prev, val]);
+    setDetailNewCriterion("");
+  };
+
+  const removeDetailCriterion = (index: number) => {
+    setDetailCriteria((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault();
@@ -425,6 +475,7 @@ export function PlanningRequirementDetailPage() {
       priority,
       status,
       requirementType: reqType || null,
+      acceptanceCriteria: detailCriteria,
     });
     setOperating(null);
     if (result.error) {
@@ -517,6 +568,34 @@ export function PlanningRequirementDetailPage() {
               {operating === "saving" ? "Saving..." : "Save Changes"}
             </Button>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Acceptance Criteria</CardTitle></CardHeader>
+        <CardContent>
+          {detailCriteria.length > 0 ? (
+            <ol className="space-y-1 mb-3">
+              {detailCriteria.map((c, i) => (
+                <li key={i} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1">{i + 1}. {c}</span>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => removeDetailCriterion(i)}>Remove</Button>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-sm text-muted-foreground mb-3">No acceptance criteria defined.</p>
+          )}
+          <div className="flex items-center gap-2">
+            <Input
+              value={detailNewCriterion}
+              onChange={(e) => setDetailNewCriterion(e.target.value)}
+              placeholder="Add acceptance criterion..."
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDetailCriterion(); } }}
+            />
+            <Button type="button" variant="secondary" onClick={addDetailCriterion}>Add</Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">Changes are saved when you click &quot;Save Changes&quot; above.</p>
         </CardContent>
       </Card>
 

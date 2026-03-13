@@ -230,6 +230,7 @@ impl MutationRoot {
         description: Option<String>,
         priority: Option<String>,
         requirement_type: Option<String>,
+        acceptance_criteria: Option<Vec<String>>,
     ) -> Result<GqlRequirement> {
         let api = ctx.data::<WebApiService>()?;
         let body = json!({
@@ -237,6 +238,7 @@ impl MutationRoot {
             "description": description.unwrap_or_default(),
             "priority": priority,
             "type": requirement_type,
+            "acceptance_criteria": acceptance_criteria.unwrap_or_default(),
         });
         let val = api
             .requirements_create(body)
@@ -256,6 +258,7 @@ impl MutationRoot {
         priority: Option<String>,
         status: Option<String>,
         requirement_type: Option<String>,
+        acceptance_criteria: Option<Vec<String>>,
     ) -> Result<GqlRequirement> {
         let api = ctx.data::<WebApiService>()?;
         let mut body = serde_json::Map::new();
@@ -273,6 +276,9 @@ impl MutationRoot {
         }
         if let Some(v) = requirement_type {
             body.insert("type".into(), json!(v));
+        }
+        if let Some(v) = acceptance_criteria {
+            body.insert("acceptance_criteria".into(), json!(v));
         }
         let val = api
             .requirements_patch(&id, serde_json::Value::Object(body))
