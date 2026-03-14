@@ -164,6 +164,98 @@ impl WebApiService {
         Ok(json!(self.context.hub.workflows().list().await?))
     }
 
+    pub async fn workflow_config(&self) -> Result<Value, WebApiError> {
+        let project_root = std::path::Path::new(&self.context.project_root);
+        let loaded = load_workflow_config_or_default(project_root);
+        let config = &loaded.config;
+
+        let mcp_servers: Vec<Value> = config
+            .mcp_servers
+            .iter()
+            .map(|(name, def)| {
+                let env: Vec<Value> = def
+                    .env
+                    .iter()
+                    .map(|(k, v)| json!({ "key": k, "value": v }))
+                    .collect();
+                json!({
+                    "name": name,
+                    "command": def.command,
+                    "args": def.args,
+                    "transport": def.transport,
+                    "tools": def.tools,
+                    "env": env,
+                })
+            })
+            .collect();
+
+        let phase_catalog: Vec<Value> = config
+            .phase_catalog
+            .iter()
+            .map(|(id, entry)| {
+                json!({
+                    "id": id,
+                    "label": entry.label,
+                    "description": entry.description,
+                    "category": entry.category,
+                    "tags": entry.tags,
+                })
+            })
+            .collect();
+
+        let tools: Vec<Value> = config
+            .tools
+            .iter()
+            .map(|(name, def)| {
+                json!({
+                    "name": name,
+                    "executable": def.executable,
+                    "supportsMcp": def.supports_mcp,
+                    "supportsWrite": def.supports_write,
+                    "contextWindow": def.context_window,
+                })
+            })
+            .collect();
+
+        let agent_profiles: Vec<Value> = config
+            .agent_profiles
+            .iter()
+            .map(|(name, profile)| {
+                json!({
+                    "name": name,
+                    "description": profile.description,
+                    "role": profile.role,
+                    "mcpServers": profile.mcp_servers,
+                    "skills": profile.skills,
+                    "tool": profile.tool,
+                    "model": profile.model,
+                })
+            })
+            .collect();
+
+        let schedules: Vec<Value> = config
+            .schedules
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "cron": s.cron,
+                    "workflowRef": s.workflow_ref,
+                    "command": s.command,
+                    "enabled": s.enabled,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "mcpServers": mcp_servers,
+            "phaseCatalog": phase_catalog,
+            "tools": tools,
+            "agentProfiles": agent_profiles,
+            "schedules": schedules,
+        }))
+    }
+
     pub async fn workflow_definitions(&self) -> Result<Value, WebApiError> {
         let project_root = std::path::Path::new(&self.context.project_root);
         let loaded = orchestrator_config::workflow_config::load_workflow_config_or_default(project_root);

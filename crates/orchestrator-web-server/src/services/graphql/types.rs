@@ -378,6 +378,69 @@ pub struct GqlSystemInfo {
     pub project_root: Option<String>,
 }
 
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlWorkflowConfig {
+    pub mcp_servers: Vec<GqlMcpServer>,
+    pub phase_catalog: Vec<GqlPhaseCatalogEntry>,
+    pub tools: Vec<GqlToolDefinition>,
+    pub agent_profiles: Vec<GqlAgentProfile>,
+    pub schedules: Vec<GqlWorkflowSchedule>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlMcpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub transport: Option<String>,
+    pub tools: Vec<String>,
+    pub env: Vec<GqlKeyValue>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlKeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlPhaseCatalogEntry {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlToolDefinition {
+    pub name: String,
+    pub executable: String,
+    pub supports_mcp: bool,
+    pub supports_write: bool,
+    pub context_window: Option<i32>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlAgentProfile {
+    pub name: String,
+    pub description: String,
+    pub role: Option<String>,
+    pub mcp_servers: Vec<String>,
+    pub skills: Vec<String>,
+    pub tool: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlWorkflowSchedule {
+    pub id: String,
+    pub cron: String,
+    pub workflow_ref: Option<String>,
+    pub command: Option<String>,
+    pub enabled: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Raw deserialization types
 // ---------------------------------------------------------------------------

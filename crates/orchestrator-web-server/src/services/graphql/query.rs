@@ -3,10 +3,12 @@ use orchestrator_web_api::WebApiService;
 
 use super::gql_err;
 use super::types::{
-    GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlPhaseOutput, GqlProject,
-    GqlQueueEntry, GqlQueueStats, GqlRequirement, GqlRequirementConnection, GqlSystemInfo,
-    GqlTask, GqlTaskConnection, GqlTaskStats, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint,
-    GqlWorkflowConnection, GqlWorkflowDefinition, RawRequirement, RawTask, RawWorkflow,
+    GqlAgentProfile, GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlKeyValue,
+    GqlMcpServer, GqlPhaseCatalogEntry, GqlPhaseOutput, GqlProject, GqlQueueEntry, GqlQueueStats,
+    GqlRequirement, GqlRequirementConnection, GqlSystemInfo, GqlTask, GqlTaskConnection,
+    GqlTaskStats, GqlToolDefinition, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint,
+    GqlWorkflowConfig, GqlWorkflowConnection, GqlWorkflowDefinition, GqlWorkflowSchedule,
+    RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -361,6 +363,219 @@ impl QueryRoot {
             }
             Err(e) => Err(gql_err(e)),
         }
+    }
+
+    async fn workflow_config(&self, ctx: &Context<'_>) -> Result<GqlWorkflowConfig> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api.workflow_config().await.map_err(gql_err)?;
+
+        let mcp_servers: Vec<GqlMcpServer> = val
+            .get("mcpServers")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        Some(GqlMcpServer {
+                            name: s.get("name")?.as_str()?.to_string(),
+                            command: s.get("command")?.as_str()?.to_string(),
+                            args: s
+                                .get("args")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            transport: s
+                                .get("transport")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            tools: s
+                                .get("tools")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            env: s
+                                .get("env")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| {
+                                            Some(GqlKeyValue {
+                                                key: v.get("key")?.as_str()?.to_string(),
+                                                value: v.get("value")?.as_str()?.to_string(),
+                                            })
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let phase_catalog: Vec<GqlPhaseCatalogEntry> = val
+            .get("phaseCatalog")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        Some(GqlPhaseCatalogEntry {
+                            id: p.get("id")?.as_str()?.to_string(),
+                            label: p
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            description: p
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            category: p
+                                .get("category")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            tags: p
+                                .get("tags")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let tools: Vec<GqlToolDefinition> = val
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| {
+                        Some(GqlToolDefinition {
+                            name: t.get("name")?.as_str()?.to_string(),
+                            executable: t
+                                .get("executable")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            supports_mcp: t
+                                .get("supportsMcp")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            supports_write: t
+                                .get("supportsWrite")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            context_window: t
+                                .get("contextWindow")
+                                .and_then(|v| v.as_i64())
+                                .map(|v| v as i32),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let agent_profiles: Vec<GqlAgentProfile> = val
+            .get("agentProfiles")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| {
+                        Some(GqlAgentProfile {
+                            name: a.get("name")?.as_str()?.to_string(),
+                            description: a
+                                .get("description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            role: a
+                                .get("role")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            mcp_servers: a
+                                .get("mcpServers")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            skills: a
+                                .get("skills")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            tool: a
+                                .get("tool")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            model: a
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let schedules: Vec<GqlWorkflowSchedule> = val
+            .get("schedules")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        Some(GqlWorkflowSchedule {
+                            id: s.get("id")?.as_str()?.to_string(),
+                            cron: s
+                                .get("cron")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            workflow_ref: s
+                                .get("workflowRef")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            command: s
+                                .get("command")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            enabled: s
+                                .get("enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(GqlWorkflowConfig {
+            mcp_servers,
+            phase_catalog,
+            tools,
+            agent_profiles,
+            schedules,
+        })
     }
 
     async fn daemon_health(&self, ctx: &Context<'_>) -> Result<GqlDaemonHealth> {
