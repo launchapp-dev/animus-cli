@@ -5,36 +5,8 @@ use std::hash::{Hash, Hasher};
 
 const RUNNER_IPC_TIMEOUT: Duration = Duration::from_millis(900);
 
-pub(super) fn should_skip_runner_start() -> bool {
-    false
-}
 
-pub(super) fn default_global_config_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.launchpad.agent-orchestrator")
-    }
 
-    #[cfg(target_os = "windows")]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("com.launchpad.agent-orchestrator")
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("agent-orchestrator")
-    }
-}
-
-pub(super) fn runner_scope_from_env() -> String {
-    "project".to_string()
-}
 
 pub(super) fn runner_config_dir(project_root: &Path) -> PathBuf {
     let config_dir = project_runtime_root(project_root)
@@ -429,9 +401,6 @@ pub(super) fn find_agent_runner_binary() -> Result<PathBuf> {
 }
 
 pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<Option<u32>> {
-    if should_skip_runner_start() {
-        return Ok(None);
-    }
 
     let config_dir = runner_config_dir(project_root);
     let binary = find_agent_runner_binary()?;

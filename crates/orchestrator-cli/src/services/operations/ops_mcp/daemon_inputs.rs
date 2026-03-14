@@ -21,8 +21,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) autonomous: Option<bool>,
     #[serde(default)]
-    pub(super) ai_task_generation: Option<bool>,
-    #[serde(default)]
     pub(super) auto_run_ready: Option<bool>,
     #[serde(default)]
     pub(super) auto_merge: Option<bool>,

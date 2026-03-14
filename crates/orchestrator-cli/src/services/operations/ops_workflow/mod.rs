@@ -1,5 +1,5 @@
 mod config;
-mod execute;
+pub(crate) mod execute;
 mod phases;
 mod prompt;
 
@@ -368,11 +368,6 @@ pub(crate) async fn handle_workflow(
                 };
                 print_value(workflows.run(dispatch.to_workflow_run_input()).await?, json)
             }
-        }
-        WorkflowCommand::Execute(args) => {
-            eprintln!("warning: `workflow execute` is deprecated; use `workflow run --sync` instead");
-            execute::handle_workflow_execute(args, hub, project_root, json).await?;
-            Ok(())
         }
         WorkflowCommand::Prompt { command } => match command {
             WorkflowPromptCommand::Render(args) => {

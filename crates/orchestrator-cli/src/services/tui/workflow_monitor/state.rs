@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use orchestrator_core::{OrchestratorWorkflow, WorkflowPhaseStatus, WorkflowStatus};
 
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub(super) enum OutputStreamType {
     Stdout,
     Stderr,

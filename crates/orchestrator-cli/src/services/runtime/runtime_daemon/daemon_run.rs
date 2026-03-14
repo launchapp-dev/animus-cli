@@ -182,7 +182,7 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: 1,
-                ai_task_generation: false,
+
                 auto_run_ready: false,
                 auto_merge: None,
                 auto_pr: None,
@@ -312,7 +312,7 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: 1,
-                ai_task_generation: false,
+
                 auto_run_ready: false,
                 auto_merge: None,
                 auto_pr: None,
@@ -432,7 +432,7 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: 1,
-                ai_task_generation: false,
+
                 auto_run_ready: true,
                 auto_merge: None,
                 auto_pr: None,
@@ -558,7 +558,7 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: 1,
-                ai_task_generation: false,
+
                 auto_run_ready: false,
                 auto_merge: None,
                 auto_pr: None,

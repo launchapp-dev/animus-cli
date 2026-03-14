@@ -60,9 +60,6 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowPromptCommand,
     },
-    /// Deprecated: use `workflow run --sync` instead.
-    #[command(hide = true)]
-    Execute(WorkflowExecuteArgs),
     /// Update a workflow definition by id.
     UpdateDefinition(WorkflowDefinitionUpdateArgs),
 }

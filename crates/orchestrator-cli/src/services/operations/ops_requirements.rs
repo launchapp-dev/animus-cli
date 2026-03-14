@@ -12,7 +12,7 @@ mod state;
 
 use crate::{
     print_ok, print_value, RequirementGraphCommand, RequirementsCommand, RequirementsExecuteArgs,
-    WorkflowCommand, WorkflowExecuteArgs,
+    WorkflowExecuteArgs,
 };
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
@@ -31,8 +31,8 @@ pub(crate) async fn handle_requirements(
 
     match command {
         RequirementsCommand::Execute(args) => {
-            let workflow_command = build_requirements_execute_workflow_command(args)?;
-            super::handle_workflow(workflow_command, hub.clone(), project_root, json).await
+            let execute_args = build_requirements_execute_args(args)?;
+            super::ops_workflow::execute::handle_workflow_execute(execute_args, hub.clone(), project_root, json).await
         }
         RequirementsCommand::List => print_value(planning.list_requirements().await?, json),
         RequirementsCommand::Get(args) => {
@@ -71,9 +71,9 @@ pub(crate) async fn handle_requirements(
     }
 }
 
-fn build_requirements_execute_workflow_command(
+fn build_requirements_execute_args(
     args: RequirementsExecuteArgs,
-) -> Result<WorkflowCommand> {
+) -> Result<WorkflowExecuteArgs> {
     let mut requirement_ids = args
         .requirement_ids
         .into_iter()
@@ -108,7 +108,7 @@ fn build_requirements_execute_workflow_command(
         REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string()
     };
 
-    Ok(WorkflowCommand::Execute(WorkflowExecuteArgs {
+    Ok(WorkflowExecuteArgs {
         workflow_id: None,
         task_id: None,
         requirement_id: Some(requirement_id),
@@ -123,5 +123,5 @@ fn build_requirements_execute_workflow_command(
         quiet: false,
         verbose: false,
         vars: Vec::new(),
-    }))
+    })
 }

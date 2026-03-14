@@ -110,11 +110,10 @@ pub(crate) struct DaemonSchedulerArgs {
     pub(crate) stale_threshold_hours: u64,
     #[arg(
         long,
-        hide = true,
         value_name = "COUNT",
         default_value_t = 2,
         value_parser = parse_positive_usize,
-        help = "Deprecated: use --pool-size to control agent concurrency."
+        help = "Maximum new workflows to dispatch per scheduler tick."
     )]
     pub(crate) max_tasks_per_tick: usize,
     #[arg(
@@ -131,14 +130,6 @@ pub(crate) struct DaemonSchedulerArgs {
         help = "Override workflow idle timeout in seconds."
     )]
     pub(crate) idle_timeout_secs: Option<u64>,
-    #[arg(
-        long,
-        hide = true,
-        action = ArgAction::Set,
-        default_value_t = false,
-        help = "Deprecated no-op flag retained for CLI compatibility."
-    )]
-    pub(crate) ai_task_generation: bool,
 }
 
 #[derive(Debug, Args)]

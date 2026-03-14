@@ -57,9 +57,6 @@ fn runtime_binary_refresh_supported(project_root: &str) -> bool {
     }
 }
 
-fn runtime_binary_refresh_retry_backoff_secs() -> i64 {
-    RUNTIME_BINARY_REFRESH_RETRY_BACKOFF_SECS
-}
 
 fn runtime_binary_refresh_state_path(project_root: &str) -> Result<PathBuf> {
     Ok(repo_ao_root(project_root)?
@@ -145,7 +142,7 @@ fn runtime_binary_refresh_backoff_active(
         return false;
     };
     let elapsed = Utc::now().timestamp().saturating_sub(last_attempt);
-    elapsed < runtime_binary_refresh_retry_backoff_secs()
+    elapsed < RUNTIME_BINARY_REFRESH_RETRY_BACKOFF_SECS
 }
 
 #[cfg(test)]

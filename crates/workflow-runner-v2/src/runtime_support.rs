@@ -160,16 +160,11 @@ fn claude_bypass_permissions_enabled() -> bool {
     protocol::parse_env_bool("AO_CLAUDE_BYPASS_PERMISSIONS")
 }
 
-fn env_codex_reasoning_effort_override() -> Option<String> {
-    None
-}
-
 fn codex_reasoning_effort(reasoning_override: Option<&str>) -> Option<String> {
     reasoning_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
-        .or_else(env_codex_reasoning_effort_override)
 }
 
 fn codex_exec_insert_index(args: &[Value]) -> usize {

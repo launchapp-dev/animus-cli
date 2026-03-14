@@ -1337,13 +1337,6 @@ pub fn agent_runtime_config_path(project_root: &Path) -> PathBuf {
     base.join("state").join(AGENT_RUNTIME_CONFIG_FILE_NAME)
 }
 
-pub fn legacy_agent_runtime_config_path(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join("state")
-        .join("agent-runtime-config.v1.json")
-}
-
 pub fn ensure_agent_runtime_config_file(project_root: &Path) -> Result<()> {
     crate::workflow_config::ensure_workflow_yaml_scaffold(project_root).map(|_| ())
 }
@@ -1372,22 +1365,6 @@ pub fn load_agent_runtime_config_with_metadata(
             config,
             path: loaded_workflow.path,
         });
-    }
-
-    let legacy = legacy_agent_runtime_config_path(project_root);
-    if legacy.exists() {
-        return Err(anyhow!(
-            "agent runtime config JSON is no longer supported at {}. Remove the legacy JSON config and define runtime in .ao/workflows.yaml or .ao/workflows/*.yaml",
-            legacy.display()
-        ));
-    }
-
-    let json_path = agent_runtime_config_path(project_root);
-    if json_path.exists() {
-        return Err(anyhow!(
-            "agent runtime config JSON is no longer supported at {}. Remove the JSON config and define runtime in .ao/workflows.yaml or .ao/workflows/*.yaml",
-            json_path.display()
-        ));
     }
 
     Err(anyhow!(

@@ -434,8 +434,6 @@ pub struct DaemonConfig {
     #[serde(default)]
     pub stream_phase_output: Option<String>,
     #[serde(default)]
-    pub cancel_on_disconnect: Option<bool>,
-    #[serde(default)]
     pub auto_merge: Option<bool>,
     #[serde(default)]
     pub auto_pr: Option<bool>,

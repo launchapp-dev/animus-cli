@@ -196,7 +196,6 @@ pub fn build_runtime_contract_with_resume(
         mcp_endpoint.as_deref(),
         mcp_agent_id.as_deref(),
     )?;
-    inject_cli_launch_overrides_from_env(&mut runtime_contract, tool);
     Some(runtime_contract)
 }
 
@@ -212,9 +211,6 @@ fn claude_bypass_permissions_enabled() -> bool {
     protocol::parse_env_bool("AO_CLAUDE_BYPASS_PERMISSIONS")
 }
 
-fn env_codex_reasoning_effort_override() -> Option<String> {
-    None
-}
 
 fn parse_env_string_list_json(
     key: &str,
@@ -375,38 +371,6 @@ fn inject_codex_search_launch_flag(runtime_contract: &mut Value, tool: &str) {
     }
 }
 
-fn inject_codex_reasoning_effort_override(runtime_contract: &mut Value, tool: &str) {
-    if !tool.eq_ignore_ascii_case("codex") {
-        return;
-    }
-    let Some(effort) = env_codex_reasoning_effort_override() else {
-        return;
-    };
-    let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-
-    let mut index = 0usize;
-    while index + 1 < args.len() {
-        let flag = args[index].as_str().unwrap_or_default();
-        let value = args[index + 1].as_str().unwrap_or_default();
-        if flag == "-c" && value.starts_with("model_reasoning_effort=") {
-            args[index + 1] = Value::String(format!("model_reasoning_effort={effort}"));
-            return;
-        }
-        index += 1;
-    }
-
-    let insert_at = codex_exec_insert_index(args);
-    args.insert(insert_at, Value::String("-c".to_string()));
-    args.insert(
-        insert_at + 1,
-        Value::String(format!("model_reasoning_effort={effort}")),
-    );
-}
 
 fn inject_codex_network_access_override(runtime_contract: &mut Value, tool: &str) {
     if !tool.eq_ignore_ascii_case("codex") {
@@ -470,15 +434,6 @@ fn inject_cli_extra_args_from_env(runtime_contract: &mut Value, tool: &str) {
             insert_at += 1;
         }
     }
-}
-
-fn inject_cli_launch_overrides_from_env(runtime_contract: &mut Value, tool: &str) {
-    inject_codex_search_launch_flag(runtime_contract, tool);
-    inject_codex_reasoning_effort_override(runtime_contract, tool);
-    inject_codex_network_access_override(runtime_contract, tool);
-    inject_claude_permission_mode_override(runtime_contract, tool);
-    inject_codex_extra_config_overrides(runtime_contract, tool);
-    inject_cli_extra_args_from_env(runtime_contract, tool);
 }
 
 pub fn event_matches_run(event: &AgentRunEvent, run_id: &RunId) -> bool {

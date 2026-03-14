@@ -529,7 +529,6 @@ pub struct RawRequirement {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct RawWorkflow {
     pub id: String,
     pub task_id: String,
@@ -541,8 +540,6 @@ pub struct RawWorkflow {
     pub current_phase: Option<String>,
     #[serde(default)]
     pub phases: Vec<RawPhaseExecution>,
-    #[serde(default)]
-    pub decision_history: Vec<RawDecision>,
     #[serde(default)]
     pub total_reworks: u32,
 }

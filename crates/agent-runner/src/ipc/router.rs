@@ -76,22 +76,12 @@ where
     .await;
 
     if !connection_run_ids.is_empty() {
-        let cancel_on_disconnect = true;
-
-        if cancel_on_disconnect {
-            info!(
-                connection_id,
-                run_count = connection_run_ids.len(),
-                "Client disconnected; cancelling owned runs"
-            );
-            runner.lock().await.cancel_runs(&connection_run_ids);
-        } else {
-            info!(
-                connection_id,
-                run_count = connection_run_ids.len(),
-                "Client disconnected; runs continue (AO_CANCEL_ON_DISCONNECT=false)"
-            );
-        }
+        info!(
+            connection_id,
+            run_count = connection_run_ids.len(),
+            "Client disconnected; cancelling owned runs"
+        );
+        runner.lock().await.cancel_runs(&connection_run_ids);
     }
 
     result

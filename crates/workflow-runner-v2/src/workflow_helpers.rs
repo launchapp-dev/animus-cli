@@ -198,9 +198,6 @@ Rules:
 struct AiRecoveryResponse {
     action: String,
     #[serde(default)]
-    #[allow(dead_code)]
-    reason: String,
-    #[serde(default)]
     subtasks: Vec<AiRecoverySubtask>,
 }
 
