@@ -1,3 +1,75 @@
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PhaseRoutingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub research_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_ux_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_ux_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_edit_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_edit_tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub global_fallback_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub research_fallback_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ui_ux_fallback_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_phase: HashMap<String, PhaseOverride>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PhaseOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
+}
+
+impl PhaseRoutingConfig {
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        config.global_model = std::env::var("AO_PHASE_MODEL").ok().filter(|v| !v.is_empty());
+        config.global_tool = std::env::var("AO_PHASE_TOOL").ok().filter(|v| !v.is_empty());
+        config.research_model = std::env::var("AO_PHASE_MODEL_RESEARCH").ok().filter(|v| !v.is_empty());
+        config.research_tool = std::env::var("AO_PHASE_TOOL_RESEARCH").ok().filter(|v| !v.is_empty());
+        config.ui_ux_model = std::env::var("AO_PHASE_MODEL_UI_UX").ok().filter(|v| !v.is_empty());
+        config.ui_ux_tool = std::env::var("AO_PHASE_TOOL_UI_UX").ok().filter(|v| !v.is_empty());
+        config.file_edit_model = std::env::var("AO_PHASE_MODEL_FILE_EDIT").ok().filter(|v| !v.is_empty());
+        config.file_edit_tool = std::env::var("AO_PHASE_TOOL_FILE_EDIT").ok().filter(|v| !v.is_empty());
+        config.global_fallback_models = std::env::var("AO_PHASE_FALLBACK_MODELS")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        config.research_fallback_models = std::env::var("AO_PHASE_FALLBACK_MODELS_RESEARCH")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        config.ui_ux_fallback_models = std::env::var("AO_PHASE_FALLBACK_MODELS_UI_UX")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        config.complexity = std::env::var("AO_PHASE_COMPLEXITY").ok().filter(|v| !v.is_empty());
+        config
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRoutingComplexity {
     Low,

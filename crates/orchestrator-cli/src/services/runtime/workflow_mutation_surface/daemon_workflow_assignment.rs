@@ -19,6 +19,7 @@ pub(crate) fn daemon_workflow_assignment(
 
     let fallback_models = runtime_config.phase_fallback_models(&phase_id);
     let caps = runtime_config.phase_capabilities(&phase_id);
+    let routing = protocol::PhaseRoutingConfig::from_env();
     let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
         &phase_id,
         runtime_config.phase_model_override(&phase_id),
@@ -27,6 +28,7 @@ pub(crate) fn daemon_workflow_assignment(
         routing_complexity_for_task(task),
         Some(project_root),
         &caps,
+        &routing,
     );
     let model = execution_targets.first().map(|(_, model)| model.clone());
     (role, model)

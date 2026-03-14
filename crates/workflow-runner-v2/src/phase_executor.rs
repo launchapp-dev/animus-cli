@@ -96,6 +96,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             None
         };
 
+        let routing = protocol::PhaseRoutingConfig::from_env();
         let run_result = run_workflow_phase(&PhaseRunParams {
             project_root: &request.project_root,
             execution_cwd: &execution_cwd,
@@ -111,6 +112,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             pipeline_vars: None,
             dispatch_input: None,
             schedule_input: None,
+            routing: &routing,
         })
         .await;
 
@@ -757,6 +759,7 @@ struct PhaseAgentParams<'a> {
     pipeline_vars: Option<&'a std::collections::HashMap<String, String>>,
     dispatch_input: Option<&'a str>,
     schedule_input: Option<&'a str>,
+    routing: &'a protocol::PhaseRoutingConfig,
 }
 
 async fn run_workflow_phase_with_agent(
@@ -795,6 +798,7 @@ async fn run_workflow_phase_with_agent(
         routing_complexity,
         Some(project_root),
         &caps,
+        params.routing,
     );
     let prompt_inputs = PhasePromptInputs {
         rework_context: overrides
@@ -1146,6 +1150,7 @@ pub struct PhaseRunParams<'a> {
     pub pipeline_vars: Option<&'a std::collections::HashMap<String, String>>,
     pub dispatch_input: Option<&'a str>,
     pub schedule_input: Option<&'a str>,
+    pub routing: &'a protocol::PhaseRoutingConfig,
 }
 
 pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunResult> {
@@ -1280,6 +1285,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 routing_complexity,
                 Some(project_root),
                 &exec_caps,
+                params.routing,
             );
             if let Some((tool, model)) = execution_targets.first() {
                 metadata.selected_tool = Some(tool.clone());
@@ -1301,6 +1307,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 pipeline_vars,
                 dispatch_input,
                 schedule_input,
+                routing: params.routing,
             })
             .await?;
 
