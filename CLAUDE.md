@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-AO (`ao`) is a Rust-only agent orchestrator CLI. 9-crate workspace providing CLI, daemon, agent runner, LLM wrappers, MCP server, and web UI for orchestrating AI agent workflows.
+AO (`ao`) is a Rust-only agent orchestrator. 9-crate workspace providing CLI, daemon, agent runner, LLM wrappers, MCP server, and a 21-page web UI for orchestrating AI agent workflows.
 
 ## Workspace Layout
 
@@ -143,6 +143,74 @@ All list tools support: `limit` (default 25, max 200), `offset`, `max_tokens` (d
 ### Batch Tool Error Handling
 
 Batch tools accept `on_error`: `"stop"` (default, halt on first failure) or `"continue"` (process all). Max 100 items per call.
+
+## Web UI
+
+The web UI is a React + TypeScript SPA served by `ao web serve`. Located at `crates/orchestrator-web-server/web-ui/`.
+
+### Stack
+- React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui (base-ui)
+- urql GraphQL client with async-graphql Rust backend
+- Dark/light theme with oklch color tokens (electric indigo primary, hue 275)
+- Sora Variable (sans) + JetBrains Mono (mono) fonts
+
+### Pages (21 total)
+
+| Group | Page | Route |
+|---|---|---|
+| **Operate** | Dashboard | `/dashboard` |
+| | Tasks (list/create/detail) | `/tasks/*` |
+| | Task Output | `/tasks/:id/output` |
+| | Workflows (command center) | `/workflows` |
+| | Workflow Detail | `/workflows/:id` |
+| | Dispatch Wizard | `/workflows/dispatch/*` |
+| | Queue | `/queue` |
+| | Agents | `/agents` |
+| **Plan** | Vision | `/planning/vision` |
+| | Requirements (lifecycle) | `/planning/requirements/*` |
+| | Architecture | `/architecture` |
+| **Monitor** | Events | `/events` |
+| | History | `/history` |
+| | Errors | `/errors` |
+| | Daemon | `/daemon` |
+| **Configure** | Workflow Builder | `/workflows/builder/*` |
+| | Skills | `/skills` |
+| | Settings (MCP/Agents/Daemon) | `/settings/*` |
+| **Other** | Review Handoff | `/reviews/handoff` |
+
+### Key Files
+- Router: `web-ui/src/app/router.tsx`
+- Shell (sidebar, nav, theme): `web-ui/src/app/shell.tsx`
+- Theme provider: `web-ui/src/app/theme-provider.tsx`
+- Shared components: `web-ui/src/app/shared.tsx` (StatusDot, StatCard, SectionHeading, PageLoading, PageError, PageEmpty, Markdown)
+- Design system: `.interface-design/system.md`
+- GraphQL schema: `embedded/schema.graphql`
+- GraphQL operations: `web-ui/src/lib/graphql/operations/*.graphql`
+- Generated types: `web-ui/src/lib/graphql/generated/`
+
+### Web UI Build & Test
+```bash
+cd crates/orchestrator-web-server/web-ui
+npm run codegen    # Regenerate GraphQL types from schema
+npx vite build     # Production build → ../embedded/assets/
+npx vitest run     # Run tests
+```
+
+### GraphQL Schema Regeneration
+When Rust GraphQL types/queries/mutations change:
+```bash
+cargo test -p orchestrator-web-server export_schema  # Write embedded/schema.graphql
+cd crates/orchestrator-web-server/web-ui && npm run codegen  # Generate TS types
+```
+
+### Design System Conventions
+- Page titles: `text-2xl font-semibold tracking-tight`
+- Form labels: `text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium`
+- Cards: `border-border/40 bg-card/60` with uppercase `CardHeader`
+- Page root: `space-y-6`
+- Status colors: `--ao-success` (green), `--ao-running` (indigo), `--ao-amber` (amber), `--destructive` (red)
+- Feedback: global toast via sonner (not per-page Alert state)
+- Markdown rendering: `<Markdown content={text} />` from `./shared`
 
 ## Known Issues to Be Aware Of
 
