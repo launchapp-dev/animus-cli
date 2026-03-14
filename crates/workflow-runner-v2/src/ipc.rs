@@ -187,7 +187,7 @@ pub fn build_runtime_contract_with_resume(
     let mcp_endpoint = mcp_config.endpoint.clone();
     let mcp_agent_id = mcp_config.agent_id.clone();
 
-    let mut runtime_contract = runtime_contract::build_runtime_contract(
+    let runtime_contract = runtime_contract::build_runtime_contract(
         tool,
         model,
         prompt,

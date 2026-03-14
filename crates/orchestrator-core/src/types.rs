@@ -1,4 +1,3 @@
-// TODO(TASK-058): Sentinel marker for phase decision contract prompt injection verification; remove after validation.
 pub use protocol::orchestrator::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,
     ArchitectureEntity, ArchitectureGraph, Assignee, CheckpointReason, Complexity,

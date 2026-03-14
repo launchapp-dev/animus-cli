@@ -20,7 +20,6 @@ use rmcp::{
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
-use schemars::generate::SchemaSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -392,21 +391,6 @@ fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObj
     rmcp::handler::server::common::schema_for_type::<T>()
 }
 
-#[allow(dead_code)]
-fn ao_schema_for_type_draft07<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObject> {
-    let mut settings = SchemaSettings::draft07();
-    settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
-    let generator = settings.into_generator();
-    let schema = generator.into_root_schema_for::<T>();
-    let value = serde_json::to_value(schema).expect("failed to serialize draft07 schema");
-    let object = match value {
-        Value::Object(object) => object,
-        other => panic!(
-            "Schema serialization produced non-object value: expected JSON object but got {other:?}"
-        ),
-    };
-    std::sync::Arc::new(object)
-}
 
 #[cfg(test)]
 #[path = "ops_mcp/tests.rs"]

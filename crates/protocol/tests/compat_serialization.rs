@@ -147,15 +147,3 @@ fn requirement_priority_serialization_is_lowercase_and_stable() {
         serde_json::from_value(json!("wont")).expect("deserialize requirement priority");
     assert_eq!(decoded, RequirementPriority::Wont);
 }
-
-#[allow(deprecated)]
-#[test]
-fn legacy_priority_alias_remains_compatible() {
-    let legacy_priority: protocol::Priority = RequirementPriority::Should;
-    let value = serde_json::to_value(legacy_priority).expect("serialize legacy alias");
-    assert_eq!(value, json!("should"));
-
-    let decoded: protocol::Priority =
-        serde_json::from_value(json!("could")).expect("deserialize legacy alias");
-    assert_eq!(decoded, RequirementPriority::Could);
-}
