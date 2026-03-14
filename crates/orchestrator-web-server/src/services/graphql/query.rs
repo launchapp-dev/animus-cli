@@ -4,8 +4,9 @@ use orchestrator_web_api::WebApiService;
 use super::gql_err;
 use super::types::{
     GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlPhaseOutput, GqlProject,
-    GqlQueueEntry, GqlQueueStats, GqlRequirement, GqlSystemInfo, GqlTask, GqlTaskStats, GqlVision,
-    GqlWorkflow, GqlWorkflowCheckpoint, GqlWorkflowDefinition, RawRequirement, RawTask, RawWorkflow,
+    GqlQueueEntry, GqlQueueStats, GqlRequirement, GqlRequirementConnection, GqlSystemInfo,
+    GqlTask, GqlTaskConnection, GqlTaskStats, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint,
+    GqlWorkflowConnection, GqlWorkflowDefinition, RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -139,6 +140,96 @@ impl QueryRoot {
             Err(e) if e.code == "not_found" => Ok(None),
             Err(e) => Err(gql_err(e)),
         }
+    }
+
+    async fn tasks_paginated(
+        &self,
+        ctx: &Context<'_>,
+        status: Option<String>,
+        task_type: Option<String>,
+        priority: Option<String>,
+        search: Option<String>,
+        #[graphql(default = 50)] limit: i32,
+        #[graphql(default = 0)] offset: i32,
+    ) -> Result<GqlTaskConnection> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .tasks_list(
+                task_type,
+                status,
+                priority,
+                None,
+                None,
+                vec![],
+                None,
+                None,
+                search,
+            )
+            .await
+            .map_err(gql_err)?;
+        let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
+        let total_count = tasks.len() as i32;
+        let offset = (offset.max(0) as usize).min(tasks.len());
+        let limit = limit.max(1) as usize;
+        let items: Vec<GqlTask> = tasks
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(GqlTask)
+            .collect();
+        Ok(GqlTaskConnection { items, total_count })
+    }
+
+    async fn requirements_paginated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 50)] limit: i32,
+        #[graphql(default = 0)] offset: i32,
+    ) -> Result<GqlRequirementConnection> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .requirements_list()
+            .await
+            .map_err(gql_err)?;
+        let reqs: Vec<RawRequirement> = serde_json::from_value(val).unwrap_or_default();
+        let total_count = reqs.len() as i32;
+        let offset = (offset.max(0) as usize).min(reqs.len());
+        let limit = limit.max(1) as usize;
+        let items: Vec<GqlRequirement> = reqs
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(GqlRequirement)
+            .collect();
+        Ok(GqlRequirementConnection { items, total_count })
+    }
+
+    async fn workflows_paginated(
+        &self,
+        ctx: &Context<'_>,
+        status: Option<String>,
+        #[graphql(default = 50)] limit: i32,
+        #[graphql(default = 0)] offset: i32,
+    ) -> Result<GqlWorkflowConnection> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api
+            .workflows_list()
+            .await
+            .map_err(gql_err)?;
+        let mut workflows: Vec<RawWorkflow> = serde_json::from_value(val).unwrap_or_default();
+        if let Some(status_filter) = status {
+            workflows.retain(|w| w.status == status_filter);
+        }
+        let total_count = workflows.len() as i32;
+        let offset = (offset.max(0) as usize).min(workflows.len());
+        let limit = limit.max(1) as usize;
+        let items: Vec<GqlWorkflow> = workflows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(GqlWorkflow)
+            .collect();
+        Ok(GqlWorkflowConnection { items, total_count })
     }
 
     async fn workflow_checkpoints(

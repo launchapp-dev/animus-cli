@@ -103,4 +103,116 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn accepts_subdirectory_within_project_root() {
+        let root = std::env::temp_dir().join(format!(
+            "ao-wg-subdir-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or_default()
+        ));
+        let subdir = root.join("src").join("deep").join("nested");
+        std::fs::create_dir_all(&subdir).expect("subdir should be created");
+
+        let result = validate_workspace(
+            subdir.to_string_lossy().as_ref(),
+            root.to_string_lossy().as_ref(),
+        );
+        assert!(result.is_ok());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_sibling_directory_outside_project_root() {
+        let parent = std::env::temp_dir().join(format!(
+            "ao-wg-sibling-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or_default()
+        ));
+        let project = parent.join("project");
+        let sibling = parent.join("other-repo");
+        std::fs::create_dir_all(&project).expect("project should be created");
+        std::fs::create_dir_all(&sibling).expect("sibling should be created");
+
+        let result = validate_workspace(
+            sibling.to_string_lossy().as_ref(),
+            project.to_string_lossy().as_ref(),
+        );
+        assert!(result.is_err());
+
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Security violation"),
+            "error should mention security violation, got: {}",
+            err_msg
+        );
+
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn rejects_nonexistent_cwd_path() {
+        let result = validate_workspace(
+            "/tmp/ao-nonexistent-path-xyz-999",
+            std::env::temp_dir().to_str().unwrap(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_nonexistent_project_root() {
+        let result = validate_workspace(
+            std::env::temp_dir().to_str().unwrap(),
+            "/tmp/ao-nonexistent-root-xyz-999",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_worktree_with_wrong_project_root_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "ao-wg-wrong-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or_default()
+        ));
+
+        let project = root.join("project-a");
+        let other_project = root.join("project-b");
+        std::fs::create_dir_all(&project).expect("project should be created");
+        std::fs::create_dir_all(&other_project).expect("other project should be created");
+
+        let worktree = root
+            .join(".ao")
+            .join("scope-abc")
+            .join("worktrees")
+            .join("task-1");
+        std::fs::create_dir_all(&worktree).expect("worktree should be created");
+
+        let other_canonical = other_project
+            .canonicalize()
+            .expect("path should canonicalize");
+        std::fs::write(
+            root.join(".ao").join("scope-abc").join(".project-root"),
+            format!("{}\n", other_canonical.to_string_lossy()),
+        )
+        .expect("marker should be written");
+
+        let result = validate_workspace(
+            worktree.to_string_lossy().as_ref(),
+            project.to_string_lossy().as_ref(),
+        );
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

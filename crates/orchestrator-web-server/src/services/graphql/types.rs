@@ -343,6 +343,24 @@ pub struct GqlWorkflowCheckpoint {
     pub data: Option<String>,
 }
 
+#[derive(SimpleObject)]
+pub struct GqlTaskConnection {
+    pub items: Vec<GqlTask>,
+    pub total_count: i32,
+}
+
+#[derive(SimpleObject)]
+pub struct GqlRequirementConnection {
+    pub items: Vec<GqlRequirement>,
+    pub total_count: i32,
+}
+
+#[derive(SimpleObject)]
+pub struct GqlWorkflowConnection {
+    pub items: Vec<GqlWorkflow>,
+    pub total_count: i32,
+}
+
 #[derive(SimpleObject, Debug, Clone)]
 pub struct GqlDaemonLog {
     pub timestamp: Option<String>,
@@ -568,16 +586,24 @@ impl GqlTask {
         &self,
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Vec<GqlRequirement>> {
-        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
-        let mut result = Vec::new();
-        for req_id in &self.0.linked_requirements {
-            if let Ok(val) = api.requirements_get(req_id).await {
-                if let Ok(raw) = serde_json::from_value::<RawRequirement>(val) {
-                    result.push(GqlRequirement(raw));
-                }
-            }
+        if self.0.linked_requirements.is_empty() {
+            return Ok(vec![]);
         }
-        Ok(result)
+        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
+        let all_val = api.requirements_list().await?;
+        let all_reqs: Vec<RawRequirement> =
+            serde_json::from_value(all_val).unwrap_or_default();
+        let linked: std::collections::HashSet<&str> = self
+            .0
+            .linked_requirements
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        Ok(all_reqs
+            .into_iter()
+            .filter(|r| linked.contains(r.id.as_str()))
+            .map(GqlRequirement)
+            .collect())
     }
 }
 

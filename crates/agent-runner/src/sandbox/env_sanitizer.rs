@@ -222,4 +222,108 @@ mod tests {
 
         assert!(!env.contains_key("AO_TASK_029_NON_UNICODE"));
     }
+
+    #[test]
+    fn allows_path_home_and_anthropic_api_key() {
+        let _lock = env_lock();
+        let _path = EnvVarGuard::set("PATH", Some("/usr/bin:/usr/local/bin"));
+        let _home = EnvVarGuard::set("HOME", Some("/Users/testuser"));
+        let _api = EnvVarGuard::set("ANTHROPIC_API_KEY", Some("sk-ant-test-key-123"));
+
+        let env = sanitize_env();
+
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some("/usr/bin:/usr/local/bin")
+        );
+        assert_eq!(
+            env.get("HOME").map(String::as_str),
+            Some("/Users/testuser")
+        );
+        assert_eq!(
+            env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("sk-ant-test-key-123")
+        );
+    }
+
+    #[test]
+    fn blocks_dangerous_env_vars() {
+        let _lock = env_lock();
+        let _db = EnvVarGuard::set("DATABASE_URL", Some("postgres://secret@localhost/db"));
+        let _stripe = EnvVarGuard::set("STRIPE_SECRET_KEY", Some("sk_test_xxx"));
+        let _npm = EnvVarGuard::set("NPM_TOKEN", Some("npm-token-secret"));
+        let _docker = EnvVarGuard::set("DOCKER_HOST", Some("tcp://localhost:2375"));
+        let _ld = EnvVarGuard::set("LD_PRELOAD", Some("/tmp/evil.so"));
+
+        let env = sanitize_env();
+
+        assert!(!env.contains_key("DATABASE_URL"));
+        assert!(!env.contains_key("STRIPE_SECRET_KEY"));
+        assert!(!env.contains_key("NPM_TOKEN"));
+        assert!(!env.contains_key("DOCKER_HOST"));
+        assert!(!env.contains_key("LD_PRELOAD"));
+    }
+
+    #[test]
+    fn preserves_ao_prefix_vars() {
+        let _lock = env_lock();
+        let _custom1 = EnvVarGuard::set("AO_MY_CUSTOM_SETTING", Some("value1"));
+        let _custom2 = EnvVarGuard::set("AO_RUNNER_BUILD_ID", Some("build-abc"));
+        let _custom3 = EnvVarGuard::set("AO_DEBUG", Some("true"));
+
+        let env = sanitize_env();
+
+        assert_eq!(
+            env.get("AO_MY_CUSTOM_SETTING").map(String::as_str),
+            Some("value1")
+        );
+        assert_eq!(
+            env.get("AO_RUNNER_BUILD_ID").map(String::as_str),
+            Some("build-abc")
+        );
+        assert_eq!(env.get("AO_DEBUG").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn sanitize_env_returns_only_allowed_keys() {
+        let _lock = env_lock();
+        let _allowed = EnvVarGuard::set("HOME", Some("/home/test"));
+        let _blocked = EnvVarGuard::set("MYSQL_PASSWORD", Some("secret123"));
+
+        let env = sanitize_env();
+
+        for key in env.keys() {
+            assert!(
+                is_allowed_env_var(key),
+                "sanitize_env returned disallowed key: {}",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn claude_specific_env_vars_allowed() {
+        let _lock = env_lock();
+        let _settings = EnvVarGuard::set(
+            "CLAUDE_CODE_SETTINGS_PATH",
+            Some("/tmp/.claude/settings.json"),
+        );
+        let _api = EnvVarGuard::set("CLAUDE_API_KEY", Some("claude-key-123"));
+        let _dir = EnvVarGuard::set("CLAUDE_CODE_DIR", Some("/tmp/claude-dir"));
+
+        let env = sanitize_env();
+
+        assert_eq!(
+            env.get("CLAUDE_CODE_SETTINGS_PATH").map(String::as_str),
+            Some("/tmp/.claude/settings.json")
+        );
+        assert_eq!(
+            env.get("CLAUDE_API_KEY").map(String::as_str),
+            Some("claude-key-123")
+        );
+        assert_eq!(
+            env.get("CLAUDE_CODE_DIR").map(String::as_str),
+            Some("/tmp/claude-dir")
+        );
+    }
 }
