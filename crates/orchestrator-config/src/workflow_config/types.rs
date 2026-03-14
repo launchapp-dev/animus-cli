@@ -432,8 +432,6 @@ pub struct DaemonConfig {
     #[serde(default)]
     pub retry_cooldown_secs: Option<u64>,
     #[serde(default)]
-    pub stream_phase_output: Option<String>,
-    #[serde(default)]
     pub auto_merge: Option<bool>,
     #[serde(default)]
     pub auto_pr: Option<bool>,

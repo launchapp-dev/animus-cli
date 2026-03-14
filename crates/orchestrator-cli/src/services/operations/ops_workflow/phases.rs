@@ -313,7 +313,6 @@ pub(crate) async fn approve_manual_phase(
             tool: None,
             phase_timeout_secs: None,
             phase_filter: None,
-            stream_level: Some("quiet".to_string()),
             on_phase_event: None,
             hub: Some(hub.clone()),
             phase_routing: None,

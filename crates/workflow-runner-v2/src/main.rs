@@ -65,8 +65,6 @@ struct WorkflowExecuteArgs {
     #[arg(long)]
     mcp_config_json: Option<String>,
 
-    #[arg(long)]
-    stream_level: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,7 +139,6 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         tool: args.tool,
         phase_timeout_secs: args.phase_timeout_secs,
         phase_filter: None,
-        stream_level: args.stream_level,
         on_phase_event: None,
         hub: None,
         phase_routing,

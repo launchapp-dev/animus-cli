@@ -126,7 +126,6 @@ pub(super) async fn handle_daemon_run(
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
-    process_manager.stream_level = daemon_config.and_then(|d| d.stream_phase_output.clone());
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager);
     let mut host = CliDaemonRunHost::new(project_root, json);

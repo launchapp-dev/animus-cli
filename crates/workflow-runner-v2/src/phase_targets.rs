@@ -209,13 +209,6 @@ fn enforce_write_capable_phase_target(
     (normalized_tool_id, model_id)
 }
 
-fn parse_model_list(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(canonical_model_id)
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
 fn env_phase_key(phase_id: &str) -> String {
     phase_id
         .trim()
