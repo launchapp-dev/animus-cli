@@ -27,7 +27,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 protocol = { path = "../protocol" }
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-config = { workspace = true }
-termimad = "0.30"
 
 [dev-dependencies]
 assert_cmd = "2.0"

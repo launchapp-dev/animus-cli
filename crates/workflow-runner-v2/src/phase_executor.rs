@@ -11,9 +11,7 @@ use crate::phase_prompt::{
     phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx,
     PhasePromptInputs, PhaseRenderParams,
 };
-use crate::phase_output::{
-    format_output_chunk_for_display, format_tool_call_for_display, persist_phase_output,
-};
+use crate::phase_output::persist_phase_output;
 use crate::runtime_contract::{
     inject_agent_tool_policy, inject_default_stdio_mcp, inject_project_mcp_servers,
     inject_read_only_flag, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
@@ -435,11 +433,6 @@ pub async fn run_workflow_phase_attempt(
     request: &AgentRunRequest,
 ) -> Result<PhaseExecutionOutcome> {
     let ctx = RuntimeConfigContext::load(project_root);
-    let tool_id = request
-        .context
-        .get("tool")
-        .and_then(|v| v.as_str())
-        .unwrap_or("codex");
     let parse_commit_message = phase_requires_commit_message_with_ctx(&ctx, phase_id);
     let config_dir = runner_config_dir(Path::new(project_root));
     let stream = connect_runner(&config_dir).await.with_context(|| {
@@ -459,10 +452,6 @@ pub async fn run_workflow_phase_attempt(
     let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
-    let stream_to_stderr = false;
-    let stream_verbose = false;
-    let use_colors = false;
-    let mut last_ended_with_newline = true;
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
         if line.is_empty() {
@@ -502,17 +491,6 @@ pub async fn run_workflow_phase_attempt(
                 if pending_result_payload.is_none() && parse_phase_decision {
                     pending_result_payload = parse_decision_payload_from_text(&text, phase_id);
                 }
-                if stream_to_stderr {
-                    use std::io::Write as _;
-                    if let Some(formatted) =
-                        format_output_chunk_for_display(&text, stream_verbose, use_colors, tool_id)
-                    {
-                        if !formatted.is_empty() {
-                            let _ = write!(std::io::stderr(), "{}", formatted);
-                            last_ended_with_newline = formatted.ends_with('\n');
-                        }
-                    }
-                }
             }
             AgentRunEvent::Thinking { content, .. } => {
                 if provider_exhaustion_reason.is_none() {
@@ -538,15 +516,6 @@ pub async fn run_workflow_phase_attempt(
                 }
                 if pending_result_payload.is_none() && parse_phase_decision {
                     pending_result_payload = parse_decision_payload_from_text(&content, phase_id);
-                }
-                if stream_verbose {
-                    use std::io::Write as _;
-                    let (dim, reset) = if use_colors {
-                        ("\x1b[2m", "\x1b[0m")
-                    } else {
-                        ("", "")
-                    };
-                    let _ = write!(std::io::stderr(), "{dim}{content}{reset}");
                 }
             }
             AgentRunEvent::Error { error, .. } => {
@@ -592,33 +561,8 @@ pub async fn run_workflow_phase_attempt(
                     result_payload: pending_result_payload,
                 });
             }
-            AgentRunEvent::ToolCall { tool_info, .. } => {
-                if stream_to_stderr && tool_info.tool_name != "phase_transition" {
-                    use std::io::Write as _;
-                    if !last_ended_with_newline {
-                        let _ = writeln!(std::io::stderr());
-                        last_ended_with_newline = true;
-                    }
-                    let formatted = format_tool_call_for_display(
-                        &tool_info.tool_name,
-                        &tool_info.parameters,
-                        use_colors,
-                    );
-                    let _ = write!(std::io::stderr(), "{}", formatted);
-                }
-            }
-            AgentRunEvent::Artifact { artifact_info, .. } => {
-                if stream_verbose {
-                    use std::io::Write as _;
-                    let (dim, reset) = if use_colors {
-                        ("\x1b[2m", "\x1b[0m")
-                    } else {
-                        ("", "")
-                    };
-                    let path = artifact_info.file_path.as_deref().unwrap_or("unknown");
-                    let _ = writeln!(std::io::stderr(), "{dim}  artifact: {path}{reset}");
-                }
-            }
+            AgentRunEvent::ToolCall { .. } => {}
+            AgentRunEvent::Artifact { .. } => {}
             _ => {}
         }
     }
