@@ -75,35 +75,6 @@ pub fn load_workflow_runtime_config(project_root: &str) -> WorkflowRuntimeConfig
     WorkflowRuntimeConfigLite::default()
 }
 
-pub fn resolve_phase_runtime_settings(
-    config: &WorkflowRuntimeConfigLite,
-    workflow_ref: Option<&str>,
-    phase_id: &str,
-) -> Option<WorkflowPhaseRuntimeSettings> {
-    let requested_pipeline = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            let value = config.default_workflow_ref.trim();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        })?;
-
-    let pipeline = config
-        .workflows
-        .iter()
-        .find(|pipeline| pipeline.id.eq_ignore_ascii_case(requested_pipeline))?;
-
-    pipeline
-        .phase_settings
-        .iter()
-        .find(|(phase_key, _)| phase_key.eq_ignore_ascii_case(phase_id))
-        .map(|(_, settings)| settings.clone())
-}
-
 fn parse_env_usize(key: &str) -> Option<usize> {
     std::env::var(key)
         .ok()

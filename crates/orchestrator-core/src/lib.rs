@@ -12,7 +12,6 @@ pub mod runtime_contract;
 pub mod services;
 pub mod state_machines;
 pub mod task_dispatch_policy;
-pub mod task_gate;
 pub mod types;
 pub mod workflow;
 pub mod workflow_config;
@@ -78,10 +77,6 @@ pub use state_machines::{
 };
 pub use task_dispatch_policy::{
     routing_complexity_for_task, should_skip_task_dispatch, workflow_ref_for_task,
-};
-pub use task_gate::{
-    is_dependency_gate_block, promote_backlog_tasks_to_ready,
-    retry_failed_task_workflows, DEPENDENCY_GATE_PREFIX, MERGE_GATE_PREFIX,
 };
 pub use types::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,

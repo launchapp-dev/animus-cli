@@ -20,7 +20,6 @@ orchestrator-web-server = { path = "../orchestrator-web-server" }
 protocol = { path = "../protocol" }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 orchestrator-daemon-runtime = { workspace = true }
-orchestrator-git-ops = { workspace = true }
 orchestrator-notifications = { workspace = true }
 workflow-runner-v2 = { path = "../workflow-runner-v2" }
 orchestrator-config = { workspace = true }
