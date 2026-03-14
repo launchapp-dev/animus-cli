@@ -295,6 +295,14 @@ pub fn inject_response_schema_into_launch_args(
 }
 
 pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str) {
+    inject_default_stdio_mcp_with_config(runtime_contract, project_root, &protocol::McpRuntimeConfig::from_env());
+}
+
+pub fn inject_default_stdio_mcp_with_config(
+    runtime_contract: &mut Value,
+    project_root: &str,
+    mcp_config: &protocol::McpRuntimeConfig,
+) {
     if runtime_contract
         .pointer("/mcp/stdio/command")
         .and_then(Value::as_str)
@@ -303,11 +311,7 @@ pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str
         return;
     }
 
-    if std::env::var("AO_MCP_TRANSPORT")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .is_some_and(|v| v == "http")
-    {
+    if mcp_config.is_http_transport() {
         return;
     }
 
@@ -319,8 +323,7 @@ pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str
         return;
     }
 
-    let command = std::env::var("AO_MCP_STDIO_COMMAND")
-        .ok()
+    let command = mcp_config.stdio_command.clone()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
             std::env::current_exe()
@@ -331,9 +334,8 @@ pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str
         return;
     };
 
-    let args = std::env::var("AO_MCP_STDIO_ARGS_JSON")
-        .ok()
-        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+    let args = mcp_config.stdio_args_json.as_deref()
+        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
         .unwrap_or_else(|| {
             vec![
                 "--project-root".to_string(),

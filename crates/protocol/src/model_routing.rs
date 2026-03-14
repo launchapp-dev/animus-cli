@@ -1,6 +1,39 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct McpRuntimeConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdio_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdio_args_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_draft: Option<String>,
+}
+
+impl McpRuntimeConfig {
+    pub fn from_env() -> Self {
+        Self {
+            endpoint: std::env::var("AO_MCP_ENDPOINT").ok().filter(|v| !v.is_empty()),
+            transport: std::env::var("AO_MCP_TRANSPORT").ok().filter(|v| !v.is_empty()),
+            stdio_command: std::env::var("AO_MCP_STDIO_COMMAND").ok().filter(|v| !v.is_empty()),
+            stdio_args_json: std::env::var("AO_MCP_STDIO_ARGS_JSON").ok().filter(|v| !v.is_empty()),
+            agent_id: std::env::var("AO_MCP_AGENT_ID").ok().filter(|v| !v.is_empty()),
+            schema_draft: std::env::var("AO_MCP_SCHEMA_DRAFT").ok().filter(|v| !v.is_empty()),
+        }
+    }
+
+    pub fn is_http_transport(&self) -> bool {
+        self.transport.as_deref().map(|v| v.trim().to_ascii_lowercase()) == Some("http".to_string())
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PhaseRoutingConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_model: Option<String>,

@@ -230,11 +230,9 @@ pub fn build_runtime_contract_with_resume(
     prompt: &str,
     resume_plan: Option<&orchestrator_core::runtime_contract::CliSessionResumePlan>,
 ) -> Option<Value> {
-    let mcp_endpoint = std::env::var("AO_MCP_ENDPOINT")
-        .ok()
-        .or_else(|| std::env::var("MCP_ENDPOINT").ok())
-        .or_else(|| std::env::var("OPENCODE_MCP_ENDPOINT").ok());
-    let mcp_agent_id = std::env::var("AO_MCP_AGENT_ID").ok();
+    let mcp_config = protocol::McpRuntimeConfig::from_env();
+    let mcp_endpoint = mcp_config.endpoint.clone();
+    let mcp_agent_id = mcp_config.agent_id.clone();
 
     let mut runtime_contract = runtime_contract::build_runtime_contract(
         tool,

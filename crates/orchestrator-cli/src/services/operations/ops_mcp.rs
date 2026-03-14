@@ -389,8 +389,8 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str) -> Resul
 }
 
 fn use_draft07_tool_schema() -> bool {
-    std::env::var("AO_MCP_SCHEMA_DRAFT")
-        .ok()
+    protocol::McpRuntimeConfig::from_env()
+        .schema_draft
         .map(|raw| {
             matches!(
                 raw.trim().to_ascii_lowercase().as_str(),
