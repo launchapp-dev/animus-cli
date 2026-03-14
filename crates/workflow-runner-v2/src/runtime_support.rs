@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-use orchestrator_core::{RequirementItem, RequirementStatus};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WorkflowPhaseRuntimeSettings {
@@ -124,30 +123,6 @@ pub fn phase_max_continuations() -> usize {
     parse_env_usize("AO_PHASE_MAX_CONTINUATIONS")
         .unwrap_or(DEFAULT_PHASE_MAX_CONTINUATIONS)
         .clamp(0, 10)
-}
-
-pub fn bootstrap_max_requirements() -> usize {
-    match parse_env_usize("AO_BOOTSTRAP_MAX_REQUIREMENTS") {
-        Some(0) => usize::MAX,
-        Some(value) => value,
-        None => usize::MAX,
-    }
-}
-
-pub fn requirement_needs_refinement(requirement: &RequirementItem) -> bool {
-    if requirement.status == RequirementStatus::Draft {
-        return true;
-    }
-
-    if requirement.acceptance_criteria.is_empty() {
-        return true;
-    }
-
-    !requirement.acceptance_criteria.iter().any(|criterion| {
-        criterion
-            .to_ascii_lowercase()
-            .contains("automated test coverage")
-    })
 }
 
 fn codex_web_search_enabled(web_search_override: Option<bool>) -> bool {
