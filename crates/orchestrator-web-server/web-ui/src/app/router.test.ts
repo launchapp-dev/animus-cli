@@ -39,6 +39,7 @@ describe("APP_ROUTE_PATHS", () => {
       "/settings/daemon",
       "/architecture",
       "/history",
+      "/ops-map",
       "/skills",
       "*",
     ];

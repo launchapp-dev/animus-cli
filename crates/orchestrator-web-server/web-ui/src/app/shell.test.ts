@@ -12,6 +12,7 @@ describe("PRIMARY_NAV_ITEMS", () => {
       "Workflows",
       "Queue",
       "Agents",
+      "Ops Map",
       "Vision",
       "Requirements",
       "Architecture",

@@ -27,6 +27,7 @@ import {
   Wrench,
   Share2,
   Clock,
+  Map,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -50,6 +51,7 @@ export const NAV_GROUPS = [
       { to: "/workflows", label: "Workflows", icon: GitBranch, badgeKey: "workflows" as const },
       { to: "/queue", label: "Queue", icon: Layers, badgeKey: "queue" as const },
       { to: "/agents", label: "Agents", icon: Bot, badgeKey: "agents" as const },
+      { to: "/ops-map", label: "Ops Map", icon: Map, badgeKey: null },
     ],
   },
   {
@@ -113,10 +115,11 @@ function AppShellFrame() {
   }, []);
 
   const breadcrumbs = useMemo(() => {
-    return location.pathname
-      .split("/")
-      .filter(Boolean)
-      .map((s) => s.replace(/-/g, " "));
+    const segments = location.pathname.split("/").filter(Boolean);
+    return segments.map((s, i) => ({
+      label: s.replace(/-/g, " "),
+      path: "/" + segments.slice(0, i + 1).join("/"),
+    }));
   }, [location.pathname]);
 
   return (
@@ -143,9 +146,13 @@ function AppShellFrame() {
             {breadcrumbs.map((crumb, i) => (
               <span key={i} className="flex items-center gap-1 capitalize truncate">
                 {i > 0 && <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />}
-                <span className={i === breadcrumbs.length - 1 ? "text-foreground/80 font-medium" : ""}>
-                  {crumb}
-                </span>
+                {i < breadcrumbs.length - 1 ? (
+                  <NavLink to={crumb.path} className="hover:text-foreground/80 transition-colors">
+                    {crumb.label}
+                  </NavLink>
+                ) : (
+                  <span className="text-foreground/80 font-medium">{crumb.label}</span>
+                )}
               </span>
             ))}
           </nav>
@@ -194,6 +201,7 @@ function useSidebarData() {
   const taskStats = data?.taskStats;
   const health = data?.daemonHealth;
   const agents = data?.agentRuns ?? [];
+  const queueDepth = data?.queueStats?.depth ?? 0;
 
   const byStatus: Record<string, number> = taskStats?.byStatus ? JSON.parse(taskStats.byStatus) : {};
   const inProgress = byStatus["in-progress"] ?? 0;
@@ -206,7 +214,7 @@ function useSidebarData() {
     badges: {
       tasks: taskStats?.total ?? 0,
       workflows: inProgress,
-      queue: 0,
+      queue: queueDepth > 0 ? queueDepth : null,
       agents: agents.length > 0 ? `${agents.length}/${health?.activeDaemons ?? "?"}` : null,
       events: null,
       errors: blocked > 0 ? blocked : null,
