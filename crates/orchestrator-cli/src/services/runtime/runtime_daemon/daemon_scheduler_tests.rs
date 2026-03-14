@@ -2,9 +2,13 @@ use super::*;
 use crate::DaemonSchedulerArgs;
 use crate::shared::{build_runtime_contract, test_env_lock};
 use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
-use protocol::{ModelRoutingComplexity, PhaseCapabilities};
+use protocol::{ModelRoutingComplexity, PhaseCapabilities, PhaseRoutingConfig};
 use std::sync::Arc;
 use tempfile::TempDir;
+
+fn routing() -> PhaseRoutingConfig {
+    PhaseRoutingConfig::from_env()
+}
 
 async fn reconcile_dependency_gate_tasks_for_project(
     hub: Arc<dyn ServiceHub>,
@@ -165,6 +169,7 @@ fn phase_tool_defaults_to_model_provider() {
         None,
         None,
         &research_caps,
+        &routing(),
     );
     let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
     let (implementation_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
@@ -173,6 +178,7 @@ fn phase_tool_defaults_to_model_provider() {
         None,
         None,
         &impl_caps,
+        &routing(),
     );
     assert_eq!(research_tool, "gemini");
     assert_eq!(implementation_tool, "codex");
@@ -195,6 +201,7 @@ fn phase_tool_respects_phase_override_precedence() {
         None,
         None,
         &research_caps,
+        &routing(),
     );
     let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");
     let (implementation_tool, _) = PhaseTargetPlanner::resolve_phase_execution_target(
@@ -203,6 +210,7 @@ fn phase_tool_respects_phase_override_precedence() {
         None,
         None,
         &impl_caps,
+        &routing(),
     );
     assert_eq!(research_tool, "gemini");
     assert_eq!(implementation_tool, "opencode");
@@ -230,6 +238,7 @@ fn resolve_phase_execution_target_falls_back_to_write_capable_tool() {
         None,
         None,
         &write_caps,
+        &routing(),
     );
     assert!(
         protocol::tool_supports_repository_writes(&tool),
@@ -250,7 +259,7 @@ fn resolve_phase_execution_target_skips_write_enforcement_for_read_only_phase() 
 
     let caps = PhaseCapabilities::defaults_for_phase("ux-research");
     let (tool, model) =
-        PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None, &caps);
+        PhaseTargetPlanner::resolve_phase_execution_target("ux-research", None, None, None, &caps, &routing());
     assert_eq!(tool, "gemini");
     assert_eq!(model, "gemini-2.5-pro");
 }
@@ -268,6 +277,7 @@ fn resolve_phase_execution_target_prefers_runtime_overrides() {
         Some("codex"),
         None,
         &impl_caps,
+        &routing(),
     );
     assert_eq!(tool, "codex");
     assert_eq!(model, default_codex_model());
@@ -289,6 +299,7 @@ fn resolve_phase_execution_target_uses_complexity_for_review_model() {
         None,
         Some(ModelRoutingComplexity::Medium),
         &review_caps,
+        &routing(),
     );
     let (_tool_high, model_high) = PhaseTargetPlanner::resolve_phase_execution_target(
         "code-review",
@@ -296,6 +307,7 @@ fn resolve_phase_execution_target_uses_complexity_for_review_model() {
         None,
         Some(ModelRoutingComplexity::High),
         &review_caps,
+        &routing(),
     );
 
     assert_eq!(model_medium, "claude-sonnet-4-6");
@@ -441,6 +453,7 @@ fn build_phase_execution_targets_respects_fallback_models() {
         None,
         None,
         &impl_caps,
+        &routing(),
     );
     let models: Vec<_> = targets
         .iter()
