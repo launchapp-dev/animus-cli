@@ -17,10 +17,6 @@ pub struct McpRuntimeConfig {
 }
 
 impl McpRuntimeConfig {
-    pub fn from_env() -> Self {
-        Self::default()
-    }
-
     pub fn is_http_transport(&self) -> bool {
         self.transport.as_deref().map(|v| v.trim().to_ascii_lowercase()) == Some("http".to_string())
     }
@@ -68,11 +64,6 @@ pub struct PhaseOverride {
     pub fallback_models: Vec<String>,
 }
 
-impl PhaseRoutingConfig {
-    pub fn from_env() -> Self {
-        Self::default()
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRoutingComplexity {

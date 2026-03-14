@@ -55,30 +55,12 @@ struct WorkflowRuntimeConfigLite {
     workflows: Vec<WorkflowPipelineRuntimeRecord>,
 }
 
-struct HandoffConfig {
-    timeout_secs: u64,
-    max_depth: usize,
-}
-
-impl HandoffConfig {
-    fn from_env() -> Self {
-        Self {
-            timeout_secs: DEFAULT_HANDOFF_TIMEOUT_SECS,
-            max_depth: DEFAULT_HANDOFF_MAX_DEPTH,
-        }
-    }
-
-    fn timeout(&self) -> Duration {
-        Duration::from_secs(self.timeout_secs)
-    }
-}
-
 fn handoff_timeout() -> Duration {
-    HandoffConfig::from_env().timeout()
+    Duration::from_secs(DEFAULT_HANDOFF_TIMEOUT_SECS)
 }
 
 fn handoff_max_depth() -> usize {
-    HandoffConfig::from_env().max_depth
+    DEFAULT_HANDOFF_MAX_DEPTH
 }
 
 fn workflow_runtime_config_path(project_root: &Path) -> PathBuf {

@@ -388,23 +388,12 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str) -> Resul
     }
 }
 
-fn use_draft07_tool_schema() -> bool {
-    protocol::McpRuntimeConfig::from_env()
-        .schema_draft
-        .map(|raw| {
-            matches!(
-                raw.trim().to_ascii_lowercase().as_str(),
-                "07" | "draft07" | "draft-07" | "draft_07"
-            )
-        })
-        .unwrap_or(false)
+fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObject> {
+    rmcp::handler::server::common::schema_for_type::<T>()
 }
 
-fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObject> {
-    if !use_draft07_tool_schema() {
-        return rmcp::handler::server::common::schema_for_type::<T>();
-    }
-
+#[allow(dead_code)]
+fn ao_schema_for_type_draft07<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObject> {
     let mut settings = SchemaSettings::draft07();
     settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
     let generator = settings.into_generator();

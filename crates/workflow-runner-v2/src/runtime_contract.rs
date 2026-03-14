@@ -302,7 +302,7 @@ pub fn inject_response_schema_into_launch_args(
 }
 
 pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str) {
-    inject_default_stdio_mcp_with_config(runtime_contract, project_root, &protocol::McpRuntimeConfig::from_env());
+    inject_default_stdio_mcp_with_config(runtime_contract, project_root, &protocol::McpRuntimeConfig::default());
 }
 
 pub fn inject_default_stdio_mcp_with_config(

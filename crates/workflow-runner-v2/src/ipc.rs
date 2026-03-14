@@ -183,7 +183,7 @@ pub fn build_runtime_contract_with_resume(
     prompt: &str,
     resume_plan: Option<&orchestrator_core::runtime_contract::CliSessionResumePlan>,
 ) -> Option<Value> {
-    let mcp_config = protocol::McpRuntimeConfig::from_env();
+    let mcp_config = protocol::McpRuntimeConfig::default();
     let mcp_endpoint = mcp_config.endpoint.clone();
     let mcp_agent_id = mcp_config.agent_id.clone();
 

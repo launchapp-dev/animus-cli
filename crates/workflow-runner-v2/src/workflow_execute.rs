@@ -126,7 +126,7 @@ fn workflow_phase_inputs(workflow: &OrchestratorWorkflow) -> WorkflowPhaseInputs
 
 pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
     let stream_level = params.stream_level.as_deref().unwrap_or("quiet").to_string();
-    let routing = params.phase_routing.take().unwrap_or_else(protocol::PhaseRoutingConfig::from_env);
+    let routing = params.phase_routing.take().unwrap_or_default();
     let phase_timeout_secs = params.phase_timeout_secs;
 
     let hub: Arc<dyn ServiceHub> = match params.hub {

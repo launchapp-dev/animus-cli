@@ -28,11 +28,6 @@ pub enum StateMachineMode {
     JsonStrict,
 }
 
-impl StateMachineMode {
-    pub fn from_env() -> Self {
-        Self::Json
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMachineLoadWarning {
@@ -79,7 +74,7 @@ pub fn write_state_machines_document(
 }
 
 pub fn load_state_machines_for_project(project_root: &Path) -> Result<LoadedStateMachines> {
-    load_state_machines_for_project_with_mode(project_root, StateMachineMode::from_env())
+    load_state_machines_for_project_with_mode(project_root, StateMachineMode::Json)
 }
 
 pub fn load_state_machines_for_project_with_mode(

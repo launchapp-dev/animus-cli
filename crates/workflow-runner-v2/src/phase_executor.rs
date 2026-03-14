@@ -88,7 +88,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             None
         };
 
-        let routing = protocol::PhaseRoutingConfig::from_env();
+        let routing = protocol::PhaseRoutingConfig::default();
         let stream_level = String::new();
         let run_result = run_workflow_phase(&PhaseRunParams {
             project_root: &request.project_root,
