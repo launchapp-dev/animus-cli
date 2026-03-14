@@ -1,3 +1,13 @@
+type GqlAgentProfile {
+	name: String!
+	description: String!
+	role: String
+	mcpServers: [String!]!
+	skills: [String!]!
+	tool: String
+	model: String
+}
+
 type GqlAgentRun {
 	runId: String!
 	taskId: String
@@ -76,6 +86,28 @@ type GqlDecision {
 type GqlDependency {
 	taskId: String!
 	type: String!
+}
+
+type GqlKeyValue {
+	key: String!
+	value: String!
+}
+
+type GqlMcpServer {
+	name: String!
+	command: String!
+	args: [String!]!
+	transport: String
+	tools: [String!]!
+	env: [GqlKeyValue!]!
+}
+
+type GqlPhaseCatalogEntry {
+	id: String!
+	label: String!
+	description: String!
+	category: String!
+	tags: [String!]!
 }
 
 type GqlPhaseExecution {
@@ -253,6 +285,14 @@ enum GqlTaskType {
 	EXPERIMENT
 }
 
+type GqlToolDefinition {
+	name: String!
+	executable: String!
+	supportsMcp: Boolean!
+	supportsWrite: Boolean!
+	contextWindow: Int
+}
+
 type GqlVision {
 	title: String
 	summary: String
@@ -282,6 +322,14 @@ type GqlWorkflowCheckpoint {
 	data: String
 }
 
+type GqlWorkflowConfig {
+	mcpServers: [GqlMcpServer!]!
+	phaseCatalog: [GqlPhaseCatalogEntry!]!
+	tools: [GqlToolDefinition!]!
+	agentProfiles: [GqlAgentProfile!]!
+	schedules: [GqlWorkflowSchedule!]!
+}
+
 type GqlWorkflowConnection {
 	items: [GqlWorkflow!]!
 	totalCount: Int!
@@ -292,6 +340,14 @@ type GqlWorkflowDefinition {
 	name: String!
 	description: String
 	phases: [String!]!
+}
+
+type GqlWorkflowSchedule {
+	id: String!
+	cron: String!
+	workflowRef: String
+	command: String
+	enabled: Boolean!
 }
 
 enum GqlWorkflowStatus {
@@ -362,6 +418,7 @@ type QueryRoot {
 	phaseOutput(workflowId: ID!, phaseId: String, tail: Int): GqlPhaseOutput!
 	readyTasks(search: String, limit: Int): [GqlTask!]!
 	workflowDefinitions: [GqlWorkflowDefinition!]!
+	workflowConfig: GqlWorkflowConfig!
 	daemonHealth: GqlDaemonHealth!
 	daemonStatus: GqlDaemonStatus!
 	daemonLogs(limit: Int): [GqlDaemonLog!]!
