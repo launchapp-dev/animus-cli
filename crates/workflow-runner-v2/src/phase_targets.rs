@@ -115,8 +115,7 @@ fn phase_model_id(
     let phase_key = phase_id
         .trim()
         .to_ascii_uppercase()
-        .replace('-', "_")
-        .replace(' ', "_");
+        .replace(['-', ' '], "_");
     let phase_override_key = format!("AO_PHASE_MODEL_{phase_key}");
 
     if let Ok(value) = std::env::var(&phase_override_key) {
@@ -158,8 +157,7 @@ fn phase_tool_id(phase_id: &str, model_id: &str, caps: &PhaseCapabilities) -> St
     let phase_key = phase_id
         .trim()
         .to_ascii_uppercase()
-        .replace('-', "_")
-        .replace(' ', "_");
+        .replace(['-', ' '], "_");
     let phase_override_key = format!("AO_PHASE_TOOL_{phase_key}");
 
     if let Ok(value) = std::env::var(&phase_override_key) {
@@ -242,8 +240,7 @@ fn env_phase_key(phase_id: &str) -> String {
     phase_id
         .trim()
         .to_ascii_uppercase()
-        .replace('-', "_")
-        .replace(' ', "_")
+        .replace(['-', ' '], "_")
 }
 
 fn phase_complexity_from_env(phase_id: &str) -> Option<ModelRoutingComplexity> {

@@ -111,7 +111,7 @@ impl Config {
         if config
             .agent_runner_token
             .as_deref()
-            .map_or(true, |t| t.trim().is_empty())
+            .is_none_or(|t| t.trim().is_empty())
         {
             config.agent_runner_token = Some(Uuid::new_v4().to_string());
             let json = serde_json::to_string_pretty(&config)?;

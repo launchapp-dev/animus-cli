@@ -146,6 +146,7 @@ struct CiRunSummary {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum CiLookupOutcome {
     Unavailable(String),
     Success(Option<CiRunSummary>),

@@ -190,8 +190,7 @@ pub(super) fn build_task_filter(
         status: status
             .as_deref()
             .map(parse_task_status)
-            .transpose()
-            .map_err(WebApiError::from)?,
+            .transpose()?,
         priority: parse_priority_opt(priority.as_deref())?,
         risk: parse_risk_opt(risk.as_deref())?,
         assignee_type: parse_assignee_type_opt(assignee_type)?,
@@ -300,7 +299,7 @@ pub(super) fn parse_requirement_type_opt(
 
 pub(super) fn parse_handoff_target_role(value: &str) -> Result<HandoffTargetRole, WebApiError> {
     HandoffTargetRole::try_from(value)
-        .map_err(|error| WebApiError::new("invalid_input", format!("{error}"), 2))
+        .map_err(|error| WebApiError::new("invalid_input", error.to_string(), 2))
 }
 
 pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType>, WebApiError> {

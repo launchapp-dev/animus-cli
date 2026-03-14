@@ -127,7 +127,7 @@ impl WorkflowStateManager {
         write_atomic(&checkpoint_path, json)?;
         self.save(&workflow)?;
 
-        if workflow.checkpoint_metadata.checkpoint_count % 5 == 0 {
+        if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
             let _ = self.prune_checkpoints(
                 &workflow.id,
                 DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,

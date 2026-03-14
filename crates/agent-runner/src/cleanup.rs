@@ -5,7 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-pub use protocol::{graceful_kill_process, kill_process, process_exists};
+pub use protocol::{graceful_kill_process, process_exists};
 
 #[cfg(windows)]
 pub use protocol::{track_job, untrack_job};

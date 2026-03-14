@@ -265,7 +265,7 @@ pub(crate) async fn handle_task(
             if args.dry_run {
                 let task_id = task.id.clone();
                 let task_title = task.title.clone();
-                let task_status = task.status.clone();
+                let task_status = task.status;
                 let task_paused = task.paused;
                 let task_cancelled = task.cancelled;
                 return print_value(

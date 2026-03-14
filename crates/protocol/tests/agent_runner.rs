@@ -177,6 +177,7 @@ fn test_runner_status_response_roundtrip_includes_protocol_metadata() {
         active_agents: 2,
         protocol_version: PROTOCOL_VERSION.to_string(),
         build_id: Some("1700000000.123-987654".to_string()),
+        metrics: None,
     };
 
     let json = serde_json::to_string(&response).expect("serialize runner status");

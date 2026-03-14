@@ -82,23 +82,17 @@ pub(super) async fn handle_daemon_run(
     let phase_timeout_override = args.phase_timeout_secs;
     let idle_timeout_override = args.idle_timeout_secs;
     let auto_merge_original = auto_merge_override
-        .map(|_| std::env::var("AO_AUTO_MERGE_ENABLED").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_AUTO_MERGE_ENABLED").ok());
     let auto_pr_original = auto_pr_override
-        .map(|_| std::env::var("AO_AUTO_PR_ENABLED").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_AUTO_PR_ENABLED").ok());
     let auto_commit_before_merge_original = auto_commit_before_merge_override
-        .map(|_| std::env::var("AO_AUTO_COMMIT_BEFORE_MERGE").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_AUTO_COMMIT_BEFORE_MERGE").ok());
     let auto_prune_worktrees_after_merge_original = auto_prune_worktrees_after_merge_override
-        .map(|_| std::env::var("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE").ok());
     let phase_timeout_original = phase_timeout_override
-        .map(|_| std::env::var("AO_PHASE_TIMEOUT_SECS").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_PHASE_TIMEOUT_SECS").ok());
     let idle_timeout_original = idle_timeout_override
-        .map(|_| std::env::var("AO_RUN_IDLE_TIMEOUT_SECS").ok())
-        .flatten();
+        .and_then(|_| std::env::var("AO_RUN_IDLE_TIMEOUT_SECS").ok());
 
     if let Some(enabled) = auto_merge_override {
         std::env::set_var("AO_AUTO_MERGE_ENABLED", if enabled { "1" } else { "0" });

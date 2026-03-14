@@ -447,6 +447,7 @@ pub struct RawRequirement {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct RawWorkflow {
     pub id: String,
     pub task_id: String,

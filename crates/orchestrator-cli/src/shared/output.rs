@@ -188,12 +188,12 @@ mod tests {
     }
 
     #[test]
-    fn classify_error_does_not_treat_untyped_keyword_messages_as_conflicts() {
+    fn classify_error_uses_string_fallback_for_untyped_errors_with_conflict_keywords() {
         let (code, exit_code) = classify_error(&anyhow!(
             "resource already exists but no typed conflict was attached"
         ));
-        assert_eq!(code, "internal");
-        assert_eq!(exit_code, 1);
+        assert_eq!(code, "conflict");
+        assert_eq!(exit_code, 4);
     }
 
     #[test]

@@ -104,7 +104,7 @@ pub fn list_files(working_dir: &Path, pattern: &str, base_path: Option<&str>) ->
         results.sort();
         if results.len() > 500 {
             results.truncate(500);
-            results.push(format!("... (truncated, showing 500 of many results)"));
+            results.push("... (truncated, showing 500 of many results)".to_string());
         }
         Ok(results.join("\n"))
     }
@@ -122,8 +122,8 @@ fn resolve_path(working_dir: &Path, path: &str) -> Result<std::path::PathBuf> {
         .unwrap_or_else(|_| working_dir.to_path_buf());
     let canonical_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
-    if !canonical_resolved.starts_with(&canonical_wd) {
-        if resolved
+    if !canonical_resolved.starts_with(&canonical_wd)
+        && resolved
             .components()
             .any(|c| c == std::path::Component::ParentDir)
         {
@@ -132,7 +132,6 @@ fn resolve_path(working_dir: &Path, path: &str) -> Result<std::path::PathBuf> {
                 path
             );
         }
-    }
 
     Ok(resolved)
 }

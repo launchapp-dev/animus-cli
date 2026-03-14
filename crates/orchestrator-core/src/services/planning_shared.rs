@@ -286,7 +286,6 @@ fn criterion_title_fragment(criterion: &str, max_chars: usize) -> String {
     let cleaned = criterion
         .trim()
         .trim_start_matches('-')
-        .trim()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");

@@ -39,6 +39,8 @@ pub enum PhaseEvent<'a> {
     },
 }
 
+pub type PhaseEventCallback = Box<dyn Fn(PhaseEvent<'_>) + Send + Sync>;
+
 pub struct WorkflowExecuteParams {
     pub project_root: String,
     pub workflow_id: Option<String>,
@@ -54,7 +56,7 @@ pub struct WorkflowExecuteParams {
     pub phase_timeout_secs: Option<u64>,
     pub phase_filter: Option<String>,
     pub stream_level: Option<String>,
-    pub on_phase_event: Option<Box<dyn Fn(PhaseEvent<'_>) + Send + Sync>>,
+    pub on_phase_event: Option<PhaseEventCallback>,
     pub hub: Option<Arc<dyn ServiceHub>>,
 }
 

@@ -3,6 +3,7 @@ use workflow_runner_v2::PhaseExecutionEvent;
 use crate::DispatchWorkflowStartSummary;
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ProjectTickExecutionOutcome {
     pub cleaned_stale_workflows: usize,
     pub resumed_workflows: usize,
@@ -15,18 +16,3 @@ pub struct ProjectTickExecutionOutcome {
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
 }
 
-impl Default for ProjectTickExecutionOutcome {
-    fn default() -> Self {
-        Self {
-            cleaned_stale_workflows: 0,
-            resumed_workflows: 0,
-            reconciled_stale_tasks: 0,
-            reconciled_dependency_tasks: 0,
-            reconciled_merge_tasks: 0,
-            ready_workflow_starts: DispatchWorkflowStartSummary::default(),
-            executed_workflow_phases: 0,
-            failed_workflow_phases: 0,
-            phase_execution_events: Vec::new(),
-        }
-    }
-}

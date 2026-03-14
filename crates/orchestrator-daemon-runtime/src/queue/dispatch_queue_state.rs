@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DispatchQueueEntryStatus {
+    #[default]
     Pending,
     Assigned,
     Held,
@@ -11,11 +13,6 @@ pub enum DispatchQueueEntryStatus {
     Unknown,
 }
 
-impl Default for DispatchQueueEntryStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchQueueEntry {

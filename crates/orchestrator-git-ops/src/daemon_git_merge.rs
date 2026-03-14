@@ -1,7 +1,7 @@
 //! DEPRECATED: Will be replaced by GitProvider trait. See providers/git.rs
 use super::*;
 
-pub(crate) use ::workflow_runner::executor::MergeConflictContext;
+pub(crate) use ::workflow_runner_v2::MergeConflictContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -519,10 +519,10 @@ pub async fn post_success_merge_push_and_cleanup(
         }
     }
 
-    cleanup_task_worktree_if_enabled(hub.clone(), project_root, task, &cfg).await?;
+    cleanup_task_worktree_if_enabled(hub.clone(), project_root, task, cfg).await?;
     if merged_successfully {
         let _ =
-            auto_prune_completed_task_worktrees_after_merge(hub.clone(), project_root, &cfg).await;
+            auto_prune_completed_task_worktrees_after_merge(hub.clone(), project_root, cfg).await;
         let _ = refresh_runtime_binaries_if_main_advanced(
             hub,
             project_root,
@@ -580,8 +580,8 @@ pub async fn finalize_merge_conflict_resolution(
     persist_merge_result_and_push(project_root, context)?;
     remove_worktree_path(project_root, context.merge_worktree_path.as_str());
 
-    cleanup_task_worktree_if_enabled(hub.clone(), project_root, task, &cfg).await?;
-    let _ = auto_prune_completed_task_worktrees_after_merge(hub.clone(), project_root, &cfg).await;
+    cleanup_task_worktree_if_enabled(hub.clone(), project_root, task, cfg).await?;
+    let _ = auto_prune_completed_task_worktrees_after_merge(hub.clone(), project_root, cfg).await;
     let _ = refresh_runtime_binaries_if_main_advanced(
         hub,
         project_root,

@@ -340,6 +340,7 @@ pub struct PhaseRunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum PhaseExecutionOutcome {
     Completed {
         commit_message: Option<String>,

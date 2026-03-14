@@ -108,7 +108,7 @@ pub async fn run_agent_loop(
         let has_tool_calls = assistant_msg
             .tool_calls
             .as_ref()
-            .map_or(false, |tc| !tc.is_empty());
+            .is_some_and(|tc| !tc.is_empty());
 
         messages.push(assistant_msg.clone());
 

@@ -149,17 +149,14 @@ pub struct WorkflowDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum MergeStrategy {
     Squash,
+    #[default]
     Merge,
     Rebase,
 }
 
-impl Default for MergeStrategy {
-    fn default() -> Self {
-        Self::Merge
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeConfig {

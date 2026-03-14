@@ -222,7 +222,7 @@ fn highlight_json_line(text: &str) -> Vec<Span<'_>> {
                     && text
                         .as_bytes()
                         .get(pos + 1)
-                        .map_or(false, |b| b.is_ascii_digit())) =>
+                        .is_some_and(|b| b.is_ascii_digit())) =>
             {
                 let start = pos;
                 pos += ch_len;

@@ -565,18 +565,18 @@ pub(super) async fn stop_agent_runner_process(project_root: &Path) -> Result<boo
 }
 
 async fn stop_agent_runner_process_at_config_dir(config_dir: &Path) -> Result<bool> {
-    let lock_path = runner_lock_path(&config_dir);
+    let lock_path = runner_lock_path(config_dir);
     let _ = remove_malformed_runner_lock_if_present(config_dir);
-    let Some((pid, _)) = read_runner_lock(&config_dir) else {
+    let Some((pid, _)) = read_runner_lock(config_dir) else {
         #[cfg(unix)]
-        cleanup_stale_runner_socket(&config_dir);
+        cleanup_stale_runner_socket(config_dir);
         return Ok(false);
     };
 
     if !is_runner_process_alive(pid) {
         let _ = std::fs::remove_file(lock_path);
         #[cfg(unix)]
-        cleanup_stale_runner_socket(&config_dir);
+        cleanup_stale_runner_socket(config_dir);
         return Ok(false);
     }
 
@@ -632,7 +632,7 @@ async fn stop_agent_runner_process_at_config_dir(config_dir: &Path) -> Result<bo
 
     let _ = std::fs::remove_file(lock_path);
     #[cfg(unix)]
-    let _ = std::fs::remove_file(runner_socket_path(&config_dir));
+    let _ = std::fs::remove_file(runner_socket_path(config_dir));
     Ok(true)
 }
 
@@ -654,6 +654,7 @@ mod tests {
             active_agents: 0,
             protocol_version: "0.9.0".to_string(),
             build_id: Some("123.456-789".to_string()),
+            metrics: None,
         };
         assert!(!runner_status_is_compatible(&status, Some("123.456-789")));
     }
@@ -664,6 +665,7 @@ mod tests {
             active_agents: 1,
             protocol_version: protocol::PROTOCOL_VERSION.to_string(),
             build_id: Some("old-build".to_string()),
+            metrics: None,
         };
         assert!(!runner_status_is_compatible(&status, Some("new-build")));
     }
@@ -674,6 +676,7 @@ mod tests {
             active_agents: 2,
             protocol_version: protocol::PROTOCOL_VERSION.to_string(),
             build_id: Some("build-1".to_string()),
+            metrics: None,
         };
         assert!(runner_status_is_compatible(&status, Some("build-1")));
     }

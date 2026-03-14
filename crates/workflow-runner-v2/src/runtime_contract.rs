@@ -467,7 +467,7 @@ pub fn inject_workflow_mcp_servers(
         None
     };
     let allowed_servers: Option<&[String]> =
-        workflow_profile_servers.or_else(|| runtime_profile_servers.as_deref());
+        workflow_profile_servers.or(runtime_profile_servers.as_deref());
 
     let existing = runtime_contract
         .pointer("/mcp/additional_servers")

@@ -22,6 +22,12 @@ use super::{
 
 pub struct SubprocessSessionBackend;
 
+impl Default for SubprocessSessionBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubprocessSessionBackend {
     pub fn new() -> Self {
         Self

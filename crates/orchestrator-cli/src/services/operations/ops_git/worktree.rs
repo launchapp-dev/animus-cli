@@ -319,14 +319,12 @@ pub(super) async fn handle_git_worktree(
                     .and_then(|task_id| tasks_by_id.get(&task_id.to_ascii_uppercase()));
 
                 let mut matched_task_ids = BTreeSet::new();
-                for maybe_task in [
+                for task in [
                     matched_by_path,
                     matched_by_branch,
                     matched_by_inferred_task_id,
-                ] {
-                    if let Some(task) = maybe_task {
-                        matched_task_ids.insert(task.id.clone());
-                    }
+                ].into_iter().flatten() {
+                    matched_task_ids.insert(task.id.clone());
                 }
 
                 let ambiguous_task_match = matched_task_ids.len() > 1;

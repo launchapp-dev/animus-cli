@@ -280,16 +280,13 @@ fn glob_match_inner(pat: &[u8], val: &[u8]) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AgentMcpServerSource {
+    #[default]
     Builtin,
     Custom,
 }
 
-impl Default for AgentMcpServerSource {
-    fn default() -> Self {
-        Self::Builtin
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentMcpServerConfig {
