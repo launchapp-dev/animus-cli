@@ -13,11 +13,6 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "TERM",
     "COLORTERM",
     "SSH_AUTH_SOCK",
-    // API keys
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
     // Claude CLI configuration
     "CLAUDE_CODE_SETTINGS_PATH",
     "CLAUDE_API_KEY",
@@ -63,8 +58,6 @@ mod tests {
     #[test]
     fn allowlist_includes_required_entries_for_runner_clis() {
         for key in [
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
             "TERM",
             "COLORTERM",
             "SSH_AUTH_SOCK",
@@ -92,24 +85,14 @@ mod tests {
     }
 
     #[test]
-    fn forwards_new_explicit_allowlist_entries() {
+    fn forwards_terminal_and_ssh_entries() {
         let _lock = env_lock();
-        let _gemini = EnvVarGuard::set("GEMINI_API_KEY", Some("gemini-test-key"));
-        let _google = EnvVarGuard::set("GOOGLE_API_KEY", Some("google-test-key"));
         let _term = EnvVarGuard::set("TERM", Some("xterm-256color"));
         let _colorterm = EnvVarGuard::set("COLORTERM", Some("truecolor"));
         let _ssh = EnvVarGuard::set("SSH_AUTH_SOCK", Some("/tmp/test-agent.sock"));
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("GEMINI_API_KEY").map(String::as_str),
-            Some("gemini-test-key")
-        );
-        assert_eq!(
-            env.get("GOOGLE_API_KEY").map(String::as_str),
-            Some("google-test-key")
-        );
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
         assert_eq!(
@@ -171,17 +154,16 @@ mod tests {
     }
 
     #[test]
-    fn keeps_existing_allowlist_and_blocks_unrelated_keys() {
+    fn blocks_api_keys_and_secrets() {
         let _lock = env_lock();
         let _openai = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+        let _anthropic = EnvVarGuard::set("ANTHROPIC_API_KEY", Some("ant-test-key"));
         let _aws = EnvVarGuard::set("AWS_SECRET_ACCESS_KEY", Some("blocked-secret"));
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("OPENAI_API_KEY").map(String::as_str),
-            Some("openai-test-key")
-        );
+        assert!(!env.contains_key("OPENAI_API_KEY"));
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
         assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY"));
     }
 
@@ -224,11 +206,10 @@ mod tests {
     }
 
     #[test]
-    fn allows_path_home_and_anthropic_api_key() {
+    fn allows_path_and_home() {
         let _lock = env_lock();
         let _path = EnvVarGuard::set("PATH", Some("/usr/bin:/usr/local/bin"));
         let _home = EnvVarGuard::set("HOME", Some("/Users/testuser"));
-        let _api = EnvVarGuard::set("ANTHROPIC_API_KEY", Some("sk-ant-test-key-123"));
 
         let env = sanitize_env();
 
@@ -239,10 +220,6 @@ mod tests {
         assert_eq!(
             env.get("HOME").map(String::as_str),
             Some("/Users/testuser")
-        );
-        assert_eq!(
-            env.get("ANTHROPIC_API_KEY").map(String::as_str),
-            Some("sk-ant-test-key-123")
         );
     }
 
