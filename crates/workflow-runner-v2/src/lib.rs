@@ -17,7 +17,7 @@ pub mod ensure_execution_cwd;
 pub mod workflow_execute;
 
 pub use ipc::*;
-pub use phase_failover::PhaseFailureClassifier;
+pub use phase_failover::{PhaseFailureClassifier, PhaseFailureKind, classify_phase_failure};
 pub use phase_targets::PhaseTargetPlanner;
 pub use runtime_support::*;
 pub use phase_executor::{

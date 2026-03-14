@@ -4,56 +4,133 @@ use serde_json::Value;
 
 use crate::ipc::collect_json_payload_lines;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhaseFailureKind {
+    TransientRunner,
+    ProviderExhaustion { reason: String },
+    TargetUnavailable,
+    Unknown,
+}
+
+impl PhaseFailureKind {
+    pub fn is_transient_runner(&self) -> bool {
+        matches!(self, PhaseFailureKind::TransientRunner)
+    }
+
+    pub fn is_provider_exhaustion(&self) -> bool {
+        matches!(self, PhaseFailureKind::ProviderExhaustion { .. })
+    }
+
+    pub fn is_target_unavailable(&self) -> bool {
+        matches!(self, PhaseFailureKind::TargetUnavailable)
+    }
+
+    pub fn should_failover_target(&self) -> bool {
+        matches!(
+            self,
+            PhaseFailureKind::ProviderExhaustion { .. } | PhaseFailureKind::TargetUnavailable
+        )
+    }
+
+    pub fn exhaustion_reason(&self) -> Option<&str> {
+        match self {
+            PhaseFailureKind::ProviderExhaustion { reason } => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+pub fn classify_phase_failure(message: &str) -> PhaseFailureKind {
+    if is_transient_runner_pattern(message) {
+        return PhaseFailureKind::TransientRunner;
+    }
+    if let Some(reason) = extract_provider_exhaustion_reason(message) {
+        return PhaseFailureKind::ProviderExhaustion { reason };
+    }
+    if is_target_unavailable_pattern(message) {
+        return PhaseFailureKind::TargetUnavailable;
+    }
+    PhaseFailureKind::Unknown
+}
+
+fn is_transient_runner_pattern(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("failed to connect runner")
+        || normalized.contains("runner disconnected before workflow")
+        || normalized.contains("connection refused")
+        || normalized.contains("connection reset by peer")
+        || normalized.contains("broken pipe")
+        || normalized.contains("timed out")
+        || normalized.contains("timeout")
+}
+
+fn is_target_unavailable_pattern(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("missing runtime contract launch for ai cli")
+        || normalized.contains("failed to spawn cli process")
+        || normalized.contains("no such file or directory")
+        || normalized.contains("command not found")
+        || normalized.contains("unsupported tool")
+        || normalized.contains("unknown model")
+        || normalized.contains("invalid model")
+        || normalized.contains("missing api key")
+        || normalized.contains("missing cli")
+        || normalized.contains("model not available")
+}
+
+fn extract_provider_exhaustion_reason(text: &str) -> Option<String> {
+    for (_raw, payload) in collect_json_payload_lines(text) {
+        if let Some(reason) = provider_exhaustion_reason_from_payload(&payload) {
+            return Some(reason);
+        }
+    }
+
+    let normalized = text.to_ascii_lowercase();
+    if normalized.contains("insufficient_quota")
+        || normalized.contains("quota exceeded")
+        || normalized.contains("quota_exceeded")
+    {
+        return Some("provider quota exceeded".to_string());
+    }
+    if normalized.contains("rate limit")
+        || normalized.contains("rate-limit")
+        || normalized.contains("too many requests")
+    {
+        return Some("provider rate limit exceeded".to_string());
+    }
+    if normalized.contains("\"has_credits\":false")
+        || normalized.contains("\"balance\":\"0\"")
+        || normalized.contains("\"balance\":0")
+    {
+        return Some("provider credits exhausted".to_string());
+    }
+    if normalized.contains("secondary") && normalized.contains("used_percent") {
+        return Some("secondary token budget exhausted".to_string());
+    }
+
+    None
+}
+
 pub struct PhaseFailureClassifier;
 
 impl PhaseFailureClassifier {
+    pub fn classify(message: &str) -> PhaseFailureKind {
+        classify_phase_failure(message)
+    }
+
     pub fn is_transient_runner_error_message(message: &str) -> bool {
-        let normalized = message.to_ascii_lowercase();
-        normalized.contains("failed to connect runner")
-            || normalized.contains("runner disconnected before workflow")
-            || normalized.contains("connection refused")
-            || normalized.contains("connection reset by peer")
-            || normalized.contains("broken pipe")
-            || normalized.contains("timed out")
-            || normalized.contains("timeout")
+        classify_phase_failure(message).is_transient_runner()
     }
 
     pub fn provider_exhaustion_reason_from_text(text: &str) -> Option<String> {
-        for (_raw, payload) in collect_json_payload_lines(text) {
-            if let Some(reason) = provider_exhaustion_reason_from_payload(&payload) {
-                return Some(reason);
-            }
+        match classify_phase_failure(text) {
+            PhaseFailureKind::ProviderExhaustion { reason } => Some(reason),
+            _ => None,
         }
-
-        let normalized = text.to_ascii_lowercase();
-        if normalized.contains("insufficient_quota")
-            || normalized.contains("quota exceeded")
-            || normalized.contains("quota_exceeded")
-        {
-            return Some("provider quota exceeded".to_string());
-        }
-        if normalized.contains("rate limit")
-            || normalized.contains("rate-limit")
-            || normalized.contains("too many requests")
-        {
-            return Some("provider rate limit exceeded".to_string());
-        }
-        if normalized.contains("\"has_credits\":false")
-            || normalized.contains("\"balance\":\"0\"")
-            || normalized.contains("\"balance\":0")
-        {
-            return Some("provider credits exhausted".to_string());
-        }
-        if normalized.contains("secondary") && normalized.contains("used_percent") {
-            return Some("secondary token budget exhausted".to_string());
-        }
-
-        None
     }
 
     pub fn should_failover_target(message: &str) -> bool {
-        is_provider_exhaustion_error_message(message)
-            || is_target_unavailable_error_message(message)
+        classify_phase_failure(message).should_failover_target()
     }
 
     pub fn push_phase_diagnostic_line(lines: &mut VecDeque<String>, text: &str) {
@@ -150,22 +227,4 @@ fn provider_exhaustion_reason_from_payload(payload: &Value) -> Option<String> {
     }
 
     None
-}
-
-fn is_provider_exhaustion_error_message(message: &str) -> bool {
-    PhaseFailureClassifier::provider_exhaustion_reason_from_text(message).is_some()
-}
-
-fn is_target_unavailable_error_message(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    normalized.contains("missing runtime contract launch for ai cli")
-        || normalized.contains("failed to spawn cli process")
-        || normalized.contains("no such file or directory")
-        || normalized.contains("command not found")
-        || normalized.contains("unsupported tool")
-        || normalized.contains("unknown model")
-        || normalized.contains("invalid model")
-        || normalized.contains("missing api key")
-        || normalized.contains("missing cli")
-        || normalized.contains("model not available")
 }
