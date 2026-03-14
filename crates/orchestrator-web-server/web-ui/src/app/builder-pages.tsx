@@ -91,6 +91,14 @@ interface AgentProfileEntry {
   skills: string[];
 }
 
+interface ContractField {
+  name: string;
+  type: "string" | "array" | "integer" | "boolean";
+  description: string;
+  itemsType: string;
+  enumValues: string[];
+}
+
 interface PhaseDefinitionEntry {
   id: string;
   mode: "agent" | "command" | "manual";
@@ -100,10 +108,13 @@ interface PhaseDefinitionEntry {
     minConfidence: number;
     maxRisk: string;
     allowMissingDecision: boolean;
+    requiredEvidence: string[];
+    fields: ContractField[];
   };
   outputContract: {
     kind: string;
     requiredFields: string[];
+    fields: ContractField[];
   };
   command: {
     program: string;
@@ -162,8 +173,8 @@ function makePhaseDefinition(id?: string): PhaseDefinitionEntry {
     mode: "agent",
     agent: "",
     directive: "",
-    decisionContract: { minConfidence: 0.7, maxRisk: "medium", allowMissingDecision: false },
-    outputContract: { kind: "", requiredFields: [] },
+    decisionContract: { minConfidence: 0.7, maxRisk: "medium", allowMissingDecision: false, requiredEvidence: [], fields: [] },
+    outputContract: { kind: "", requiredFields: [], fields: [] },
     command: { program: "", args: [], cwdMode: "project_root", timeoutSecs: 300 },
     manualInstructions: "",
     approvalNoteRequired: false,
@@ -906,6 +917,138 @@ function AgentsTab({
   );
 }
 
+function FieldCard({ field, onEdit, onRemove }: { field: ContractField; onEdit: () => void; onRemove: () => void }) {
+  return (
+    <div className="border border-border/30 rounded-md p-2.5 group">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono font-medium">{field.name}</span>
+          <Badge variant="outline" className="text-[9px] h-4 px-1">{field.type}</Badge>
+          {field.type === "array" && field.itemsType && (
+            <span className="text-[9px] text-muted-foreground/40">of {field.itemsType}</span>
+          )}
+        </div>
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={onEdit} className="text-[10px] text-muted-foreground hover:text-foreground">edit</button>
+          <button onClick={onRemove} className="text-[10px] text-destructive/60 hover:text-destructive">✕</button>
+        </div>
+      </div>
+      {field.description && (
+        <p className="text-[10px] text-muted-foreground/50 mt-1 truncate">{field.description}</p>
+      )}
+      {field.enumValues.length > 0 && (
+        <div className="flex gap-1 mt-1 flex-wrap">
+          {field.enumValues.map(v => <Badge key={v} variant="outline" className="text-[8px] h-3.5 px-1">{v}</Badge>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldEditorForm({ draft, setDraft, onSave, onCancel }: { draft: ContractField; setDraft: (d: ContractField) => void; onSave: () => void; onCancel: () => void }) {
+  return (
+    <div className="border border-primary/30 bg-primary/5 rounded-md p-3 space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-medium">Name</label>
+          <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-0.5 h-7 text-xs font-mono" placeholder="field_name" />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-medium">Type</label>
+          <select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value as ContractField["type"] })} className="mt-0.5 h-7 w-full rounded-md border border-input bg-background px-2 text-xs">
+            <option value="string">string</option>
+            <option value="array">array</option>
+            <option value="integer">integer</option>
+            <option value="boolean">boolean</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</label>
+        <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="mt-0.5 h-7 text-xs" placeholder="What this field represents..." />
+      </div>
+      {draft.type === "array" && (
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-medium">Items Type</label>
+          <select value={draft.itemsType} onChange={(e) => setDraft({ ...draft, itemsType: e.target.value })} className="mt-0.5 h-7 w-full rounded-md border border-input bg-background px-2 text-xs">
+            <option value="string">string</option>
+            <option value="integer">integer</option>
+            <option value="boolean">boolean</option>
+          </select>
+        </div>
+      )}
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-medium">Enum Values (optional)</label>
+        <TagInput values={draft.enumValues} onChange={(v) => setDraft({ ...draft, enumValues: v })} placeholder="value + Enter" />
+      </div>
+      <div className="flex gap-2 pt-1">
+        <Button size="sm" className="h-6 text-[10px]" onClick={onSave} disabled={!draft.name.trim()}>Save Field</Button>
+        <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+function ContractFieldEditor({ fields, onChange }: { fields: ContractField[]; onChange: (fields: ContractField[]) => void }) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [draft, setDraft] = useState<ContractField | null>(null);
+
+  const addField = () => {
+    const newField: ContractField = { name: "", type: "string", description: "", itemsType: "string", enumValues: [] };
+    setDraft(newField);
+    setEditingIndex(fields.length);
+  };
+
+  const saveField = () => {
+    if (!draft || !draft.name.trim()) return;
+    const next = [...fields];
+    if (editingIndex !== null && editingIndex < fields.length) {
+      next[editingIndex] = draft;
+    } else {
+      next.push(draft);
+    }
+    onChange(next);
+    setEditingIndex(null);
+    setDraft(null);
+  };
+
+  const removeField = (i: number) => {
+    onChange(fields.filter((_, j) => j !== i));
+  };
+
+  const startEdit = (i: number) => {
+    setEditingIndex(i);
+    setDraft({ ...fields[i], enumValues: [...fields[i].enumValues] });
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Fields</label>
+        <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5" onClick={addField}>
+          + Add Field
+        </Button>
+      </div>
+
+      {fields.map((field, i) => (
+        editingIndex === i && draft ? (
+          <FieldEditorForm key={i} draft={draft} setDraft={setDraft} onSave={saveField} onCancel={() => { setEditingIndex(null); setDraft(null); }} />
+        ) : (
+          <FieldCard key={i} field={field} onEdit={() => startEdit(i)} onRemove={() => removeField(i)} />
+        )
+      ))}
+
+      {editingIndex !== null && editingIndex >= fields.length && draft && (
+        <FieldEditorForm draft={draft} setDraft={setDraft} onSave={saveField} onCancel={() => { setEditingIndex(null); setDraft(null); }} />
+      )}
+
+      {fields.length === 0 && editingIndex === null && (
+        <p className="text-[10px] text-muted-foreground/40 py-2">No fields defined.</p>
+      )}
+    </div>
+  );
+}
+
 function PhaseDefinitionEditor({
   phase,
   agentNames,
@@ -919,8 +1062,8 @@ function PhaseDefinitionEditor({
 }) {
   const [draft, setDraft] = useState<PhaseDefinitionEntry>({
     ...phase,
-    decisionContract: { ...phase.decisionContract },
-    outputContract: { ...phase.outputContract, requiredFields: [...phase.outputContract.requiredFields] },
+    decisionContract: { ...phase.decisionContract, requiredEvidence: [...phase.decisionContract.requiredEvidence], fields: phase.decisionContract.fields.map(f => ({ ...f, enumValues: [...f.enumValues] })) },
+    outputContract: { ...phase.outputContract, requiredFields: [...phase.outputContract.requiredFields], fields: phase.outputContract.fields.map(f => ({ ...f, enumValues: [...f.enumValues] })) },
     command: { ...phase.command, args: [...phase.command.args] },
   });
 
@@ -982,24 +1125,40 @@ function PhaseDefinitionEditor({
                 </select>
               </div>
               <div className="flex items-end pb-1">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
                   <input type="checkbox" checked={draft.decisionContract.allowMissingDecision} onChange={(e) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, allowMissingDecision: e.target.checked } })} className="rounded" />
                   Allow Missing
                 </label>
               </div>
             </div>
-            <Separator className="opacity-30" />
-            <p className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Output Contract</p>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Kind</label>
-              <Input value={draft.outputContract.kind} onChange={(e) => setDraft({ ...draft, outputContract: { ...draft.outputContract, kind: e.target.value } })} className="mt-1 text-xs h-8 font-mono" placeholder="output kind" />
-            </div>
-            <div>
-              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Required Fields</label>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Required Evidence</label>
               <div className="mt-1">
-                <TagInput values={draft.outputContract.requiredFields} onChange={(v) => setDraft({ ...draft, outputContract: { ...draft.outputContract, requiredFields: v } })} placeholder="Field name + Enter" />
+                <TagInput values={draft.decisionContract.requiredEvidence} onChange={(v) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, requiredEvidence: v } })} placeholder="evidence + Enter" />
               </div>
             </div>
+            <ContractFieldEditor
+              fields={draft.decisionContract.fields}
+              onChange={(fields) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, fields } })}
+            />
+            <Separator className="opacity-30" />
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Output Contract</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Kind</label>
+                <Input value={draft.outputContract.kind} onChange={(e) => setDraft({ ...draft, outputContract: { ...draft.outputContract, kind: e.target.value } })} className="mt-1 text-xs h-8 font-mono" placeholder="e.g. implementation_result" />
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Required Fields</label>
+                <div className="mt-1">
+                  <TagInput values={draft.outputContract.requiredFields} onChange={(v) => setDraft({ ...draft, outputContract: { ...draft.outputContract, requiredFields: v } })} placeholder="field + Enter" />
+                </div>
+              </div>
+            </div>
+            <ContractFieldEditor
+              fields={draft.outputContract.fields}
+              onChange={(fields) => setDraft({ ...draft, outputContract: { ...draft.outputContract, fields } })}
+            />
           </>
         )}
 
@@ -1600,10 +1759,27 @@ function EditorCore({
           min_confidence: p.decisionContract.minConfidence,
           max_risk: p.decisionContract.maxRisk,
           allow_missing_decision: p.decisionContract.allowMissingDecision || undefined,
+          required_evidence: p.decisionContract.requiredEvidence.length > 0 ? p.decisionContract.requiredEvidence : undefined,
+          fields: p.decisionContract.fields.length > 0 ? Object.fromEntries(
+            p.decisionContract.fields.map(f => [f.name, {
+              type: f.type,
+              description: f.description || undefined,
+              ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
+              ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
+            }])
+          ) : undefined,
         } : undefined,
         output_contract: p.mode === "agent" && p.outputContract.kind ? {
           kind: p.outputContract.kind,
           required_fields: p.outputContract.requiredFields.length > 0 ? p.outputContract.requiredFields : undefined,
+          fields: p.outputContract.fields.length > 0 ? Object.fromEntries(
+            p.outputContract.fields.map(f => [f.name, {
+              type: f.type,
+              description: f.description || undefined,
+              ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
+              ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
+            }])
+          ) : undefined,
         } : undefined,
         command: p.mode === "command" ? {
           program: p.command.program,
