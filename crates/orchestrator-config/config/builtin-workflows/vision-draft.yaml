@@ -1,32 +1,44 @@
 tools_allowlist:
   - ao
+  - Read
+  - Glob
+  - Grep
+  - Bash
+  - Write
 
 phase_catalog:
-  builtin-vision-draft-command:
+  vision-draft:
     label: Vision Draft
-    description: Draft the project vision using the builtin planning command.
+    description: Draft a project vision document by analyzing the codebase and project context.
     category: planning
-    tags: ["planning", "vision", "builtin"]
+    tags: ["planning", "vision"]
 
 phases:
-  builtin-vision-draft-command:
-    mode: command
-    command:
-      program: ao
-      args:
-        - --json
-        - --project-root
-        - "{{project_root}}"
-        - vision
-        - draft
-        - --input-json
-        - "{{dispatch_input}}"
-      cwd_mode: project_root
-      parse_json_output: true
+  vision-draft:
+    mode: agent
+    directive: |
+      You are drafting a project vision document. Analyze the project's codebase, README,
+      existing documentation, and any provided context to produce a comprehensive vision.
+
+      Use `ao vision get` to check if a vision already exists. If it does, inform the user
+      and ask whether to overwrite or refine instead.
+
+      The vision should include:
+      - A clear problem statement
+      - Target users
+      - Goals (3-6 concrete goals)
+      - Constraints (technical, business, or regulatory)
+      - Value proposition
+      - Complexity assessment (simple/moderate/complex/enterprise)
+
+      Use the dispatch_input JSON for any user-provided context (problem_statement, goals, etc.).
+      Persist the final vision using the ao CLI commands available to you.
+
+      Output a structured JSON summary of what was created.
 
 workflows:
   - id: builtin/vision-draft
-    name: Builtin Vision Draft
-    description: Draft the project vision through the shipped planning workflow.
+    name: Vision Draft
+    description: Draft a project vision document by analyzing the codebase and context.
     phases:
-      - builtin-vision-draft-command
+      - vision-draft

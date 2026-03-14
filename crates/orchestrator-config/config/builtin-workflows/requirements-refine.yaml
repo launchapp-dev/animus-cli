@@ -1,32 +1,43 @@
 tools_allowlist:
   - ao
+  - Read
+  - Glob
+  - Grep
+  - Bash
 
 phase_catalog:
-  builtin-requirements-refine-command:
+  requirements-refine:
     label: Requirements Refine
-    description: Refine requirements using the builtin planning command.
+    description: Refine existing requirements with improved detail and acceptance criteria.
     category: planning
-    tags: ["planning", "requirements", "builtin"]
+    tags: ["planning", "requirements"]
 
 phases:
-  builtin-requirements-refine-command:
-    mode: command
-    command:
-      program: ao
-      args:
-        - --json
-        - --project-root
-        - "{{project_root}}"
-        - requirements
-        - refine
-        - --input-json
-        - "{{dispatch_input}}"
-      cwd_mode: project_root
-      parse_json_output: true
+  requirements-refine:
+    mode: agent
+    directive: |
+      You are refining existing project requirements.
+
+      Steps:
+      1. Read the current vision: `ao vision get --json`
+      2. If dispatch_input includes "requirement_ids", refine only those.
+         Otherwise, list all requirements: `ao requirements list --json`
+      3. For each requirement to refine:
+         - Improve the description with concrete scope
+         - Add or improve acceptance criteria
+         - Verify priority alignment with vision
+         - Check for missing links or dependencies
+
+      If dispatch_input includes a "focus" field, prioritize that aspect
+      (e.g., "acceptance_criteria", "descriptions", "priorities").
+
+      Use `ao requirements update --id REQ-XXX` to apply refinements.
+
+      Output a JSON summary of what was refined.
 
 workflows:
   - id: builtin/requirements-refine
-    name: Builtin Requirements Refine
-    description: Refine requirements through the shipped planning workflow.
+    name: Requirements Refine
+    description: Refine requirements with improved detail and acceptance criteria.
     phases:
-      - builtin-requirements-refine-command
+      - requirements-refine

@@ -1,32 +1,41 @@
 tools_allowlist:
   - ao
+  - Read
+  - Glob
+  - Grep
+  - Bash
 
 phase_catalog:
-  builtin-vision-refine-command:
+  vision-refine:
     label: Vision Refine
-    description: Refine the project vision using the builtin planning command.
+    description: Refine the existing project vision with targeted improvements.
     category: planning
-    tags: ["planning", "vision", "builtin"]
+    tags: ["planning", "vision"]
 
 phases:
-  builtin-vision-refine-command:
-    mode: command
-    command:
-      program: ao
-      args:
-        - --json
-        - --project-root
-        - "{{project_root}}"
-        - vision
-        - refine
-        - --input-json
-        - "{{dispatch_input}}"
-      cwd_mode: project_root
-      parse_json_output: true
+  vision-refine:
+    mode: agent
+    directive: |
+      You are refining an existing project vision document.
+
+      First, read the current vision using `ao vision get --json`.
+
+      Then analyze the codebase and project state to identify improvements:
+      - Are there missing target users?
+      - Are goals too vague or missing?
+      - Are constraints outdated or incomplete?
+      - Does the complexity assessment match the actual project scope?
+
+      If dispatch_input includes a "focus" field, prioritize that area.
+      If dispatch_input includes "preserve_core": true, do not change the problem statement
+      or value proposition — only add to goals, constraints, and target users.
+
+      Apply refinements and persist using ao CLI commands.
+      Output a structured JSON summary of what changed.
 
 workflows:
   - id: builtin/vision-refine
-    name: Builtin Vision Refine
-    description: Refine the project vision through the shipped planning workflow.
+    name: Vision Refine
+    description: Refine the project vision with targeted improvements.
     phases:
-      - builtin-vision-refine-command
+      - vision-refine

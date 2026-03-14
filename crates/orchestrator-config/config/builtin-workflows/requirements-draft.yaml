@@ -1,32 +1,45 @@
 tools_allowlist:
   - ao
+  - Read
+  - Glob
+  - Grep
+  - Bash
 
 phase_catalog:
-  builtin-requirements-draft-command:
+  requirements-draft:
     label: Requirements Draft
-    description: Draft requirements using the builtin planning command.
+    description: Draft requirements from project vision and codebase analysis.
     category: planning
-    tags: ["planning", "requirements", "builtin"]
+    tags: ["planning", "requirements"]
 
 phases:
-  builtin-requirements-draft-command:
-    mode: command
-    command:
-      program: ao
-      args:
-        - --json
-        - --project-root
-        - "{{project_root}}"
-        - requirements
-        - draft
-        - --input-json
-        - "{{dispatch_input}}"
-      cwd_mode: project_root
-      parse_json_output: true
+  requirements-draft:
+    mode: agent
+    directive: |
+      You are drafting project requirements based on the vision and codebase.
+
+      Steps:
+      1. Read the current vision: `ao vision get --json`
+      2. Read existing requirements: `ao requirements list --json`
+      3. If dispatch_input includes "include_codebase_scan": true, scan the codebase
+         to understand current architecture and identify gaps
+      4. Draft new requirements that bridge the gap between the vision and current state
+
+      For each requirement, use `ao requirements create` with:
+      - --title: Clear, actionable title
+      - --description: Detailed scope and motivation
+      - --priority: must/should/could based on vision alignment
+      - --category: usability/runtime/integration/quality/security/release
+      - --type: product/functional/non-functional/technical
+
+      If dispatch_input includes "append_only": true, do not modify existing requirements.
+      If dispatch_input includes "max_requirements", limit to that count.
+
+      Output a JSON summary of requirements created.
 
 workflows:
   - id: builtin/requirements-draft
-    name: Builtin Requirements Draft
-    description: Draft requirements through the shipped planning workflow.
+    name: Requirements Draft
+    description: Draft requirements from project vision and codebase analysis.
     phases:
-      - builtin-requirements-draft-command
+      - requirements-draft
