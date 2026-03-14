@@ -123,7 +123,7 @@ impl OutputParser {
                         | NormalizedTextEvent::FinalResult { text } => text,
                         NormalizedTextEvent::Ignored => accumulated,
                     };
-                    events.push(ParsedEvent::Output { text });
+                    events.push(ParsedEvent::Output(text));
                 }
             } else {
                 let text = match extract_text_from_line(line, &self.tool) {
@@ -131,7 +131,7 @@ impl OutputParser {
                     | NormalizedTextEvent::FinalResult { text } => text,
                     NormalizedTextEvent::Ignored => line.to_string(),
                 };
-                events.push(ParsedEvent::Output { text });
+                events.push(ParsedEvent::Output(text));
             }
         }
 

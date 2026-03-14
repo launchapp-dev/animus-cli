@@ -220,7 +220,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, ParsedEvent::Output { .. })),
+                .any(|event| matches!(event, ParsedEvent::Output(_))),
             "expected output event for plain text line"
         );
     }
@@ -239,7 +239,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, ParsedEvent::Output { .. })),
+                .any(|event| matches!(event, ParsedEvent::Output(_))),
             "malformed JSON should produce an output event"
         );
     }
@@ -360,7 +360,7 @@ mod tests {
         let output = events
             .iter()
             .find_map(|event| match event {
-                ParsedEvent::Output { text } => Some(text.clone()),
+                ParsedEvent::Output(text) => Some(text.clone()),
                 _ => None,
             })
             .expect("plain text should produce output event");
@@ -432,7 +432,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ParsedEvent::Output { .. })),
+                .any(|e| matches!(e, ParsedEvent::Output(_))),
             "non-tool-call JSON should emit output"
         );
     }

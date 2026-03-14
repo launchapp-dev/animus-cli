@@ -60,7 +60,7 @@ fn spawn_stdout_forwarder(
                                 run_id: run_id.clone(),
                                 content,
                             }),
-                            ParsedEvent::Output { .. } => None,
+                            ParsedEvent::Output(_) => None,
                         };
 
                         if let Some(evt) = event {
