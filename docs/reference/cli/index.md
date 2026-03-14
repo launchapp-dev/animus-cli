@@ -20,7 +20,6 @@ ao
 ├── setup                    Guided onboarding wizard
 ├── doctor                   Environment diagnostics (--fix)
 ├── tui                      Interactive terminal UI
-├── workflow-monitor         Live workflow phase monitor
 │
 ├── daemon                   Daemon lifecycle & automation
 │   ├── start                Start daemon (detached/background)
@@ -157,23 +156,7 @@ ao
 │       ├── create           Create edge
 │       └── delete           Delete edge
 │
-├── execute                  Generate/run task plans
-│   ├── plan                 Generate execution plan
-│   └── run                  Generate and run workflows
-│
-├── planning                 Planning facade
-│   ├── vision
-│   │   ├── draft            (mirrors ao vision draft)
-│   │   ├── refine           (mirrors ao vision refine)
-│   │   └── get              (mirrors ao vision get)
-│   └── requirements
-│       ├── draft            (mirrors ao requirements draft)
-│       ├── list             (mirrors ao requirements list)
-│       ├── get              (mirrors ao requirements get)
-│       ├── refine           (mirrors ao requirements refine)
-│       └── execute          Execute requirements into tasks
-│
-├── review                   Review decisions
+├── review                   Review decisions (hidden)
 │   ├── entity               Review status for entity
 │   ├── record               Record review decision
 │   ├── task-status          Review status for task

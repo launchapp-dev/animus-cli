@@ -84,14 +84,14 @@ ao task status --id TASK-XXX --status done          # Complete work
 
 ## CLI Command Surface
 
-Full command tree reference: `docs/cli-command-surface.md`
+Full command tree reference: `docs/reference/cli/index.md`
 
 24 top-level commands, ~130+ subcommands. Key groups:
 - **Core workflow**: `task`, `workflow`, `daemon`, `agent`
 - **Planning**: `vision`, `requirements`, `execute`, `architecture`
 - **Operations**: `runner`, `output`, `errors`, `history`
 - **Infrastructure**: `git`, `model`, `skill`, `mcp`, `web`
-- **UX**: `status`, `setup`, `doctor`, `tui`, `workflow-monitor`
+- **UX**: `status`, `setup`, `doctor`, `tui`
 - **Review/QA**: `review`, `qa`
 
 ## MCP Tools Quick Reference

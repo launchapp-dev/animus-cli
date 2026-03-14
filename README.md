@@ -70,7 +70,7 @@ worktree metadata; the cleanup script above only removes Rust build artifacts.
 
 ## Command Overview
 
-See `docs/cli-command-surface.md` for the full command tree with all flags.
+See `docs/reference/cli/index.md` for the full command tree with all flags.
 
 | Group | Commands | Purpose |
 |---|---|---|

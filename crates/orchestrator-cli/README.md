@@ -93,10 +93,7 @@ Current top-level commands include:
 - `web`
 - `setup`
 - `tui`
-- `workflow-monitor`
 - `doctor`
-
-Deprecated compatibility aliases still exist for `task-control` and `execute`.
 
 ## Key pieces
 
