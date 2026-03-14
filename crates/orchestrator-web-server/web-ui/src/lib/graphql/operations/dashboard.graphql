@@ -3,4 +3,5 @@ query Dashboard {
   daemonHealth { healthy status runnerConnected activeDaemons: activeAgents daemonPid }
   agentRuns { runId taskId taskTitle workflowId phaseId status }
   systemInfo { platform version daemonStatus projectRoot }
+  queueStats { depth }
 }

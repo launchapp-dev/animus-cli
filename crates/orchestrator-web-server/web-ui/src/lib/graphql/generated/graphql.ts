@@ -260,6 +260,25 @@ export enum GqlScope {
   Small = 'SMALL'
 }
 
+export type GqlSkill = {
+  __typename?: 'GqlSkill';
+  category: Scalars['String']['output'];
+  description: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  skillType: Scalars['String']['output'];
+  source: Scalars['String']['output'];
+};
+
+export type GqlSkillDetail = {
+  __typename?: 'GqlSkillDetail';
+  category: Scalars['String']['output'];
+  definitionJson: Scalars['String']['output'];
+  description: Scalars['String']['output'];
+  name: Scalars['String']['output'];
+  skillType: Scalars['String']['output'];
+  source: Scalars['String']['output'];
+};
+
 export type GqlSystemInfo = {
   __typename?: 'GqlSystemInfo';
   arch?: Maybe<Scalars['String']['output']>;
@@ -444,6 +463,7 @@ export type MutationRoot = {
   reviewHandoff: Scalars['Boolean']['output'];
   runWorkflow: GqlWorkflow;
   saveVision: GqlVision;
+  saveWorkflowConfig: Scalars['Boolean']['output'];
   updateProject: GqlProject;
   updateRequirement: GqlRequirement;
   updateTask: GqlTask;
@@ -620,6 +640,11 @@ export type MutationRootSaveVisionArgs = {
 };
 
 
+export type MutationRootSaveWorkflowConfigArgs = {
+  configJson: Scalars['String']['input'];
+};
+
+
 export type MutationRootUpdateProjectArgs = {
   description?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
@@ -681,6 +706,8 @@ export type QueryRoot = {
   requirement?: Maybe<GqlRequirement>;
   requirements: Array<GqlRequirement>;
   requirementsPaginated: GqlRequirementConnection;
+  skillDetail?: Maybe<GqlSkillDetail>;
+  skills: Array<GqlSkill>;
   systemInfo: GqlSystemInfo;
   task?: Maybe<GqlTask>;
   taskStats: GqlTaskStats;
@@ -729,6 +756,11 @@ export type QueryRootRequirementArgs = {
 export type QueryRootRequirementsPaginatedArgs = {
   limit?: Scalars['Int']['input'];
   offset?: Scalars['Int']['input'];
+};
+
+
+export type QueryRootSkillDetailArgs = {
+  name: Scalars['String']['input'];
 };
 
 
@@ -849,7 +881,7 @@ export type DaemonClearLogsMutation = { __typename?: 'MutationRoot', daemonClear
 export type DashboardQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type DashboardQuery = { __typename?: 'QueryRoot', taskStats: { __typename?: 'GqlTaskStats', total: number, byStatus?: string | null, byPriority?: string | null }, daemonHealth: { __typename?: 'GqlDaemonHealth', healthy: boolean, status: string, runnerConnected: boolean, daemonPid?: number | null, activeDaemons: number }, agentRuns: Array<{ __typename?: 'GqlAgentRun', runId: string, taskId?: string | null, taskTitle?: string | null, workflowId?: string | null, phaseId?: string | null, status: string }>, systemInfo: { __typename?: 'GqlSystemInfo', platform?: string | null, version?: string | null, daemonStatus?: string | null, projectRoot?: string | null } };
+export type DashboardQuery = { __typename?: 'QueryRoot', taskStats: { __typename?: 'GqlTaskStats', total: number, byStatus?: string | null, byPriority?: string | null }, daemonHealth: { __typename?: 'GqlDaemonHealth', healthy: boolean, status: string, runnerConnected: boolean, daemonPid?: number | null, activeDaemons: number }, agentRuns: Array<{ __typename?: 'GqlAgentRun', runId: string, taskId?: string | null, taskTitle?: string | null, workflowId?: string | null, phaseId?: string | null, status: string }>, systemInfo: { __typename?: 'GqlSystemInfo', platform?: string | null, version?: string | null, daemonStatus?: string | null, projectRoot?: string | null }, queueStats: { __typename?: 'GqlQueueStats', depth: number } };
 
 export type ReadyTasksQueryVariables = Exact<{
   search?: InputMaybe<Scalars['String']['input']>;
@@ -1339,6 +1371,9 @@ export const DashboardDocument = new TypedDocumentString(`
     version
     daemonStatus
     projectRoot
+  }
+  queueStats {
+    depth
   }
 }
     `) as unknown as TypedDocumentString<DashboardQuery, DashboardQueryVariables>;

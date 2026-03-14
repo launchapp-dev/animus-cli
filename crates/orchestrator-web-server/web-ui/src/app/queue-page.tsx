@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
 import { toast } from "sonner";
@@ -19,7 +20,7 @@ import {
   QueueReorderDocument,
 } from "@/lib/graphql/generated/graphql";
 import { statusColor, priorityColor, StatusDot, PageLoading, PageError, StatCard } from "./shared";
-import { ArrowUp, ArrowDown, Pause, Play, ArrowUpDown, RefreshCw, Layers } from "lucide-react";
+import { ArrowUp, ArrowDown, Pause, Play, ArrowUpDown, RefreshCw, Layers, GripVertical } from "lucide-react";
 
 export function QueuePage() {
   const [result, reexecute] = useQuery({ query: QueueDocument });
@@ -27,6 +28,9 @@ export function QueuePage() {
   const [, releaseMut] = useMutation(QueueReleaseDocument);
   const [, reorderMut] = useMutation(QueueReorderDocument);
   const { data, fetching, error } = result;
+  const dragSrcIndex = useRef<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
 
@@ -56,14 +60,43 @@ export function QueuePage() {
     }
   };
 
+  const reorderEntries = async (ids: string[]) => {
+    const { error: err } = await reorderMut({ taskIds: ids });
+    if (err) toast.error(err.message);
+    else reexecute({ requestPolicy: "network-only" });
+  };
+
   const moveEntry = async (index: number, direction: -1 | 1) => {
     const ids = entries.map((e) => e.taskId);
     const newIndex = index + direction;
     if (newIndex < 0 || newIndex >= ids.length) return;
     [ids[index], ids[newIndex]] = [ids[newIndex], ids[index]];
-    const { error: err } = await reorderMut({ taskIds: ids });
-    if (err) toast.error(err.message);
-    else reexecute({ requestPolicy: "network-only" });
+    await reorderEntries(ids);
+  };
+
+  const onDragStart = (index: number) => {
+    dragSrcIndex.current = index;
+  };
+
+  const onDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    setDragOverIndex(index);
+  };
+
+  const onDrop = async (targetIndex: number) => {
+    const srcIndex = dragSrcIndex.current;
+    dragSrcIndex.current = null;
+    setDragOverIndex(null);
+    if (srcIndex === null || srcIndex === targetIndex) return;
+    const ids = entries.map((e) => e.taskId);
+    const [moved] = ids.splice(srcIndex, 1);
+    ids.splice(targetIndex, 0, moved);
+    await reorderEntries(ids);
+  };
+
+  const onDragEnd = () => {
+    dragSrcIndex.current = null;
+    setDragOverIndex(null);
   };
 
   const sortByPriority = async () => {
@@ -161,6 +194,7 @@ export function QueuePage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-border/30 hover:bg-transparent">
+                  <TableHead className="text-[10px] uppercase tracking-wider h-7 w-8" />
                   <TableHead className="text-[10px] uppercase tracking-wider h-7 w-12 text-center">#</TableHead>
                   <TableHead className="text-[10px] uppercase tracking-wider h-7">Task</TableHead>
                   <TableHead className="text-[10px] uppercase tracking-wider h-7">Title</TableHead>
@@ -176,7 +210,16 @@ export function QueuePage() {
                   return (
                     <TableRow
                       key={entry.taskId}
-                      className={`border-border/20 transition-colors ${
+                      draggable
+                      onDragStart={() => onDragStart(i)}
+                      onDragOver={(e) => onDragOver(e, i)}
+                      onDrop={() => onDrop(i)}
+                      onDragEnd={onDragEnd}
+                      className={`border-border/20 transition-colors cursor-grab active:cursor-grabbing ${
+                        dragOverIndex === i
+                          ? "border-t-2 border-t-primary"
+                          : ""
+                      } ${
                         held
                           ? "bg-[var(--ao-amber-bg)] hover:bg-[var(--ao-amber-bg)]"
                           : i === 0
@@ -186,6 +229,11 @@ export function QueuePage() {
                       style={{ animationDelay: `${i * 30}ms` }}
                     >
                       <TableCell className="text-center py-2">
+                        <div className="flex items-center justify-center gap-0.5">
+                          <GripVertical className="h-3 w-3 text-muted-foreground/30" />
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-2">
                         <span className={`inline-flex items-center justify-center h-5 w-5 rounded text-[10px] font-mono font-medium ${
                           i === 0
                             ? "bg-primary/10 text-primary border border-primary/20"
