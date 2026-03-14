@@ -55,7 +55,6 @@ pub struct WorkflowExecuteParams {
     pub tool: Option<String>,
     pub phase_timeout_secs: Option<u64>,
     pub phase_filter: Option<String>,
-    pub stream_level: Option<String>,
     pub on_phase_event: Option<PhaseEventCallback>,
     pub hub: Option<Arc<dyn ServiceHub>>,
     pub phase_routing: Option<protocol::PhaseRoutingConfig>,
@@ -125,7 +124,6 @@ fn workflow_phase_inputs(workflow: &OrchestratorWorkflow) -> WorkflowPhaseInputs
 }
 
 pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<WorkflowExecuteResult> {
-    let stream_level = params.stream_level.as_deref().unwrap_or("quiet").to_string();
     let routing = params.phase_routing.take().unwrap_or_default();
     let phase_timeout_secs = params.phase_timeout_secs;
 
@@ -262,7 +260,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             dispatch_input: phase_inputs.dispatch_input.as_deref(),
             schedule_input: phase_inputs.schedule_input.as_deref(),
             routing: &routing,
-            stream_level: &stream_level,
+
             phase_timeout_secs,
         })
         .await;
@@ -404,7 +402,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             dispatch_input: phase_inputs.dispatch_input.as_deref(),
             schedule_input: phase_inputs.schedule_input.as_deref(),
             routing: &routing,
-            stream_level: &stream_level,
+
             phase_timeout_secs,
         })
         .await;
@@ -1527,7 +1525,6 @@ mod requirement_workflow_tests {
             tool: None,
             phase_timeout_secs: None,
             phase_filter: None,
-            stream_level: Some("quiet".to_string()),
             on_phase_event: None,
             hub: Some(hub.clone()),
             phase_routing: None,

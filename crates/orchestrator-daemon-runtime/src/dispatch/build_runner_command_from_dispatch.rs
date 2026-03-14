@@ -4,7 +4,7 @@ pub fn build_runner_command_from_dispatch(
     dispatch: &SubjectDispatch,
     project_root: &str,
 ) -> std::process::Command {
-    build_runner_command(dispatch, project_root, None, None, None)
+    build_runner_command(dispatch, project_root, None, None)
 }
 
 pub fn build_runner_command(
@@ -12,7 +12,6 @@ pub fn build_runner_command(
     project_root: &str,
     phase_routing: Option<&PhaseRoutingConfig>,
     mcp_config: Option<&McpRuntimeConfig>,
-    stream_level: Option<&str>,
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new("ao-workflow-runner");
     cmd.arg("execute");
@@ -49,10 +48,6 @@ pub fn build_runner_command(
             cmd.arg("--mcp-config-json").arg(json);
         }
     }
-    if let Some(level) = stream_level {
-        cmd.arg("--stream-level").arg(level);
-    }
-
     cmd
 }
 

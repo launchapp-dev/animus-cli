@@ -89,7 +89,6 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
         };
 
         let routing = protocol::PhaseRoutingConfig::default();
-        let stream_level = String::new();
         let run_result = run_workflow_phase(&PhaseRunParams {
             project_root: &request.project_root,
             execution_cwd: &execution_cwd,
@@ -106,7 +105,6 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             dispatch_input: None,
             schedule_input: None,
             routing: &routing,
-            stream_level: &stream_level,
             phase_timeout_secs: phase_timeout_secs,
         })
         .await;
@@ -744,7 +742,6 @@ struct PhaseAgentParams<'a> {
     dispatch_input: Option<&'a str>,
     schedule_input: Option<&'a str>,
     routing: &'a protocol::PhaseRoutingConfig,
-    stream_level: &'a str,
 }
 
 async fn run_workflow_phase_with_agent(
@@ -1135,7 +1132,6 @@ pub struct PhaseRunParams<'a> {
     pub dispatch_input: Option<&'a str>,
     pub schedule_input: Option<&'a str>,
     pub routing: &'a protocol::PhaseRoutingConfig,
-    pub stream_level: &'a str,
     pub phase_timeout_secs: Option<u64>,
 }
 
@@ -1294,7 +1290,6 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 dispatch_input,
                 schedule_input,
                 routing: params.routing,
-                stream_level: params.stream_level,
             })
             .await?;
 

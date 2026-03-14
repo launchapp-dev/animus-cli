@@ -8,7 +8,7 @@ use protocol::SubjectDispatch;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
-use crate::{build_runner_command, build_runner_command_from_dispatch, CompletedProcess, RunnerEvent};
+use crate::{build_runner_command, CompletedProcess, RunnerEvent};
 
 struct WorkflowProcess {
     subject_id: String,
@@ -26,7 +26,6 @@ pub struct ProcessManager {
     process_timeout_secs: Option<u64>,
     pub phase_routing: Option<protocol::PhaseRoutingConfig>,
     pub mcp_config: Option<protocol::McpRuntimeConfig>,
-    pub stream_level: Option<String>,
 }
 
 impl Default for ProcessManager {
@@ -42,7 +41,6 @@ impl ProcessManager {
             process_timeout_secs: None,
             phase_routing: None,
             mcp_config: None,
-            stream_level: None,
         }
     }
 
@@ -61,7 +59,6 @@ impl ProcessManager {
             project_root,
             self.phase_routing.as_ref(),
             self.mcp_config.as_ref(),
-            self.stream_level.as_deref(),
         );
         let mut command = Command::from(std_cmd);
         command.stdout(Stdio::null()).stderr(Stdio::piped());
