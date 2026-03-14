@@ -443,6 +443,10 @@ pub struct DaemonConfig {
     pub auto_commit_before_merge: Option<bool>,
     #[serde(default)]
     pub auto_prune_worktrees: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_routing: Option<protocol::PhaseRoutingConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<protocol::McpRuntimeConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

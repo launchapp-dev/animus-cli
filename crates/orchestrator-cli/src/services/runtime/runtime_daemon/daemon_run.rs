@@ -122,7 +122,12 @@ pub(super) async fn handle_daemon_run(
     let _idle_timeout_guard = EnvOverrideGuard::set_if("AO_RUN_IDLE_TIMEOUT_SECS", args.scheduler.idle_timeout_secs);
 
     let runtime_options = runtime_options_from_cli(&args);
+    let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
+    let daemon_config = workflow_config.config.daemon.as_ref();
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
+    process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
+    process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
+    process_manager.stream_level = daemon_config.and_then(|d| d.stream_phase_output.clone());
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager);
     let mut host = CliDaemonRunHost::new(project_root, json);
