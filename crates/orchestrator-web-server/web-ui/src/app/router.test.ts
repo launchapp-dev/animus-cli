@@ -36,6 +36,9 @@ describe("APP_ROUTE_PATHS", () => {
       "/errors",
       "/settings/mcp",
       "/settings/agents",
+      "/settings/daemon",
+      "/architecture",
+      "/history",
       "/skills",
       "*",
     ];

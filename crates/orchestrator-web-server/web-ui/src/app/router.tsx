@@ -32,8 +32,11 @@ const AgentManagementPage = lazy(() => import("./agent-page").then((m) => ({ def
 const TaskOutputPage = lazy(() => import("./output-page").then((m) => ({ default: m.TaskOutputPage })));
 const McpServersPage = lazy(() => import("./settings-pages").then((m) => ({ default: m.McpServersPage })));
 const AgentProfilesPage = lazy(() => import("./settings-pages").then((m) => ({ default: m.AgentProfilesPage })));
+const DaemonConfigPage = lazy(() => import("./settings-pages").then((m) => ({ default: m.DaemonConfigPage })));
 const ErrorBrowserPage = lazy(() => import("./errors-page").then((m) => ({ default: m.ErrorBrowserPage })));
 const SkillsPage = lazy(() => import("./skills-page").then((m) => ({ default: m.SkillsPage })));
+const ArchitecturePage = lazy(() => import("./architecture-page").then((m) => ({ default: m.ArchitecturePage })));
+const HistoryPage = lazy(() => import("./history-page").then((m) => ({ default: m.HistoryPage })));
 const NotFoundPage = lazy(() => import("./not-found-page").then((m) => ({ default: m.NotFoundPage })));
 const TaskDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.TaskDispatchPage })));
 const RequirementDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.RequirementDispatchPage })));
@@ -71,6 +74,9 @@ export const APP_ROUTE_PATHS = [
   "/errors",
   "/settings/mcp",
   "/settings/agents",
+  "/settings/daemon",
+  "/architecture",
+  "/history",
   "/skills",
   "*",
 ] as const;
@@ -204,6 +210,18 @@ const router = createBrowserRouter([
       {
         path: "settings/agents",
         element: withRouteSuspense(<AgentProfilesPage />),
+      },
+      {
+        path: "settings/daemon",
+        element: withRouteSuspense(<DaemonConfigPage />),
+      },
+      {
+        path: "architecture",
+        element: withRouteSuspense(<ArchitecturePage />),
+      },
+      {
+        path: "history",
+        element: withRouteSuspense(<HistoryPage />),
       },
       {
         path: "skills",

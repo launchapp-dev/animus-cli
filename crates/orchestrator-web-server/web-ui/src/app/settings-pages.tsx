@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Separator } from "@/components/ui/separator";
 import { WorkflowConfigDocument } from "@/lib/graphql/generated/graphql";
 import { PageLoading, PageError, SectionHeading } from "./shared";
 
@@ -18,6 +19,7 @@ function SettingsNav() {
   const links = [
     { to: "/settings/mcp", label: "MCP Servers" },
     { to: "/settings/agents", label: "Agent Profiles" },
+    { to: "/settings/daemon", label: "Daemon" },
   ];
   return (
     <div className="flex gap-2 mb-4">
@@ -257,6 +259,84 @@ export function AgentProfilesPage() {
           </Card>
         </div>
       )}
+    </div>
+  );
+}
+
+const DAEMON_SETTINGS = [
+  {
+    key: "auto_merge_enabled",
+    label: "Auto Merge",
+    description: "Automatically merge completed workflow branches into the base branch",
+  },
+  {
+    key: "auto_pr_enabled",
+    label: "Auto PR",
+    description: "Automatically create pull requests for completed workflow branches",
+  },
+  {
+    key: "auto_commit_before_merge",
+    label: "Auto Commit Before Merge",
+    description: "Commit any uncommitted changes before merging workflow branches",
+  },
+  {
+    key: "auto_prune_worktrees_after_merge",
+    label: "Auto Prune Worktrees",
+    description: "Remove git worktrees after their branches have been merged",
+  },
+] as const;
+
+function ToggleRow({ label, description, checked }: { label: string; description: string; checked: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-3">
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium text-foreground/90">{label}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <div
+        className={`relative inline-flex h-5 w-9 shrink-0 cursor-default rounded-full border-2 border-transparent transition-colors ${
+          checked ? "bg-primary" : "bg-muted"
+        }`}
+      >
+        <span
+          className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-sm ring-0 transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function DaemonConfigPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Daemon Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">Configure daemon automation behavior</p>
+      </div>
+
+      <SettingsNav />
+
+      <Card className="border-border/40 bg-card/60">
+        <CardHeader className="pb-2 pt-3 px-4">
+          <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Automation</CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pb-4">
+          {DAEMON_SETTINGS.map((setting, i) => (
+            <div key={setting.key}>
+              {i > 0 && <Separator />}
+              <ToggleRow label={setting.label} description={setting.description} checked={false} />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <div className="rounded-md border border-border/40 bg-muted/30 px-4 py-3">
+        <p className="text-xs text-muted-foreground">
+          Read-only view. Configure via <code className="font-mono text-[11px] bg-muted px-1 py-0.5 rounded">ao daemon config --auto-merge true/false</code>
+        </p>
+      </div>
     </div>
   );
 }

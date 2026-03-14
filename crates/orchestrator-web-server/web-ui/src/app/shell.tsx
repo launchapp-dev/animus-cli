@@ -25,6 +25,8 @@ import {
   Monitor,
   AlertTriangle,
   Wrench,
+  Share2,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -55,12 +57,14 @@ export const NAV_GROUPS = [
     items: [
       { to: "/planning/vision", label: "Vision", icon: FileText, badgeKey: null },
       { to: "/planning/requirements", label: "Requirements", icon: ClipboardCheck, badgeKey: null },
+      { to: "/architecture", label: "Architecture", icon: Share2, badgeKey: null },
     ],
   },
   {
     label: "Monitor",
     items: [
       { to: "/events", label: "Events", icon: Activity, badgeKey: "events" as const },
+      { to: "/history", label: "History", icon: Clock, badgeKey: null },
       { to: "/errors", label: "Errors", icon: AlertTriangle, badgeKey: "errors" as const },
       { to: "/daemon", label: "Daemon", icon: Server, badgeKey: null },
     ],
