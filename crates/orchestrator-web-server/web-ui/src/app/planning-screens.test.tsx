@@ -159,7 +159,7 @@ describe("planning screens", () => {
     expect(screen.getByText("REQ-1")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Refine" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refine with AI" })).toBeTruthy();
   });
 
   it("renders not found state when requirement is missing", () => {

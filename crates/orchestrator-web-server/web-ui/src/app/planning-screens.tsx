@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 
 const VISION_QUERY = `
   query Vision {
@@ -36,6 +37,49 @@ const UPDATE_REQUIREMENT = `mutation UpdateRequirement($id: ID!, $title: String,
 const DELETE_REQUIREMENT = `mutation DeleteRequirement($id: ID!) { deleteRequirement(id: $id) }`;
 const DRAFT_REQUIREMENT = `mutation DraftRequirement($context: String) { draftRequirement(context: $context) { id title } }`;
 const REFINE_REQUIREMENT = `mutation RefineRequirement($id: String!, $feedback: String) { refineRequirement(id: $id, feedback: $feedback) { id } }`;
+
+const EXECUTE_REQUIREMENTS = `mutation ExecuteRequirements($ids: [String!]!, $startWorkflows: Boolean, $workflowRef: String) { executeRequirements(ids: $ids, startWorkflows: $startWorkflows, workflowRef: $workflowRef) { requirementsProcessed tasksCreated tasksReused workflowsStarted } }`;
+
+const EDITABLE_STATUSES = ["draft", "refined", "needs-rework"];
+const PIPELINE_STAGES = ["draft", "refined", "po-review", "em-review", "approved"] as const;
+const TERMINAL_STATUSES = ["approved", "implemented", "done", "deprecated"];
+
+function StatusPipeline({ currentStatus }: { currentStatus: string }) {
+  const currentIndex = PIPELINE_STAGES.indexOf(currentStatus as typeof PIPELINE_STAGES[number]);
+  const isRework = currentStatus === "needs-rework";
+
+  return (
+    <div className="flex items-center gap-1">
+      {PIPELINE_STAGES.map((stage, i) => {
+        const isPast = i < currentIndex;
+        const isCurrent = stage === currentStatus;
+        return (
+          <Fragment key={stage}>
+            {i > 0 && <div className={`h-px w-4 ${isPast ? "bg-[var(--ao-success)]" : "bg-border/40"}`} />}
+            <div className="flex items-center gap-1.5">
+              <div className={`h-2.5 w-2.5 rounded-full ${
+                isPast ? "bg-[var(--ao-success)]" :
+                isCurrent ? "bg-primary ring-2 ring-primary/30" :
+                "bg-muted-foreground/20"
+              }`} />
+              <span className={`text-[10px] font-mono ${
+                isCurrent ? "text-primary font-medium" :
+                isPast ? "text-[var(--ao-success)]" :
+                "text-muted-foreground/40"
+              }`}>{stage}</span>
+            </div>
+          </Fragment>
+        );
+      })}
+      {isRework && (
+        <div className="ml-2 flex items-center gap-1">
+          <div className="h-2.5 w-2.5 rounded-full bg-[var(--ao-amber)] ring-2 ring-[var(--ao-amber)]/30" />
+          <span className="text-[10px] font-mono text-[var(--ao-amber)] font-medium">needs-rework</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const PRIORITY_OPTIONS = ["must", "should", "could", "wont"] as const;
 const STATUS_OPTIONS = ["draft", "refined", "planned", "in-progress", "done", "po-review", "em-review", "needs-rework", "approved", "implemented", "deprecated"] as const;
@@ -553,6 +597,7 @@ export function PlanningRequirementDetailPage() {
   const [, updateRequirement] = useMutation(UPDATE_REQUIREMENT);
   const [, deleteRequirement] = useMutation(DELETE_REQUIREMENT);
   const [, refineRequirement] = useMutation(REFINE_REQUIREMENT);
+  const [, executeRequirements] = useMutation(EXECUTE_REQUIREMENTS);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -562,12 +607,16 @@ export function PlanningRequirementDetailPage() {
   const [detailCriteria, setDetailCriteria] = useState<string[]>([]);
   const [detailNewCriterion, setDetailNewCriterion] = useState("");
   const [refineFeedback, setRefineFeedback] = useState("");
+  const [rejectFeedback, setRejectFeedback] = useState("");
   const [operating, setOperating] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [executionResult, setExecutionResult] = useState<{ requirementsProcessed: number; tasksCreated: number; tasksReused: number; workflowsStarted: number } | null>(null);
 
   const req = data?.requirement;
   const reqKey = req ? `${req.id}-${req.title}-${req.statusRaw}-${req.priorityRaw}` : "";
+  const currentStatus = req?.statusRaw ?? "draft";
+  const isEditable = EDITABLE_STATUSES.includes(currentStatus);
 
   useEffect(() => {
     if (!req) return;
@@ -632,7 +681,69 @@ export function PlanningRequirementDetailPage() {
     if (result.error) {
       setMessage(`Error: ${result.error.message}`);
     } else {
-      setMessage("Requirement refined.");
+      toast.success("Requirement refined.");
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const onTransition = async (newStatus: string) => {
+    setOperating("transitioning");
+    setMessage(null);
+    const result = await updateRequirement({ id: requirementId, status: newStatus });
+    setOperating(null);
+    if (result.error) {
+      toast.error(result.error.message);
+    } else {
+      toast.success(`Status updated to ${newStatus}.`);
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const onReject = async () => {
+    setOperating("rejecting");
+    setMessage(null);
+    const result = await updateRequirement({ id: requirementId, status: "needs-rework", description: rejectFeedback ? `${req?.description ?? ""}\n\n---\nReview feedback: ${rejectFeedback}` : undefined });
+    setOperating(null);
+    if (result.error) {
+      toast.error(result.error.message);
+    } else {
+      setRejectFeedback("");
+      toast.success("Returned for rework.");
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const onRefineAndResubmit = async () => {
+    setOperating("refining");
+    setMessage(null);
+    const refineResult = await refineRequirement({ id: requirementId, feedback: refineFeedback || null });
+    if (refineResult.error) {
+      setOperating(null);
+      toast.error(refineResult.error.message);
+      return;
+    }
+    const statusResult = await updateRequirement({ id: requirementId, status: "refined" });
+    setOperating(null);
+    if (statusResult.error) {
+      toast.error(statusResult.error.message);
+    } else {
+      toast.success("Refined and resubmitted.");
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const onExecute = async (startWorkflows: boolean) => {
+    setOperating(startWorkflows ? "executing-full" : "planning");
+    setMessage(null);
+    setExecutionResult(null);
+    const result = await executeRequirements({ ids: [requirementId], startWorkflows });
+    setOperating(null);
+    if (result.error) {
+      toast.error(result.error.message);
+    } else {
+      const d = result.data?.executeRequirements;
+      if (d) setExecutionResult(d);
+      toast.success(startWorkflows ? "Execution started." : "Tasks planned.");
       reexecute({ requestPolicy: "network-only" });
     }
   };
@@ -659,44 +770,170 @@ export function PlanningRequirementDetailPage() {
         </div>
       </div>
 
+      <StatusPipeline currentStatus={currentStatus} />
+
       <Card className="border-border/40 bg-card/60">
         <CardHeader className="pb-2 pt-3 px-4">
-          <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Edit Requirement</CardTitle>
+          <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Actions</CardTitle>
         </CardHeader>
         <CardContent className="px-4 pb-3">
-          <form onSubmit={onSave} className="space-y-4">
-            <div>
-              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Title</label>
-              <Input required value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+          {currentStatus === "draft" && (
+            <div className="flex items-center gap-2">
+              <Input
+                value={refineFeedback}
+                onChange={(e) => setRefineFeedback(e.target.value)}
+                placeholder="Optional refinement feedback..."
+                className="flex-1 text-sm"
+              />
+              <Button variant="secondary" onClick={onRefine} disabled={operating !== null}>
+                {operating === "refining" ? "Refining..." : "Refine with AI"}
+              </Button>
             </div>
-            <div>
-              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</label>
-              <Textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label htmlFor="edit-req-priority" className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Priority</label>
-                <select id="edit-req-priority" value={priority} onChange={(e) => setPriority(e.target.value)} className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
-                  {PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="edit-req-status" className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Status</label>
-                <select id="edit-req-status" value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
-                  {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Type</label>
-                <Input value={reqType} onChange={(e) => setReqType(e.target.value)} className="mt-1" />
-              </div>
-            </div>
-            <Button type="submit" disabled={operating !== null}>
-              {operating === "saving" ? "Saving..." : "Save Changes"}
+          )}
+          {currentStatus === "refined" && (
+            <Button onClick={() => onTransition("po-review")} disabled={operating !== null}>
+              {operating === "transitioning" ? "Submitting..." : "Submit for PO Review"}
             </Button>
-          </form>
+          )}
+          {currentStatus === "needs-rework" && (
+            <div className="flex items-center gap-2">
+              <Input
+                value={refineFeedback}
+                onChange={(e) => setRefineFeedback(e.target.value)}
+                placeholder="Optional refinement feedback..."
+                className="flex-1 text-sm"
+              />
+              <Button variant="secondary" onClick={onRefineAndResubmit} disabled={operating !== null}>
+                {operating === "refining" ? "Refining..." : "Refine & Resubmit"}
+              </Button>
+            </div>
+          )}
+          {currentStatus === "po-review" && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Button onClick={() => onTransition("em-review")} disabled={operating !== null}>
+                  {operating === "transitioning" ? "Approving..." : "PO Approve"}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={rejectFeedback}
+                  onChange={(e) => setRejectFeedback(e.target.value)}
+                  placeholder="Rejection feedback..."
+                  className="flex-1 text-sm"
+                />
+                <Button variant="ghost" className="text-destructive/60 hover:text-destructive" onClick={onReject} disabled={operating !== null}>
+                  {operating === "rejecting" ? "Rejecting..." : "PO Reject"}
+                </Button>
+              </div>
+            </div>
+          )}
+          {currentStatus === "em-review" && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Button onClick={() => onTransition("approved")} disabled={operating !== null}>
+                  {operating === "transitioning" ? "Approving..." : "EM Approve"}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={rejectFeedback}
+                  onChange={(e) => setRejectFeedback(e.target.value)}
+                  placeholder="Rejection feedback..."
+                  className="flex-1 text-sm"
+                />
+                <Button variant="ghost" className="text-destructive/60 hover:text-destructive" onClick={onReject} disabled={operating !== null}>
+                  {operating === "rejecting" ? "Rejecting..." : "EM Reject"}
+                </Button>
+              </div>
+            </div>
+          )}
+          {currentStatus === "approved" && (
+            <div className="flex items-center gap-2">
+              <Button onClick={() => onExecute(false)} disabled={operating !== null}>
+                {operating === "planning" ? "Planning..." : "Plan Tasks"}
+              </Button>
+              <Button variant="secondary" onClick={() => onExecute(true)} disabled={operating !== null}>
+                {operating === "executing-full" ? "Executing..." : "Execute Full"}
+              </Button>
+            </div>
+          )}
+          {TERMINAL_STATUSES.includes(currentStatus) && currentStatus !== "approved" && (
+            <p className="text-xs text-muted-foreground/50">This requirement is in a terminal state ({currentStatus}).</p>
+          )}
         </CardContent>
       </Card>
+
+      {isEditable ? (
+        <Card className="border-border/40 bg-card/60">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Edit Requirement</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <form onSubmit={onSave} className="space-y-4">
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Title</label>
+                <Input required value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</label>
+                <Textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1" />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="edit-req-priority" className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Priority</label>
+                  <select id="edit-req-priority" value={priority} onChange={(e) => setPriority(e.target.value)} className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+                    {PRIORITY_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="edit-req-status" className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Status</label>
+                  <select id="edit-req-status" value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+                    {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Type</label>
+                  <Input value={reqType} onChange={(e) => setReqType(e.target.value)} className="mt-1" />
+                </div>
+              </div>
+              <Button type="submit" disabled={operating !== null}>
+                {operating === "saving" ? "Saving..." : "Save Changes"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-border/40 bg-card/60">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Requirement Details</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3 space-y-3">
+            <div>
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Title</span>
+              <p className="text-sm mt-0.5">{req.title}</p>
+            </div>
+            {req.description && (
+              <div>
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</span>
+                <p className="text-sm mt-0.5 whitespace-pre-wrap">{req.description}</p>
+              </div>
+            )}
+            <div className="flex gap-6">
+              <div>
+                <span className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Priority</span>
+                <p className="text-sm mt-0.5">{req.priorityRaw}</p>
+              </div>
+              {req.requirementType && (
+                <div>
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Type</span>
+                  <p className="text-sm mt-0.5">{req.requirementType}</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-border/40 bg-card/60">
         <CardHeader className="pb-2 pt-3 px-4">
@@ -709,64 +946,77 @@ export function PlanningRequirementDetailPage() {
                 <li key={i} className="flex items-center gap-2 text-sm group">
                   <span className="text-[10px] font-mono text-muted-foreground/40 w-4 text-right shrink-0">{i + 1}</span>
                   <span className="flex-1">{c}</span>
-                  <button type="button" onClick={() => removeDetailCriterion(i)} className="text-[10px] text-destructive/60 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity">remove</button>
+                  {isEditable && (
+                    <button type="button" onClick={() => removeDetailCriterion(i)} className="text-[10px] text-destructive/60 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity">remove</button>
+                  )}
                 </li>
               ))}
             </ol>
           ) : (
             <p className="text-xs text-muted-foreground/50 mb-3">No acceptance criteria defined.</p>
           )}
-          <div className="flex items-center gap-2">
-            <Input
-              value={detailNewCriterion}
-              onChange={(e) => setDetailNewCriterion(e.target.value)}
-              placeholder="Add acceptance criterion..."
-              className="text-sm"
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDetailCriterion(); } }}
-            />
-            <Button type="button" variant="outline" size="sm" onClick={addDetailCriterion}>Add</Button>
-          </div>
-          <p className="text-[10px] text-muted-foreground/40 mt-2">Saved with &quot;Save Changes&quot; above.</p>
+          {isEditable && (
+            <>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={detailNewCriterion}
+                  onChange={(e) => setDetailNewCriterion(e.target.value)}
+                  placeholder="Add acceptance criterion..."
+                  className="text-sm"
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDetailCriterion(); } }}
+                />
+                <Button type="button" variant="outline" size="sm" onClick={addDetailCriterion}>Add</Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground/40 mt-2">Saved with &quot;Save Changes&quot; above.</p>
+            </>
+          )}
         </CardContent>
       </Card>
 
-      <div className="grid md:grid-cols-2 gap-4">
-        {req.linkedTaskIds?.length > 0 && (
-          <Card className="border-border/40 bg-card/60">
-            <CardHeader className="pb-2 pt-3 px-4">
-              <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Linked Tasks</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 pb-3">
-              <div className="flex flex-wrap gap-2">
-                {req.linkedTaskIds.map((id: string) => (
-                  <Link key={id} to={`/tasks/${id}`}>
-                    <Badge variant="outline" className="font-mono text-[10px] hover:bg-accent/50 transition-colors cursor-pointer">{id}</Badge>
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
+      {req.linkedTaskIds?.length > 0 && (
         <Card className="border-border/40 bg-card/60">
           <CardHeader className="pb-2 pt-3 px-4">
-            <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">AI Refinement</CardTitle>
+            <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Linked Tasks</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-3">
-            <div className="flex items-center gap-2">
-              <Input
-                value={refineFeedback}
-                onChange={(e) => setRefineFeedback(e.target.value)}
-                placeholder="Optional refinement feedback..."
-                className="flex-1 text-sm"
-              />
-              <Button variant="secondary" size="sm" onClick={onRefine} disabled={operating !== null}>
-                {operating === "refining" ? "Refining..." : "Refine"}
-              </Button>
+            <div className="flex flex-wrap gap-2">
+              {req.linkedTaskIds.map((id: string) => (
+                <Link key={id} to={`/tasks/${id}`}>
+                  <Badge variant="outline" className="font-mono text-[10px] hover:bg-accent/50 transition-colors cursor-pointer">{id}</Badge>
+                </Link>
+              ))}
             </div>
           </CardContent>
         </Card>
-      </div>
+      )}
+
+      {executionResult && (
+        <Card className="border-border/40 bg-card/60">
+          <CardHeader className="pb-2 pt-3 px-4">
+            <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Execution Results</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <div className="grid grid-cols-4 gap-4 text-center">
+              <div>
+                <p className="text-lg font-semibold">{executionResult.requirementsProcessed}</p>
+                <p className="text-[10px] text-muted-foreground/50">Processed</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold">{executionResult.tasksCreated}</p>
+                <p className="text-[10px] text-muted-foreground/50">Tasks Created</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold">{executionResult.tasksReused}</p>
+                <p className="text-[10px] text-muted-foreground/50">Tasks Reused</p>
+              </div>
+              <div>
+                <p className="text-lg font-semibold">{executionResult.workflowsStarted}</p>
+                <p className="text-[10px] text-muted-foreground/50">Workflows Started</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center gap-3">
         <Link to="/planning/requirements"><Button variant="outline" size="sm">Back to List</Button></Link>
