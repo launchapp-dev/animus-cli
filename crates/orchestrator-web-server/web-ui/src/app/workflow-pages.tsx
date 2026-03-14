@@ -16,7 +16,7 @@ import {
   CancelWorkflowDocument,
   ApprovePhaseDocument,
 } from "@/lib/graphql/generated/graphql";
-import { statusColor, StatusDot, PageLoading, PageError, StatCard, SectionHeading } from "./shared";
+import { statusColor, StatusDot, PageLoading, PageError, StatCard, SectionHeading, Markdown } from "./shared";
 
 const PHASE_OUTPUT_QUERY = `query PhaseOutput($workflowId: ID!, $phaseId: String, $tail: Int) { phaseOutput(workflowId: $workflowId, phaseId: $phaseId, tail: $tail) { lines phaseId hasMore } }`;
 
@@ -542,7 +542,11 @@ export function WorkflowDetailPage() {
                           </button>
                         )}
                       </div>
-                      {p.errorMessage && <p className="text-xs text-destructive mt-0.5">{p.errorMessage}</p>}
+                      {p.errorMessage && (
+                        /[\n#*`\-|]/.test(p.errorMessage)
+                          ? <div className="mt-0.5 text-destructive"><Markdown content={p.errorMessage} /></div>
+                          : <p className="text-xs text-destructive mt-0.5">{p.errorMessage}</p>
+                      )}
                       {(p.startedAt || p.completedAt) && (
                         <p className="text-xs text-muted-foreground">
                           {p.startedAt && <>Started: {p.startedAt}</>}

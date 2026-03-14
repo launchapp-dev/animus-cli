@@ -31,7 +31,7 @@ import {
   RunWorkflowDocument,
 } from "@/lib/graphql/generated/graphql";
 import { toast } from "sonner";
-import { statusColor, priorityColor, PageLoading, PageError, SectionHeading } from "./shared";
+import { statusColor, priorityColor, PageLoading, PageError, SectionHeading, Markdown } from "./shared";
 
 export function TasksPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -501,7 +501,7 @@ export function TaskDetailPage() {
 
       {task.description && !editing && (
         <Card className="border-border/40 bg-card/60">
-          <CardContent className="pt-4 pb-3 px-4 text-sm whitespace-pre-wrap text-foreground/80">{task.description}</CardContent>
+          <CardContent className="pt-4 pb-3 px-4"><Markdown content={task.description} /></CardContent>
         </Card>
       )}
 

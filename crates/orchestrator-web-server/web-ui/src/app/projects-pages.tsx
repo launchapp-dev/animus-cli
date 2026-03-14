@@ -17,7 +17,7 @@ import {
   ArchiveProjectDocument,
   RequirementDetailDocument,
 } from "@/lib/graphql/generated/graphql";
-import { statusColor, priorityColor, PageLoading, PageError } from "./shared";
+import { statusColor, priorityColor, PageLoading, PageError, Markdown } from "./shared";
 
 export function ProjectsPage() {
   const [result, reexecute] = useQuery({ query: ProjectsDocument });
@@ -167,7 +167,7 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
-      {project.description && !editing && <p className="text-sm">{project.description}</p>}
+      {project.description && !editing && <Markdown content={project.description} />}
 
       {(project.techStack ?? []).length > 0 && (
         <div className="flex gap-2 flex-wrap">
@@ -242,7 +242,7 @@ export function RequirementDetailPage() {
       </div>
       {req.description && (
         <Card className="border-border/40 bg-card/60">
-          <CardContent className="pt-4 text-sm whitespace-pre-wrap">{req.description}</CardContent>
+          <CardContent className="pt-4"><Markdown content={req.description} /></CardContent>
         </Card>
       )}
       {(req.linkedTaskIds ?? []).length > 0 && (

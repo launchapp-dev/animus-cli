@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { Markdown } from "./shared";
 
 const VISION_QUERY = `
   query Vision {
@@ -916,7 +917,7 @@ export function PlanningRequirementDetailPage() {
             {req.description && (
               <div>
                 <span className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</span>
-                <p className="text-sm mt-0.5 whitespace-pre-wrap">{req.description}</p>
+                <Markdown content={req.description} />
               </div>
             )}
             <div className="flex gap-6">
