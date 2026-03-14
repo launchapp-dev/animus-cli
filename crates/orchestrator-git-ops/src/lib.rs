@@ -25,7 +25,7 @@ mod git_integration;
 mod git_runtime_refresh;
 
 pub use git_helpers::*;
-pub use git_integration::*;
+use git_integration::*;
 pub use git_merge::*;
 pub use git_runtime_refresh::*;
 pub use git_worktree::*;

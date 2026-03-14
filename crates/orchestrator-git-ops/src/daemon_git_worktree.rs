@@ -9,7 +9,7 @@ pub struct GitWorktreeEntry {
     pub branch: Option<String>,
 }
 
-pub fn parse_git_worktree_list_porcelain(output: &str) -> Vec<GitWorktreeEntry> {
+pub(crate) fn parse_git_worktree_list_porcelain(output: &str) -> Vec<GitWorktreeEntry> {
     let mut entries = Vec::new();
     let mut current_path: Option<String> = None;
     let mut current_branch: Option<String> = None;
@@ -83,7 +83,7 @@ fn normalize_path_for_match(path: &str) -> String {
     candidate.to_string_lossy().to_string()
 }
 
-pub fn infer_task_id_from_worktree(branch: Option<&str>, worktree_name: &str) -> Option<String> {
+pub(crate) fn infer_task_id_from_worktree(branch: Option<&str>, worktree_name: &str) -> Option<String> {
     let token_to_task_id = |token: &str| -> Option<String> {
         let suffix = token.trim().strip_prefix("task-")?;
         if suffix.is_empty() {
@@ -109,34 +109,6 @@ pub fn infer_task_id_from_worktree(branch: Option<&str>, worktree_name: &str) ->
         return token_to_task_id(rest);
     }
     token_to_task_id(name)
-}
-
-pub fn rebase_worktree_on_main(project_root: &str, worktree_cwd: &str) {
-    if worktree_cwd == project_root {
-        return;
-    }
-
-    let merge_base = "origin/main";
-    let status = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(worktree_cwd)
-        .args(["rebase", merge_base])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    match status {
-        Ok(s) if s.success() => {}
-        _ => {
-            let _ = ProcessCommand::new("git")
-                .arg("-C")
-                .arg(worktree_cwd)
-                .args(["rebase", "--abort"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
 }
 
 pub async fn auto_prune_completed_task_worktrees_after_merge(
@@ -305,7 +277,7 @@ pub async fn cleanup_task_worktree_if_enabled(
     Ok(())
 }
 
-pub fn remove_worktree_path(project_root: &str, worktree_path: &str) {
+pub(crate) fn remove_worktree_path(project_root: &str, worktree_path: &str) {
     let _ = ProcessCommand::new("git")
         .arg("-C")
         .arg(project_root)
@@ -319,7 +291,7 @@ pub fn remove_worktree_path(project_root: &str, worktree_path: &str) {
     }
 }
 
-pub fn is_branch_checked_out_in_any_worktree(
+pub(crate) fn is_branch_checked_out_in_any_worktree(
     project_root: &str,
     branch_name: &str,
 ) -> Result<bool> {

@@ -1,13 +1,15 @@
-use std::collections::HashSet;
-
 use protocol::SubjectDispatch;
 
 use crate::DispatchSelectionSource;
 
+#[cfg(test)]
+use std::collections::HashSet;
+
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
-pub struct DispatchCandidate {
-    pub dispatch: SubjectDispatch,
-    pub selection_source: DispatchSelectionSource,
+pub(crate) struct DispatchCandidate {
+    pub(crate) dispatch: SubjectDispatch,
+    pub(crate) selection_source: DispatchSelectionSource,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,13 +24,15 @@ impl PlannedDispatchStart {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct ReadyDispatchPlan {
-    pub ordered_starts: Vec<PlannedDispatchStart>,
-    pub completed_subject_ids: Vec<String>,
+pub(crate) struct ReadyDispatchPlan {
+    pub(crate) ordered_starts: Vec<PlannedDispatchStart>,
+    pub(crate) completed_subject_ids: Vec<String>,
 }
 
-pub fn plan_ready_dispatch(
+#[cfg(test)]
+pub(crate) fn plan_ready_dispatch(
     queued_candidates: &[DispatchCandidate],
     fallback_candidates: &[DispatchCandidate],
     completed_subject_ids: &[String],

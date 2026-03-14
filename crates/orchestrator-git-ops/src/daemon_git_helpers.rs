@@ -119,7 +119,7 @@ pub fn git_status(cwd: &str, args: &[&str], operation: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
+pub(crate) fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
     let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
     let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
 
@@ -132,7 +132,7 @@ pub fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
     "command failed without output".to_string()
 }
 
-pub fn run_external_command(
+pub(crate) fn run_external_command(
     cwd: &str,
     program: &str,
     args: &[&str],
@@ -156,7 +156,7 @@ pub fn run_external_command(
     Ok(())
 }
 
-pub fn is_terminal_task_status(status: TaskStatus) -> bool {
+pub(crate) fn is_terminal_task_status(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Done | TaskStatus::Cancelled)
 }
 
@@ -236,7 +236,7 @@ pub fn git_ref_exists(project_root: &str, reference: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn git_default_target_refs(project_root: &str) -> Vec<String> {
+pub(crate) fn git_default_target_refs(project_root: &str) -> Vec<String> {
     let mut refs = Vec::new();
 
     if let Ok(output) = ProcessCommand::new("git")
@@ -264,7 +264,7 @@ pub fn git_default_target_refs(project_root: &str) -> Vec<String> {
     refs
 }
 
-pub fn git_is_ancestor(
+pub(crate) fn git_is_ancestor(
     project_root: &str,
     source_ref: &str,
     target_ref: &str,
@@ -339,7 +339,7 @@ fn ensure_git_identity(cwd: &str) -> Result<()> {
     ::workflow_runner_v2::ensure_git_identity(cwd)
 }
 
-pub fn auto_commit_pending_source_changes(cwd: &str, task_id: &str) -> Result<()> {
+pub(crate) fn auto_commit_pending_source_changes(cwd: &str, task_id: &str) -> Result<()> {
     if !git_has_pending_changes(cwd)? {
         return Ok(());
     }

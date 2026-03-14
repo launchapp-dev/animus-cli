@@ -40,7 +40,7 @@ pub fn push_branch(cwd: &str, remote: &str, branch: &str) -> Result<()> {
     run_external_command(cwd, "git", &["push", remote, branch], "push source branch")
 }
 
-pub fn push_ref(cwd: &str, remote: &str, source_ref: &str, target_ref: &str) -> Result<()> {
+pub(crate) fn push_ref(cwd: &str, remote: &str, source_ref: &str, target_ref: &str) -> Result<()> {
     let refspec = format!("{source_ref}:{target_ref}");
     run_external_command(
         cwd,
@@ -104,7 +104,7 @@ pub fn create_pull_request(
     anyhow::bail!("gh pr create failed: {summary}")
 }
 
-pub fn enable_pull_request_auto_merge(cwd: &str, head_branch: &str) -> Result<()> {
+pub(crate) fn enable_pull_request_auto_merge(cwd: &str, head_branch: &str) -> Result<()> {
     let gh_available = ProcessCommand::new("gh")
         .arg("--version")
         .stdout(Stdio::null())
@@ -210,7 +210,7 @@ fn head_parent_count(cwd: &str) -> Result<usize> {
     Ok(token_count.saturating_sub(1))
 }
 
-pub fn persist_merge_result_and_push(
+pub(crate) fn persist_merge_result_and_push(
     project_root: &str,
     context: &MergeConflictContext,
 ) -> Result<()> {
@@ -591,6 +591,3 @@ pub async fn finalize_merge_conflict_resolution(
     Ok(())
 }
 
-pub fn cleanup_merge_conflict_worktree(project_root: &str, context: &MergeConflictContext) {
-    remove_worktree_path(project_root, context.merge_worktree_path.as_str());
-}

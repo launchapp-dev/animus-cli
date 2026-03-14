@@ -31,9 +31,3 @@ pub trait DispatchNoticeSink {
     fn notice(&mut self, notice: DispatchNotice);
 }
 
-#[derive(Default)]
-pub struct NoopDispatchNoticeSink;
-
-impl DispatchNoticeSink for NoopDispatchNoticeSink {
-    fn notice(&mut self, _notice: DispatchNotice) {}
-}

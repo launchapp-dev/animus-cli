@@ -3,7 +3,7 @@ use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum GitIntegrationOperation {
+pub(crate) enum GitIntegrationOperation {
     PushBranch {
         cwd: String,
         remote: String,
@@ -130,7 +130,7 @@ fn git_integration_operation_key(operation: &GitIntegrationOperation) -> String 
     }
 }
 
-pub fn enqueue_git_integration_operation(
+pub(crate) fn enqueue_git_integration_operation(
     project_root: &str,
     operation: GitIntegrationOperation,
 ) -> Result<()> {
@@ -152,63 +152,4 @@ pub fn enqueue_git_integration_operation(
     save_git_integration_outbox(project_root, &entries)
 }
 
-fn execute_git_integration_operation(operation: &GitIntegrationOperation) -> Result<()> {
-    match operation {
-        GitIntegrationOperation::PushBranch {
-            cwd,
-            remote,
-            branch,
-        } => push_branch(cwd, remote, branch),
-        GitIntegrationOperation::PushRef {
-            cwd,
-            remote,
-            source_ref,
-            target_ref,
-        } => push_ref(cwd, remote, source_ref, target_ref),
-        GitIntegrationOperation::OpenPullRequest {
-            cwd,
-            base_branch,
-            head_branch,
-            title,
-            body,
-            draft,
-        } => create_pull_request(cwd, base_branch, head_branch, title, body, *draft),
-        GitIntegrationOperation::EnablePullRequestAutoMerge { cwd, head_branch } => {
-            enable_pull_request_auto_merge(cwd, head_branch)
-        }
-    }
-}
 
-fn git_integration_retry_delay_secs(attempts: u32) -> i64 {
-    let shift = attempts.min(8);
-    (1_i64 << shift).clamp(2, 300)
-}
-
-pub fn flush_git_integration_outbox(project_root: &str) -> Result<()> {
-    let entries = load_git_integration_outbox(project_root)?;
-    if entries.is_empty() {
-        return Ok(());
-    }
-
-    let now = Utc::now().timestamp();
-    let mut remaining = Vec::new();
-    for mut entry in entries {
-        if entry.next_attempt_unix_secs > now {
-            remaining.push(entry);
-            continue;
-        }
-
-        match execute_git_integration_operation(&entry.operation) {
-            Ok(()) => {}
-            Err(error) => {
-                entry.attempts = entry.attempts.saturating_add(1);
-                entry.next_attempt_unix_secs =
-                    now.saturating_add(git_integration_retry_delay_secs(entry.attempts));
-                entry.last_error = Some(error.to_string());
-                remaining.push(entry);
-            }
-        }
-    }
-
-    save_git_integration_outbox(project_root, &remaining)
-}

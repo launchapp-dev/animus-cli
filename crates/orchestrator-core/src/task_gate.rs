@@ -13,12 +13,8 @@ use crate::{
 pub const DEPENDENCY_GATE_PREFIX: &str = "dependency gate:";
 pub const MERGE_GATE_PREFIX: &str = "merge gate:";
 
-pub fn dependency_blocked_reason(issues: &[String]) -> String {
+pub(crate) fn dependency_blocked_reason(issues: &[String]) -> String {
     format!("{DEPENDENCY_GATE_PREFIX} {}", issues.join("; "))
-}
-
-pub fn merge_blocked_reason(branch_name: &str) -> String {
-    format!("{MERGE_GATE_PREFIX} branch `{branch_name}` is not merged into default branch")
 }
 
 pub fn is_dependency_gate_block(task: &OrchestratorTask) -> bool {
@@ -28,14 +24,14 @@ pub fn is_dependency_gate_block(task: &OrchestratorTask) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_merge_gate_block(task: &OrchestratorTask) -> bool {
+pub(crate) fn is_merge_gate_block(task: &OrchestratorTask) -> bool {
     task.blocked_reason
         .as_deref()
         .map(|reason| reason.starts_with(MERGE_GATE_PREFIX))
         .unwrap_or(false)
 }
 
-pub async fn dependency_gate_issues_for_task(
+pub(crate) async fn dependency_gate_issues_for_task(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task: &OrchestratorTask,

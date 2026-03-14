@@ -5,11 +5,9 @@ pub mod daemon_config;
 pub mod daemon_tick_metrics;
 pub mod doctor;
 pub mod domain_state;
-pub mod events;
 pub mod execution_projection;
 pub mod model_quality;
 pub mod providers;
-pub mod runtime;
 pub mod runtime_contract;
 pub mod services;
 pub mod state_machines;
@@ -50,9 +48,8 @@ pub use domain_state::{
     QaPhaseGateResult, QaResultsStore, QaReviewApprovalRecord, QaReviewApprovalStore,
     ReviewDecision, ReviewEntityType, ReviewRecord, ReviewStore, ReviewerRole,
 };
-pub use events::{OrchestratorEvent, OrchestratorEventKind};
 pub use execution_projection::{
-    project_requirement_workflow_status, project_schedule_completion_status,
+    project_requirement_workflow_status,
     project_schedule_dispatch_attempt, project_schedule_execution_fact,
     project_task_blocked_with_reason, project_task_dispatch_failure, project_task_execution_fact,
     project_task_status, project_task_terminal_workflow_status, project_task_workflow_start,
@@ -62,7 +59,6 @@ pub use model_quality::{
     record_model_phase_outcome, ModelQualityLedger, ModelQualityRecord,
     MODEL_QUALITY_LEDGER_FILE_NAME,
 };
-pub use runtime::{EventSink, OrchestratorRuntime, RuntimeHandle};
 pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool,
     cli_capabilities_from_config, cli_tool_executable, cli_tool_read_only_flag,
@@ -84,8 +80,7 @@ pub use task_dispatch_policy::{
     routing_complexity_for_task, should_skip_task_dispatch, workflow_ref_for_task,
 };
 pub use task_gate::{
-    dependency_blocked_reason, dependency_gate_issues_for_task, is_dependency_gate_block,
-    is_merge_gate_block, merge_blocked_reason, promote_backlog_tasks_to_ready,
+    is_dependency_gate_block, promote_backlog_tasks_to_ready,
     retry_failed_task_workflows, DEPENDENCY_GATE_PREFIX, MERGE_GATE_PREFIX,
 };
 pub use types::{

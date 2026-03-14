@@ -138,7 +138,7 @@ pub fn project_schedule_dispatch_attempt(
     update_schedule_state(root, schedule_id, Some(run_at), status, true);
 }
 
-pub fn project_schedule_completion_status(root: &str, schedule_id: &str, status: &str) {
+pub(crate) fn project_schedule_completion_status(root: &str, schedule_id: &str, status: &str) {
     update_schedule_state(root, schedule_id, None, status, false);
 }
 
