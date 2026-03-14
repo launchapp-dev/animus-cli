@@ -142,6 +142,7 @@ impl QueryRoot {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn tasks_paginated(
         &self,
         ctx: &Context<'_>,

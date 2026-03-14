@@ -56,6 +56,7 @@ pub(super) fn require_native_session_backend(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn spawn_session_process(
     tool: &str,
     model: &str,
@@ -173,6 +174,7 @@ fn native_sessions_enabled() -> bool {
         .unwrap_or(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_session_request(
     tool: &str,
     model: &str,

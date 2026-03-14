@@ -5,6 +5,7 @@ use orchestrator_core::{
 };
 use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn project_terminal_workflow_result(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,

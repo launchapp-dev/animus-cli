@@ -172,6 +172,7 @@ pub(super) fn refine_vision_heuristically(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_task_filter(
     task_type: Option<String>,
     status: Option<String>,

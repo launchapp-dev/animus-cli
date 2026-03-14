@@ -42,6 +42,7 @@ fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessa
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     client: &ApiClient,
     model: &str,

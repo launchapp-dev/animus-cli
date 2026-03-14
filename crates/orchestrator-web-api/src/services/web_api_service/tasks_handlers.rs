@@ -15,6 +15,7 @@ use super::{
 };
 
 impl WebApiService {
+    #[allow(clippy::too_many_arguments)]
     pub async fn tasks_list(
         &self,
         task_type: Option<String>,
@@ -48,6 +49,7 @@ impl WebApiService {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn project_tasks(
         &self,
         id: &str,

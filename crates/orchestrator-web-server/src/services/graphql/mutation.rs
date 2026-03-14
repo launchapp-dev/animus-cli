@@ -40,6 +40,7 @@ impl MutationRoot {
         Ok(GqlTask(raw))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn update_task(
         &self,
         ctx: &Context<'_>,
@@ -250,6 +251,7 @@ impl MutationRoot {
         Ok(GqlRequirement(raw))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn update_requirement(
         &self,
         ctx: &Context<'_>,

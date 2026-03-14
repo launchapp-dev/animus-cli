@@ -25,6 +25,7 @@ use crate::{
     WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_workflow_run_dispatch(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,

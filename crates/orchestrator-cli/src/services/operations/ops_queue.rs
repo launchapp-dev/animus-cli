@@ -11,6 +11,7 @@ use protocol::SubjectDispatch;
 use super::ops_workflow::resolve_requirement_workflow_ref;
 use crate::{print_ok, print_value, QueueCommand};
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_enqueue_dispatch(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,

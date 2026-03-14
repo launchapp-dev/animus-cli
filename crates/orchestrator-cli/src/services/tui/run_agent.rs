@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::services::tui::app_event::AppEvent;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_agent_session(
     project_root: String,
     tool: String,

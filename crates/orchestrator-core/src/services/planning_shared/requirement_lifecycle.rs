@@ -464,6 +464,7 @@ fn requirement_comment_template(
         .to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_requirement_lifecycle_actions(
     requirement: &mut RequirementItem,
     vision: Option<&VisionDocument>,
