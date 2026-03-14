@@ -39,3 +39,9 @@ wt-test = "test --manifest-path"
 ao-bin-build = "build -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
 ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
 ao-bin-check = "check -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
+
+# Linting
+ao-lint = "clippy --workspace --all-targets"
+ao-lint-strict = "clippy --workspace --all-targets -- -D warnings"
+ao-fmt = "fmt --all"
+ao-fmt-check = "fmt --all -- --check"

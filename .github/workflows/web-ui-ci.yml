@@ -52,6 +52,16 @@ jobs:
         working-directory: crates/orchestrator-web-server/web-ui
         run: npm ci
 
+      - name: Lint
+        working-directory: crates/orchestrator-web-server/web-ui
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: crates/orchestrator-web-server/web-ui
+        continue-on-error: true
+        run: npm run typecheck
+
       - name: Run unit/component tests
         working-directory: crates/orchestrator-web-server/web-ui
         run: npm run test

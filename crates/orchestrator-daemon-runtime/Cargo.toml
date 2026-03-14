@@ -24,3 +24,6 @@ workflow-runner-v2 = { path = "../workflow-runner-v2" }
 [dev-dependencies]
 protocol = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
+
+[lints]
+workspace = true

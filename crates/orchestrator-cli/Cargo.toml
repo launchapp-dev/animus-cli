@@ -43,3 +43,6 @@ assert_cmd = "2"
 protocol = { path = "../protocol", features = ["test-utils"] }
 tempfile = "3"
 toml = "1.0"
+
+[lints]
+workspace = true

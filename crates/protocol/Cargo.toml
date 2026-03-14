@@ -28,3 +28,6 @@ protocol = { path = ".", features = ["test-utils"] }
 proptest = "1.4"
 schemars = "0.8"
 tempfile = "3"
+
+[lints]
+workspace = true

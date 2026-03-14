@@ -17,3 +17,6 @@ tokio = { version = "1", features = ["process"] }
 jira = ["reqwest"]
 linear = ["reqwest"]
 gitlab = ["reqwest"]
+
+[lints]
+workspace = true

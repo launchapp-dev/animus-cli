@@ -7,3 +7,6 @@ edition = "2021"
 http = "1"
 serde = { version = "1", features = ["derive"] }
 protocol = { path = "../protocol" }
+
+[lints]
+workspace = true
