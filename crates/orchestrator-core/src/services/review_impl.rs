@@ -56,21 +56,42 @@ struct WorkflowRuntimeConfigLite {
     workflows: Vec<WorkflowPipelineRuntimeRecord>,
 }
 
+struct HandoffConfig {
+    timeout_secs: u64,
+    max_depth: usize,
+    global_tool: Option<String>,
+    global_model: Option<String>,
+}
+
+impl HandoffConfig {
+    fn from_env() -> Self {
+        Self {
+            timeout_secs: std::env::var("AO_HANDOFF_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(DEFAULT_HANDOFF_TIMEOUT_SECS),
+            max_depth: std::env::var("AO_HANDOFF_MAX_DEPTH")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(DEFAULT_HANDOFF_MAX_DEPTH),
+            global_tool: std::env::var("AO_HANDOFF_TOOL").ok().filter(|v| !v.is_empty()),
+            global_model: std::env::var("AO_HANDOFF_MODEL").ok().filter(|v| !v.is_empty()),
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs)
+    }
+}
+
 fn handoff_timeout() -> Duration {
-    let secs = std::env::var("AO_HANDOFF_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_HANDOFF_TIMEOUT_SECS);
-    Duration::from_secs(secs)
+    HandoffConfig::from_env().timeout()
 }
 
 fn handoff_max_depth() -> usize {
-    std::env::var("AO_HANDOFF_MAX_DEPTH")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_HANDOFF_MAX_DEPTH)
+    HandoffConfig::from_env().max_depth
 }
 
 fn workflow_runtime_config_path(project_root: &Path) -> PathBuf {
@@ -117,6 +138,7 @@ fn resolve_handoff_execution_target(
     project_root: &Path,
     role: HandoffTargetRole,
 ) -> (String, String) {
+    let handoff = HandoffConfig::from_env();
     let role_key = role.as_str().to_ascii_uppercase().replace('-', "_");
     let tool_env_key = format!("AO_HANDOFF_TOOL_{role_key}");
     let model_env_key = format!("AO_HANDOFF_MODEL_{role_key}");
@@ -125,7 +147,7 @@ fn resolve_handoff_execution_target(
 
     let tool = std::env::var(&tool_env_key)
         .ok()
-        .or_else(|| std::env::var("AO_HANDOFF_TOOL").ok())
+        .or(handoff.global_tool)
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -139,7 +161,7 @@ fn resolve_handoff_execution_target(
 
     let model = std::env::var(&model_env_key)
         .ok()
-        .or_else(|| std::env::var("AO_HANDOFF_MODEL").ok())
+        .or(handoff.global_model)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .or_else(|| {
