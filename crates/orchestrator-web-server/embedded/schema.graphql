@@ -340,6 +340,7 @@ type GqlWorkflowDefinition {
 	name: String!
 	description: String
 	phases: [String!]!
+	isBuiltin: Boolean!
 }
 
 type GqlWorkflowSchedule {

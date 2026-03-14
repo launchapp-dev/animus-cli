@@ -270,6 +270,7 @@ pub struct GqlWorkflowDefinition {
     pub name: String,
     pub description: Option<String>,
     pub phases: Vec<String>,
+    pub is_builtin: bool,
 }
 
 #[derive(SimpleObject, Debug, Clone)]

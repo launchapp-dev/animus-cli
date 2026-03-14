@@ -358,6 +358,7 @@ impl QueryRoot {
                                     .collect()
                             })
                             .unwrap_or_default(),
+                        is_builtin: d.get("is_builtin").and_then(|v| v.as_bool()).unwrap_or(false),
                     })
                     .collect())
             }

@@ -386,6 +386,7 @@ export type GqlWorkflowDefinition = {
   __typename?: 'GqlWorkflowDefinition';
   description?: Maybe<Scalars['String']['output']>;
   id: Scalars['String']['output'];
+  isBuiltin: Scalars['Boolean']['output'];
   name: Scalars['String']['output'];
   phases: Array<Scalars['String']['output']>;
 };
@@ -862,7 +863,7 @@ export type ReadyTasksQuery = { __typename?: 'QueryRoot', readyTasks: Array<{ __
 export type WorkflowDefinitionsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type WorkflowDefinitionsQuery = { __typename?: 'QueryRoot', workflowDefinitions: Array<{ __typename?: 'GqlWorkflowDefinition', id: string, name: string, description?: string | null, phases: Array<string> }> };
+export type WorkflowDefinitionsQuery = { __typename?: 'QueryRoot', workflowDefinitions: Array<{ __typename?: 'GqlWorkflowDefinition', id: string, name: string, description?: string | null, phases: Array<string>, isBuiltin: boolean }> };
 
 export type DispatchRequirementsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1360,6 +1361,7 @@ export const WorkflowDefinitionsDocument = new TypedDocumentString(`
     name
     description
     phases
+    isBuiltin
   }
 }
     `) as unknown as TypedDocumentString<WorkflowDefinitionsQuery, WorkflowDefinitionsQueryVariables>;
