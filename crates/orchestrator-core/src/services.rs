@@ -77,9 +77,16 @@ pub fn plan_task_priority_rebalance(
     plan_task_priority_rebalance_from_tasks(tasks, options)
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DaemonStartConfig {
+    pub max_agents: Option<usize>,
+    pub skip_runner: bool,
+    pub runner_scope: Option<String>,
+}
+
 #[async_trait]
 pub trait DaemonServiceApi: Send + Sync {
-    async fn start(&self) -> Result<()>;
+    async fn start(&self, config: DaemonStartConfig) -> Result<()>;
     async fn stop(&self) -> Result<()>;
     async fn pause(&self) -> Result<()>;
     async fn resume(&self) -> Result<()>;

@@ -61,8 +61,8 @@ async fn mutate_daemon_state<T>(
 
 #[async_trait]
 impl DaemonServiceApi for InMemoryServiceHub {
-    async fn start(&self) -> Result<()> {
-        let max_agents = max_agents_override_from_env();
+    async fn start(&self, config: DaemonStartConfig) -> Result<()> {
+        let max_agents = config.max_agents;
         let mut lock = self.state.write().await;
         lock.daemon_status = DaemonStatus::Running;
         lock.daemon_max_agents = max_agents;
@@ -163,8 +163,8 @@ impl DaemonServiceApi for InMemoryServiceHub {
 
 #[async_trait]
 impl DaemonServiceApi for FileServiceHub {
-    async fn start(&self) -> Result<()> {
-        let max_agents = max_agents_override_from_env();
+    async fn start(&self, config: DaemonStartConfig) -> Result<()> {
+        let max_agents = config.max_agents;
         let runner_pid = match ensure_runner_started(&self.project_root).await {
             Ok(pid) => pid,
             Err(first_error) => {
