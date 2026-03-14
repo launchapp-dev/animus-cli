@@ -606,7 +606,7 @@ pub(crate) async fn handle_daemon(
                 std::env::remove_var("AO_RUNNER_SCOPE");
             }
 
-            let result = daemon.start().await;
+            let result = daemon.start(Default::default()).await;
             std::env::remove_var("AO_MAX_AGENTS");
             std::env::remove_var("AO_SKIP_RUNNER_START");
             std::env::remove_var("AO_RUNNER_SCOPE");

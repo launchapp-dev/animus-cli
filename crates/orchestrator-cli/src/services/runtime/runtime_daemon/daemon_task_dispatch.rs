@@ -26,7 +26,7 @@ pub fn dispatch_queued_entries_via_runner(
     root: &str,
     process_manager: &mut ProcessManager,
     limit: usize,
-) -> Result<DispatchWorkflowStartSummary> {
+) -> anyhow::Result<DispatchWorkflowStartSummary> {
     let active_subject_ids = process_manager.active_subject_ids();
     let queue_state = match load_dispatch_queue_state(root) {
         Ok(state) => state,
