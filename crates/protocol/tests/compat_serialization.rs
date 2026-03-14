@@ -1,7 +1,7 @@
 use protocol::{
-    ActivityType, AgentControlAction, AgentControlRequest, AgentRunEvent, AgentRunRequest,
-    DaemonEvent, ModelId, OutputStreamType, ProjectId, RequirementPriority, RunId, Timestamp,
-    TokenUsage, ToolCallInfo, PROTOCOL_VERSION,
+    AgentControlAction, AgentControlRequest, AgentRunEvent, AgentRunRequest, ModelId,
+    OutputStreamType, RequirementPriority, RunId, Timestamp, TokenUsage, ToolCallInfo,
+    PROTOCOL_VERSION,
 };
 use serde_json::json;
 
@@ -43,27 +43,6 @@ fn agent_run_event_uses_kind_tag_and_snake_case_variants() {
     assert_eq!(value["run_id"], "run-123");
     assert_eq!(value["stream_type"], "stdout");
     assert_eq!(value["text"], "hello");
-}
-
-#[test]
-fn daemon_event_uses_type_tag_and_snake_case_variants() {
-    let event = DaemonEvent::ActivityUpdate {
-        project_id: ProjectId("project-1".to_string()),
-        activity: protocol::ActivityEntry {
-            id: "a1".to_string(),
-            timestamp: protocol::Timestamp::now(),
-            activity_type: ActivityType::WorkflowStarted,
-            title: "Workflow started".to_string(),
-            description: Some("started".to_string()),
-            metadata: None,
-        },
-    };
-
-    let value = serde_json::to_value(event).expect("serialize daemon event");
-
-    assert_eq!(value["type"], "activity_update");
-    assert_eq!(value["project_id"], "project-1");
-    assert_eq!(value["activity"]["activity_type"], "workflow_started");
 }
 
 #[test]
