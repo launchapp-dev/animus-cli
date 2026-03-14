@@ -223,6 +223,23 @@ enum GqlScope {
 	SMALL
 }
 
+type GqlSkill {
+	name: String!
+	description: String!
+	category: String!
+	source: String!
+	skillType: String!
+}
+
+type GqlSkillDetail {
+	name: String!
+	description: String!
+	category: String!
+	source: String!
+	skillType: String!
+	definitionJson: String!
+}
+
 type GqlSystemInfo {
 	platform: String
 	arch: String
@@ -420,6 +437,8 @@ type QueryRoot {
 	readyTasks(search: String, limit: Int): [GqlTask!]!
 	workflowDefinitions: [GqlWorkflowDefinition!]!
 	workflowConfig: GqlWorkflowConfig!
+	skills: [GqlSkill!]!
+	skillDetail(name: String!): GqlSkillDetail
 	daemonHealth: GqlDaemonHealth!
 	daemonStatus: GqlDaemonStatus!
 	daemonLogs(limit: Int): [GqlDaemonLog!]!

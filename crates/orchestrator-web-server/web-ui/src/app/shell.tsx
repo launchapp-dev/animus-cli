@@ -69,6 +69,7 @@ export const NAV_GROUPS = [
     label: "Configure",
     items: [
       { to: "/workflows/builder", label: "Builder", icon: Wrench, badgeKey: null },
+      { to: "/skills", label: "Skills", icon: Layers, badgeKey: null },
       { to: "/settings/mcp", label: "Settings", icon: Settings, badgeKey: null },
     ],
   },

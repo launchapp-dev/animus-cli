@@ -265,6 +265,25 @@ impl GqlComplexity {
 // ---------------------------------------------------------------------------
 
 #[derive(SimpleObject, Debug, Clone)]
+pub struct GqlSkill {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub source: String,
+    pub skill_type: String,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
+pub struct GqlSkillDetail {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub source: String,
+    pub skill_type: String,
+    pub definition_json: String,
+}
+
+#[derive(SimpleObject, Debug, Clone)]
 pub struct GqlWorkflowDefinition {
     pub id: String,
     pub name: String,

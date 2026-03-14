@@ -7,8 +7,8 @@ use super::types::{
     GqlMcpServer, GqlPhaseCatalogEntry, GqlPhaseOutput, GqlProject, GqlQueueEntry, GqlQueueStats,
     GqlRequirement, GqlRequirementConnection, GqlSystemInfo, GqlTask, GqlTaskConnection,
     GqlTaskStats, GqlToolDefinition, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint,
-    GqlWorkflowConfig, GqlWorkflowConnection, GqlWorkflowDefinition, GqlWorkflowSchedule,
-    RawRequirement, RawTask, RawWorkflow,
+    GqlSkill, GqlSkillDetail, GqlWorkflowConfig, GqlWorkflowConnection, GqlWorkflowDefinition,
+    GqlWorkflowSchedule, RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -576,6 +576,38 @@ impl QueryRoot {
             agent_profiles,
             schedules,
         })
+    }
+
+    async fn skills(&self, ctx: &Context<'_>) -> Result<Vec<GqlSkill>> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api.skills_list().await.map_err(gql_err)?;
+        let items: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
+        Ok(items
+            .into_iter()
+            .map(|s| GqlSkill {
+                name: s.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                category: s.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                source: s.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                skill_type: s.get("skillType").and_then(|v| v.as_str()).unwrap_or("definition").to_string(),
+            })
+            .collect())
+    }
+
+    async fn skill_detail(&self, ctx: &Context<'_>, name: String) -> Result<Option<GqlSkillDetail>> {
+        let api = ctx.data::<WebApiService>()?;
+        match api.skill_show(&name).await {
+            Ok(val) => Ok(Some(GqlSkillDetail {
+                name: val.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                description: val.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                category: val.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                source: val.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                skill_type: val.get("skillType").and_then(|v| v.as_str()).unwrap_or("definition").to_string(),
+                definition_json: val.get("definitionJson").and_then(|v| v.as_str()).unwrap_or("{}").to_string(),
+            })),
+            Err(e) if e.code == "not_found" => Ok(None),
+            Err(e) => Err(gql_err(e)),
+        }
     }
 
     async fn daemon_health(&self, ctx: &Context<'_>) -> Result<GqlDaemonHealth> {

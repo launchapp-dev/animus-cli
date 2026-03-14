@@ -18,6 +18,7 @@ describe("PRIMARY_NAV_ITEMS", () => {
       "Errors",
       "Daemon",
       "Builder",
+      "Skills",
       "Settings",
     ]);
   });
