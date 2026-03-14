@@ -395,6 +395,18 @@ impl MutationRoot {
         Ok(GqlWorkflow(raw))
     }
 
+    async fn save_workflow_config(
+        &self,
+        ctx: &Context<'_>,
+        config_json: String,
+    ) -> Result<bool> {
+        let api = ctx.data::<WebApiService>()?;
+        api.save_workflow_config(&config_json)
+            .await
+            .map_err(gql_err)?;
+        Ok(true)
+    }
+
     async fn upsert_workflow_definition(
         &self,
         ctx: &Context<'_>,

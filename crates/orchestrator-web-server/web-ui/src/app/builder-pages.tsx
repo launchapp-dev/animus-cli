@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
@@ -15,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { WorkflowDefinitionsDocument } from "@/lib/graphql/generated/graphql";
+import { WorkflowDefinitionsDocument, WorkflowConfigDocument } from "@/lib/graphql/generated/graphql";
 import { PageLoading, PageError } from "./shared";
 import {
   Plus,
@@ -33,6 +34,15 @@ import {
   Layers,
   PaintBucket,
   FileText,
+  Settings,
+  Server,
+  Clock,
+  Users,
+  Terminal,
+  Hand,
+  Bot,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 interface PhaseEntry {
@@ -53,12 +63,72 @@ interface VariableEntry {
   default: string;
 }
 
+interface PostSuccessConfig {
+  mergeStrategy: string;
+  targetBranch: string;
+  createPr: boolean;
+  autoMerge: boolean;
+  cleanupWorktree: boolean;
+}
+
 interface WorkflowDef {
   id: string;
   name: string;
   description: string;
   phases: PhaseEntry[];
   variables: VariableEntry[];
+  postSuccess: PostSuccessConfig;
+}
+
+interface AgentProfileEntry {
+  name: string;
+  description: string;
+  role: string;
+  systemPrompt: string;
+  model: string;
+  tool: string;
+  mcpServers: string[];
+  skills: string[];
+}
+
+interface PhaseDefinitionEntry {
+  id: string;
+  mode: "agent" | "command" | "manual";
+  agent: string;
+  directive: string;
+  decisionContract: {
+    minConfidence: number;
+    maxRisk: string;
+    allowMissingDecision: boolean;
+  };
+  outputContract: {
+    kind: string;
+    requiredFields: string[];
+  };
+  command: {
+    program: string;
+    args: string[];
+    cwdMode: string;
+    timeoutSecs: number;
+  };
+  manualInstructions: string;
+  approvalNoteRequired: boolean;
+}
+
+interface McpServerEntry {
+  name: string;
+  command: string;
+  args: string[];
+  transport: string;
+  tools: string[];
+  env: Array<{ key: string; value: string }>;
+}
+
+interface ScheduleEntry {
+  id: string;
+  cron: string;
+  workflowRef: string;
+  enabled: boolean;
 }
 
 function makePhaseEntry(id: string): PhaseEntry {
@@ -76,6 +146,36 @@ function makePhaseEntry(id: string): PhaseEntry {
 
 function makeVariableEntry(): VariableEntry {
   return { name: "", description: "", required: false, default: "" };
+}
+
+function makePostSuccess(): PostSuccessConfig {
+  return { mergeStrategy: "squash", targetBranch: "main", createPr: true, autoMerge: false, cleanupWorktree: true };
+}
+
+function makeAgentProfile(): AgentProfileEntry {
+  return { name: "", description: "", role: "", systemPrompt: "", model: "", tool: "", mcpServers: [], skills: [] };
+}
+
+function makePhaseDefinition(id?: string): PhaseDefinitionEntry {
+  return {
+    id: id ?? "",
+    mode: "agent",
+    agent: "",
+    directive: "",
+    decisionContract: { minConfidence: 0.7, maxRisk: "medium", allowMissingDecision: false },
+    outputContract: { kind: "", requiredFields: [] },
+    command: { program: "", args: [], cwdMode: "project_root", timeoutSecs: 300 },
+    manualInstructions: "",
+    approvalNoteRequired: false,
+  };
+}
+
+function makeMcpServer(): McpServerEntry {
+  return { name: "", command: "", args: [], transport: "stdio", tools: [], env: [] };
+}
+
+function makeSchedule(): ScheduleEntry {
+  return { id: "", cron: "", workflowRef: "", enabled: true };
 }
 
 const TEMPLATES: Record<string, { name: string; description: string; phases: string[] }> = {
@@ -530,6 +630,808 @@ function TransitionsTable({ phases }: { phases: PhaseEntry[] }) {
   );
 }
 
+function TagInput({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+}) {
+  const [input, setInput] = useState("");
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        {values.map((v, i) => (
+          <Badge key={i} variant="secondary" className="text-xs font-mono gap-1">
+            {v}
+            <button type="button" onClick={() => onChange(values.filter((_, j) => j !== i))}>
+              <X className="h-2.5 w-2.5" />
+            </button>
+          </Badge>
+        ))}
+      </div>
+      <Input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder={placeholder ?? "Type and press Enter"}
+        className="text-xs h-7 font-mono"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && input.trim()) {
+            e.preventDefault();
+            onChange([...values, input.trim()]);
+            setInput("");
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function ListInput({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+}) {
+  const [input, setInput] = useState("");
+  return (
+    <div className="space-y-1">
+      {values.map((v, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <span className="text-xs font-mono flex-1 truncate">{v}</span>
+          <button type="button" onClick={() => onChange(values.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive">
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+      <div className="flex gap-1">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={placeholder ?? "Add item"}
+          className="text-xs h-7 font-mono flex-1"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && input.trim()) {
+              e.preventDefault();
+              onChange([...values, input.trim()]);
+              setInput("");
+            }
+          }}
+        />
+        <Button size="sm" variant="outline" className="h-7 px-2" disabled={!input.trim()} onClick={() => { if (input.trim()) { onChange([...values, input.trim()]); setInput(""); } }}>
+          <Plus className="h-3 w-3" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function KeyValueEditor({
+  entries,
+  onChange,
+}: {
+  entries: Array<{ key: string; value: string }>;
+  onChange: (v: Array<{ key: string; value: string }>) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      {entries.map((entry, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <Input
+            value={entry.key}
+            onChange={(e) => onChange(entries.map((en, j) => j === i ? { ...en, key: e.target.value } : en))}
+            placeholder="KEY"
+            className="text-xs h-7 font-mono flex-1"
+          />
+          <span className="text-muted-foreground text-xs">=</span>
+          <Input
+            value={entry.value}
+            onChange={(e) => onChange(entries.map((en, j) => j === i ? { ...en, value: e.target.value } : en))}
+            placeholder="value"
+            className="text-xs h-7 font-mono flex-1"
+          />
+          <button type="button" onClick={() => onChange(entries.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive">
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+      <Button size="sm" variant="outline" className="h-7" onClick={() => onChange([...entries, { key: "", value: "" }])}>
+        <Plus className="h-3 w-3 mr-1" />
+        Add
+      </Button>
+    </div>
+  );
+}
+
+function AgentProfileCard({
+  profile,
+  onEdit,
+  onDelete,
+}: {
+  profile: AgentProfileEntry;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Card className="border-border/40 bg-card/60">
+      <CardContent className="pt-3 pb-3 px-4">
+        <div className="flex items-start justify-between">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-sm text-primary font-medium">{profile.name || "Unnamed"}</p>
+            {profile.description && <p className="text-xs text-muted-foreground/60 mt-0.5">{profile.description}</p>}
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              {profile.role && <Badge variant="outline" className="text-[10px]">{profile.role}</Badge>}
+              {profile.model && <span className="text-[10px] text-muted-foreground font-mono">{profile.model}</span>}
+              {profile.tool && <span className="text-[10px] text-muted-foreground font-mono">{profile.tool}</span>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0 ml-2">
+            <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onEdit}>
+              <Pencil className="h-3 w-3" />
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive/60 hover:text-destructive" onClick={onDelete}>
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AgentProfileEditor({
+  profile,
+  onSave,
+  onCancel,
+}: {
+  profile: AgentProfileEntry;
+  onSave: (p: AgentProfileEntry) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState<AgentProfileEntry>({ ...profile, mcpServers: [...profile.mcpServers], skills: [...profile.skills] });
+  return (
+    <Card className="border-primary/30 bg-card/60">
+      <CardContent className="pt-3 pb-3 px-4 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Name</label>
+            <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="agent-name" disabled={!!profile.name} />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Role</label>
+            <Input value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })} className="mt-1 text-xs h-8" placeholder="implementer" />
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Description</label>
+          <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="mt-1 text-xs h-8" placeholder="What this agent does" />
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">System Prompt</label>
+          <Textarea value={draft.systemPrompt} onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })} className="mt-1 font-mono text-xs" rows={8} placeholder="System prompt for this agent profile" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Model</label>
+            <select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+              <option value="">Auto</option>
+              <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+              <option value="claude-opus-4-6">claude-opus-4-6</option>
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Tool</label>
+            <select value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+              <option value="">Auto</option>
+              <option value="claude">claude</option>
+              <option value="codex">codex</option>
+              <option value="gemini">gemini</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">MCP Servers</label>
+          <div className="mt-1">
+            <TagInput values={draft.mcpServers} onChange={(v) => setDraft({ ...draft, mcpServers: v })} placeholder="Type server name + Enter" />
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Skills</label>
+          <div className="mt-1">
+            <TagInput values={draft.skills} onChange={(v) => setDraft({ ...draft, skills: v })} placeholder="Type skill name + Enter" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>Save</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AgentsTab({
+  agents,
+  onChange,
+}: {
+  agents: AgentProfileEntry[];
+  onChange: (agents: AgentProfileEntry[]) => void;
+}) {
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Agent Profiles</p>
+        <Button size="sm" variant="outline" onClick={() => { setAdding(true); setEditingIdx(null); }}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add Agent
+        </Button>
+      </div>
+      {adding && (
+        <AgentProfileEditor
+          profile={makeAgentProfile()}
+          onSave={(p) => { onChange([...agents, p]); setAdding(false); }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+      {agents.map((agent, i) =>
+        editingIdx === i ? (
+          <AgentProfileEditor
+            key={i}
+            profile={agent}
+            onSave={(p) => { onChange(agents.map((a, j) => j === i ? p : a)); setEditingIdx(null); }}
+            onCancel={() => setEditingIdx(null)}
+          />
+        ) : (
+          <AgentProfileCard
+            key={i}
+            profile={agent}
+            onEdit={() => { setEditingIdx(i); setAdding(false); }}
+            onDelete={() => onChange(agents.filter((_, j) => j !== i))}
+          />
+        )
+      )}
+      {agents.length === 0 && !adding && (
+        <p className="text-sm text-muted-foreground/60 text-center py-4">No agent profiles defined</p>
+      )}
+    </div>
+  );
+}
+
+function PhaseDefinitionEditor({
+  phase,
+  agentNames,
+  onSave,
+  onCancel,
+}: {
+  phase: PhaseDefinitionEntry;
+  agentNames: string[];
+  onSave: (p: PhaseDefinitionEntry) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState<PhaseDefinitionEntry>({
+    ...phase,
+    decisionContract: { ...phase.decisionContract },
+    outputContract: { ...phase.outputContract, requiredFields: [...phase.outputContract.requiredFields] },
+    command: { ...phase.command, args: [...phase.command.args] },
+  });
+
+  return (
+    <Card className="border-primary/30 bg-card/60">
+      <CardContent className="pt-3 pb-3 px-4 space-y-3">
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Phase ID</label>
+          <Input value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="phase-id" disabled={!!phase.id} />
+        </div>
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium mb-1 block">Mode</label>
+          <div className="flex gap-1">
+            {(["agent", "command", "manual"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setDraft({ ...draft, mode: m })}
+                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  draft.mode === m ? "border-primary/40 bg-primary/10 text-primary" : "border-border/40 bg-card/60 text-muted-foreground hover:border-border/60"
+                }`}
+              >
+                {m === "agent" && <Bot className="h-3 w-3" />}
+                {m === "command" && <Terminal className="h-3 w-3" />}
+                {m === "manual" && <Hand className="h-3 w-3" />}
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {draft.mode === "agent" && (
+          <>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Agent</label>
+              <select value={draft.agent} onChange={(e) => setDraft({ ...draft, agent: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+                <option value="">Select agent</option>
+                {agentNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Directive</label>
+              <Textarea value={draft.directive} onChange={(e) => setDraft({ ...draft, directive: e.target.value })} className="mt-1 font-mono text-xs" rows={4} placeholder="Instructions for the agent" />
+            </div>
+            <Separator className="opacity-30" />
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Decision Contract</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Min Confidence</label>
+                <Input type="number" min={0} max={1} step={0.1} value={draft.decisionContract.minConfidence} onChange={(e) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, minConfidence: parseFloat(e.target.value) || 0 } })} className="mt-1 text-xs h-8" />
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Max Risk</label>
+                <select value={draft.decisionContract.maxRisk} onChange={(e) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, maxRisk: e.target.value } })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input type="checkbox" checked={draft.decisionContract.allowMissingDecision} onChange={(e) => setDraft({ ...draft, decisionContract: { ...draft.decisionContract, allowMissingDecision: e.target.checked } })} className="rounded" />
+                  Allow Missing
+                </label>
+              </div>
+            </div>
+            <Separator className="opacity-30" />
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Output Contract</p>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Kind</label>
+              <Input value={draft.outputContract.kind} onChange={(e) => setDraft({ ...draft, outputContract: { ...draft.outputContract, kind: e.target.value } })} className="mt-1 text-xs h-8 font-mono" placeholder="output kind" />
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Required Fields</label>
+              <div className="mt-1">
+                <TagInput values={draft.outputContract.requiredFields} onChange={(v) => setDraft({ ...draft, outputContract: { ...draft.outputContract, requiredFields: v } })} placeholder="Field name + Enter" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {draft.mode === "command" && (
+          <>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Program</label>
+              <Input value={draft.command.program} onChange={(e) => setDraft({ ...draft, command: { ...draft.command, program: e.target.value } })} className="mt-1 font-mono text-xs h-8" placeholder="/usr/bin/program" />
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Args</label>
+              <div className="mt-1">
+                <ListInput values={draft.command.args} onChange={(v) => setDraft({ ...draft, command: { ...draft.command, args: v } })} placeholder="Argument" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">CWD Mode</label>
+                <select value={draft.command.cwdMode} onChange={(e) => setDraft({ ...draft, command: { ...draft.command, cwdMode: e.target.value } })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+                  <option value="project_root">project_root</option>
+                  <option value="task_root">task_root</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Timeout (secs)</label>
+                <Input type="number" min={1} value={draft.command.timeoutSecs} onChange={(e) => setDraft({ ...draft, command: { ...draft.command, timeoutSecs: parseInt(e.target.value) || 300 } })} className="mt-1 text-xs h-8" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {draft.mode === "manual" && (
+          <>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Instructions</label>
+              <Textarea value={draft.manualInstructions} onChange={(e) => setDraft({ ...draft, manualInstructions: e.target.value })} className="mt-1 text-xs" rows={6} placeholder="Instructions for the manual step" />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+              <input type="checkbox" checked={draft.approvalNoteRequired} onChange={(e) => setDraft({ ...draft, approvalNoteRequired: e.target.checked })} className="rounded" />
+              Approval Note Required
+            </label>
+          </>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.id.trim()}>Save</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PhaseConfigTab({
+  phases,
+  agentNames,
+  onChange,
+}: {
+  phases: PhaseDefinitionEntry[];
+  agentNames: string[];
+  onChange: (phases: PhaseDefinitionEntry[]) => void;
+}) {
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Phase Definitions</p>
+        <Button size="sm" variant="outline" onClick={() => { setAdding(true); setEditingIdx(null); }}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add Phase Definition
+        </Button>
+      </div>
+      {adding && (
+        <PhaseDefinitionEditor
+          phase={makePhaseDefinition()}
+          agentNames={agentNames}
+          onSave={(p) => { onChange([...phases, p]); setAdding(false); }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+      {phases.map((phase, i) =>
+        editingIdx === i ? (
+          <PhaseDefinitionEditor
+            key={i}
+            phase={phase}
+            agentNames={agentNames}
+            onSave={(p) => { onChange(phases.map((ph, j) => j === i ? p : ph)); setEditingIdx(null); }}
+            onCancel={() => setEditingIdx(null)}
+          />
+        ) : (
+          <Card key={i} className="border-border/40 bg-card/60">
+            <CardContent className="pt-3 pb-3 px-4">
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-sm font-medium">{phase.id || "Unnamed"}</p>
+                    <Badge variant="outline" className="text-[10px]">
+                      {phase.mode === "agent" && <Bot className="h-2.5 w-2.5 mr-0.5" />}
+                      {phase.mode === "command" && <Terminal className="h-2.5 w-2.5 mr-0.5" />}
+                      {phase.mode === "manual" && <Hand className="h-2.5 w-2.5 mr-0.5" />}
+                      {phase.mode}
+                    </Badge>
+                  </div>
+                  {phase.mode === "agent" && phase.agent && (
+                    <p className="text-xs text-muted-foreground/60 mt-0.5 font-mono">{phase.agent}</p>
+                  )}
+                  {phase.directive && (
+                    <p className="text-xs text-muted-foreground/60 mt-0.5 truncate max-w-md">{phase.directive}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditingIdx(i); setAdding(false); }}>
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive/60 hover:text-destructive" onClick={() => onChange(phases.filter((_, j) => j !== i))}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {phases.length === 0 && !adding && (
+        <p className="text-sm text-muted-foreground/60 text-center py-4">No phase definitions configured</p>
+      )}
+    </div>
+  );
+}
+
+function McpServerEditor({
+  server,
+  onSave,
+  onCancel,
+}: {
+  server: McpServerEntry;
+  onSave: (s: McpServerEntry) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState<McpServerEntry>({ ...server, args: [...server.args], tools: [...server.tools], env: server.env.map((e) => ({ ...e })) });
+  return (
+    <Card className="border-primary/30 bg-card/60">
+      <CardContent className="pt-3 pb-3 px-4 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Name</label>
+            <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="server-name" />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Transport</label>
+            <select value={draft.transport} onChange={(e) => setDraft({ ...draft, transport: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+              <option value="stdio">stdio</option>
+              <option value="sse">sse</option>
+              <option value="streamable-http">streamable-http</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Command</label>
+          <Input value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="/path/to/server" />
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Args</label>
+          <div className="mt-1">
+            <ListInput values={draft.args} onChange={(v) => setDraft({ ...draft, args: v })} placeholder="Argument" />
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Tools</label>
+          <div className="mt-1">
+            <TagInput values={draft.tools} onChange={(v) => setDraft({ ...draft, tools: v })} placeholder="Tool name + Enter" />
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Environment Variables</label>
+          <div className="mt-1">
+            <KeyValueEditor entries={draft.env} onChange={(v) => setDraft({ ...draft, env: v })} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.name.trim()}>Save</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function McpServersTab({
+  servers,
+  onChange,
+}: {
+  servers: McpServerEntry[];
+  onChange: (servers: McpServerEntry[]) => void;
+}) {
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">MCP Servers</p>
+        <Button size="sm" variant="outline" onClick={() => { setAdding(true); setEditingIdx(null); }}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add Server
+        </Button>
+      </div>
+      {adding && (
+        <McpServerEditor
+          server={makeMcpServer()}
+          onSave={(s) => { onChange([...servers, s]); setAdding(false); }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+      {servers.map((server, i) =>
+        editingIdx === i ? (
+          <McpServerEditor
+            key={i}
+            server={server}
+            onSave={(s) => { onChange(servers.map((sv, j) => j === i ? s : sv)); setEditingIdx(null); }}
+            onCancel={() => setEditingIdx(null)}
+          />
+        ) : (
+          <Card key={i} className="border-border/40 bg-card/60">
+            <CardContent className="pt-3 pb-3 px-4">
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-sm font-medium">{server.name || "Unnamed"}</p>
+                    {server.transport && <Badge variant="outline" className="text-[10px]">{server.transport}</Badge>}
+                  </div>
+                  <p className="text-xs text-muted-foreground/60 mt-0.5 font-mono truncate">{server.command} {server.args.join(" ")}</p>
+                  {server.tools.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {server.tools.map((t, ti) => (
+                        <Badge key={ti} variant="secondary" className="text-[10px] font-mono">{t}</Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditingIdx(i); setAdding(false); }}>
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive/60 hover:text-destructive" onClick={() => onChange(servers.filter((_, j) => j !== i))}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {servers.length === 0 && !adding && (
+        <p className="text-sm text-muted-foreground/60 text-center py-4">No MCP servers configured</p>
+      )}
+    </div>
+  );
+}
+
+function ScheduleEditor({
+  schedule,
+  workflowIds,
+  onSave,
+  onCancel,
+}: {
+  schedule: ScheduleEntry;
+  workflowIds: string[];
+  onSave: (s: ScheduleEntry) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState<ScheduleEntry>({ ...schedule });
+  return (
+    <Card className="border-primary/30 bg-card/60">
+      <CardContent className="pt-3 pb-3 px-4 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">ID</label>
+            <Input value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="schedule-id" />
+          </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Workflow Ref</label>
+            <select value={draft.workflowRef} onChange={(e) => setDraft({ ...draft, workflowRef: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+              <option value="">Select workflow</option>
+              {workflowIds.map((id) => <option key={id} value={id}>{id}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Cron Expression</label>
+          <Input value={draft.cron} onChange={(e) => setDraft({ ...draft, cron: e.target.value })} className="mt-1 font-mono text-xs h-8" placeholder="0 */6 * * *" />
+          <p className="text-[10px] text-muted-foreground/40 mt-0.5">Format: min hour day month weekday</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+          <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} className="rounded" />
+          Enabled
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button size="sm" onClick={() => onSave(draft)} disabled={!draft.id.trim()}>Save</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SchedulesTab({
+  schedules,
+  workflowIds,
+  onChange,
+}: {
+  schedules: ScheduleEntry[];
+  workflowIds: string[];
+  onChange: (schedules: ScheduleEntry[]) => void;
+}) {
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Schedules</p>
+        <Button size="sm" variant="outline" onClick={() => { setAdding(true); setEditingIdx(null); }}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add Schedule
+        </Button>
+      </div>
+      {adding && (
+        <ScheduleEditor
+          schedule={makeSchedule()}
+          workflowIds={workflowIds}
+          onSave={(s) => { onChange([...schedules, s]); setAdding(false); }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+      {schedules.map((sched, i) =>
+        editingIdx === i ? (
+          <ScheduleEditor
+            key={i}
+            schedule={sched}
+            workflowIds={workflowIds}
+            onSave={(s) => { onChange(schedules.map((sc, j) => j === i ? s : sc)); setEditingIdx(null); }}
+            onCancel={() => setEditingIdx(null)}
+          />
+        ) : (
+          <Card key={i} className="border-border/40 bg-card/60">
+            <CardContent className="pt-3 pb-3 px-4">
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-mono text-sm font-medium">{sched.id || "Unnamed"}</p>
+                    <Badge variant={sched.enabled ? "default" : "secondary"} className="text-[10px]">
+                      {sched.enabled ? "enabled" : "disabled"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground/60 mt-0.5 font-mono">{sched.cron}</p>
+                  {sched.workflowRef && <p className="text-xs text-muted-foreground/60 font-mono">{sched.workflowRef}</p>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => { setEditingIdx(i); setAdding(false); }}>
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive/60 hover:text-destructive" onClick={() => onChange(schedules.filter((_, j) => j !== i))}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {schedules.length === 0 && !adding && (
+        <p className="text-sm text-muted-foreground/60 text-center py-4">No schedules configured</p>
+      )}
+    </div>
+  );
+}
+
+function PostSuccessSection({
+  config,
+  onChange,
+}: {
+  config: PostSuccessConfig;
+  onChange: (c: PostSuccessConfig) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <Card className="border-border/40 bg-card/60">
+      <button type="button" onClick={() => setExpanded(!expanded)} className="w-full px-4 py-3 flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Post-Success Config</span>
+        {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+      {expanded && (
+        <CardContent className="px-4 pb-4 pt-0 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Merge Strategy</label>
+              <select value={config.mergeStrategy} onChange={(e) => onChange({ ...config, mergeStrategy: e.target.value })} className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-xs">
+                <option value="squash">squash</option>
+                <option value="merge">merge</option>
+                <option value="rebase">rebase</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-muted-foreground/60 font-medium">Target Branch</label>
+              <Input value={config.targetBranch} onChange={(e) => onChange({ ...config, targetBranch: e.target.value })} className="mt-1 text-xs h-8 font-mono" placeholder="main" />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+              <input type="checkbox" checked={config.createPr} onChange={(e) => onChange({ ...config, createPr: e.target.checked })} className="rounded" />
+              Create PR
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+              <input type="checkbox" checked={config.autoMerge} onChange={(e) => onChange({ ...config, autoMerge: e.target.checked })} className="rounded" />
+              Auto Merge
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+              <input type="checkbox" checked={config.cleanupWorktree} onChange={(e) => onChange({ ...config, cleanupWorktree: e.target.checked })} className="rounded" />
+              Cleanup Worktree
+            </label>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+const SAVE_CONFIG = `mutation SaveWorkflowConfig($configJson: String!) { saveWorkflowConfig(configJson: $configJson) }`;
+
 const UPSERT_MUTATION = `mutation UpsertWorkflowDefinition($id: String!, $name: String!, $description: String, $phases: String!, $variables: String) { upsertWorkflowDefinition(id: $id, name: $name, description: $description, phases: $phases, variables: $variables) }`;
 
 function EditorCore({
@@ -548,6 +1450,47 @@ function EditorCore({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(0);
   const [, upsertDef] = useMutation(UPSERT_MUTATION);
+  const [, saveConfig] = useMutation(SAVE_CONFIG);
+
+  const [agents, setAgents] = useState<AgentProfileEntry[]>([]);
+  const [phaseDefinitions, setPhaseDefinitions] = useState<PhaseDefinitionEntry[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleEntry[]>([]);
+
+  const [configResult] = useQuery({ query: WorkflowConfigDocument });
+
+  useEffect(() => {
+    if (configResult.data?.workflowConfig) {
+      const cfg = configResult.data.workflowConfig;
+      setAgents(cfg.agentProfiles.map((a) => ({
+        name: a.name,
+        description: a.description,
+        role: a.role ?? "",
+        systemPrompt: "",
+        model: a.model ?? "",
+        tool: a.tool ?? "",
+        mcpServers: [...a.mcpServers],
+        skills: [...a.skills],
+      })));
+      setMcpServers(cfg.mcpServers.map((s) => ({
+        name: s.name,
+        command: s.command,
+        args: [...s.args],
+        transport: s.transport ?? "stdio",
+        tools: [...s.tools],
+        env: s.env.map((e) => ({ key: e.key, value: e.value })),
+      })));
+      setSchedules(cfg.schedules.map((s) => ({
+        id: s.id,
+        cron: s.cron,
+        workflowRef: s.workflowRef ?? "",
+        enabled: s.enabled,
+      })));
+      if (cfg.phaseCatalog.length > 0 && phaseDefinitions.length === 0) {
+        setPhaseDefinitions(cfg.phaseCatalog.map((p) => makePhaseDefinition(p.id)));
+      }
+    }
+  }, [configResult.data]);
 
   const errorPhaseIds = useMemo(() => {
     if (!validation) return new Set<string>();
@@ -596,6 +1539,13 @@ function EditorCore({
     setValidation(validateDef(def));
   };
 
+  const agentNames = useMemo(() => agents.map((a) => a.name).filter(Boolean), [agents]);
+  const workflowIds = useMemo(() => {
+    const ids: string[] = [];
+    if (def.id) ids.push(def.id);
+    return ids;
+  }, [def.id]);
+
   const onSave = async () => {
     const result = validateDef(def);
     setValidation(result);
@@ -629,6 +1579,70 @@ function EditorCore({
     });
     if (err) {
       setSaveError(err.message);
+      return;
+    }
+
+    const configJson = JSON.stringify({
+      agents: Object.fromEntries(agents.map((a) => [a.name, {
+        description: a.description || undefined,
+        role: a.role || undefined,
+        system_prompt: a.systemPrompt || undefined,
+        model: a.model || undefined,
+        tool: a.tool || undefined,
+        mcp_servers: a.mcpServers.length > 0 ? a.mcpServers : undefined,
+        skills: a.skills.length > 0 ? a.skills : undefined,
+      }])),
+      phases: Object.fromEntries(phaseDefinitions.map((p) => [p.id, {
+        mode: p.mode,
+        agent: p.mode === "agent" ? p.agent || undefined : undefined,
+        directive: p.mode === "agent" ? p.directive || undefined : undefined,
+        decision_contract: p.mode === "agent" ? {
+          min_confidence: p.decisionContract.minConfidence,
+          max_risk: p.decisionContract.maxRisk,
+          allow_missing_decision: p.decisionContract.allowMissingDecision || undefined,
+        } : undefined,
+        output_contract: p.mode === "agent" && p.outputContract.kind ? {
+          kind: p.outputContract.kind,
+          required_fields: p.outputContract.requiredFields.length > 0 ? p.outputContract.requiredFields : undefined,
+        } : undefined,
+        command: p.mode === "command" ? {
+          program: p.command.program,
+          args: p.command.args.length > 0 ? p.command.args : undefined,
+          cwd_mode: p.command.cwdMode,
+          timeout_secs: p.command.timeoutSecs,
+        } : undefined,
+        instructions: p.mode === "manual" ? p.manualInstructions || undefined : undefined,
+        approval_note_required: p.mode === "manual" ? p.approvalNoteRequired || undefined : undefined,
+      }])),
+      mcp_servers: Object.fromEntries(mcpServers.map((s) => [s.name, {
+        command: s.command,
+        args: s.args.length > 0 ? s.args : undefined,
+        transport: s.transport !== "stdio" ? s.transport : undefined,
+        tools: s.tools.length > 0 ? s.tools : undefined,
+        env: s.env.length > 0 ? Object.fromEntries(s.env.map((e) => [e.key, e.value])) : undefined,
+      }])),
+      schedules: schedules.length > 0 ? schedules.map((s) => ({
+        id: s.id,
+        cron: s.cron,
+        workflow_ref: s.workflowRef || undefined,
+        enabled: s.enabled,
+      })) : undefined,
+      workflows: {
+        [def.id]: {
+          post_success: {
+            merge_strategy: def.postSuccess.mergeStrategy,
+            target_branch: def.postSuccess.targetBranch,
+            create_pr: def.postSuccess.createPr,
+            auto_merge: def.postSuccess.autoMerge,
+            cleanup_worktree: def.postSuccess.cleanupWorktree,
+          },
+        },
+      },
+    });
+
+    const { error: configErr } = await saveConfig({ configJson });
+    if (configErr) {
+      setSaveError(configErr.message);
     } else {
       setDirty(false);
       setSaveMsg("Workflow saved");
@@ -730,11 +1744,17 @@ function EditorCore({
         </CardContent>
       </Card>
 
+      <PostSuccessSection config={def.postSuccess} onChange={(c) => updateDef((d) => ({ ...d, postSuccess: c }))} />
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value={0}>Phases</TabsTrigger>
-          <TabsTrigger value={1}>Variables</TabsTrigger>
-          <TabsTrigger value={2}>Transitions</TabsTrigger>
+          <TabsTrigger value={1}><Users className="h-3 w-3 mr-1" />Agents</TabsTrigger>
+          <TabsTrigger value={2}><Settings className="h-3 w-3 mr-1" />Phase Config</TabsTrigger>
+          <TabsTrigger value={3}><Server className="h-3 w-3 mr-1" />MCP Servers</TabsTrigger>
+          <TabsTrigger value={4}><Clock className="h-3 w-3 mr-1" />Schedules</TabsTrigger>
+          <TabsTrigger value={5}>Variables</TabsTrigger>
+          <TabsTrigger value={6}>Transitions</TabsTrigger>
         </TabsList>
 
         <TabsContent value={0}>
@@ -783,6 +1803,22 @@ function EditorCore({
         </TabsContent>
 
         <TabsContent value={1}>
+          <AgentsTab agents={agents} onChange={(a) => { setAgents(a); setDirty(true); }} />
+        </TabsContent>
+
+        <TabsContent value={2}>
+          <PhaseConfigTab phases={phaseDefinitions} agentNames={agentNames} onChange={(p) => { setPhaseDefinitions(p); setDirty(true); }} />
+        </TabsContent>
+
+        <TabsContent value={3}>
+          <McpServersTab servers={mcpServers} onChange={(s) => { setMcpServers(s); setDirty(true); }} />
+        </TabsContent>
+
+        <TabsContent value={4}>
+          <SchedulesTab schedules={schedules} workflowIds={workflowIds} onChange={(s) => { setSchedules(s); setDirty(true); }} />
+        </TabsContent>
+
+        <TabsContent value={5}>
           <div className="mt-4 space-y-3">
             {def.variables.map((v, i) => (
               <VariableCard
@@ -816,7 +1852,7 @@ function EditorCore({
           </div>
         </TabsContent>
 
-        <TabsContent value={2}>
+        <TabsContent value={6}>
           <div className="mt-4">
             <Card className="border-border/40 bg-card/60">
               <CardHeader className="pb-2 pt-3 px-4">
@@ -1000,6 +2036,7 @@ export function WorkflowBuilderNewPage() {
       description: template.description,
       phases: template.phases.map((id) => makePhaseEntry(id)),
       variables: [],
+      postSuccess: makePostSuccess(),
     };
     return <EditorCore initial={initial} isNew />;
   }
@@ -1123,6 +2160,7 @@ export function WorkflowBuilderEditPage() {
     description: found.description ?? "",
     phases: found.phases.map((id) => makePhaseEntry(id)),
     variables: [],
+    postSuccess: makePostSuccess(),
   };
 
   return <EditorCore key={definitionId} initial={initial} isNew={false} />;

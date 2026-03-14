@@ -430,6 +430,18 @@ impl WebApiService {
         Ok(json!(workflow))
     }
 
+    pub async fn save_workflow_config(&self, config_json: &str) -> Result<(), WebApiError> {
+        let config: orchestrator_config::workflow_config::WorkflowConfig =
+            serde_json::from_str(config_json).map_err(|e| {
+                WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2)
+            })?;
+        let project_root = std::path::Path::new(&self.context.project_root);
+        write_workflow_config(project_root, &config).map_err(|e| {
+            WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1)
+        })?;
+        Ok(())
+    }
+
     pub async fn upsert_workflow_definition(
         &self,
         id: String,
