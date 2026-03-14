@@ -10,13 +10,9 @@ mod mockups;
 mod recommendations;
 mod state;
 
-use super::ops_planning::{
-    run_requirements_draft, run_requirements_refine, RequirementsDraftInputPayload,
-    RequirementsRefineInputPayload,
-};
 use crate::{
-    parse_input_json_or, print_ok, print_value, RequirementGraphCommand, RequirementsCommand,
-    RequirementsExecuteArgs, WorkflowCommand, WorkflowExecuteArgs,
+    print_ok, print_value, RequirementGraphCommand, RequirementsCommand, RequirementsExecuteArgs,
+    WorkflowCommand, WorkflowExecuteArgs,
 };
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
@@ -34,28 +30,6 @@ pub(crate) async fn handle_requirements(
     let planning = hub.planning();
 
     match command {
-        RequirementsCommand::Draft(args) => {
-            let resolved_model = args.model.unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string());
-            let input = parse_input_json_or(args.input_json, || {
-                Ok(RequirementsDraftInputPayload {
-                    include_codebase_scan: args.include_codebase_scan,
-                    append_only: args.append_only,
-                    max_requirements: args.max_requirements,
-                    draft_strategy: args.draft_strategy,
-                    po_parallelism: args.po_parallelism,
-                    quality_repair_attempts: args.quality_repair_attempts,
-                    allow_heuristic_complexity: args.allow_heuristic_complexity,
-                    tool: args.tool,
-                    model: resolved_model,
-                    timeout_secs: args.timeout_secs,
-                    start_runner: args.start_runner,
-                })
-            })?;
-            print_value(
-                run_requirements_draft(hub.clone(), project_root, input).await?,
-                json,
-            )
-        }
         RequirementsCommand::Execute(args) => {
             let workflow_command = build_requirements_execute_workflow_command(args)?;
             super::handle_workflow(workflow_command, hub.clone(), project_root, json).await
@@ -63,24 +37,6 @@ pub(crate) async fn handle_requirements(
         RequirementsCommand::List => print_value(planning.list_requirements().await?, json),
         RequirementsCommand::Get(args) => {
             print_value(planning.get_requirement(&args.id).await?, json)
-        }
-        RequirementsCommand::Refine(args) => {
-            let resolved_model = args.model.unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string());
-            let input = parse_input_json_or(args.input_json, || {
-                Ok(RequirementsRefineInputPayload {
-                    requirement_ids: args.requirement_ids,
-                    focus: args.focus,
-                    use_ai: args.use_ai,
-                    tool: args.tool,
-                    model: resolved_model,
-                    timeout_secs: args.timeout_secs,
-                    start_runner: args.start_runner,
-                })
-            })?;
-            print_value(
-                run_requirements_refine(hub.clone(), project_root, input).await?,
-                json,
-            )
         }
         RequirementsCommand::Create(args) => {
             let created = create_requirement_cli(project_root, args)?;

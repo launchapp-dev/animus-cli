@@ -7,16 +7,12 @@ use super::{
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RequirementsCommand {
-    /// Draft requirements from project context.
-    Draft(RequirementsDraftArgs),
     /// Execute requirements into implementation tasks and optional workflows.
     Execute(RequirementsExecuteArgs),
     /// List requirements.
     List,
     /// Get a requirement by id.
     Get(IdArgs),
-    /// Refine existing requirements.
-    Refine(RequirementsRefineArgs),
     /// Create a requirement.
     Create(RequirementCreateArgs),
     /// Update a requirement.
@@ -57,60 +53,6 @@ pub(crate) struct RequirementsExecuteArgs {
     pub(crate) start_workflows: bool,
     #[arg(long, action = ArgAction::Set, default_value_t = false)]
     pub(crate) include_wont: bool,
-    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
-    pub(crate) input_json: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct RequirementsDraftArgs {
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
-    pub(crate) include_codebase_scan: bool,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
-    pub(crate) append_only: bool,
-    #[arg(long, default_value_t = 0)]
-    pub(crate) max_requirements: usize,
-    #[arg(long, default_value = "single-agent")]
-    pub(crate) draft_strategy: String,
-    #[arg(long, default_value_t = 1)]
-    pub(crate) po_parallelism: usize,
-    #[arg(long, default_value_t = 2)]
-    pub(crate) quality_repair_attempts: usize,
-    #[arg(long, action = ArgAction::Set, default_value_t = false)]
-    pub(crate) allow_heuristic_complexity: bool,
-    #[arg(long, default_value = "claude")]
-    pub(crate) tool: String,
-    #[arg(long, help = "Model identifier. Defaults to the configured model for the selected --tool.")]
-    pub(crate) model: Option<String>,
-    #[arg(long)]
-    pub(crate) timeout_secs: Option<u64>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
-    pub(crate) start_runner: bool,
-    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
-    pub(crate) input_json: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct RequirementsRefineArgs {
-    #[arg(
-        long = "id",
-        visible_alias = "requirement-id",
-        visible_alias = "requirement-ids",
-        value_name = "REQ_ID",
-        num_args = 1..
-    )]
-    pub(crate) requirement_ids: Vec<String>,
-    #[arg(long)]
-    pub(crate) focus: Option<String>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
-    pub(crate) use_ai: bool,
-    #[arg(long, default_value = "claude")]
-    pub(crate) tool: String,
-    #[arg(long, help = "Model identifier. Defaults to the configured model for the selected --tool.")]
-    pub(crate) model: Option<String>,
-    #[arg(long)]
-    pub(crate) timeout_secs: Option<u64>,
-    #[arg(long, action = ArgAction::Set, default_value_t = true)]
-    pub(crate) start_runner: bool,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }

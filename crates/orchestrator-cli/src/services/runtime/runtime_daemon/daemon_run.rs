@@ -486,7 +486,7 @@ mod tests {
                 .data
                 .get("selection_source")
                 .and_then(serde_json::Value::as_str),
-            Some("fallback_picker")
+            Some("queue")
         );
     }
 
