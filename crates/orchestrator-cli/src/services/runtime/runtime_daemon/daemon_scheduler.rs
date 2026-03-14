@@ -116,17 +116,17 @@ fn build_phase_prompt(
     task_description: &str,
     phase_id: &str,
 ) -> String {
-    ::workflow_runner_v2::build_phase_prompt(
+    ::workflow_runner_v2::build_phase_prompt(&::workflow_runner_v2::PhasePromptParams {
         project_root,
-        project_root,
+        execution_cwd: project_root,
         workflow_id,
-        task_id,
-        task_title,
-        task_description,
+        subject_id: task_id,
+        subject_title: task_title,
+        subject_description: task_description,
         phase_id,
-        None,
-        None,
-    )
+        rework_context: None,
+        pipeline_vars: None,
+    })
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use orchestrator_core::{
 };
 
 use crate::ensure_execution_cwd::ensure_execution_cwd;
-use crate::phase_executor::{run_workflow_phase, PhaseExecuteOverrides, PhaseExecutionOutcome};
+use crate::phase_executor::{run_workflow_phase, PhaseExecuteOverrides, PhaseExecutionOutcome, PhaseRunParams};
 use crate::phase_output::persist_phase_output;
 
 pub enum PhaseEvent<'a> {
@@ -243,26 +243,26 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
             model: params.model.clone(),
             rework_context: rework_context.take(),
         };
-        let run_result = run_workflow_phase(
-            &params.project_root,
-            &execution_cwd,
-            &workflow.id,
-            workflow_ref.as_str(),
-            &subject_id_str,
-            &subject_title,
-            &subject_description,
+        let run_result = run_workflow_phase(&PhaseRunParams {
+            project_root: &params.project_root,
+            execution_cwd: &execution_cwd,
+            workflow_id: &workflow.id,
+            workflow_ref: workflow_ref.as_str(),
+            subject_id: &subject_id_str,
+            subject_title: &subject_title,
+            subject_description: &subject_description,
             task_complexity,
-            &phase_filter,
+            phase_id: &phase_filter,
             phase_attempt,
-            Some(&phase_overrides),
-            if workflow_vars.is_empty() {
+            overrides: Some(&phase_overrides),
+            pipeline_vars: if workflow_vars.is_empty() {
                 None
             } else {
                 Some(&workflow_vars)
             },
-            phase_inputs.dispatch_input.as_deref(),
-            phase_inputs.schedule_input.as_deref(),
-        )
+            dispatch_input: phase_inputs.dispatch_input.as_deref(),
+            schedule_input: phase_inputs.schedule_input.as_deref(),
+        })
         .await;
 
         let phase_elapsed = phase_start.elapsed();
@@ -382,26 +382,26 @@ pub async fn execute_workflow(params: WorkflowExecuteParams) -> Result<WorkflowE
             model: params.model.clone(),
             rework_context: rework_context.take(),
         };
-        let run_result = run_workflow_phase(
-            &params.project_root,
-            &execution_cwd,
-            &workflow.id,
-            workflow_ref.as_str(),
-            &subject_id_str,
-            &subject_title,
-            &subject_description,
+        let run_result = run_workflow_phase(&PhaseRunParams {
+            project_root: &params.project_root,
+            execution_cwd: &execution_cwd,
+            workflow_id: &workflow.id,
+            workflow_ref: workflow_ref.as_str(),
+            subject_id: &subject_id_str,
+            subject_title: &subject_title,
+            subject_description: &subject_description,
             task_complexity,
-            &phase_id,
+            phase_id: &phase_id,
             phase_attempt,
-            Some(&phase_overrides),
-            if workflow_vars.is_empty() {
+            overrides: Some(&phase_overrides),
+            pipeline_vars: if workflow_vars.is_empty() {
                 None
             } else {
                 Some(&workflow_vars)
             },
-            phase_inputs.dispatch_input.as_deref(),
-            phase_inputs.schedule_input.as_deref(),
-        )
+            dispatch_input: phase_inputs.dispatch_input.as_deref(),
+            schedule_input: phase_inputs.schedule_input.as_deref(),
+        })
         .await;
 
         let phase_elapsed = phase_start.elapsed();

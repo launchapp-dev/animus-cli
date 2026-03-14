@@ -5,6 +5,28 @@ use crate::phase_output::{build_workflow_pipeline_context, format_prior_phase_ou
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+pub struct PhasePromptParams<'a> {
+    pub project_root: &'a str,
+    pub execution_cwd: &'a str,
+    pub workflow_id: &'a str,
+    pub subject_id: &'a str,
+    pub subject_title: &'a str,
+    pub subject_description: &'a str,
+    pub phase_id: &'a str,
+    pub rework_context: Option<&'a str>,
+    pub pipeline_vars: Option<&'a HashMap<String, String>>,
+}
+
+pub struct PhaseRenderParams<'a> {
+    pub project_root: &'a str,
+    pub execution_cwd: &'a str,
+    pub workflow_id: &'a str,
+    pub subject_id: &'a str,
+    pub subject_title: &'a str,
+    pub subject_description: &'a str,
+    pub phase_id: &'a str,
+}
+
 pub(crate) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/runtime/workflow_phase.prompt"
@@ -51,17 +73,7 @@ pub struct RenderedPhasePrompt {
     pub final_prompt: String,
 }
 
-pub fn build_phase_prompt(
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    subject_id: &str,
-    subject_title: &str,
-    subject_description: &str,
-    phase_id: &str,
-    rework_context: Option<&str>,
-    pipeline_vars: Option<&std::collections::HashMap<String, String>>,
-) -> String {
+pub fn build_phase_prompt(params: &PhasePromptParams<'_>) -> String {
     let dispatch_input = std::env::var("AO_DISPATCH_INPUT")
         .ok()
         .filter(|value| !value.is_empty());
@@ -69,61 +81,48 @@ pub fn build_phase_prompt(
         .ok()
         .filter(|value| !value.is_empty());
     let inputs = PhasePromptInputs {
-        rework_context: rework_context.map(ToOwned::to_owned),
-        pipeline_vars: pipeline_vars.cloned().unwrap_or_default(),
+        rework_context: params.rework_context.map(ToOwned::to_owned),
+        pipeline_vars: params.pipeline_vars.cloned().unwrap_or_default(),
         dispatch_input,
         schedule_input,
     };
-    let ctx = RuntimeConfigContext::load(project_root);
+    let ctx = RuntimeConfigContext::load(params.project_root);
     render_phase_prompt_with_ctx(
         &ctx,
-        project_root,
-        execution_cwd,
-        workflow_id,
-        subject_id,
-        subject_title,
-        subject_description,
-        phase_id,
+        &PhaseRenderParams {
+            project_root: params.project_root,
+            execution_cwd: params.execution_cwd,
+            workflow_id: params.workflow_id,
+            subject_id: params.subject_id,
+            subject_title: params.subject_title,
+            subject_description: params.subject_description,
+            phase_id: params.phase_id,
+        },
         inputs,
     )
     .final_prompt
 }
 
 pub fn render_phase_prompt(
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    subject_id: &str,
-    subject_title: &str,
-    subject_description: &str,
-    phase_id: &str,
+    params: &PhaseRenderParams<'_>,
     inputs: PhasePromptInputs,
 ) -> RenderedPhasePrompt {
-    let ctx = RuntimeConfigContext::load(project_root);
-    render_phase_prompt_with_ctx(
-        &ctx,
-        project_root,
-        execution_cwd,
-        workflow_id,
-        subject_id,
-        subject_title,
-        subject_description,
-        phase_id,
-        inputs,
-    )
+    let ctx = RuntimeConfigContext::load(params.project_root);
+    render_phase_prompt_with_ctx(&ctx, params, inputs)
 }
 
 pub fn render_phase_prompt_with_ctx(
     ctx: &RuntimeConfigContext,
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    subject_id: &str,
-    subject_title: &str,
-    subject_description: &str,
-    phase_id: &str,
+    params: &PhaseRenderParams<'_>,
     inputs: PhasePromptInputs,
 ) -> RenderedPhasePrompt {
+    let project_root = params.project_root;
+    let execution_cwd = params.execution_cwd;
+    let workflow_id = params.workflow_id;
+    let subject_id = params.subject_id;
+    let subject_title = params.subject_title;
+    let subject_description = params.subject_description;
+    let phase_id = params.phase_id;
     let caps = ctx.phase_capabilities(phase_id);
     let phase_decision_contract = ctx.phase_decision_contract(phase_id).cloned();
     let phase_action_rule = if caps.writes_files {

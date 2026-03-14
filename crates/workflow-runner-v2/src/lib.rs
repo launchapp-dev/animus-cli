@@ -23,11 +23,12 @@ pub use runtime_support::*;
 pub use phase_executor::{
     PhaseExecuteOverrides, PhaseExecutionOutcome, PhaseExecutionMetadata,
     PhaseExecutionSignal, CliPhaseExecutor, run_workflow_phase, PhaseRunResult,
-    load_agent_runtime_config,
+    PhaseRunParams, load_agent_runtime_config,
 };
 pub use phase_output::{persist_phase_output, PersistedPhaseOutput, phase_output_dir};
 pub use phase_prompt::{
-    build_phase_prompt, render_phase_prompt, PhasePromptInputs, RenderedPhasePrompt,
+    build_phase_prompt, render_phase_prompt, PhasePromptInputs, PhasePromptParams,
+    PhaseRenderParams, RenderedPhasePrompt,
     phase_requires_commit_message, phase_requires_commit_message_with_config,
 };
 pub use phase_git::{is_git_repo, git_has_pending_changes, ensure_git_identity, commit_implementation_changes};

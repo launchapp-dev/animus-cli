@@ -14,7 +14,8 @@ use uuid::Uuid;
 use crate::{print_value, WorkflowPromptRenderArgs};
 
 use ::workflow_runner_v2::{
-    ensure_execution_cwd, render_phase_prompt, PhasePromptInputs, RenderedPhasePrompt,
+    ensure_execution_cwd, render_phase_prompt, PhasePromptInputs, PhaseRenderParams,
+    RenderedPhasePrompt,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,13 +97,15 @@ async fn render_existing_workflow_prompts(
                 schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
             };
             let rendered = render_phase_prompt(
-                project_root,
-                &context.execution_cwd,
-                &context.workflow_id,
-                context.subject.id(),
-                &context.subject_title,
-                &context.subject_description,
-                &phase_id,
+                &PhaseRenderParams {
+                    project_root,
+                    execution_cwd: &context.execution_cwd,
+                    workflow_id: &context.workflow_id,
+                    subject_id: context.subject.id(),
+                    subject_title: &context.subject_title,
+                    subject_description: &context.subject_description,
+                    phase_id: &phase_id,
+                },
                 inputs,
             );
             PromptRenderOutput {
@@ -139,13 +142,15 @@ async fn render_ad_hoc_prompts(
                 schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
             };
             let rendered = render_phase_prompt(
-                project_root,
-                &context.execution_cwd,
-                &context.workflow_id,
-                context.subject.id(),
-                &context.subject_title,
-                &context.subject_description,
-                &phase_id,
+                &PhaseRenderParams {
+                    project_root,
+                    execution_cwd: &context.execution_cwd,
+                    workflow_id: &context.workflow_id,
+                    subject_id: context.subject.id(),
+                    subject_title: &context.subject_title,
+                    subject_description: &context.subject_description,
+                    phase_id: &phase_id,
+                },
                 inputs,
             );
             PromptRenderOutput {

@@ -9,7 +9,7 @@ use crate::phase_command::{
 };
 use crate::phase_prompt::{
     phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx,
-    PhasePromptInputs,
+    PhasePromptInputs, PhaseRenderParams,
 };
 use crate::phase_output::{
     format_output_chunk_for_display, format_tool_call_for_display, persist_phase_output,
@@ -96,22 +96,22 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             None
         };
 
-        let run_result = run_workflow_phase(
-            &request.project_root,
-            &execution_cwd,
-            &request.workflow_ref,
-            &request.workflow_ref,
-            &subject_id,
-            &subject_title,
-            &subject_description,
+        let run_result = run_workflow_phase(&PhaseRunParams {
+            project_root: &request.project_root,
+            execution_cwd: &execution_cwd,
+            workflow_id: &request.workflow_ref,
+            workflow_ref: &request.workflow_ref,
+            subject_id: &subject_id,
+            subject_title: &subject_title,
+            subject_description: &subject_description,
             task_complexity,
-            &request.phase_id,
-            0,
-            overrides.as_ref(),
-            None,
-            None,
-            None,
-        )
+            phase_id: &request.phase_id,
+            phase_attempt: 0,
+            overrides: overrides.as_ref(),
+            pipeline_vars: None,
+            dispatch_input: None,
+            schedule_input: None,
+        })
         .await;
 
         match previous_timeout {
@@ -742,24 +742,39 @@ fn parse_decision_payload_from_payload(payload: &Value, _phase_id: &str) -> Opti
     }
 }
 
-async fn run_workflow_phase_with_agent(
-    ctx: &RuntimeConfigContext,
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    subject_id: &str,
-    subject_title: &str,
-    subject_description: &str,
+struct PhaseAgentParams<'a> {
+    ctx: &'a RuntimeConfigContext,
+    project_root: &'a str,
+    execution_cwd: &'a str,
+    workflow_id: &'a str,
+    subject_id: &'a str,
+    subject_title: &'a str,
+    subject_description: &'a str,
     task_complexity: Option<orchestrator_core::Complexity>,
-    phase_id: &str,
-    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
-    overrides: Option<&PhaseExecuteOverrides>,
-    pipeline_vars: Option<&std::collections::HashMap<String, String>>,
-    dispatch_input: Option<&str>,
-    schedule_input: Option<&str>,
+    phase_id: &'a str,
+    phase_runtime_settings: Option<&'a WorkflowPhaseRuntimeSettings>,
+    overrides: Option<&'a PhaseExecuteOverrides>,
+    pipeline_vars: Option<&'a std::collections::HashMap<String, String>>,
+    dispatch_input: Option<&'a str>,
+    schedule_input: Option<&'a str>,
+}
+
+async fn run_workflow_phase_with_agent(
+    params: PhaseAgentParams<'_>,
 ) -> Result<PhaseExecutionOutcome> {
+    let ctx = params.ctx;
+    let project_root = params.project_root;
+    let execution_cwd = params.execution_cwd;
+    let workflow_id = params.workflow_id;
+    let subject_id = params.subject_id;
+    let subject_title = params.subject_title;
+    let subject_description = params.subject_description;
+    let phase_id = params.phase_id;
+    let phase_runtime_settings = params.phase_runtime_settings;
+    let overrides = params.overrides;
+    let pipeline_vars = params.pipeline_vars;
     let caps = ctx.phase_capabilities(phase_id);
-    let routing_complexity = routing_complexity(task_complexity);
+    let routing_complexity = routing_complexity(params.task_complexity);
     let settings_tool = phase_runtime_settings.and_then(|s| s.tool.as_deref());
     let settings_model = phase_runtime_settings.and_then(|s| s.model.as_deref());
     let agent_model_override = ctx.phase_model_override(phase_id);
@@ -786,18 +801,20 @@ async fn run_workflow_phase_with_agent(
             .and_then(|o| o.rework_context.as_deref())
             .map(ToOwned::to_owned),
         pipeline_vars: pipeline_vars.cloned().unwrap_or_default(),
-        dispatch_input: dispatch_input.map(ToOwned::to_owned),
-        schedule_input: schedule_input.map(ToOwned::to_owned),
+        dispatch_input: params.dispatch_input.map(ToOwned::to_owned),
+        schedule_input: params.schedule_input.map(ToOwned::to_owned),
     };
     let prompt = render_phase_prompt_with_ctx(
         ctx,
-        project_root,
-        execution_cwd,
-        workflow_id,
-        subject_id,
-        subject_title,
-        subject_description,
-        phase_id,
+        &PhaseRenderParams {
+            project_root,
+            execution_cwd,
+            workflow_id,
+            subject_id,
+            subject_title,
+            subject_description,
+            phase_id,
+        },
         prompt_inputs,
     )
     .final_prompt;
@@ -1114,22 +1131,38 @@ fn should_emit_manual_required(
     Ok(true)
 }
 
-pub async fn run_workflow_phase(
-    project_root: &str,
-    execution_cwd: &str,
-    workflow_id: &str,
-    workflow_ref: &str,
-    subject_id: &str,
-    subject_title: &str,
-    subject_description: &str,
-    task_complexity: Option<orchestrator_core::Complexity>,
-    phase_id: &str,
-    phase_attempt: u32,
-    overrides: Option<&PhaseExecuteOverrides>,
-    pipeline_vars: Option<&std::collections::HashMap<String, String>>,
-    dispatch_input: Option<&str>,
-    schedule_input: Option<&str>,
-) -> Result<PhaseRunResult> {
+pub struct PhaseRunParams<'a> {
+    pub project_root: &'a str,
+    pub execution_cwd: &'a str,
+    pub workflow_id: &'a str,
+    pub workflow_ref: &'a str,
+    pub subject_id: &'a str,
+    pub subject_title: &'a str,
+    pub subject_description: &'a str,
+    pub task_complexity: Option<orchestrator_core::Complexity>,
+    pub phase_id: &'a str,
+    pub phase_attempt: u32,
+    pub overrides: Option<&'a PhaseExecuteOverrides>,
+    pub pipeline_vars: Option<&'a std::collections::HashMap<String, String>>,
+    pub dispatch_input: Option<&'a str>,
+    pub schedule_input: Option<&'a str>,
+}
+
+pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunResult> {
+    let project_root = params.project_root;
+    let execution_cwd = params.execution_cwd;
+    let workflow_id = params.workflow_id;
+    let workflow_ref = params.workflow_ref;
+    let subject_id = params.subject_id;
+    let subject_title = params.subject_title;
+    let subject_description = params.subject_description;
+    let task_complexity = params.task_complexity;
+    let phase_id = params.phase_id;
+    let phase_attempt = params.phase_attempt;
+    let overrides = params.overrides;
+    let pipeline_vars = params.pipeline_vars;
+    let dispatch_input = params.dispatch_input;
+    let schedule_input = params.schedule_input;
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
     orchestrator_core::validate_workflow_and_runtime_configs(
@@ -1253,8 +1286,8 @@ pub async fn run_workflow_phase(
                 metadata.selected_model = Some(model.clone());
             }
 
-            let outcome = run_workflow_phase_with_agent(
-                &ctx,
+            let outcome = run_workflow_phase_with_agent(PhaseAgentParams {
+                ctx: &ctx,
                 project_root,
                 execution_cwd,
                 workflow_id,
@@ -1263,12 +1296,12 @@ pub async fn run_workflow_phase(
                 subject_description,
                 task_complexity,
                 phase_id,
-                runtime_settings.as_ref(),
+                phase_runtime_settings: runtime_settings.as_ref(),
                 overrides,
                 pipeline_vars,
                 dispatch_input,
                 schedule_input,
-            )
+            })
             .await?;
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
