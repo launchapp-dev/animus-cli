@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use chrono::Utc;
@@ -122,20 +122,4 @@ pub(super) fn value_to_event_record(value: Value, fallback_seq: u64) -> DaemonEv
         project_root,
         data,
     }
-}
-
-#[allow(dead_code)]
-pub(super) fn sanitize_relative_path(path: &str) -> Option<PathBuf> {
-    let path = Path::new(path);
-    let mut safe_path = PathBuf::new();
-
-    for component in path.components() {
-        match component {
-            Component::Normal(segment) => safe_path.push(segment),
-            Component::CurDir => continue,
-            Component::RootDir | Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    Some(safe_path)
 }

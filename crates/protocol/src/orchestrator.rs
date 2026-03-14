@@ -1395,15 +1395,6 @@ impl OrchestratorWorkflow {
         self.status = self.machine_state.to_workflow_status();
     }
 
-    pub fn backfill_subject(&mut self) {
-        if matches!(&self.subject, WorkflowSubject::Task { id } if id.is_empty())
-            && !self.task_id.is_empty()
-        {
-            self.subject = WorkflowSubject::Task {
-                id: self.task_id.clone(),
-            };
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1497,13 +1488,6 @@ impl WorkflowSubject {
         }
     }
 
-    pub fn subject_type(&self) -> &str {
-        match self {
-            Self::Task { .. } => "task",
-            Self::Requirement { .. } => "requirement",
-            Self::Custom { .. } => "custom",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1764,19 +1748,6 @@ impl WorkflowRunInput {
 
     pub fn with_workflow_ref(mut self, workflow_ref: String) -> Self {
         self.workflow_ref = Some(workflow_ref);
-        self
-    }
-
-    pub fn into_workflow_ref(self) -> Option<String> {
-        self.workflow_ref
-    }
-
-    pub fn clone_workflow_ref(&self) -> Option<String> {
-        self.workflow_ref.clone()
-    }
-
-    pub fn with_optional_workflow_ref(mut self, workflow_ref: Option<String>) -> Self {
-        self.workflow_ref = workflow_ref;
         self
     }
 
