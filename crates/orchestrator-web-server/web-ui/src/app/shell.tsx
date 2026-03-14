@@ -3,7 +3,6 @@ import {
   NavLink,
   Outlet,
   useLocation,
-  useMatches,
   useNavigate,
 } from "react-router-dom";
 import {
@@ -20,7 +19,6 @@ import {
   Menu,
   ChevronRight,
   X,
-  FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -29,8 +27,8 @@ import {
   DialogContent,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ProjectContextProvider, useProjectContext } from "./project-context";
 import { GraphQLProvider } from "@/lib/graphql/provider";
+import { Toaster } from "@/components/ui/sonner";
 
 export const PRIMARY_NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -47,13 +45,9 @@ export const PRIMARY_NAV_ITEMS = [
 export const MAIN_CONTENT_ID = "main-content";
 
 export function AppShellLayout() {
-  const routeProjectId = useRouteProjectId();
-
   return (
     <GraphQLProvider>
-      <ProjectContextProvider routeProjectId={routeProjectId}>
-        <AppShellFrame />
-      </ProjectContextProvider>
+      <AppShellFrame />
     </GraphQLProvider>
   );
 }
@@ -63,8 +57,6 @@ function AppShellFrame() {
   const [commandOpen, setCommandOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-
-  const projectContext = useProjectContext();
 
   useEffect(() => {
     setMobileOpen(false);
@@ -87,15 +79,6 @@ function AppShellFrame() {
       .filter(Boolean)
       .map((s) => s.replace(/-/g, " "));
   }, [location.pathname]);
-
-  const onProjectChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const id = e.target.value || null;
-      projectContext.setActiveProjectId(id);
-      if (id) navigate(`/projects/${id}`);
-    },
-    [projectContext, navigate],
-  );
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
@@ -141,22 +124,6 @@ function AppShellFrame() {
                 {"\u2318"}K
               </kbd>
             </Button>
-
-            <div className="flex items-center gap-1.5">
-              <FolderOpen className="h-3 w-3 text-muted-foreground/60" />
-              <select
-                value={projectContext.activeProjectId ?? ""}
-                onChange={onProjectChange}
-                className="h-7 rounded-md border border-border/50 bg-transparent px-2 text-[11px] text-muted-foreground focus:text-foreground transition-colors"
-              >
-                <option value="">No project</option>
-                {projectContext.projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
         </header>
 
@@ -176,6 +143,7 @@ function AppShellFrame() {
         onOpenChange={setCommandOpen}
         navigate={navigate}
       />
+      <Toaster theme="dark" position="bottom-right" richColors />
     </div>
   );
 }
@@ -218,20 +186,6 @@ function SidebarContent() {
           </NavLink>
         ))}
       </nav>
-      <div className="h-px bg-border/50 mx-3" />
-      <div className="px-3 py-2.5">
-        <NavLink
-          to="/projects"
-          className={({ isActive }) =>
-            `flex items-center gap-2 text-[11px] transition-colors ${
-              isActive ? "text-primary" : "text-muted-foreground hover:text-foreground/70"
-            }`
-          }
-        >
-          <FolderOpen className="h-3 w-3" />
-          Projects
-        </NavLink>
-      </div>
     </div>
   );
 }
@@ -333,13 +287,3 @@ function CommandPalette({
   );
 }
 
-function useRouteProjectId(): string | null {
-  const matches = useMatches();
-
-  for (let index = matches.length - 1; index >= 0; index -= 1) {
-    const params = matches[index].params as Record<string, string | undefined>;
-    if (params.projectId) return params.projectId;
-  }
-
-  return null;
-}

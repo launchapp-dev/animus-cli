@@ -1,10 +1,9 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Table,
   TableBody,
@@ -30,8 +29,6 @@ export function DaemonPage() {
   const [, pauseMut] = useMutation(DaemonPauseDocument);
   const [, resumeMut] = useMutation(DaemonResumeDocument);
   const [, clearLogsMut] = useMutation(DaemonClearLogsDocument);
-  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
-
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -43,9 +40,9 @@ export function DaemonPage() {
 
   const runAction = async (label: string, fn: () => Promise<any>) => {
     const { error: err } = await fn();
-    if (err) setFeedback({ kind: "error", message: err.message });
+    if (err) toast.error(err.message);
     else {
-      setFeedback({ kind: "ok", message: `${label} successful.` });
+      toast.success(`${label} successful.`);
       reexecute({ requestPolicy: "network-only" });
     }
   };
@@ -64,12 +61,6 @@ export function DaemonPage() {
           <Button size="sm" variant="destructive" onClick={() => runAction("Stop", () => stopMut({}))}>Stop</Button>
         </div>
       </div>
-
-      {feedback && (
-        <Alert variant={feedback.kind === "error" ? "destructive" : "default"}>
-          <AlertDescription>{feedback.message}</AlertDescription>
-        </Alert>
-      )}
 
       <Card className="border-border/40 bg-card/60">
         <CardHeader className="pb-2 pt-3 px-4">

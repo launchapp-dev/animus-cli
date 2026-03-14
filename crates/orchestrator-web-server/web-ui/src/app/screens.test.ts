@@ -13,6 +13,7 @@ const featureFiles = [
   { file: "projects-pages.tsx", exports: ["ProjectsPage", "ProjectDetailPage", "RequirementDetailPage"] },
   { file: "events-page.tsx", exports: ["EventsPage"] },
   { file: "review-page.tsx", exports: ["ReviewHandoffPage"] },
+  { file: "output-page.tsx", exports: ["TaskOutputPage"] },
   { file: "not-found-page.tsx", exports: ["NotFoundPage"] },
 ];
 

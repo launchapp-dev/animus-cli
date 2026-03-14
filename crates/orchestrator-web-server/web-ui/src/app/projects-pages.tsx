@@ -1,12 +1,12 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   ProjectsDocument,
   ProjectDetailDocument,
@@ -27,7 +27,6 @@ export function ProjectsPage() {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [description, setDescription] = useState("");
-  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -39,8 +38,8 @@ export function ProjectsPage() {
     e.preventDefault();
     if (!name.trim() || !path.trim()) return;
     const { error: err } = await createProject({ name: name.trim(), path: path.trim(), description: description.trim() || undefined });
-    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
-    setFeedback({ kind: "ok", message: `Project "${name.trim()}" created.` });
+    if (err) { toast.error(err.message); return; }
+    toast.success(`Project "${name.trim()}" created.`);
     setName(""); setPath(""); setDescription(""); setShowCreate(false);
     reexecute({ requestPolicy: "network-only" });
   };
@@ -53,12 +52,6 @@ export function ProjectsPage() {
       </div>
       {active.length > 0 && (
         <p className="text-sm text-muted-foreground">Active: {active.map((p) => p.name).join(", ")}</p>
-      )}
-
-      {feedback && (
-        <Alert variant={feedback.kind === "error" ? "destructive" : "default"} role={feedback.kind === "error" ? "alert" : "status"}>
-          <AlertDescription>{feedback.message}</AlertDescription>
-        </Alert>
       )}
 
       {showCreate && (
@@ -110,7 +103,6 @@ export function ProjectDetailPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editType, setEditType] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
   const [initialized, setInitialized] = useState(false);
 
   const { data, fetching, error } = result;
@@ -135,8 +127,8 @@ export function ProjectDetailPage() {
       description: editDescription.trim() || undefined,
       projectType: editType.trim() || undefined,
     });
-    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
-    setFeedback({ kind: "ok", message: "Project updated." });
+    if (err) { toast.error(err.message); return; }
+    toast.success("Project updated.");
     setEditing(false);
     setInitialized(false);
     reexecute({ requestPolicy: "network-only" });
@@ -144,20 +136,20 @@ export function ProjectDetailPage() {
 
   const onDelete = async () => {
     const { error: err } = await deleteProject({ id: projectId! });
-    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
+    if (err) { toast.error(err.message); return; }
     navigate("/projects", { replace: true });
   };
 
   const onLoad = async () => {
     const { error: err } = await loadProject({ id: projectId! });
-    if (err) setFeedback({ kind: "error", message: err.message });
-    else setFeedback({ kind: "ok", message: "Project set as active." });
+    if (err) toast.error(err.message);
+    else toast.success("Project set as active.");
   };
 
   const onArchive = async () => {
     const { error: err } = await archiveProject({ id: projectId! });
-    if (err) { setFeedback({ kind: "error", message: err.message }); return; }
-    setFeedback({ kind: "ok", message: "Project archived." });
+    if (err) { toast.error(err.message); return; }
+    toast.success("Project archived.");
     setInitialized(false);
     reexecute({ requestPolicy: "network-only" });
   };
@@ -174,12 +166,6 @@ export function ProjectDetailPage() {
           {project.archived && <Badge variant="destructive">archived</Badge>}
         </div>
       </div>
-
-      {feedback && (
-        <Alert variant={feedback.kind === "error" ? "destructive" : "default"} role={feedback.kind === "error" ? "alert" : "status"}>
-          <AlertDescription>{feedback.message}</AlertDescription>
-        </Alert>
-      )}
 
       {project.description && !editing && <p className="text-sm">{project.description}</p>}
 

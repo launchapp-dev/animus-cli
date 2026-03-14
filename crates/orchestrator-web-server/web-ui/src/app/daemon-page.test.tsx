@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   useMutation: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock("@/lib/graphql/client", async () => {
@@ -19,6 +21,13 @@ vi.mock("@/lib/graphql/client", async () => {
 
 vi.mock("@/lib/graphql/provider", () => ({
   GraphQLProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: mocks.toastSuccess,
+    error: mocks.toastError,
+  },
 }));
 
 import { DaemonPage } from "./daemon-page";
@@ -97,7 +106,7 @@ describe("DaemonPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
 
     await waitFor(() => {
-      expect(screen.getByText("daemon already running")).toBeTruthy();
+      expect(mocks.toastError).toHaveBeenCalledWith("daemon already running");
     });
   });
 
@@ -107,7 +116,7 @@ describe("DaemonPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Pause successful.")).toBeTruthy();
+      expect(mocks.toastSuccess).toHaveBeenCalledWith("Pause successful.");
     });
   });
 

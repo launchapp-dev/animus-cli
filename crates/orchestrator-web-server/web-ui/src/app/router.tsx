@@ -29,6 +29,7 @@ const WorkflowBuilderBrowsePage = lazy(() => import("./builder-pages").then((m) 
 const WorkflowBuilderNewPage = lazy(() => import("./builder-pages").then((m) => ({ default: m.WorkflowBuilderNewPage })));
 const WorkflowBuilderEditPage = lazy(() => import("./builder-pages").then((m) => ({ default: m.WorkflowBuilderEditPage })));
 const AgentManagementPage = lazy(() => import("./agent-page").then((m) => ({ default: m.AgentManagementPage })));
+const TaskOutputPage = lazy(() => import("./output-page").then((m) => ({ default: m.TaskOutputPage })));
 const NotFoundPage = lazy(() => import("./not-found-page").then((m) => ({ default: m.NotFoundPage })));
 const TaskDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.TaskDispatchPage })));
 const RequirementDispatchPage = lazy(() => import("./dispatch-pages").then((m) => ({ default: m.RequirementDispatchPage })));
@@ -50,6 +51,7 @@ export const APP_ROUTE_PATHS = [
   "/tasks",
   "/tasks/new",
   "/tasks/:taskId",
+  "/tasks/:taskId/output",
   "/workflows",
   "/workflows/builder",
   "/workflows/builder/new",
@@ -130,6 +132,10 @@ const router = createBrowserRouter([
       {
         path: "tasks/:taskId",
         element: withRouteSuspense(<TaskDetailPage />),
+      },
+      {
+        path: "tasks/:taskId/output",
+        element: withRouteSuspense(<TaskOutputPage />),
       },
       {
         path: "workflows",

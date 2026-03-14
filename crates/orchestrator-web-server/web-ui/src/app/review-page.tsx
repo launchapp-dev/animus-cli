@@ -1,9 +1,9 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useMutation } from "@/lib/graphql/client";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ReviewHandoffDocument } from "@/lib/graphql/generated/graphql";
 
 export function ReviewHandoffPage() {
@@ -11,17 +11,6 @@ export function ReviewHandoffPage() {
   const [targetRole, setTargetRole] = useState("em");
   const [question, setQuestion] = useState("");
   const [context, setContext] = useState("");
-  const [feedback, setFeedback] = useState<{
-    kind: "ok" | "error";
-    message: string;
-  } | null>(null);
-
-  useEffect(() => {
-    if (feedback?.kind === "ok") {
-      const timer = setTimeout(() => setFeedback(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [feedback]);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,9 +20,9 @@ export function ReviewHandoffPage() {
       question: question.trim(),
       context: context.trim() || undefined,
     });
-    if (error) setFeedback({ kind: "error", message: error.message });
+    if (error) toast.error(error.message);
     else {
-      setFeedback({ kind: "ok", message: "Review handoff submitted." });
+      toast.success("Review handoff submitted.");
       setQuestion("");
       setContext("");
     }
@@ -42,15 +31,6 @@ export function ReviewHandoffPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold tracking-tight">Review Handoff</h1>
-
-      {feedback && (
-        <Alert
-          variant={feedback.kind === "error" ? "destructive" : "default"}
-          role={feedback.kind === "error" ? "alert" : "status"}
-        >
-          <AlertDescription>{feedback.message}</AlertDescription>
-        </Alert>
-      )}
 
       <Card className="border-border/40 bg-card/60">
         <CardHeader className="pb-2 pt-3 px-4">

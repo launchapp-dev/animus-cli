@@ -1,10 +1,9 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@/lib/graphql/client";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Table,
   TableBody,
@@ -26,8 +25,6 @@ export function QueuePage() {
   const [, holdMut] = useMutation(QueueHoldDocument);
   const [, releaseMut] = useMutation(QueueReleaseDocument);
   const [, reorderMut] = useMutation(QueueReorderDocument);
-  const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
-
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -37,18 +34,18 @@ export function QueuePage() {
 
   const onHold = async (taskId: string) => {
     const { error: err } = await holdMut({ taskId });
-    if (err) setFeedback({ kind: "error", message: err.message });
+    if (err) toast.error(err.message);
     else {
-      setFeedback({ kind: "ok", message: `Held ${taskId}.` });
+      toast.success(`Held ${taskId}.`);
       reexecute({ requestPolicy: "network-only" });
     }
   };
 
   const onRelease = async (taskId: string) => {
     const { error: err } = await releaseMut({ taskId });
-    if (err) setFeedback({ kind: "error", message: err.message });
+    if (err) toast.error(err.message);
     else {
-      setFeedback({ kind: "ok", message: `Released ${taskId}.` });
+      toast.success(`Released ${taskId}.`);
       reexecute({ requestPolicy: "network-only" });
     }
   };
@@ -59,7 +56,7 @@ export function QueuePage() {
     if (newIndex < 0 || newIndex >= ids.length) return;
     [ids[index], ids[newIndex]] = [ids[newIndex], ids[index]];
     const { error: err } = await reorderMut({ taskIds: ids });
-    if (err) setFeedback({ kind: "error", message: err.message });
+    if (err) toast.error(err.message);
     else reexecute({ requestPolicy: "network-only" });
   };
 
@@ -67,9 +64,9 @@ export function QueuePage() {
     const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
     const sorted = [...entries].sort((a, b) => (priorityOrder[a.priority ?? ""] ?? 9) - (priorityOrder[b.priority ?? ""] ?? 9));
     const { error: err } = await reorderMut({ taskIds: sorted.map((e) => e.taskId) });
-    if (err) setFeedback({ kind: "error", message: err.message });
+    if (err) toast.error(err.message);
     else {
-      setFeedback({ kind: "ok", message: "Queue reordered by priority." });
+      toast.success("Queue reordered by priority.");
       reexecute({ requestPolicy: "network-only" });
     }
   };
@@ -88,12 +85,6 @@ export function QueuePage() {
         <StatCard label="Avg Wait" value={stats?.avgWait != null ? `${stats.avgWait.toFixed(1)}s` : "-"} />
         <StatCard label="Throughput" value={stats?.throughput != null ? `${stats.throughput.toFixed(1)}/hr` : "-"} />
       </div>
-
-      {feedback && (
-        <Alert variant={feedback.kind === "error" ? "destructive" : "default"}>
-          <AlertDescription>{feedback.message}</AlertDescription>
-        </Alert>
-      )}
 
       {entries.length === 0 ? (
         <p className="text-sm text-muted-foreground py-8 text-center">Queue is empty.</p>

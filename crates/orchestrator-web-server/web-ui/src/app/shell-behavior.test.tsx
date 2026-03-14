@@ -23,15 +23,6 @@ vi.mock("@/lib/graphql/provider", () => ({
   GraphQLProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
-vi.mock("./project-context", () => ({
-  ProjectContextProvider: ({ children }: { children: ReactNode }) => children,
-  useProjectContext: () => ({
-    activeProjectId: null,
-    source: "none",
-    projects: [],
-    setActiveProjectId: vi.fn(),
-  }),
-}));
 
 import { AppShellLayout, MAIN_CONTENT_ID, PRIMARY_NAV_ITEMS } from "./shell";
 
@@ -69,11 +60,6 @@ describe("AppShellLayout structure and navigation", () => {
     expect(screen.getByText("Search")).toBeTruthy();
   });
 
-  it("renders project selector", () => {
-    renderShell();
-
-    expect(screen.getByText("No project")).toBeTruthy();
-  });
 });
 
 function renderShell() {

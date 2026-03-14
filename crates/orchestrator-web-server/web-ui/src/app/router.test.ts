@@ -20,6 +20,7 @@ describe("APP_ROUTE_PATHS", () => {
       "/tasks",
       "/tasks/new",
       "/tasks/:taskId",
+      "/tasks/:taskId/output",
       "/workflows",
       "/workflows/builder",
       "/workflows/builder/new",
