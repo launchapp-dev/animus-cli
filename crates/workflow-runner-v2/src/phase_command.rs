@@ -9,7 +9,6 @@ use tokio::time::timeout;
 use std::process::Stdio;
 
 use crate::payload_traversal::parse_phase_decision_from_text;
-use crate::phase_output::format_output_chunk_for_display;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommandExecutionContext<'a> {
@@ -379,9 +378,6 @@ struct CommandStreamCapture {
 async fn capture_command_stream<R>(
     reader: R,
     phase_id: &str,
-    stream_output: bool,
-    stream_verbose: bool,
-    use_colors: bool,
 ) -> Result<CommandStreamCapture>
 where
     R: AsyncRead + Unpin,
@@ -396,14 +392,6 @@ where
 
         if phase_decision.is_none() {
             phase_decision = parse_phase_decision_from_text(&line, phase_id);
-        }
-
-        if stream_output {
-            use std::io::Write as _;
-            let display =
-                format_output_chunk_for_display(&line, stream_verbose, use_colors, "command")
-                    .unwrap_or_else(|| format!("{line}\n"));
-            let _ = write!(std::io::stderr(), "{}", display);
         }
     }
 
@@ -467,24 +455,15 @@ pub(crate) async fn run_workflow_phase_with_command(
         .stderr
         .take()
         .ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
-    let stream_to_stderr = false;
-    let stream_verbose = false;
-    let use_colors = false;
     let phase_id = context.phase_id.to_string();
     let phase_id2 = phase_id.clone();
     let stdout_task = tokio::spawn(capture_command_stream(
         stdout_reader,
         Box::leak(phase_id.into_boxed_str()),
-        stream_to_stderr,
-        stream_verbose,
-        use_colors,
     ));
     let stderr_task = tokio::spawn(capture_command_stream(
         stderr_reader,
         Box::leak(phase_id2.into_boxed_str()),
-        stream_to_stderr,
-        stream_verbose,
-        use_colors,
     ));
 
     let status = if let Some(timeout_secs) = command.timeout_secs {

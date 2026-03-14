@@ -74,13 +74,7 @@ impl DaemonRunHooks for CliDaemonRunHost {
 
     async fn start_daemon(&mut self, project_root: &str) -> Result<()> {
         let hub = FileServiceHub::new(project_root)?;
-        hub.daemon().start(Default::default()).await.or_else(|err| {
-            if std::env::var("AO_SKIP_RUNNER_START").ok().map(|v| v == "1").unwrap_or(false) {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        }).or_else(|error| {
+        hub.daemon().start(Default::default()).await.or_else(|error| {
             let skip = std::env::var("AO_SKIP_RUNNER_START")
                 .ok()
                 .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
