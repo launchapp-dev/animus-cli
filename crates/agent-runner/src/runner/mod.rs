@@ -17,7 +17,7 @@ use protocol::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
 use crate::telemetry::RunnerMetrics;
@@ -27,6 +27,7 @@ pub use supervisor::Supervisor;
 struct RunningAgent {
     cancel_tx: oneshot::Sender<()>,
     started_at: Timestamp,
+    event_broadcast: broadcast::Sender<AgentRunEvent>,
 }
 
 struct FinishedAgent {
@@ -58,16 +59,27 @@ impl Runner {
         }
     }
 
+    pub fn is_run_active(&self, run_id: &RunId) -> bool {
+        self.running_agents.contains_key(run_id)
+    }
+
+    pub fn subscribe_to_run(&self, run_id: &RunId) -> Option<broadcast::Receiver<AgentRunEvent>> {
+        self.running_agents
+            .get(run_id)
+            .map(|agent| agent.event_broadcast.subscribe())
+    }
+
     pub fn handle_run_request(
         &mut self,
         req: AgentRunRequest,
-        event_tx: mpsc::Sender<AgentRunEvent>,
-    ) {
+        _event_tx: mpsc::Sender<AgentRunEvent>,
+    ) -> broadcast::Receiver<AgentRunEvent> {
         let run_id = req.run_id.clone();
         let persistence = RunEventPersistence::new(&req.context, &run_id);
+        let (broadcast_tx, broadcast_rx) = broadcast::channel::<AgentRunEvent>(256);
         let (run_event_tx, mut run_event_rx) = mpsc::channel::<AgentRunEvent>(100);
-        let downstream_event_tx = event_tx.clone();
         let run_id_for_forwarder = run_id.clone();
+        let broadcast_tx_for_forwarder = broadcast_tx.clone();
 
         tokio::spawn(async move {
             let mut persistence = persistence;
@@ -79,11 +91,13 @@ impl Runner {
                         "Failed to persist run event"
                     );
                 }
-                if downstream_event_tx.send(event).await.is_err() {
-                    debug!(
-                        run_id = %run_id_for_forwarder.0.as_str(),
-                        "Run event receiver dropped; continuing persistence without downstream forwarding"
-                    );
+                let is_terminal = matches!(
+                    event,
+                    AgentRunEvent::Finished { .. } | AgentRunEvent::Error { .. }
+                );
+                let _ = broadcast_tx_for_forwarder.send(event);
+                if is_terminal {
+                    break;
                 }
             }
         });
@@ -97,6 +111,7 @@ impl Runner {
                 RunningAgent {
                     cancel_tx,
                     started_at: started_at.clone(),
+                    event_broadcast: broadcast_tx,
                 },
             )
             .is_some();
@@ -130,6 +145,28 @@ impl Runner {
                 warn!(run_id = %run_id.0.as_str(), "Failed to enqueue cleanup for run");
             }
         });
+
+        broadcast_rx
+    }
+
+    pub fn cancel_runs(&mut self, run_ids: &[RunId]) {
+        for run_id in run_ids {
+            if let Some(entry) = self.running_agents.remove(run_id) {
+                let _ = entry.cancel_tx.send(());
+                self.finished_agents.insert(
+                    run_id.clone(),
+                    FinishedAgent {
+                        started_at: entry.started_at,
+                        completed_at: Timestamp::now(),
+                        status: AgentStatus::Terminated,
+                    },
+                );
+                info!(
+                    run_id = %run_id.0.as_str(),
+                    "Cancelled agent run due to client disconnect"
+                );
+            }
+        }
     }
 
     pub fn cleanup_agent(&mut self, message: CleanupMessage) {
@@ -297,11 +334,13 @@ mod tests {
 
     fn insert_running_agent(runner: &mut Runner, run_id: &RunId) {
         let (cancel_tx, _cancel_rx) = oneshot::channel();
+        let (broadcast_tx, _) = broadcast::channel(16);
         runner.running_agents.insert(
             run_id.clone(),
             RunningAgent {
                 cancel_tx,
                 started_at: Timestamp::now(),
+                event_broadcast: broadcast_tx,
             },
         );
     }
@@ -401,5 +440,28 @@ mod tests {
             }
             AgentStatusQueryResponse::Status(_) => panic!("expected not_found error"),
         }
+    }
+
+    #[test]
+    fn cancel_runs_terminates_active_agents() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-cancel-test".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        runner.cancel_runs(&[run_id.clone()]);
+
+        assert!(!runner.is_run_active(&run_id));
+        let finished = runner.finished_agents.get(&run_id).expect("should be finished");
+        assert_eq!(finished.status, AgentStatus::Terminated);
+    }
+
+    #[test]
+    fn subscribe_to_active_run_returns_receiver() {
+        let mut runner = make_runner();
+        let run_id = RunId("run-subscribe-test".to_string());
+        insert_running_agent(&mut runner, &run_id);
+
+        assert!(runner.subscribe_to_run(&run_id).is_some());
+        assert!(runner.subscribe_to_run(&RunId("nonexistent".to_string())).is_none());
     }
 }

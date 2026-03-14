@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use protocol::{
     AgentControlRequest, AgentRunEvent, AgentRunRequest, AgentStatusRequest, ModelStatusRequest,
-    RunnerStatusRequest,
+    RunId, RunnerStatusRequest,
 };
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, info, warn};
 
 use super::{auth, handlers};
@@ -61,12 +61,59 @@ where
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half).lines();
     let mut authenticated = false;
+    let mut connection_run_ids: Vec<RunId> = Vec::new();
+    let mut active_broadcast_rx: Option<broadcast::Receiver<AgentRunEvent>> = None;
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentRunEvent>(100);
-    debug!(connection_id, "Connection event channel initialized");
+    let result = handle_connection_inner(
+        &mut reader,
+        &mut write_half,
+        &runner,
+        connection_id,
+        &mut authenticated,
+        &mut connection_run_ids,
+        &mut active_broadcast_rx,
+    )
+    .await;
 
+    if !connection_run_ids.is_empty() {
+        let cancel_on_disconnect = std::env::var("AO_CANCEL_ON_DISCONNECT")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+
+        if cancel_on_disconnect {
+            info!(
+                connection_id,
+                run_count = connection_run_ids.len(),
+                "Client disconnected; cancelling owned runs"
+            );
+            runner.lock().await.cancel_runs(&connection_run_ids);
+        } else {
+            info!(
+                connection_id,
+                run_count = connection_run_ids.len(),
+                "Client disconnected; runs continue (AO_CANCEL_ON_DISCONNECT=false)"
+            );
+        }
+    }
+
+    result
+}
+
+async fn handle_connection_inner<R, W>(
+    reader: &mut tokio::io::Lines<BufReader<R>>,
+    write_half: &mut W,
+    runner: &Arc<Mutex<Runner>>,
+    connection_id: u64,
+    authenticated: &mut bool,
+    connection_run_ids: &mut Vec<RunId>,
+    active_broadcast_rx: &mut Option<broadcast::Receiver<AgentRunEvent>>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     loop {
-        if !authenticated {
+        if !*authenticated {
             let line = match tokio::time::timeout(AUTH_PAYLOAD_TIMEOUT, reader.next_line()).await {
                 Ok(line) => line.context("Failed to read IPC auth payload")?,
                 Err(_) => {
@@ -87,9 +134,9 @@ where
                 continue;
             }
 
-            match auth::authenticate_first_payload(text, &mut write_half, connection_id).await? {
+            match auth::authenticate_first_payload(text, write_half, connection_id).await? {
                 auth::AuthResult::Accepted => {
-                    authenticated = true;
+                    *authenticated = true;
                     info!(connection_id, "IPC connection authenticated");
                 }
                 auth::AuthResult::Rejected => {
@@ -121,43 +168,47 @@ where
                 );
 
                 if let Ok(req) = serde_json::from_str::<AgentRunRequest>(text) {
-                    handlers::run::handle_run_request(
+                    let run_id = req.run_id.clone();
+                    let broadcast_rx = handlers::run::handle_run_request(
                         req,
-                        &runner,
-                        &event_tx,
-                        &mut write_half,
+                        runner,
+                        write_half,
                         connection_id,
                     )
                     .await?;
+                    if let Some(rx) = broadcast_rx {
+                        connection_run_ids.push(run_id);
+                        *active_broadcast_rx = Some(rx);
+                    }
                 } else if let Ok(req) = serde_json::from_str::<ModelStatusRequest>(text) {
                     handlers::status::handle_model_status_request(
                         req,
-                        &runner,
-                        &mut write_half,
+                        runner,
+                        write_half,
                         connection_id,
                     )
                     .await?;
                 } else if let Ok(req) = serde_json::from_str::<AgentControlRequest>(text) {
                     handlers::control::handle_control_request(
                         req,
-                        &runner,
-                        &mut write_half,
+                        runner,
+                        write_half,
                         connection_id,
                     )
                     .await?;
                 } else if let Ok(req) = serde_json::from_str::<AgentStatusRequest>(text) {
                     handlers::status::handle_agent_status_request(
                         req,
-                        &runner,
-                        &mut write_half,
+                        runner,
+                        write_half,
                         connection_id,
                     )
                     .await?;
                 } else if let Ok(req) = serde_json::from_str::<RunnerStatusRequest>(text) {
                     handlers::status::handle_runner_status_request(
                         req,
-                        &runner,
-                        &mut write_half,
+                        runner,
+                        write_half,
                         connection_id,
                     )
                     .await?;
@@ -169,13 +220,43 @@ where
                     );
                 }
             }
-            Some(evt) = event_rx.recv() => {
-                debug!(
-                    connection_id,
-                    event_kind = event_kind(&evt),
-                    "Forwarding run event to client"
-                );
-                write_json_line(&mut write_half, &evt).await?;
+            recv_result = async {
+                match active_broadcast_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match recv_result {
+                    Ok(evt) => {
+                        debug!(
+                            connection_id,
+                            event_kind = event_kind(&evt),
+                            "Forwarding run event to client"
+                        );
+                        let is_terminal = matches!(
+                            evt,
+                            AgentRunEvent::Finished { .. } | AgentRunEvent::Error { .. }
+                        );
+                        if write_json_line(write_half, &evt).await.is_err() {
+                            info!(connection_id, "Failed to forward event; client likely disconnected");
+                            break;
+                        }
+                        if is_terminal {
+                            *active_broadcast_rx = None;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(
+                            connection_id,
+                            skipped,
+                            "Client lagged behind event stream; some events were dropped"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!(connection_id, "Run event broadcast closed");
+                        *active_broadcast_rx = None;
+                    }
+                }
             }
         }
     }
