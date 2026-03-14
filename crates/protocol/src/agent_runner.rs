@@ -128,6 +128,8 @@ pub struct RunnerStatusResponse {
     pub protocol_version: String,
     #[serde(default)]
     pub build_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<serde_json::Value>,
 }
 
 fn default_protocol_version() -> String {

@@ -16,8 +16,11 @@ use protocol::{
     ModelStatusResponse, RunId, RunnerStatusResponse, Timestamp, PROTOCOL_VERSION,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
+
+use crate::telemetry::RunnerMetrics;
 
 pub use supervisor::Supervisor;
 
@@ -42,6 +45,7 @@ pub struct Runner {
     running_agents: HashMap<RunId, RunningAgent>,
     finished_agents: HashMap<RunId, FinishedAgent>,
     cleanup_tx: mpsc::Sender<CleanupMessage>,
+    pub metrics: Arc<RunnerMetrics>,
 }
 
 impl Runner {
@@ -50,6 +54,7 @@ impl Runner {
             running_agents: HashMap::new(),
             finished_agents: HashMap::new(),
             cleanup_tx,
+            metrics: Arc::new(RunnerMetrics::new()),
         }
     }
 
@@ -108,6 +113,8 @@ impl Runner {
             "Registered agent run request"
         );
 
+        self.metrics.record_start();
+
         let supervisor = Supervisor::new();
         let cleanup_tx = self.cleanup_tx.clone();
         tokio::spawn(async move {
@@ -132,11 +139,26 @@ impl Runner {
         } = message;
         if let Some(entry) = self.running_agents.remove(&run_id) {
             let terminal_status = normalize_terminal_status_for_cleanup(terminal_status, &run_id);
+            let completed_at = Timestamp::now();
+            let duration_ms = completed_at
+                .0
+                .signed_duration_since(entry.started_at.0)
+                .num_milliseconds()
+                .max(0) as u64;
+            match terminal_status {
+                AgentStatus::Completed => self.metrics.record_completion(duration_ms),
+                AgentStatus::Terminated => self.metrics.record_cancellation(),
+                AgentStatus::Timeout => {
+                    self.metrics.record_timeout();
+                    self.metrics.record_failure(duration_ms);
+                }
+                _ => self.metrics.record_failure(duration_ms),
+            }
             self.finished_agents.insert(
                 run_id.clone(),
                 FinishedAgent {
                     started_at: entry.started_at,
-                    completed_at: Timestamp::now(),
+                    completed_at,
                     status: terminal_status,
                 },
             );
@@ -167,6 +189,7 @@ impl Runner {
             active_agents: self.running_agents.len(),
             protocol_version: PROTOCOL_VERSION.to_string(),
             build_id: runner_build_id(),
+            metrics: serde_json::to_value(self.metrics.snapshot()).ok(),
         }
     }
 
