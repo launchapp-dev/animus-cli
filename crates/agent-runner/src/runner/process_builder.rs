@@ -19,11 +19,7 @@ pub(super) fn resolve_idle_timeout_secs(
             .and_then(|value| value.as_u64())
     });
 
-    let env_override = std::env::var("AO_RUN_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok());
-
-    let requested = contract_override.or(env_override).unwrap_or(600);
+    let requested = contract_override.unwrap_or(600);
     if requested == 0 {
         return None;
     }

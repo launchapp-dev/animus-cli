@@ -119,7 +119,6 @@ pub(super) async fn handle_daemon_run(
     let _auto_commit_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_COMMIT_BEFORE_MERGE", args.scheduler.auto_commit_before_merge);
     let _auto_prune_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE", args.scheduler.auto_prune_worktrees_after_merge);
     let _phase_timeout_guard = EnvOverrideGuard::set_if("AO_PHASE_TIMEOUT_SECS", args.scheduler.phase_timeout_secs);
-    let _idle_timeout_guard = EnvOverrideGuard::set_if("AO_RUN_IDLE_TIMEOUT_SECS", args.scheduler.idle_timeout_secs);
 
     let runtime_options = runtime_options_from_cli(&args);
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));

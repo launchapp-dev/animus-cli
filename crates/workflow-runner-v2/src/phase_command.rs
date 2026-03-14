@@ -460,7 +460,7 @@ pub(crate) async fn run_workflow_phase_with_command(
         .stderr
         .take()
         .ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
-    let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
+    let stream_level = String::new();
     let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
     let stream_verbose = stream_level == "verbose";
     let stream_to_stderr = stream_normal || stream_verbose;

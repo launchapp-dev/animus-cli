@@ -76,9 +76,7 @@ where
     .await;
 
     if !connection_run_ids.is_empty() {
-        let cancel_on_disconnect = std::env::var("AO_CANCEL_ON_DISCONNECT")
-            .map(|v| v != "0" && v.to_lowercase() != "false")
-            .unwrap_or(true);
+        let cancel_on_disconnect = true;
 
         if cancel_on_disconnect {
             info!(

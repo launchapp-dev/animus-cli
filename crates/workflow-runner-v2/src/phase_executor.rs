@@ -89,7 +89,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
         };
 
         let routing = protocol::PhaseRoutingConfig::from_env();
-        let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
+        let stream_level = String::new();
         let run_result = run_workflow_phase(&PhaseRunParams {
             project_root: &request.project_root,
             execution_cwd: &execution_cwd,
@@ -461,7 +461,7 @@ pub async fn run_workflow_phase_attempt(
     let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
-    let stream_level = std::env::var("AO_STREAM_PHASE_OUTPUT").unwrap_or_default();
+    let stream_level = String::new();
     let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
     let stream_verbose = stream_level == "verbose";
     let stream_to_stderr = stream_normal || stream_verbose;
