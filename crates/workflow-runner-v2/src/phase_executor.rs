@@ -459,14 +459,9 @@ pub async fn run_workflow_phase_attempt(
     let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
-    let stream_level = String::new();
-    let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
-    let stream_verbose = stream_level == "verbose";
-    let stream_to_stderr = stream_normal || stream_verbose;
-    let use_colors = stream_to_stderr && {
-        use std::io::IsTerminal;
-        std::io::stderr().is_terminal()
-    };
+    let stream_to_stderr = false;
+    let stream_verbose = false;
+    let use_colors = false;
     let mut last_ended_with_newline = true;
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();

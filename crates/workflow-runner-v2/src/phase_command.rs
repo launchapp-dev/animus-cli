@@ -467,14 +467,9 @@ pub(crate) async fn run_workflow_phase_with_command(
         .stderr
         .take()
         .ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
-    let stream_level = String::new();
-    let stream_normal = matches!(stream_level.as_str(), "1" | "normal");
-    let stream_verbose = stream_level == "verbose";
-    let stream_to_stderr = stream_normal || stream_verbose;
-    let use_colors = stream_to_stderr && {
-        use std::io::IsTerminal;
-        std::io::stderr().is_terminal()
-    };
+    let stream_to_stderr = false;
+    let stream_verbose = false;
+    let use_colors = false;
     let phase_id = context.phase_id.to_string();
     let phase_id2 = phase_id.clone();
     let stdout_task = tokio::spawn(capture_command_stream(
