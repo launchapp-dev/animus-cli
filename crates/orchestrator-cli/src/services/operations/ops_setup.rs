@@ -3,8 +3,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use orchestrator_core::{
-    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config,
-    DaemonProjectConfig, DaemonProjectConfigPatch, DoctorCheckStatus, DoctorReport,
+    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, DaemonProjectConfig,
+    DaemonProjectConfigPatch, DoctorCheckStatus, DoctorReport,
 };
 use serde::Serialize;
 
@@ -42,11 +42,7 @@ struct DesiredDaemonConfig {
 
 pub(crate) async fn handle_setup(args: SetupArgs, project_root: &str, json: bool) -> Result<()> {
     let project_root_path = Path::new(project_root);
-    let mode = if args.non_interactive {
-        SetupMode::NonInteractive
-    } else {
-        SetupMode::Guided
-    };
+    let mode = if args.non_interactive { SetupMode::NonInteractive } else { SetupMode::Guided };
 
     let current_config = load_daemon_project_config(project_root_path)?;
     let desired = resolve_desired_config(&args, mode, &current_config)?;
@@ -99,9 +95,7 @@ pub(crate) async fn handle_setup(args: SetupArgs, project_root: &str, json: bool
     }
 
     let doctor_after = DoctorReport::run_for_project(project_root_path);
-    let doctor_fix_applied = doctor_fix_actions
-        .iter()
-        .any(|action| action.status == "applied");
+    let doctor_fix_applied = doctor_fix_actions.iter().any(|action| action.status == "applied");
 
     let mut changed_domains = Vec::new();
     let mut unchanged_domains = Vec::new();
@@ -183,10 +177,7 @@ fn resolve_non_interactive_desired_config(args: &SetupArgs) -> Result<DesiredDae
     })
 }
 
-fn resolve_guided_desired_config(
-    args: &SetupArgs,
-    current: &DaemonProjectConfig,
-) -> Result<DesiredDaemonConfig> {
+fn resolve_guided_desired_config(args: &SetupArgs, current: &DaemonProjectConfig) -> Result<DesiredDaemonConfig> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(crate::invalid_input_error(
             "guided setup must be run in an interactive terminal; rerun with --non-interactive and explicit --auto-* values"
@@ -195,17 +186,15 @@ fn resolve_guided_desired_config(
 
     let auto_merge_enabled = match args.auto_merge {
         Some(value) => value,
-        None => prompt_bool(
-            "Enable automatic merge after successful daemon workflow runs?",
-            current.auto_merge_enabled,
-        )?,
+        None => {
+            prompt_bool("Enable automatic merge after successful daemon workflow runs?", current.auto_merge_enabled)?
+        }
     };
     let auto_pr_enabled = match args.auto_pr {
         Some(value) => value,
-        None => prompt_bool(
-            "Enable automatic pull request creation for daemon workflow runs?",
-            current.auto_pr_enabled,
-        )?,
+        None => {
+            prompt_bool("Enable automatic pull request creation for daemon workflow runs?", current.auto_pr_enabled)?
+        }
     };
     let auto_commit_before_merge = match args.auto_commit_before_merge {
         Some(value) => value,
@@ -215,11 +204,7 @@ fn resolve_guided_desired_config(
         )?,
     };
 
-    Ok(DesiredDaemonConfig {
-        auto_merge_enabled,
-        auto_pr_enabled,
-        auto_commit_before_merge,
-    })
+    Ok(DesiredDaemonConfig { auto_merge_enabled, auto_pr_enabled, auto_commit_before_merge })
 }
 
 fn prompt_bool(prompt: &str, default: bool) -> Result<bool> {
@@ -244,44 +229,20 @@ fn prompt_bool(prompt: &str, default: bool) -> Result<bool> {
     }
 }
 
-fn daemon_field_plan(
-    current: &DaemonProjectConfig,
-    desired: &DesiredDaemonConfig,
-) -> Vec<SetupFieldPlan> {
+fn daemon_field_plan(current: &DaemonProjectConfig, desired: &DesiredDaemonConfig) -> Vec<SetupFieldPlan> {
     vec![
-        field_plan(
-            "auto_merge_enabled",
-            current.auto_merge_enabled,
-            desired.auto_merge_enabled,
-        ),
-        field_plan(
-            "auto_pr_enabled",
-            current.auto_pr_enabled,
-            desired.auto_pr_enabled,
-        ),
-        field_plan(
-            "auto_commit_before_merge",
-            current.auto_commit_before_merge,
-            desired.auto_commit_before_merge,
-        ),
+        field_plan("auto_merge_enabled", current.auto_merge_enabled, desired.auto_merge_enabled),
+        field_plan("auto_pr_enabled", current.auto_pr_enabled, desired.auto_pr_enabled),
+        field_plan("auto_commit_before_merge", current.auto_commit_before_merge, desired.auto_commit_before_merge),
     ]
 }
 
 fn field_plan(field: &str, before: bool, after: bool) -> SetupFieldPlan {
-    SetupFieldPlan {
-        field: field.to_string(),
-        before,
-        after,
-        changed: before != after,
-    }
+    SetupFieldPlan { field: field.to_string(), before, after, changed: before != after }
 }
 
 fn count_checks(report: &DoctorReport, status: DoctorCheckStatus) -> usize {
-    report
-        .checks
-        .iter()
-        .filter(|check| check.status == status)
-        .count()
+    report.checks.iter().filter(|check| check.status == status).count()
 }
 
 fn collect_blocked_items(report: &DoctorReport) -> Vec<SetupBlockedItem> {
@@ -319,21 +280,16 @@ mod tests {
     #[test]
     fn non_interactive_setup_requires_explicit_values() {
         let args = non_interactive_args();
-        let error = resolve_non_interactive_desired_config(&args)
-            .expect_err("missing non-interactive flags should fail");
-        assert!(error
-            .to_string()
-            .contains("missing required non-interactive setup inputs"));
+        let error =
+            resolve_non_interactive_desired_config(&args).expect_err("missing non-interactive flags should fail");
+        assert!(error.to_string().contains("missing required non-interactive setup inputs"));
     }
 
     #[test]
     fn daemon_field_plan_marks_changed_and_unchanged_values() {
         let current = DaemonProjectConfig::default();
-        let desired = DesiredDaemonConfig {
-            auto_merge_enabled: false,
-            auto_pr_enabled: true,
-            auto_commit_before_merge: false,
-        };
+        let desired =
+            DesiredDaemonConfig { auto_merge_enabled: false, auto_pr_enabled: true, auto_commit_before_merge: false };
 
         let plan = daemon_field_plan(&current, &desired);
         assert_eq!(plan.len(), 3);

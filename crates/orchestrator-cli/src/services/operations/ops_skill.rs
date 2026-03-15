@@ -1,6 +1,6 @@
 use crate::cli_types::{
-    SkillCommand, SkillInstallArgs, SkillListArgs, SkillPublishArgs, SkillRegistryAddArgs,
-    SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUpdateArgs,
+    SkillCommand, SkillInstallArgs, SkillListArgs, SkillPublishArgs, SkillRegistryAddArgs, SkillRegistryCommand,
+    SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUpdateArgs,
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
 use anyhow::Result;
@@ -16,8 +16,8 @@ mod resolver;
 mod store;
 
 use self::model::{
-    ResolvedSkillEntry, SkillLockEntry, SkillLockStateV1, SkillProjectConstraint,
-    SkillRegistrySourceConfig, SkillRegistryStateV1, SkillVersionRecord,
+    ResolvedSkillEntry, SkillLockEntry, SkillLockStateV1, SkillProjectConstraint, SkillRegistrySourceConfig,
+    SkillRegistryStateV1, SkillVersionRecord,
 };
 use self::resolver::{resolve_skill_version, ResolveSkillRequest};
 use self::store::{
@@ -52,10 +52,7 @@ fn ensure_registry_available(state: &SkillRegistryStateV1, registry: Option<&str
     }
     if let Some(config) = state.registries.iter().find(|entry| entry.id == registry) {
         if !config.available {
-            return Err(unavailable_error(format!(
-                "registry backend unavailable: {}",
-                registry
-            )));
+            return Err(unavailable_error(format!("registry backend unavailable: {}", registry)));
         }
     }
     Ok(())
@@ -65,13 +62,7 @@ fn ensure_registry_registered(state: &mut SkillRegistryStateV1, registry: &str) 
     if state.registries.iter().any(|entry| entry.id == registry) {
         return;
     }
-    let next_priority = state
-        .registries
-        .iter()
-        .map(|entry| entry.priority)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
+    let next_priority = state.registries.iter().map(|entry| entry.priority).max().unwrap_or(0).saturating_add(1);
     state.registries.push(SkillRegistrySourceConfig {
         id: registry.to_string(),
         priority: next_priority,
@@ -85,11 +76,7 @@ fn find_lock_pin<'a>(
     name: &str,
     preferred_source: Option<&str>,
 ) -> Option<&'a SkillLockEntry> {
-    let mut candidates: Vec<&SkillLockEntry> = lock_state
-        .entries
-        .iter()
-        .filter(|entry| entry.name == name)
-        .collect();
+    let mut candidates: Vec<&SkillLockEntry> = lock_state.entries.iter().filter(|entry| entry.name == name).collect();
     if let Some(source) = preferred_source {
         candidates.retain(|entry| entry.source == source);
     }
@@ -97,10 +84,7 @@ fn find_lock_pin<'a>(
     candidates.into_iter().next()
 }
 
-fn find_project_default<'a>(
-    state: &'a SkillRegistryStateV1,
-    name: &str,
-) -> Option<&'a SkillProjectConstraint> {
+fn find_project_default<'a>(state: &'a SkillRegistryStateV1, name: &str) -> Option<&'a SkillProjectConstraint> {
     state.defaults.iter().find(|item| item.name == name)
 }
 
@@ -112,18 +96,13 @@ fn upsert_project_default(
     registry: Option<String>,
     allow_prerelease: bool,
 ) {
-    let mut next = state
-        .defaults
-        .iter()
-        .find(|item| item.name == name)
-        .cloned()
-        .unwrap_or(SkillProjectConstraint {
-            name: name.to_string(),
-            version: None,
-            source: None,
-            registry: None,
-            allow_prerelease: false,
-        });
+    let mut next = state.defaults.iter().find(|item| item.name == name).cloned().unwrap_or(SkillProjectConstraint {
+        name: name.to_string(),
+        version: None,
+        source: None,
+        registry: None,
+        allow_prerelease: false,
+    });
 
     if let Some(version) = version {
         next.version = Some(version);
@@ -151,9 +130,7 @@ fn upsert_installed(state: &mut SkillRegistryStateV1, selected: &SkillVersionRec
         integrity: selected.integrity.clone(),
         artifact: selected.artifact.clone(),
     };
-    state
-        .installed
-        .retain(|item| !(item.name == entry.name && item.source == entry.source));
+    state.installed.retain(|item| !(item.name == entry.name && item.source == entry.source));
     state.installed.push(entry);
 }
 
@@ -166,17 +143,13 @@ fn upsert_lock_entry(lock_state: &mut SkillLockStateV1, selected: &SkillVersionR
         artifact: selected.artifact.clone(),
         registry: Some(selected.registry.clone()),
     };
-    lock_state
-        .entries
-        .retain(|item| !(item.name == entry.name && item.source == entry.source));
+    lock_state.entries.retain(|item| !(item.name == entry.name && item.source == entry.source));
     lock_state.entries.push(entry);
 }
 
 fn lock_status_for(entry: &ResolvedSkillEntry, lock_state: &SkillLockStateV1) -> &'static str {
-    let Some(lock_entry) = lock_state
-        .entries
-        .iter()
-        .find(|item| item.name == entry.name && item.source == entry.source)
+    let Some(lock_entry) =
+        lock_state.entries.iter().find(|item| item.name == entry.name && item.source == entry.source)
     else {
         return "missing";
     };
@@ -198,16 +171,12 @@ fn build_integrity(name: &str, version: &str, source: &str, artifact: &str) -> S
 
 fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Result<()> {
     let query = args.query.map(|value| value.to_ascii_lowercase());
-    let source_filter = args
-        .source
-        .as_deref()
-        .map(|s| s.trim().to_ascii_lowercase());
+    let source_filter = args.source.as_deref().map(|s| s.trim().to_ascii_lowercase());
     let registry_filter = args.registry.as_deref();
 
     let mut combined: Vec<serde_json::Value> = Vec::new();
 
-    let skip_definitions =
-        source_filter.as_deref() == Some("installed") || registry_filter.is_some();
+    let skip_definitions = source_filter.as_deref() == Some("installed") || registry_filter.is_some();
     if !skip_definitions {
         let sources = load_skill_sources(Path::new(project_root), None).unwrap_or_default();
         let available = list_available_skills(&sources);
@@ -219,12 +188,7 @@ fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Resul
                 }
             }
             if let Some(ref q) = query {
-                if !resolved
-                    .definition
-                    .name
-                    .to_ascii_lowercase()
-                    .contains(q.as_str())
-                {
+                if !resolved.definition.name.to_ascii_lowercase().contains(q.as_str()) {
                     continue;
                 }
             }
@@ -238,44 +202,31 @@ fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Resul
         }
     }
 
-    let skip_registry = matches!(
-        source_filter.as_deref(),
-        Some("built-in" | "user" | "project")
-    );
+    let skip_registry = matches!(source_filter.as_deref(), Some("built-in" | "user" | "project"));
     if !skip_registry {
         let state = load_skill_registry_state(project_root)?;
         ensure_registry_available(&state, registry_filter)?;
-        let registry_rank: HashMap<&str, u32> = state
-            .registries
-            .iter()
-            .map(|item| (item.id.as_str(), item.priority))
-            .collect();
+        let registry_rank: HashMap<&str, u32> =
+            state.registries.iter().map(|item| (item.id.as_str(), item.priority)).collect();
 
-        let mut catalog_results: Vec<SkillVersionRecord> = state
-            .catalog
-            .into_iter()
-            .filter(|record| {
-                if let Some(ref q) = query {
-                    record.name.to_ascii_lowercase().contains(q.as_str())
-                } else {
-                    true
-                }
-            })
-            .filter(|record| {
-                registry_filter
-                    .map(|registry| record.registry == registry.trim())
-                    .unwrap_or(true)
-            })
-            .collect();
+        let mut catalog_results: Vec<SkillVersionRecord> =
+            state
+                .catalog
+                .into_iter()
+                .filter(|record| {
+                    if let Some(ref q) = query {
+                        record.name.to_ascii_lowercase().contains(q.as_str())
+                    } else {
+                        true
+                    }
+                })
+                .filter(|record| registry_filter.map(|registry| record.registry == registry.trim()).unwrap_or(true))
+                .collect();
         catalog_results.sort_by(|left, right| {
             registry_rank
                 .get(left.registry.as_str())
                 .unwrap_or(&u32::MAX)
-                .cmp(
-                    registry_rank
-                        .get(right.registry.as_str())
-                        .unwrap_or(&u32::MAX),
-                )
+                .cmp(registry_rank.get(right.registry.as_str()).unwrap_or(&u32::MAX))
                 .then_with(|| left.registry.cmp(&right.registry))
                 .then_with(|| left.name.cmp(&right.name))
                 .then_with(|| left.source.cmp(&right.source))
@@ -347,10 +298,7 @@ fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Res
 }
 
 fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()> {
-    let source_filter = args
-        .source
-        .as_deref()
-        .map(|s| s.trim().to_ascii_lowercase());
+    let source_filter = args.source.as_deref().map(|s| s.trim().to_ascii_lowercase());
     let mut items: Vec<serde_json::Value> = Vec::new();
 
     let skip_definitions = source_filter.as_deref() == Some("installed");
@@ -374,10 +322,7 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
         }
     }
 
-    let skip_registry = matches!(
-        source_filter.as_deref(),
-        Some("built-in" | "user" | "project")
-    );
+    let skip_registry = matches!(source_filter.as_deref(), Some("built-in" | "user" | "project"));
     if !skip_registry {
         let state = load_skill_registry_state(project_root)?;
         let lock_state = load_skill_lock_state(project_root)?;
@@ -431,23 +376,12 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
     ensure_registry_available(&registry_state, args.registry.as_deref())?;
     let mut lock_state = load_skill_lock_state(project_root)?;
 
-    let target_name = args
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let target_source = args
-        .source
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let target_name = args.name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let target_source = args.source.as_deref().map(str::trim).filter(|value| !value.is_empty());
     let targets = resolve_update_targets(&registry_state, target_name, target_source);
 
     if target_name.is_some() && targets.is_empty() {
-        return Err(not_found_error(format!(
-            "skill not found: {}",
-            target_name.unwrap_or_default()
-        )));
+        return Err(not_found_error(format!("skill not found: {}", target_name.unwrap_or_default())));
     }
 
     let mut updated_entries = Vec::new();
@@ -467,12 +401,8 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
             project_default,
         )?;
 
-        registry_state
-            .installed
-            .retain(|entry| !(entry.name == name && entry.source == installed_source));
-        lock_state
-            .entries
-            .retain(|entry| !(entry.name == name && entry.source == installed_source));
+        registry_state.installed.retain(|entry| !(entry.name == name && entry.source == installed_source));
+        lock_state.entries.retain(|entry| !(entry.name == name && entry.source == installed_source));
         ensure_registry_registered(&mut registry_state, &resolution.selected.registry);
         upsert_installed(&mut registry_state, &resolution.selected);
         upsert_lock_entry(&mut lock_state, &resolution.selected);
@@ -481,12 +411,8 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
             &mut registry_state,
             &name,
             args.version.clone(),
-            args.source
-                .clone()
-                .or(Some(resolution.selected.source.clone())),
-            args.registry
-                .clone()
-                .or(Some(resolution.selected.registry.clone())),
+            args.source.clone().or(Some(resolution.selected.source.clone())),
+            args.registry.clone().or(Some(resolution.selected.registry.clone())),
             args.allow_prerelease,
         );
         updated_entries.push(serde_json::json!({
@@ -523,17 +449,12 @@ fn handle_publish(args: SkillPublishArgs, project_root: &str, json: bool) -> Res
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("{name}-{version}.tgz"));
-    Version::parse(&version).map_err(|error| {
-        invalid_input_error(format!("invalid version '{}': {}", version, error))
-    })?;
+    Version::parse(&version)
+        .map_err(|error| invalid_input_error(format!("invalid version '{}': {}", version, error)))?;
 
     let mut state = load_skill_registry_state(project_root)?;
     ensure_registry_available(&state, Some(&registry))?;
-    if state
-        .catalog
-        .iter()
-        .any(|entry| entry.name == name && entry.version == version && entry.source == source)
-    {
+    if state.catalog.iter().any(|entry| entry.name == name && entry.version == version && entry.source == source) {
         return Err(conflict_error(format!(
             "skill version already exists for source '{}': {}@{}",
             source, name, version
@@ -548,14 +469,7 @@ fn handle_publish(args: SkillPublishArgs, project_root: &str, json: bool) -> Res
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| build_integrity(&name, &version, &source, &artifact));
 
-    let record = SkillVersionRecord {
-        name,
-        version,
-        source,
-        registry,
-        integrity,
-        artifact,
-    };
+    let record = SkillVersionRecord { name, version, source, registry, integrity, artifact };
     state.catalog.push(record.clone());
     let registry_changed = save_skill_registry_state_if_changed(project_root, &state)?;
 
@@ -572,31 +486,11 @@ fn handle_registry_add(args: SkillRegistryAddArgs, project_root: &str, json: boo
     let id = sanitize_required(&args.id, "id")?;
     let url = sanitize_required(&args.url, "url")?;
     let mut state = load_skill_registry_state(project_root)?;
-    let existing = state
-        .registries
-        .iter()
-        .find(|entry| entry.id == id)
-        .cloned();
-    let default_priority = state
-        .registries
-        .iter()
-        .map(|entry| entry.priority)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
-    let priority = args.priority.unwrap_or_else(|| {
-        existing
-            .as_ref()
-            .map(|e| e.priority)
-            .unwrap_or(default_priority)
-    });
+    let existing = state.registries.iter().find(|entry| entry.id == id).cloned();
+    let default_priority = state.registries.iter().map(|entry| entry.priority).max().unwrap_or(0).saturating_add(1);
+    let priority = args.priority.unwrap_or_else(|| existing.as_ref().map(|e| e.priority).unwrap_or(default_priority));
     state.registries.retain(|entry| entry.id != id);
-    let registry = SkillRegistrySourceConfig {
-        id: id.clone(),
-        priority,
-        available: true,
-        url: Some(url),
-    };
+    let registry = SkillRegistrySourceConfig { id: id.clone(), priority, available: true, url: Some(url) };
     state.registries.push(SkillRegistrySourceConfig {
         id: registry.id.clone(),
         priority: registry.priority,
@@ -613,11 +507,7 @@ fn handle_registry_add(args: SkillRegistryAddArgs, project_root: &str, json: boo
     )
 }
 
-fn handle_registry_remove(
-    args: SkillRegistryRemoveArgs,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+fn handle_registry_remove(args: SkillRegistryRemoveArgs, project_root: &str, json: bool) -> Result<()> {
     let id = sanitize_required(&args.id, "id")?;
     let mut state = load_skill_registry_state(project_root)?;
     if !state.registries.iter().any(|entry| entry.id == id) {
@@ -689,11 +579,7 @@ fn handle_show(args: SkillShowArgs, project_root: &str, json: bool) -> Result<()
     }
 }
 
-pub(crate) async fn handle_skill(
-    command: SkillCommand,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         SkillCommand::Search(args) => handle_search(args, project_root, json),
         SkillCommand::Install(args) => handle_install(args, project_root, json),

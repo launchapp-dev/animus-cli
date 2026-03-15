@@ -37,26 +37,13 @@ pub fn create_pull_request(
     let mut command = ProcessCommand::new("gh");
     command
         .current_dir(cwd)
-        .args([
-            "pr",
-            "create",
-            "--base",
-            base_branch,
-            "--head",
-            head_branch,
-            "--title",
-            title,
-            "--body",
-            body,
-        ])
+        .args(["pr", "create", "--base", base_branch, "--head", head_branch, "--title", title, "--body", body])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if draft {
         command.arg("--draft");
     }
-    let output = command
-        .output()
-        .with_context(|| format!("failed to run gh pr create in {}", cwd))?;
+    let output = command.output().with_context(|| format!("failed to run gh pr create in {}", cwd))?;
     if output.status.success() {
         return Ok(());
     }
@@ -68,5 +55,3 @@ pub fn create_pull_request(
     }
     anyhow::bail!("gh pr create failed: {summary}")
 }
-
-

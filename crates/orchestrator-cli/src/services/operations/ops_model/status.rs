@@ -61,11 +61,7 @@ pub(super) fn evaluate_model_status(model_id: &str, cli_tool: &str) -> ModelStat
 
     let api_keys = required_api_keys_for_tool(cli_tool);
     if !api_keys.is_empty()
-        && !api_keys.iter().any(|key| {
-            std::env::var(key)
-                .ok()
-                .is_some_and(|value| !value.trim().is_empty())
-        })
+        && !api_keys.iter().any(|key| std::env::var(key).ok().is_some_and(|value| !value.trim().is_empty()))
     {
         return ModelStatusDtoCli {
             model_id: model_id.to_string(),
@@ -83,20 +79,9 @@ pub(super) fn evaluate_model_status(model_id: &str, cli_tool: &str) -> ModelStat
     }
 }
 
-pub(super) fn summarize_model_statuses(
-    statuses: &[ModelStatusDtoCli],
-) -> ModelAvailabilitySummaryCli {
-    let all_available = statuses
-        .iter()
-        .all(|status| status.availability == "available");
-    let available = statuses
-        .iter()
-        .filter(|status| status.availability == "available")
-        .count();
+pub(super) fn summarize_model_statuses(statuses: &[ModelStatusDtoCli]) -> ModelAvailabilitySummaryCli {
+    let all_available = statuses.iter().all(|status| status.availability == "available");
+    let available = statuses.iter().filter(|status| status.availability == "available").count();
     let summary = format!("{available}/{} models available", statuses.len());
-    ModelAvailabilitySummaryCli {
-        statuses: statuses.to_vec(),
-        all_available,
-        summary,
-    }
+    ModelAvailabilitySummaryCli { statuses: statuses.to_vec(), all_available, summary }
 }

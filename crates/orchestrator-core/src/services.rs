@@ -4,10 +4,10 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::types::not_found;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use crate::types::not_found;
 use fs2::FileExt;
 use orchestrator_store::{write_json_if_missing, write_json_pretty};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
@@ -18,20 +18,18 @@ use uuid::Uuid;
 
 use crate::providers::{BuiltinGitProvider, GitProvider};
 use crate::providers::{
-    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver,
-    BuiltinTaskProvider, ProjectAdapter, RequirementsProvider, SubjectResolver, TaskProvider,
+    BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver, BuiltinTaskProvider, ProjectAdapter,
+    RequirementsProvider, SubjectResolver, TaskProvider,
 };
 use crate::types::{
-    AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem,
-    CheckpointReason, CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth,
-    DaemonStatus, DependencyType, LogEntry, LogLevel, OrchestratorProject, OrchestratorTask,
-    OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig, ProjectCreateInput, ProjectType,
-    RequirementItem, RequirementPriorityExt, RequirementStatus, RequirementsDraftInput,
-    RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency,
-    TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
-    TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
-    TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
+    AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
+    CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth, DaemonStatus, DependencyType, LogEntry, LogLevel,
+    OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig,
+    ProjectCreateInput, ProjectType, RequirementItem, RequirementPriorityExt, RequirementStatus,
+    RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
+    RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata,
+    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions,
+    TaskPriorityRebalancePlan, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
     WorkflowMetadata, WorkflowRunInput, WorkflowSubject,
 };
 use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
@@ -51,14 +49,10 @@ mod task_impl;
 mod task_shared;
 mod workflow_impl;
 
-pub use phase_execution::{
-    PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict,
-};
+pub use phase_execution::{PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict};
 use planning_utils::*;
 use runner_helpers::*;
-pub use schedule_state::{
-    load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState,
-};
+pub use schedule_state::{load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState};
 use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
 pub use task_shared::task_matches_filter;
 use task_shared::*;
@@ -131,24 +125,9 @@ pub trait TaskServiceApi: Send + Sync {
         model: Option<String>,
         updated_by: String,
     ) -> Result<OrchestratorTask>;
-    async fn assign_human(
-        &self,
-        id: &str,
-        user_id: String,
-        updated_by: String,
-    ) -> Result<OrchestratorTask>;
-    async fn set_status(
-        &self,
-        id: &str,
-        status: TaskStatus,
-        validate: bool,
-    ) -> Result<OrchestratorTask>;
-    async fn add_checklist_item(
-        &self,
-        id: &str,
-        description: String,
-        updated_by: String,
-    ) -> Result<OrchestratorTask>;
+    async fn assign_human(&self, id: &str, user_id: String, updated_by: String) -> Result<OrchestratorTask>;
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask>;
+    async fn add_checklist_item(&self, id: &str, description: String, updated_by: String) -> Result<OrchestratorTask>;
     async fn update_checklist_item(
         &self,
         id: &str,
@@ -163,12 +142,7 @@ pub trait TaskServiceApi: Send + Sync {
         dependency_type: DependencyType,
         updated_by: String,
     ) -> Result<OrchestratorTask>;
-    async fn remove_dependency(
-        &self,
-        id: &str,
-        dependency_id: &str,
-        updated_by: String,
-    ) -> Result<OrchestratorTask>;
+    async fn remove_dependency(&self, id: &str, dependency_id: &str, updated_by: String) -> Result<OrchestratorTask>;
 }
 
 #[async_trait]
@@ -177,11 +151,7 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;
     async fn list_checkpoints(&self, id: &str) -> Result<Vec<usize>>;
-    async fn get_checkpoint(
-        &self,
-        id: &str,
-        checkpoint_number: usize,
-    ) -> Result<OrchestratorWorkflow>;
+    async fn get_checkpoint(&self, id: &str, checkpoint_number: usize) -> Result<OrchestratorWorkflow>;
     async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow>;
     async fn resume(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn pause(&self, id: &str) -> Result<OrchestratorWorkflow>;
@@ -204,22 +174,13 @@ pub trait PlanningServiceApi: Send + Sync {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider>;
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument>;
     async fn get_vision(&self) -> Result<Option<VisionDocument>>;
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult>;
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult>;
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>>;
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem>;
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>>;
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>>;
     async fn upsert_requirement(&self, requirement: RequirementItem) -> Result<RequirementItem>;
     async fn delete_requirement(&self, id: &str) -> Result<()>;
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult>;
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult>;
 }
 
 #[async_trait]
@@ -247,9 +208,7 @@ pub struct InMemoryServiceHub {
 
 impl Default for InMemoryServiceHub {
     fn default() -> Self {
-        Self {
-            state: Arc::new(RwLock::new(CoreState::default_with_stopped())),
-        }
+        Self { state: Arc::new(RwLock::new(CoreState::default_with_stopped())) }
     }
 }
 
@@ -262,11 +221,7 @@ impl InMemoryServiceHub {
         let state = self.state.clone();
         tokio::spawn(async move {
             let mut lock = state.write().await;
-            lock.logs.push(LogEntry {
-                timestamp: Utc::now(),
-                level,
-                message,
-            });
+            lock.logs.push(LogEntry { timestamp: Utc::now(), level, message });
         });
     }
 }
@@ -286,25 +241,17 @@ impl FileServiceHub {
     pub fn new(project_root: impl AsRef<Path>) -> Result<Self> {
         let project_root = project_root.as_ref().to_path_buf();
         Self::bootstrap_project_base_configs(&project_root)?;
-        let scoped_root =
-            protocol::scoped_state_root(&project_root).unwrap_or_else(|| project_root.join(".ao"));
+        let scoped_root = protocol::scoped_state_root(&project_root).unwrap_or_else(|| project_root.join(".ao"));
         let state_file = scoped_root.join("core-state.json");
 
         let mut state = load_core_state(&state_file);
 
         let workflow_manager = WorkflowStateManager::new(&project_root);
         if let Ok(workflows) = workflow_manager.list() {
-            state.workflows = workflows
-                .into_iter()
-                .map(|workflow| (workflow.id.clone(), workflow))
-                .collect();
+            state.workflows = workflows.into_iter().map(|workflow| (workflow.id.clone(), workflow)).collect();
         }
 
-        let hub = Self {
-            state: Arc::new(RwLock::new(state)),
-            state_file,
-            project_root,
-        };
+        let hub = Self { state: Arc::new(RwLock::new(state)), state_file, project_root };
         Ok(hub)
     }
 
@@ -324,10 +271,7 @@ impl FileServiceHub {
         let lock_path = Self::state_lock_file_for_state_file(path);
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create parent directory for core state lock at {}",
-                    lock_path.display()
-                )
+                format!("failed to create parent directory for core state lock at {}", lock_path.display())
             })?;
         }
 
@@ -337,18 +281,10 @@ impl FileServiceHub {
             .read(true)
             .write(true)
             .open(&lock_path)
-            .with_context(|| {
-                format!(
-                    "failed to open core state lock file at {}",
-                    lock_path.display()
-                )
-            })?;
-        lock_file.lock_exclusive().with_context(|| {
-            format!(
-                "failed to acquire exclusive core state lock at {}",
-                lock_path.display()
-            )
-        })?;
+            .with_context(|| format!("failed to open core state lock file at {}", lock_path.display()))?;
+        lock_file
+            .lock_exclusive()
+            .with_context(|| format!("failed to acquire exclusive core state lock at {}", lock_path.display()))?;
         Ok(lock_file)
     }
 
@@ -404,9 +340,7 @@ impl FileServiceHub {
 
     fn legacy_requirement_status(status: RequirementStatus) -> &'static str {
         match status {
-            RequirementStatus::Draft | RequirementStatus::Refined | RequirementStatus::Planned => {
-                "draft"
-            }
+            RequirementStatus::Draft | RequirementStatus::Refined | RequirementStatus::Planned => "draft",
             RequirementStatus::InProgress => "em-review",
             RequirementStatus::Done | RequirementStatus::Implemented => "implemented",
             RequirementStatus::PoReview => "po-review",
@@ -448,11 +382,7 @@ impl FileServiceHub {
         })
     }
 
-    fn write_requirement_files(
-        path: &Path,
-        snapshot: &CoreState,
-        only_ids: Option<&HashSet<String>>,
-    ) -> Result<()> {
+    fn write_requirement_files(path: &Path, snapshot: &CoreState, only_ids: Option<&HashSet<String>>) -> Result<()> {
         let Some(ao_dir) = Self::ao_dir_for_state_file(path) else {
             return Ok(());
         };
@@ -467,10 +397,7 @@ impl FileServiceHub {
 
         for requirement in requirements {
             let fallback_file = format!("generated/{}.json", requirement.id);
-            let relative_path = Self::sanitize_relative_json_path(
-                requirement.relative_path.as_deref(),
-                &fallback_file,
-            );
+            let relative_path = Self::sanitize_relative_json_path(requirement.relative_path.as_deref(), &fallback_file);
             let full_path = requirements_dir.join(&relative_path);
             if let Some(parent) = full_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -514,23 +441,16 @@ impl FileServiceHub {
             "requirements": index_entries,
             "traceability": traceability,
         });
-        let index_root = Self::index_root_for_state_file(path)
-            .ok_or_else(|| anyhow!("failed to resolve AO index directory"))?;
+        let index_root =
+            Self::index_root_for_state_file(path).ok_or_else(|| anyhow!("failed to resolve AO index directory"))?;
         std::fs::create_dir_all(index_root.join("requirements"))?;
         let requirements_index = index_root.join("requirements").join("index.json");
-        std::fs::write(
-            requirements_index,
-            serde_json::to_string_pretty(&index_payload)?,
-        )?;
+        std::fs::write(requirements_index, serde_json::to_string_pretty(&index_payload)?)?;
 
         Ok(())
     }
 
-    fn write_task_files(
-        path: &Path,
-        snapshot: &CoreState,
-        only_ids: Option<&HashSet<String>>,
-    ) -> Result<()> {
+    fn write_task_files(path: &Path, snapshot: &CoreState, only_ids: Option<&HashSet<String>>) -> Result<()> {
         let Some(ao_dir) = Self::ao_dir_for_state_file(path) else {
             return Ok(());
         };
@@ -544,11 +464,7 @@ impl FileServiceHub {
         let mut last_sequence = 0u32;
 
         for task in tasks {
-            if let Some(seq) = task
-                .id
-                .strip_prefix("TASK-")
-                .and_then(|value| value.parse::<u32>().ok())
-            {
+            if let Some(seq) = task.id.strip_prefix("TASK-").and_then(|value| value.parse::<u32>().ok()) {
                 last_sequence = last_sequence.max(seq);
             }
 
@@ -590,10 +506,7 @@ impl FileServiceHub {
                 "resource_requirements": task.resource_requirements,
             });
             if only_ids.is_none() || only_ids.is_some_and(|ids| ids.contains(&task.id)) {
-                std::fs::write(
-                    tasks_dir.join(format!("{}.json", task.id)),
-                    serde_json::to_string_pretty(&payload)?,
-                )?;
+                std::fs::write(tasks_dir.join(format!("{}.json", task.id)), serde_json::to_string_pretty(&payload)?)?;
             }
 
             index_entries.push(serde_json::json!({
@@ -615,10 +528,7 @@ impl FileServiceHub {
             .ok_or_else(|| anyhow!("failed to resolve AO index directory"))?
             .join("tasks");
         std::fs::create_dir_all(&index_dir)?;
-        std::fs::write(
-            index_dir.join("index.json"),
-            serde_json::to_string_pretty(&index_payload)?,
-        )?;
+        std::fs::write(index_dir.join("index.json"), serde_json::to_string_pretty(&index_payload)?)?;
 
         Ok(())
     }
@@ -637,10 +547,7 @@ impl FileServiceHub {
         }
 
         let architecture_json_path = docs_dir.join("architecture.json");
-        std::fs::write(
-            &architecture_json_path,
-            serde_json::to_string_pretty(&snapshot.architecture)?,
-        )?;
+        std::fs::write(&architecture_json_path, serde_json::to_string_pretty(&snapshot.architecture)?)?;
 
         Self::write_requirement_files(path, snapshot, None)?;
         Self::write_task_files(path, snapshot, None)?;
@@ -668,26 +575,15 @@ impl FileServiceHub {
             }
 
             let architecture_json_path = docs_dir.join("architecture.json");
-            std::fs::write(
-                &architecture_json_path,
-                serde_json::to_string_pretty(&state.architecture)?,
-            )?;
+            std::fs::write(&architecture_json_path, serde_json::to_string_pretty(&state.architecture)?)?;
 
             if state.all_tasks_dirty || !state.dirty_tasks.is_empty() {
-                let only = if state.all_tasks_dirty {
-                    None
-                } else {
-                    Some(&state.dirty_tasks)
-                };
+                let only = if state.all_tasks_dirty { None } else { Some(&state.dirty_tasks) };
                 Self::write_task_files(path, state, only)?;
             }
 
             if state.all_requirements_dirty || !state.dirty_requirements.is_empty() {
-                let only = if state.all_requirements_dirty {
-                    None
-                } else {
-                    Some(&state.dirty_requirements)
-                };
+                let only = if state.all_requirements_dirty { None } else { Some(&state.dirty_requirements) };
                 Self::write_requirement_files(path, state, only)?;
             }
         }
@@ -707,31 +603,19 @@ impl FileServiceHub {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .with_context(|| {
-                format!(
-                    "failed to run git command in {}: git {}",
-                    project_root.display(),
-                    args.join(" ")
-                )
-            })
+            .with_context(|| format!("failed to run git command in {}: git {}", project_root.display(), args.join(" ")))
     }
 
     fn ensure_project_git_repository(project_root: &Path) -> Result<()> {
-        let is_repo =
-            Self::git_command_status(project_root, &["rev-parse", "--is-inside-work-tree"])?
-                .success();
+        let is_repo = Self::git_command_status(project_root, &["rev-parse", "--is-inside-work-tree"])?.success();
         if !is_repo {
             let init_status = Self::git_command_status(project_root, &["init"])?;
             if !init_status.success() {
-                anyhow::bail!(
-                    "failed to initialize git repository at {}",
-                    project_root.display()
-                );
+                anyhow::bail!("failed to initialize git repository at {}", project_root.display());
             }
         }
 
-        let has_head =
-            Self::git_command_status(project_root, &["rev-parse", "--verify", "HEAD"])?.success();
+        let has_head = Self::git_command_status(project_root, &["rev-parse", "--verify", "HEAD"])?.success();
         if !has_head {
             let seed_status = Command::new("git")
                 .arg("-C")
@@ -749,17 +633,9 @@ impl FileServiceHub {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
-                .with_context(|| {
-                    format!(
-                        "failed to create initial git commit in {}",
-                        project_root.display()
-                    )
-                })?;
+                .with_context(|| format!("failed to create initial git commit in {}", project_root.display()))?;
             if !seed_status.success() {
-                anyhow::bail!(
-                    "failed to create initial git commit in {}",
-                    project_root.display()
-                );
+                anyhow::bail!("failed to create initial git commit in {}", project_root.display());
             }
         }
 
@@ -805,10 +681,7 @@ impl FileServiceHub {
         copy("requirements")?;
         copy("docs")?;
         copy("workflow-state")?;
-        std::fs::write(
-            scoped_root.join(".migrated-from-repo"),
-            project_root.display().to_string(),
-        )?;
+        std::fs::write(scoped_root.join(".migrated-from-repo"), project_root.display().to_string())?;
         Ok(())
     }
 
@@ -835,8 +708,7 @@ impl FileServiceHub {
 
         Self::maybe_migrate_state_to_scoped_root(project_root)?;
 
-        let scoped_root =
-            protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+        let scoped_root = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
         let state_dir = scoped_root.join("state");
         std::fs::create_dir_all(&state_dir)?;
 
@@ -849,10 +721,7 @@ impl FileServiceHub {
             }
         }
 
-        write_json_if_missing(
-            &scoped_root.join("resume-config.json"),
-            &ResumeConfig::default(),
-        )?;
+        write_json_if_missing(&scoped_root.join("resume-config.json"), &ResumeConfig::default())?;
         crate::state_machines::ensure_state_machines_file(project_root)?;
         if is_new_project {
             crate::workflow_config::ensure_workflow_yaml_scaffold(project_root)?;

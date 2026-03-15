@@ -8,12 +8,7 @@ pub const REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "requirement-task-gen
 pub const REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "requirement-task-generation-run";
 
 fn standard_phase_plan() -> Vec<String> {
-    vec![
-        "requirements".to_string(),
-        "implementation".to_string(),
-        "code-review".to_string(),
-        "testing".to_string(),
-    ]
+    vec!["requirements".to_string(), "implementation".to_string(), "code-review".to_string(), "testing".to_string()]
 }
 
 fn ui_ux_phase_plan() -> Vec<String> {
@@ -29,9 +24,7 @@ fn ui_ux_phase_plan() -> Vec<String> {
 }
 
 fn normalize_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String> {
-    let requested = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let requested = workflow_ref.map(str::trim).filter(|value| !value.is_empty())?;
     let normalized = requested.to_ascii_lowercase();
 
     match normalized.as_str() {
@@ -44,15 +37,12 @@ fn normalize_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String
 }
 
 fn raw_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String> {
-    workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    workflow_ref.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
 }
 
 pub fn phase_plan_for_workflow_ref(workflow_ref: Option<&str>) -> Vec<String> {
-    let normalized = normalize_requested_workflow_ref(workflow_ref)
-        .unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string());
+    let normalized =
+        normalize_requested_workflow_ref(workflow_ref).unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string());
 
     match normalized.as_str() {
         STANDARD_WORKFLOW_REF => standard_phase_plan(),
@@ -69,9 +59,7 @@ pub fn resolve_phase_plan_for_workflow_ref(
     let normalized_workflow_ref = normalize_requested_workflow_ref(workflow_ref);
 
     let Some(root) = project_root else {
-        return Ok(phase_plan_for_workflow_ref(
-            normalized_workflow_ref.as_deref(),
-        ));
+        return Ok(phase_plan_for_workflow_ref(normalized_workflow_ref.as_deref()));
     };
 
     let workflow_config_path = crate::workflow_config_path(root);
@@ -82,20 +70,11 @@ pub fn resolve_phase_plan_for_workflow_ref(
             .ok()
             .into_iter()
             .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
-            .any(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-            });
-    let has_legacy_workflow_config = crate::legacy_workflow_config_paths(root)
-        .iter()
-        .any(|candidate| candidate.exists());
+            .any(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false));
+    let has_legacy_workflow_config =
+        crate::legacy_workflow_config_paths(root).iter().any(|candidate| candidate.exists());
     if !has_yaml_workflows && !workflow_config_path.exists() && !has_legacy_workflow_config {
-        return Ok(phase_plan_for_workflow_ref(
-            normalized_workflow_ref.as_deref(),
-        ));
+        return Ok(phase_plan_for_workflow_ref(normalized_workflow_ref.as_deref()));
     }
 
     let loaded_workflow = crate::load_workflow_config_with_metadata(root)?;
@@ -103,16 +82,12 @@ pub fn resolve_phase_plan_for_workflow_ref(
     let runtime_config = crate::load_agent_runtime_config_or_default(root);
     crate::validate_workflow_and_runtime_configs(&workflow_config, &runtime_config)?;
 
-    if let Some(phases) =
-        crate::resolve_workflow_phase_plan(&workflow_config, requested_workflow_ref.as_deref())
-    {
+    if let Some(phases) = crate::resolve_workflow_phase_plan(&workflow_config, requested_workflow_ref.as_deref()) {
         return Ok(phases);
     }
 
     if requested_workflow_ref != normalized_workflow_ref {
-        if let Some(phases) =
-            crate::resolve_workflow_phase_plan(&workflow_config, normalized_workflow_ref.as_deref())
-        {
+        if let Some(phases) = crate::resolve_workflow_phase_plan(&workflow_config, normalized_workflow_ref.as_deref()) {
             return Ok(phases);
         }
     }
@@ -121,17 +96,9 @@ pub fn resolve_phase_plan_for_workflow_ref(
         .as_deref()
         .or(normalized_workflow_ref.as_deref())
         .unwrap_or(workflow_config.default_workflow_ref.as_str());
-    let available = workflow_config
-        .workflows
-        .iter()
-        .map(|workflow| workflow.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let available_display = if available.is_empty() {
-        "<none>"
-    } else {
-        available.as_str()
-    };
+    let available =
+        workflow_config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>().join(", ");
+    let available_display = if available.is_empty() { "<none>" } else { available.as_str() };
 
     Err(anyhow!(
         "workflow '{requested}' not found in workflow config at {} (available: {available_display})",
@@ -161,11 +128,8 @@ mod tests {
             .expect("config has parent")
             .to_path_buf();
         std::fs::create_dir_all(&state_dir).expect("state dir");
-        std::fs::write(
-            state_dir.join(crate::WORKFLOW_CONFIG_FILE_NAME),
-            "{ invalid json",
-        )
-        .expect("write invalid workflow config");
+        std::fs::write(state_dir.join(crate::WORKFLOW_CONFIG_FILE_NAME), "{ invalid json")
+            .expect("write invalid workflow config");
 
         let err = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("standard"))
             .expect_err("invalid config should return error");
@@ -193,8 +157,7 @@ mod tests {
     fn resolve_phase_plan_errors_when_pipeline_is_missing_from_config() {
         let temp = tempfile::tempdir().expect("tempdir");
 
-        crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config())
-            .expect("write workflow config");
+        crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
         crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
             .expect("write runtime config");
 
@@ -215,27 +178,16 @@ mod tests {
             .iter_mut()
             .find(|pipeline| pipeline.id == STANDARD_WORKFLOW_REF)
             .expect("standard pipeline should exist");
-        standard_pipeline.phases = vec![
-            "requirements".to_string().into(),
-            "testing".to_string().into(),
-            "implementation".to_string().into(),
-        ];
+        standard_pipeline.phases =
+            vec!["requirements".to_string().into(), "testing".to_string().into(), "implementation".to_string().into()];
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
         crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
             .expect("write runtime config");
 
-        let phases =
-            resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(STANDARD_WORKFLOW_REF))
-                .expect("resolver should use configured standard pipeline phases");
-        assert_eq!(
-            phases,
-            vec![
-                "requirements".to_string(),
-                "testing".to_string(),
-                "implementation".to_string(),
-            ]
-        );
+        let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(STANDARD_WORKFLOW_REF))
+            .expect("resolver should use configured standard pipeline phases");
+        assert_eq!(phases, vec!["requirements".to_string(), "testing".to_string(), "implementation".to_string(),]);
         assert_ne!(phases, standard_phase_plan());
     }
 

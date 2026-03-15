@@ -9,9 +9,7 @@ pub(crate) fn parse_codex_stdout_line(line: &str) -> Vec<SessionEvent> {
     }
 
     let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-        return vec![SessionEvent::TextDelta {
-            text: line.to_string(),
-        }];
+        return vec![SessionEvent::TextDelta { text: line.to_string() }];
     };
 
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
@@ -43,11 +41,7 @@ fn parse_codex_item_completed(value: &Value) -> Vec<SessionEvent> {
         "reasoning" => item
             .get("text")
             .and_then(Value::as_str)
-            .map(|text| {
-                vec![SessionEvent::Thinking {
-                    text: text.to_string(),
-                }]
-            })
+            .map(|text| vec![SessionEvent::Thinking { text: text.to_string() }])
             .unwrap_or_default(),
         "agent_message" | "message" => parse_codex_message_item(item),
         _ => Vec::new(),
@@ -57,9 +51,7 @@ fn parse_codex_item_completed(value: &Value) -> Vec<SessionEvent> {
 fn parse_codex_message_item(item: &Value) -> Vec<SessionEvent> {
     if let Some(text) = item.get("text").and_then(Value::as_str) {
         if !text.is_empty() {
-            return vec![SessionEvent::FinalText {
-                text: text.to_string(),
-            }];
+            return vec![SessionEvent::FinalText { text: text.to_string() }];
         }
     }
 

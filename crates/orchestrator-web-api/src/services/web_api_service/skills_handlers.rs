@@ -13,12 +13,7 @@ impl WebApiService {
         let items: Vec<Value> = skills
             .iter()
             .map(|s| {
-                let cat = s
-                    .definition
-                    .category
-                    .as_ref()
-                    .map(|c| format!("{c:?}"))
-                    .unwrap_or_default();
+                let cat = s.definition.category.as_ref().map(|c| format!("{c:?}")).unwrap_or_default();
                 json!({
                     "name": s.definition.name,
                     "description": s.definition.description,
@@ -39,12 +34,7 @@ impl WebApiService {
             .map_err(|e| WebApiError::new("not_found", format!("skill not found: {e}"), 3))?;
         let def_json = serde_json::to_value(&resolved.definition)
             .map_err(|e| WebApiError::new("internal", format!("failed to serialize skill: {e}"), 1))?;
-        let cat = resolved
-            .definition
-            .category
-            .as_ref()
-            .map(|c| format!("{c:?}"))
-            .unwrap_or_default();
+        let cat = resolved.definition.category.as_ref().map(|c| format!("{c:?}")).unwrap_or_default();
         Ok(json!({
             "name": resolved.definition.name,
             "description": resolved.definition.description,

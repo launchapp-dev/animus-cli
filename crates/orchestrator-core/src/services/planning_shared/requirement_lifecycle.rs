@@ -11,10 +11,7 @@ fn add_requirement_comment(requirement: &mut RequirementItem, phase: &str, conte
     }
 
     let already_recorded = requirement.comments.iter().rev().take(20).any(|comment| {
-        comment
-            .phase
-            .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case(phase))
+        comment.phase.as_deref().is_some_and(|value| value.eq_ignore_ascii_case(phase))
             && comment.content.trim().eq_ignore_ascii_case(trimmed)
     });
     if already_recorded {
@@ -30,27 +27,18 @@ fn add_requirement_comment(requirement: &mut RequirementItem, phase: &str, conte
 }
 
 fn ensure_requirement_tag(requirement: &mut RequirementItem, tag: &str) {
-    if requirement
-        .tags
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(tag))
-    {
+    if requirement.tags.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
         return;
     }
     requirement.tags.push(tag.to_string());
 }
 
-fn ensure_acceptance_criterion_contains(
-    requirement: &mut RequirementItem,
-    token: &str,
-    text: &str,
-) {
+fn ensure_acceptance_criterion_contains(requirement: &mut RequirementItem, token: &str, text: &str) {
     let normalized_token = token.trim().to_ascii_lowercase();
-    let exists = requirement.acceptance_criteria.iter().any(|criterion| {
-        criterion
-            .to_ascii_lowercase()
-            .contains(normalized_token.as_str())
-    });
+    let exists = requirement
+        .acceptance_criteria
+        .iter()
+        .any(|criterion| criterion.to_ascii_lowercase().contains(normalized_token.as_str()));
     if !exists {
         requirement.acceptance_criteria.push(text.to_string());
     }
@@ -59,13 +47,7 @@ fn ensure_acceptance_criterion_contains(
 fn normalize_text_for_match(value: &str) -> String {
     value
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() {
-                ch.to_ascii_lowercase()
-            } else {
-                ' '
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() { ch.to_ascii_lowercase() } else { ' ' })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -74,8 +56,8 @@ fn normalize_text_for_match(value: &str) -> String {
 
 fn significant_vision_tokens(value: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "the", "and", "for", "with", "that", "must", "should", "from", "this", "have", "has",
-        "are", "our", "your", "their", "into", "using", "include", "supports", "support",
+        "the", "and", "for", "with", "that", "must", "should", "from", "this", "have", "has", "are", "our", "your",
+        "their", "into", "using", "include", "supports", "support",
     ];
 
     normalize_text_for_match(value)
@@ -92,10 +74,7 @@ fn requirement_review_haystack(requirement: &RequirementItem) -> String {
     normalize_text_for_match(&chunks.join(" "))
 }
 
-fn collect_po_review_issues(
-    requirement: &RequirementItem,
-    vision: Option<&VisionDocument>,
-) -> Vec<String> {
+fn collect_po_review_issues(requirement: &RequirementItem, vision: Option<&VisionDocument>) -> Vec<String> {
     let mut issues = Vec::new();
     if requirement.description.trim().is_empty() {
         issues.push("description is empty".to_string());
@@ -109,20 +88,11 @@ fn collect_po_review_issues(
 
     if let Some(vision) = vision {
         let haystack = requirement_review_haystack(requirement);
-        let goal_tokens = vision
-            .goals
-            .iter()
-            .flat_map(|goal| significant_vision_tokens(goal))
-            .collect::<Vec<_>>();
-        let user_tokens = vision
-            .target_users
-            .iter()
-            .flat_map(|user| significant_vision_tokens(user))
-            .collect::<Vec<_>>();
-        let has_goal_alignment =
-            !goal_tokens.is_empty() && goal_tokens.iter().any(|token| haystack.contains(token));
-        let has_user_alignment =
-            !user_tokens.is_empty() && user_tokens.iter().any(|token| haystack.contains(token));
+        let goal_tokens = vision.goals.iter().flat_map(|goal| significant_vision_tokens(goal)).collect::<Vec<_>>();
+        let user_tokens =
+            vision.target_users.iter().flat_map(|user| significant_vision_tokens(user)).collect::<Vec<_>>();
+        let has_goal_alignment = !goal_tokens.is_empty() && goal_tokens.iter().any(|token| haystack.contains(token));
+        let has_user_alignment = !user_tokens.is_empty() && user_tokens.iter().any(|token| haystack.contains(token));
         if !(has_goal_alignment || has_user_alignment) {
             issues.push("missing explicit alignment to vision goals or target users".to_string());
         }
@@ -133,11 +103,11 @@ fn collect_po_review_issues(
 
 fn collect_em_review_issues(requirement: &RequirementItem) -> Vec<String> {
     let mut issues = Vec::new();
-    if !requirement.acceptance_criteria.iter().any(|criterion| {
-        criterion
-            .to_ascii_lowercase()
-            .contains("automated test coverage")
-    }) {
+    if !requirement
+        .acceptance_criteria
+        .iter()
+        .any(|criterion| criterion.to_ascii_lowercase().contains("automated test coverage"))
+    {
         issues.push("missing automated test coverage criterion".to_string());
     }
     if !requirement.acceptance_criteria.iter().any(|criterion| {
@@ -165,11 +135,7 @@ fn apply_requirement_rework(
     add_requirement_comment(
         requirement,
         "rework",
-        format!(
-            "Rework requested by {}: {}",
-            reviewer_phase,
-            issues.join("; ")
-        ),
+        format!("Rework requested by {}: {}", reviewer_phase, issues.join("; ")),
     );
 
     if super::requirement_needs_research(requirement) {
@@ -224,30 +190,16 @@ fn apply_requirement_rework(
                 .filter(|value| !value.is_empty())
                 .unwrap_or("core delivery outcome"),
         );
-        let has_alignment_section = requirement
-            .description
-            .to_ascii_lowercase()
-            .contains("vision alignment");
+        let has_alignment_section = requirement.description.to_ascii_lowercase().contains("vision alignment");
         if has_alignment_section {
-            if !requirement
-                .description
-                .to_ascii_lowercase()
-                .contains(&alignment_target.to_ascii_lowercase())
-            {
-                requirement.description = format!(
-                    "{}\n- {}",
-                    requirement.description.trim_end(),
-                    alignment_target
-                );
+            if !requirement.description.to_ascii_lowercase().contains(&alignment_target.to_ascii_lowercase()) {
+                requirement.description = format!("{}\n- {}", requirement.description.trim_end(), alignment_target);
             }
         } else {
-            requirement.description = format!(
-                "{}\n\n## Vision Alignment\n- {}",
-                requirement.description.trim_end(),
-                alignment_target
-            )
-            .trim()
-            .to_string();
+            requirement.description =
+                format!("{}\n\n## Vision Alignment\n- {}", requirement.description.trim_end(), alignment_target)
+                    .trim()
+                    .to_string();
         }
     }
 
@@ -259,9 +211,7 @@ pub(super) fn run_requirement_lifecycle_state_machine(
     vision: Option<&VisionDocument>,
     state_machines: Option<&CompiledStateMachines>,
 ) -> Result<()> {
-    let effective_state_machines = state_machines
-        .cloned()
-        .unwrap_or_else(builtin_compiled_state_machines);
+    let effective_state_machines = state_machines.cloned().unwrap_or_else(builtin_compiled_state_machines);
     let machine = effective_state_machines.requirements_lifecycle;
 
     if machine.is_terminal(requirement.status) {
@@ -272,11 +222,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
     let max_rework_rounds = machine.max_rework_rounds();
 
     loop {
-        let refined = machine.apply(
-            requirement.status,
-            RequirementLifecycleEvent::Refine,
-            |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-        );
+        let refined = machine.apply(requirement.status, RequirementLifecycleEvent::Refine, |guard| {
+            requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+        });
         requirement.status = refined.to;
         apply_requirement_lifecycle_actions(
             requirement,
@@ -296,11 +244,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
             ));
         }
 
-        let enter_po = machine.apply(
-            requirement.status,
-            RequirementLifecycleEvent::PoPass,
-            |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-        );
+        let enter_po = machine.apply(requirement.status, RequirementLifecycleEvent::PoPass, |guard| {
+            requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+        });
         requirement.status = enter_po.to;
         if requirement.status != RequirementStatus::PoReview {
             return Err(anyhow!(
@@ -312,11 +258,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
 
         let po_issues = collect_po_review_issues(requirement, vision);
         if !po_issues.is_empty() {
-            let po_fail = machine.apply(
-                requirement.status,
-                RequirementLifecycleEvent::PoFail,
-                |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-            );
+            let po_fail = machine.apply(requirement.status, RequirementLifecycleEvent::PoFail, |guard| {
+                requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+            });
 
             if !po_fail.matched {
                 return Err(anyhow!(
@@ -341,11 +285,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
             continue;
         }
 
-        let po_pass = machine.apply(
-            requirement.status,
-            RequirementLifecycleEvent::PoPass,
-            |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-        );
+        let po_pass = machine.apply(requirement.status, RequirementLifecycleEvent::PoPass, |guard| {
+            requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+        });
         if !po_pass.matched {
             return Err(anyhow!(
                 "requirement {} lifecycle stalled after PO review (state: {:?})",
@@ -375,11 +317,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
 
         let em_issues = collect_em_review_issues(requirement);
         if !em_issues.is_empty() {
-            let em_fail = machine.apply(
-                requirement.status,
-                RequirementLifecycleEvent::EmFail,
-                |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-            );
+            let em_fail = machine.apply(requirement.status, RequirementLifecycleEvent::EmFail, |guard| {
+                requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+            });
 
             if !em_fail.matched {
                 return Err(anyhow!(
@@ -404,11 +344,9 @@ pub(super) fn run_requirement_lifecycle_state_machine(
             continue;
         }
 
-        let em_pass = machine.apply(
-            requirement.status,
-            RequirementLifecycleEvent::EmPass,
-            |guard| requirement_guard_result(guard, rework_rounds, max_rework_rounds),
-        );
+        let em_pass = machine.apply(requirement.status, RequirementLifecycleEvent::EmPass, |guard| {
+            requirement_guard_result(guard, rework_rounds, max_rework_rounds)
+        });
         if !em_pass.matched {
             return Err(anyhow!(
                 "requirement {} lifecycle stalled after EM review (state: {:?})",
@@ -442,26 +380,15 @@ pub(super) fn run_requirement_lifecycle_state_machine(
     }
 }
 
-fn requirement_guard_result(
-    guard_id: &str,
-    rework_rounds: usize,
-    max_rework_rounds: usize,
-) -> bool {
+fn requirement_guard_result(guard_id: &str, rework_rounds: usize, max_rework_rounds: usize) -> bool {
     match guard_id {
         "rework_budget_available" => rework_rounds < max_rework_rounds,
         _ => false,
     }
 }
 
-fn requirement_comment_template(
-    machine: &CompiledRequirementLifecycleMachine,
-    key: &str,
-    fallback: &str,
-) -> String {
-    machine
-        .comment_template(key)
-        .unwrap_or(fallback)
-        .to_string()
+fn requirement_comment_template(machine: &CompiledRequirementLifecycleMachine, key: &str, fallback: &str) -> String {
+    machine.comment_template(key).unwrap_or(fallback).to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -539,10 +466,7 @@ mod tests {
             legacy_id: None,
             category: None,
             requirement_type: None,
-            acceptance_criteria: acceptance_criteria
-                .into_iter()
-                .map(ToString::to_string)
-                .collect(),
+            acceptance_criteria: acceptance_criteria.into_iter().map(ToString::to_string).collect(),
             priority: RequirementPriority::Should,
             status: RequirementStatus::Draft,
             source: "test".to_string(),
@@ -570,26 +494,13 @@ mod tests {
             vec!["auth", "backend"],
         );
 
-        run_requirement_lifecycle_state_machine(&mut requirement, None, None)
-            .expect("lifecycle should approve");
+        run_requirement_lifecycle_state_machine(&mut requirement, None, None).expect("lifecycle should approve");
 
         assert_eq!(requirement.status, RequirementStatus::Approved);
-        assert!(requirement
-            .comments
-            .iter()
-            .any(|comment| comment.phase.as_deref() == Some("refine")));
-        assert!(requirement
-            .comments
-            .iter()
-            .any(|comment| comment.phase.as_deref() == Some("po-review")));
-        assert!(requirement
-            .comments
-            .iter()
-            .any(|comment| comment.phase.as_deref() == Some("em-review")));
-        assert!(requirement
-            .comments
-            .iter()
-            .any(|comment| comment.phase.as_deref() == Some("approved")));
+        assert!(requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("refine")));
+        assert!(requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("po-review")));
+        assert!(requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("em-review")));
+        assert!(requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("approved")));
     }
 
     #[test]
@@ -606,21 +517,13 @@ mod tests {
             .expect("rework path should eventually approve");
 
         assert_eq!(requirement.status, RequirementStatus::Approved);
-        assert!(requirement
-            .comments
-            .iter()
-            .any(|comment| comment.phase.as_deref() == Some("rework")));
+        assert!(requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("rework")));
     }
 
     #[test]
     fn requirement_lifecycle_respects_rework_budget() {
-        let mut requirement = sample_requirement(
-            "REQ-3",
-            "Thin placeholder requirement",
-            "",
-            vec!["only one criterion"],
-            vec![],
-        );
+        let mut requirement =
+            sample_requirement("REQ-3", "Thin placeholder requirement", "", vec!["only one criterion"], vec![]);
 
         let error = run_requirement_lifecycle_state_machine(&mut requirement, None, None)
             .expect_err("missing description should exhaust PO rework budget");

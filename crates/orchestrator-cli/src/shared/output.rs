@@ -32,18 +32,12 @@ struct CliErrorEnvelope {
 
 pub(crate) fn print_ok(message: &str, json: bool) {
     if json {
-        let envelope = CliSuccessEnvelope {
-            schema: CLI_SCHEMA,
-            ok: true,
-            data: serde_json::json!({ "message": message }),
-        };
+        let envelope =
+            CliSuccessEnvelope { schema: CLI_SCHEMA, ok: true, data: serde_json::json!({ "message": message }) };
         println!(
             "{}",
             serialize_compact_json(&envelope).unwrap_or_else(|_| {
-                format!(
-                    "{{\"schema\":\"{}\",\"ok\":true,\"data\":{{\"message\":\"ok\"}}}}",
-                    CLI_SCHEMA_ID
-                )
+                format!("{{\"schema\":\"{}\",\"ok\":true,\"data\":{{\"message\":\"ok\"}}}}", CLI_SCHEMA_ID)
             })
         );
     } else {
@@ -53,11 +47,7 @@ pub(crate) fn print_ok(message: &str, json: bool) {
 
 pub(crate) fn print_value<T: serde::Serialize>(value: T, json: bool) -> Result<()> {
     if json {
-        let envelope = CliSuccessEnvelope {
-            schema: CLI_SCHEMA,
-            ok: true,
-            data: value,
-        };
+        let envelope = CliSuccessEnvelope { schema: CLI_SCHEMA, ok: true, data: value };
         println!("{}", serialize_compact_json(&envelope)?);
     } else {
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -84,12 +74,7 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
         let envelope = CliErrorEnvelope {
             schema: CLI_SCHEMA,
             ok: false,
-            error: CliErrorBody {
-                code: code.to_string(),
-                message: err.to_string(),
-                exit_code,
-                details,
-            },
+            error: CliErrorBody { code: code.to_string(), message: err.to_string(), exit_code, details },
         };
         eprintln!("{}", serialize_compact_json(&envelope).unwrap_or_else(|_| {
             format!("{{\"schema\":\"{}\",\"ok\":false,\"error\":{{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}}}", CLI_SCHEMA_ID)
@@ -144,9 +129,8 @@ mod tests {
 
     #[test]
     fn classify_error_uses_typed_kind_when_message_contains_not_found_text() {
-        let (code, exit_code) = classify_error(&invalid_input_error(
-            "task not found: TASK-123; expected --id TASK-123",
-        ));
+        let (code, exit_code) =
+            classify_error(&invalid_input_error("task not found: TASK-123; expected --id TASK-123"));
         assert_eq!(code, "invalid_input");
         assert_eq!(exit_code, 2);
     }
@@ -189,9 +173,7 @@ mod tests {
 
     #[test]
     fn classify_error_uses_string_fallback_for_untyped_errors_with_conflict_keywords() {
-        let (code, exit_code) = classify_error(&anyhow!(
-            "resource already exists but no typed conflict was attached"
-        ));
+        let (code, exit_code) = classify_error(&anyhow!("resource already exists but no typed conflict was attached"));
         assert_eq!(code, "conflict");
         assert_eq!(exit_code, 4);
     }
@@ -199,9 +181,7 @@ mod tests {
     #[test]
     fn classify_error_keeps_exit_code_stable_when_typed_message_changes() {
         let short = invalid_input_error("invalid value");
-        let long = invalid_input_error(
-            "invalid priority '<empty>'; expected one of: critical|high|medium|low",
-        );
+        let long = invalid_input_error("invalid priority '<empty>'; expected one of: critical|high|medium|low");
         assert_eq!(classify_exit_code(&short), 2);
         assert_eq!(classify_exit_code(&long), 2);
     }
@@ -221,9 +201,6 @@ mod tests {
         });
         let serialized = serialize_compact_json(&payload).expect("json should serialize");
         assert!(!serialized.contains('\n'));
-        assert_eq!(
-            serialized,
-            r#"{"data":{"message":"ok"},"ok":true,"schema":"ao.cli.v1"}"#
-        );
+        assert_eq!(serialized, r#"{"data":{"message":"ok"},"ok":true,"schema":"ao.cli.v1"}"#);
     }
 }

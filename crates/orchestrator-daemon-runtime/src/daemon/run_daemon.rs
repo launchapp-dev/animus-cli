@@ -31,10 +31,7 @@ where
     let daemon_pid = std::process::id();
     let primary_root = canonicalize_lossy(project_root);
 
-    hooks.handle_event(DaemonRunEvent::Startup {
-        project_root: primary_root.clone(),
-        daemon_pid,
-    })?;
+    hooks.handle_event(DaemonRunEvent::Startup { project_root: primary_root.clone(), daemon_pid })?;
 
     let initial_status = hooks.daemon_status(&primary_root).await?;
     let mut stop_daemon_on_exit = false;
@@ -44,15 +41,10 @@ where
     }
     let _ = DaemonRuntimeState::set_runtime_paused(project_root, false);
 
-    hooks.handle_event(DaemonRunEvent::Status {
-        project_root: primary_root.clone(),
-        status: "running".to_string(),
-    })?;
+    hooks.handle_event(DaemonRunEvent::Status { project_root: primary_root.clone(), status: "running".to_string() })?;
 
     if options.startup_cleanup {
-        hooks.handle_event(DaemonRunEvent::StartupCleanup {
-            project_root: primary_root.clone(),
-        })?;
+        hooks.handle_event(DaemonRunEvent::StartupCleanup { project_root: primary_root.clone() })?;
 
         let startup_orphans = hooks.recover_startup_orphans(&primary_root).await?;
         if startup_orphans > 0 {
@@ -85,14 +77,11 @@ where
     let interval = Duration::from_secs(options.interval_secs.max(1));
     let mut sigterm_stream = SigtermStream::new()?;
     loop {
-        let externally_paused =
-            DaemonRuntimeState::is_runtime_paused(project_root).unwrap_or(false);
+        let externally_paused = DaemonRuntimeState::is_runtime_paused(project_root).unwrap_or(false);
         let tick_result = run_project_tick(
             &primary_root,
             options,
-            ProjectTickRunMode {
-                active_process_count: active_process_count(driver),
-            },
+            ProjectTickRunMode { active_process_count: active_process_count(driver) },
             externally_paused,
             driver,
         )
@@ -122,8 +111,7 @@ where
             break;
         }
 
-        let shutdown =
-            DaemonRuntimeState::is_shutdown_requested(project_root).unwrap_or((false, None));
+        let shutdown = DaemonRuntimeState::is_shutdown_requested(project_root).unwrap_or((false, None));
         if shutdown.0 {
             hooks.handle_event(DaemonRunEvent::GracefulShutdown {
                 project_root: primary_root.clone(),
@@ -156,14 +144,8 @@ where
         let _ = hooks.stop_daemon(&primary_root).await;
     }
 
-    hooks.handle_event(DaemonRunEvent::Status {
-        project_root: primary_root.clone(),
-        status: "stopped".to_string(),
-    })?;
-    hooks.handle_event(DaemonRunEvent::Shutdown {
-        project_root: primary_root,
-        daemon_pid,
-    })?;
+    hooks.handle_event(DaemonRunEvent::Status { project_root: primary_root.clone(), status: "stopped".to_string() })?;
+    hooks.handle_event(DaemonRunEvent::Shutdown { project_root: primary_root, daemon_pid })?;
     Ok(())
 }
 
@@ -200,9 +182,5 @@ impl SigtermStream {
 
 fn canonicalize_lossy(path: &str) -> String {
     let candidate = PathBuf::from(path);
-    candidate
-        .canonicalize()
-        .unwrap_or(candidate)
-        .to_string_lossy()
-        .to_string()
+    candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }

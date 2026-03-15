@@ -20,12 +20,7 @@ pub enum ProjectRootSource {
 }
 
 pub fn resolve_project_root(config: &RuntimeConfig) -> (String, ProjectRootSource) {
-    if let Some(root) = config
-        .project_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|root| !root.is_empty())
-    {
+    if let Some(root) = config.project_root.as_deref().map(str::trim).filter(|root| !root.is_empty()) {
         return (normalize_project_root(root), ProjectRootSource::CliArg);
     }
 
@@ -35,10 +30,7 @@ pub fn resolve_project_root(config: &RuntimeConfig) -> (String, ProjectRootSourc
         return (root, ProjectRootSource::GitRepoRoot);
     }
 
-    (
-        cwd.to_string_lossy().to_string(),
-        ProjectRootSource::CurrentDir,
-    )
+    (cwd.to_string_lossy().to_string(), ProjectRootSource::CurrentDir)
 }
 
 fn normalize_project_root(root: &str) -> String {
@@ -49,12 +41,7 @@ fn normalize_project_root(root: &str) -> String {
 }
 
 fn resolve_git_repo_root(cwd: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--git-common-dir"])
-        .output()
-        .ok()?;
+    let output = Command::new("git").arg("-C").arg(cwd).args(["rev-parse", "--git-common-dir"]).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -71,13 +58,7 @@ fn resolve_git_repo_root(cwd: &Path) -> Option<String> {
     }
 
     let repo_root = canonical_common_dir.parent()?.to_path_buf();
-    Some(
-        repo_root
-            .canonicalize()
-            .unwrap_or(repo_root)
-            .to_string_lossy()
-            .to_string(),
-    )
+    Some(repo_root.canonicalize().unwrap_or(repo_root).to_string_lossy().to_string())
 }
 
 fn absolutize_path(base: &Path, path: &str) -> PathBuf {
@@ -118,25 +99,15 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn run_with_test_process_state<T>(
-        cwd: &Path,
-        _project_root: Option<&str>,
-        test: impl FnOnce() -> T,
-    ) -> T {
-        let _guard = resolver_test_lock()
-            .lock()
-            .expect("project root resolver test lock should acquire");
+    fn run_with_test_process_state<T>(cwd: &Path, _project_root: Option<&str>, test: impl FnOnce() -> T) -> T {
+        let _guard = resolver_test_lock().lock().expect("project root resolver test lock should acquire");
         let _cwd_guard = CurrentDirGuard::set(cwd);
         test()
     }
 
     fn run_git(repo_root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .args(args)
-            .output()
-            .expect("git command should start");
+        let output =
+            Command::new("git").arg("-C").arg(repo_root).args(args).output().expect("git command should start");
         assert!(
             output.status.success(),
             "git command failed: git {}\nstdout:\n{}\nstderr:\n{}",
@@ -151,10 +122,7 @@ mod tests {
     fn cli_project_root_wins() {
         let temp = tempfile::tempdir().expect("tempdir");
         run_with_test_process_state(temp.path(), None, || {
-            let config = RuntimeConfig {
-                project_root: Some("/tmp/custom".to_string()),
-                ..RuntimeConfig::default()
-            };
+            let config = RuntimeConfig { project_root: Some("/tmp/custom".to_string()), ..RuntimeConfig::default() };
 
             let (root, source) = resolve_project_root(&config);
             assert_eq!(root, "/tmp/custom");
@@ -170,38 +138,19 @@ mod tests {
         std::fs::create_dir_all(&repo_root).expect("repo root should be created");
 
         run_git(&repo_root, &["init"]);
-        run_git(
-            &repo_root,
-            &["config", "user.email", "ao-tests@example.com"],
-        );
+        run_git(&repo_root, &["config", "user.email", "ao-tests@example.com"]);
         run_git(&repo_root, &["config", "user.name", "AO Tests"]);
         std::fs::write(repo_root.join("README.md"), "root\n").expect("seed file should write");
         run_git(&repo_root, &["add", "README.md"]);
         run_git(&repo_root, &["commit", "-m", "init"]);
         run_git(&repo_root, &["branch", "feature/cli-dot-root"]);
-        run_git(
-            &repo_root,
-            &[
-                "worktree",
-                "add",
-                worktree_root.to_string_lossy().as_ref(),
-                "feature/cli-dot-root",
-            ],
-        );
+        run_git(&repo_root, &["worktree", "add", worktree_root.to_string_lossy().as_ref(), "feature/cli-dot-root"]);
 
         run_with_test_process_state(&worktree_root, None, || {
-            let config = RuntimeConfig {
-                project_root: Some(".".to_string()),
-                ..RuntimeConfig::default()
-            };
+            let config = RuntimeConfig { project_root: Some(".".to_string()), ..RuntimeConfig::default() };
 
             let (root, source) = resolve_project_root(&config);
-            assert_eq!(
-                PathBuf::from(root),
-                repo_root
-                    .canonicalize()
-                    .expect("repo root should canonicalize")
-            );
+            assert_eq!(PathBuf::from(root), repo_root.canonicalize().expect("repo root should canonicalize"));
             assert_eq!(source, ProjectRootSource::CliArg);
         });
     }
@@ -225,12 +174,7 @@ mod tests {
 
         run_with_test_process_state(&subdir, None, || {
             let (root, source) = resolve_project_root(&RuntimeConfig::default());
-            assert_eq!(
-                PathBuf::from(root),
-                repo_root
-                    .canonicalize()
-                    .expect("repo root should canonicalize")
-            );
+            assert_eq!(PathBuf::from(root), repo_root.canonicalize().expect("repo root should canonicalize"));
             assert_eq!(source, ProjectRootSource::GitRepoRoot);
         });
     }
@@ -243,33 +187,17 @@ mod tests {
         std::fs::create_dir_all(&repo_root).expect("repo root should be created");
 
         run_git(&repo_root, &["init"]);
-        run_git(
-            &repo_root,
-            &["config", "user.email", "ao-tests@example.com"],
-        );
+        run_git(&repo_root, &["config", "user.email", "ao-tests@example.com"]);
         run_git(&repo_root, &["config", "user.name", "AO Tests"]);
         std::fs::write(repo_root.join("README.md"), "root\n").expect("seed file should write");
         run_git(&repo_root, &["add", "README.md"]);
         run_git(&repo_root, &["commit", "-m", "init"]);
         run_git(&repo_root, &["branch", "feature/worktree-root"]);
-        run_git(
-            &repo_root,
-            &[
-                "worktree",
-                "add",
-                worktree_root.to_string_lossy().as_ref(),
-                "feature/worktree-root",
-            ],
-        );
+        run_git(&repo_root, &["worktree", "add", worktree_root.to_string_lossy().as_ref(), "feature/worktree-root"]);
 
         run_with_test_process_state(&worktree_root, None, || {
             let (root, source) = resolve_project_root(&RuntimeConfig::default());
-            assert_eq!(
-                PathBuf::from(root),
-                repo_root
-                    .canonicalize()
-                    .expect("repo root should canonicalize")
-            );
+            assert_eq!(PathBuf::from(root), repo_root.canonicalize().expect("repo root should canonicalize"));
             assert_eq!(source, ProjectRootSource::GitRepoRoot);
         });
     }
@@ -282,12 +210,7 @@ mod tests {
 
         run_with_test_process_state(&outside, None, || {
             let (root, source) = resolve_project_root(&RuntimeConfig::default());
-            assert_eq!(
-                PathBuf::from(root),
-                outside
-                    .canonicalize()
-                    .expect("outside dir should canonicalize")
-            );
+            assert_eq!(PathBuf::from(root), outside.canonicalize().expect("outside dir should canonicalize"));
             assert_eq!(source, ProjectRootSource::CurrentDir);
         });
     }

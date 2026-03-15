@@ -57,11 +57,8 @@ fn runtime_binary_refresh_supported(project_root: &str) -> bool {
     }
 }
 
-
 fn runtime_binary_refresh_state_path(project_root: &str) -> Result<PathBuf> {
-    Ok(repo_ao_root(project_root)?
-        .join("sync")
-        .join(RUNTIME_BINARY_REFRESH_STATE_FILE))
+    Ok(repo_ao_root(project_root)?.join("sync").join(RUNTIME_BINARY_REFRESH_STATE_FILE))
 }
 
 pub fn load_runtime_binary_refresh_state(project_root: &str) -> RuntimeBinaryRefreshState {
@@ -82,22 +79,13 @@ pub fn load_runtime_binary_refresh_state(project_root: &str) -> RuntimeBinaryRef
     serde_json::from_str::<RuntimeBinaryRefreshState>(&content).unwrap_or_default()
 }
 
-fn save_runtime_binary_refresh_state(
-    project_root: &str,
-    state: &RuntimeBinaryRefreshState,
-) -> Result<()> {
+fn save_runtime_binary_refresh_state(project_root: &str, state: &RuntimeBinaryRefreshState) -> Result<()> {
     let path = runtime_binary_refresh_state_path(project_root)?;
     orchestrator_core::write_json_pretty(&path, state)
 }
 
 pub fn resolve_main_head_commit(project_root: &str) -> Option<String> {
-    for reference in [
-        "refs/heads/main",
-        "refs/remotes/origin/main",
-        "main",
-        "origin/main",
-        "HEAD",
-    ] {
+    for reference in ["refs/heads/main", "refs/remotes/origin/main", "main", "origin/main", "HEAD"] {
         let output = ProcessCommand::new("git")
             .arg("-C")
             .arg(project_root)
@@ -128,13 +116,7 @@ fn runtime_binary_refresh_backoff_active(
     if state.last_attempt_main_head.as_deref() != Some(main_head) {
         return false;
     }
-    if state
-        .last_error
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
-    {
+    if state.last_error.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none() {
         return false;
     }
 
@@ -156,20 +138,14 @@ pub struct RuntimeBinaryRefreshTestHooks {
 }
 
 #[cfg(test)]
-pub fn runtime_binary_refresh_test_hooks(
-) -> &'static std::sync::Mutex<RuntimeBinaryRefreshTestHooks> {
-    static HOOKS: std::sync::OnceLock<std::sync::Mutex<RuntimeBinaryRefreshTestHooks>> =
-        std::sync::OnceLock::new();
+pub fn runtime_binary_refresh_test_hooks() -> &'static std::sync::Mutex<RuntimeBinaryRefreshTestHooks> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<RuntimeBinaryRefreshTestHooks>> = std::sync::OnceLock::new();
     HOOKS.get_or_init(|| std::sync::Mutex::new(RuntimeBinaryRefreshTestHooks::default()))
 }
 
 #[cfg(test)]
-pub fn with_runtime_binary_refresh_test_hooks<T>(
-    f: impl FnOnce(&mut RuntimeBinaryRefreshTestHooks) -> T,
-) -> T {
-    let mut hooks = runtime_binary_refresh_test_hooks()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+pub fn with_runtime_binary_refresh_test_hooks<T>(f: impl FnOnce(&mut RuntimeBinaryRefreshTestHooks) -> T) -> T {
+    let mut hooks = runtime_binary_refresh_test_hooks().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&mut hooks)
 }
 
@@ -244,15 +220,9 @@ async fn refresh_runner_after_runtime_binary_build(hub: Arc<dyn ServiceHub>) -> 
     #[allow(unreachable_code)]
     {
         let daemon = hub.daemon();
-        let previous_status = daemon
-            .status()
-            .await
-            .unwrap_or(orchestrator_core::DaemonStatus::Running);
+        let previous_status = daemon.status().await.unwrap_or(orchestrator_core::DaemonStatus::Running);
         let _ = daemon.stop().await;
-        daemon
-            .start(Default::default())
-            .await
-            .context("failed to restart runner after runtime binary refresh")?;
+        daemon.start(Default::default()).await.context("failed to restart runner after runtime binary refresh")?;
         if previous_status == orchestrator_core::DaemonStatus::Paused {
             let _ = daemon.pause().await;
         }

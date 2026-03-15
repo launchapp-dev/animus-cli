@@ -4,45 +4,26 @@ use orchestrator_providers::PlanningServiceApi as ProviderPlanningServiceApi;
 #[async_trait]
 impl PlanningServiceApi for InMemoryServiceHub {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
-        Arc::new(crate::providers::BuiltinRequirementsProvider::new(
-            Arc::new(self.clone()),
-        ))
+        Arc::new(crate::providers::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
     }
 
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument> {
         let now = Utc::now();
-        let project_name = input
-            .project_name
-            .clone()
-            .unwrap_or_else(|| "Project".to_string());
+        let project_name = input.project_name.clone().unwrap_or_else(|| "Project".to_string());
         let mut lock = self.state.write().await;
-        Ok(planning_shared::draft_vision_and_record(
-            &mut lock,
-            ".".to_string(),
-            project_name,
-            input,
-            now,
-        ))
+        Ok(planning_shared::draft_vision_and_record(&mut lock, ".".to_string(), project_name, input, now))
     }
 
     async fn get_vision(&self) -> Result<Option<VisionDocument>> {
         Ok(self.state.read().await.vision.clone())
     }
 
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult> {
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         let mut lock = self.state.write().await;
-        let (appended_ids, appended_count) =
-            planning_shared::draft_requirements_and_record(&mut lock, input, None)?;
+        let (appended_ids, appended_count) = planning_shared::draft_requirements_and_record(&mut lock, input, None)?;
         let requirements = planning_shared::requirements_by_ids_sorted(&lock, &appended_ids);
 
-        Ok(RequirementsDraftResult {
-            requirements,
-            appended_count,
-            codebase_insight: None,
-        })
+        Ok(RequirementsDraftResult { requirements, appended_count, codebase_insight: None })
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
@@ -55,32 +36,19 @@ impl PlanningServiceApi for InMemoryServiceHub {
         planning_shared::get_requirement(&lock, id)
     }
 
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>> {
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>> {
         let mut lock = self.state.write().await;
-        Ok(planning_shared::refine_requirements_and_record(
-            &mut lock, input,
-        ))
+        Ok(planning_shared::refine_requirements_and_record(&mut lock, input))
     }
 
-    async fn upsert_requirement(
-        &self,
-        mut requirement: RequirementItem,
-    ) -> Result<RequirementItem> {
+    async fn upsert_requirement(&self, mut requirement: RequirementItem) -> Result<RequirementItem> {
         let mut lock = self.state.write().await;
         let now = Utc::now();
 
         if requirement.id.trim().is_empty() {
             requirement.id = next_requirement_id(&lock.requirements);
         }
-        if requirement
-            .relative_path
-            .as_ref()
-            .map(|value| value.trim().is_empty())
-            .unwrap_or(true)
-        {
+        if requirement.relative_path.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) {
             requirement.relative_path = Some(format!("generated/{}.json", requirement.id));
         }
         if requirement.source.trim().is_empty() {
@@ -91,8 +59,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
         }
         requirement.updated_at = now;
 
-        lock.requirements
-            .insert(requirement.id.clone(), requirement.clone());
+        lock.requirements.insert(requirement.id.clone(), requirement.clone());
         lock.logs.push(LogEntry {
             timestamp: now,
             level: LogLevel::Info,
@@ -115,10 +82,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
         Ok(())
     }
 
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult> {
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult> {
         let mut lock = self.state.write().await;
         planning_shared::execute_requirements_and_record(&mut lock, input, None, None, None)
     }
@@ -127,9 +91,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl PlanningServiceApi for FileServiceHub {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
-        Arc::new(crate::providers::BuiltinRequirementsProvider::new(
-            Arc::new(self.clone()),
-        ))
+        Arc::new(crate::providers::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
     }
 
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument> {
@@ -144,9 +106,8 @@ impl PlanningServiceApi for FileServiceHub {
                     .active_project_id
                     .as_ref()
                     .and_then(|id| state.projects.get(id).map(|project| project.name.clone()));
-                let project_name = requested_project_name
-                    .or(active_project_name)
-                    .unwrap_or_else(|| default_project_name.clone());
+                let project_name =
+                    requested_project_name.or(active_project_name).unwrap_or_else(|| default_project_name.clone());
 
                 let vision = planning_shared::draft_vision_and_record(
                     state,
@@ -159,11 +120,7 @@ impl PlanningServiceApi for FileServiceHub {
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
         Ok(vision)
     }
 
@@ -171,43 +128,24 @@ impl PlanningServiceApi for FileServiceHub {
         Ok(self.state.read().await.vision.clone())
     }
 
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult> {
-        let codebase_insight = if input.include_codebase_scan {
-            Some(collect_codebase_insight(&self.project_root))
-        } else {
-            None
-        };
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
+        let codebase_insight =
+            if input.include_codebase_scan { Some(collect_codebase_insight(&self.project_root)) } else { None };
         let insight_for_drafting = codebase_insight.clone();
 
         let ((requirements, appended_count), snapshot) = self
             .mutate_persistent_state(|state| {
                 let (appended_ids, appended_count) =
-                    planning_shared::draft_requirements_and_record(
-                        state,
-                        input,
-                        insight_for_drafting.as_ref(),
-                    )?;
+                    planning_shared::draft_requirements_and_record(state, input, insight_for_drafting.as_ref())?;
                 state.all_requirements_dirty = true;
-                let requirements =
-                    planning_shared::requirements_by_ids_sorted(state, &appended_ids);
+                let requirements = planning_shared::requirements_by_ids_sorted(state, &appended_ids);
                 Ok((requirements, appended_count))
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
 
-        Ok(RequirementsDraftResult {
-            requirements,
-            appended_count,
-            codebase_insight,
-        })
+        Ok(RequirementsDraftResult { requirements, appended_count, codebase_insight })
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
@@ -220,10 +158,7 @@ impl PlanningServiceApi for FileServiceHub {
         planning_shared::get_requirement(&lock, id)
     }
 
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>> {
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>> {
         let (refined, snapshot) = self
             .mutate_persistent_state(|state| {
                 let refined = planning_shared::refine_requirements_and_record(state, input);
@@ -232,11 +167,7 @@ impl PlanningServiceApi for FileServiceHub {
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
         Ok(refined)
     }
 
@@ -249,12 +180,7 @@ impl PlanningServiceApi for FileServiceHub {
                 if requirement.id.trim().is_empty() {
                     requirement.id = next_requirement_id(&state.requirements);
                 }
-                if requirement
-                    .relative_path
-                    .as_ref()
-                    .map(|value| value.trim().is_empty())
-                    .unwrap_or(true)
-                {
+                if requirement.relative_path.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) {
                     requirement.relative_path = Some(format!("generated/{}.json", requirement.id));
                 }
                 if requirement.source.trim().is_empty() {
@@ -265,9 +191,7 @@ impl PlanningServiceApi for FileServiceHub {
                 }
                 requirement.updated_at = now;
 
-                state
-                    .requirements
-                    .insert(requirement.id.clone(), requirement.clone());
+                state.requirements.insert(requirement.id.clone(), requirement.clone());
                 state.dirty_requirements.insert(requirement.id.clone());
                 state.logs.push(LogEntry {
                     timestamp: now,
@@ -278,11 +202,7 @@ impl PlanningServiceApi for FileServiceHub {
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
         Ok(requirement)
     }
 
@@ -302,18 +222,11 @@ impl PlanningServiceApi for FileServiceHub {
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
         Ok(())
     }
 
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult> {
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult> {
         let manager = self.workflow_manager();
         let loaded_state_machines =
             crate::state_machines::load_state_machines_for_project(self.project_root.as_path())?;
@@ -345,21 +258,14 @@ impl PlanningServiceApi for FileServiceHub {
             })
             .await?;
 
-        write_planning_artifacts(
-            &self.project_root,
-            snapshot.vision.as_ref(),
-            &snapshot.requirements,
-        )?;
+        write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
         Ok(result)
     }
 }
 
 #[async_trait]
 impl ProviderPlanningServiceApi for InMemoryServiceHub {
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult> {
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         PlanningServiceApi::draft_requirements(self, input).await
     }
 
@@ -371,10 +277,7 @@ impl ProviderPlanningServiceApi for InMemoryServiceHub {
         PlanningServiceApi::get_requirement(self, id).await
     }
 
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>> {
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>> {
         PlanningServiceApi::refine_requirements(self, input).await
     }
 
@@ -386,20 +289,14 @@ impl ProviderPlanningServiceApi for InMemoryServiceHub {
         PlanningServiceApi::delete_requirement(self, id).await
     }
 
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult> {
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult> {
         PlanningServiceApi::execute_requirements(self, input).await
     }
 }
 
 #[async_trait]
 impl ProviderPlanningServiceApi for FileServiceHub {
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult> {
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         PlanningServiceApi::draft_requirements(self, input).await
     }
 
@@ -411,10 +308,7 @@ impl ProviderPlanningServiceApi for FileServiceHub {
         PlanningServiceApi::get_requirement(self, id).await
     }
 
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>> {
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>> {
         PlanningServiceApi::refine_requirements(self, input).await
     }
 
@@ -426,10 +320,7 @@ impl ProviderPlanningServiceApi for FileServiceHub {
         PlanningServiceApi::delete_requirement(self, id).await
     }
 
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult> {
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult> {
         PlanningServiceApi::execute_requirements(self, input).await
     }
 }

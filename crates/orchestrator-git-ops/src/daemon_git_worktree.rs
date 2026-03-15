@@ -17,16 +17,9 @@ pub(crate) fn parse_git_worktree_list_porcelain(output: &str) -> Vec<GitWorktree
     for line in output.lines() {
         if line.trim().is_empty() {
             if let Some(path) = current_path.take() {
-                let worktree_name = PathBuf::from(&path)
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("worktree")
-                    .to_string();
-                entries.push(GitWorktreeEntry {
-                    worktree_name,
-                    path,
-                    branch: current_branch.take(),
-                });
+                let worktree_name =
+                    PathBuf::from(&path).file_name().and_then(|value| value.to_str()).unwrap_or("worktree").to_string();
+                entries.push(GitWorktreeEntry { worktree_name, path, branch: current_branch.take() });
             }
             current_branch = None;
             continue;
@@ -39,11 +32,7 @@ pub(crate) fn parse_git_worktree_list_porcelain(output: &str) -> Vec<GitWorktree
                     .and_then(|value| value.to_str())
                     .unwrap_or("worktree")
                     .to_string();
-                entries.push(GitWorktreeEntry {
-                    worktree_name,
-                    path: existing_path,
-                    branch: current_branch.take(),
-                });
+                entries.push(GitWorktreeEntry { worktree_name, path: existing_path, branch: current_branch.take() });
             }
             current_path = Some(path.trim().to_string());
             current_branch = None;
@@ -56,16 +45,9 @@ pub(crate) fn parse_git_worktree_list_porcelain(output: &str) -> Vec<GitWorktree
     }
 
     if let Some(path) = current_path.take() {
-        let worktree_name = PathBuf::from(&path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("worktree")
-            .to_string();
-        entries.push(GitWorktreeEntry {
-            worktree_name,
-            path,
-            branch: current_branch,
-        });
+        let worktree_name =
+            PathBuf::from(&path).file_name().and_then(|value| value.to_str()).unwrap_or("worktree").to_string();
+        entries.push(GitWorktreeEntry { worktree_name, path, branch: current_branch });
     }
 
     entries
@@ -153,19 +135,13 @@ pub async fn auto_prune_completed_task_worktrees_after_merge(
     let mut task_id_by_branch: HashMap<String, String> = HashMap::new();
     for task in tasks {
         let task_id = task.id.clone();
-        if let Some(path) = task
-            .worktree_path
-            .as_deref()
-            .map(normalize_path_for_match)
-            .filter(|value| !value.is_empty())
+        if let Some(path) =
+            task.worktree_path.as_deref().map(normalize_path_for_match).filter(|value| !value.is_empty())
         {
             task_id_by_path.insert(path, task_id.clone());
         }
-        if let Some(branch) = task
-            .branch_name
-            .as_deref()
-            .map(normalize_branch_for_match)
-            .filter(|value| !value.is_empty())
+        if let Some(branch) =
+            task.branch_name.as_deref().map(normalize_branch_for_match).filter(|value| !value.is_empty())
         {
             task_id_by_branch.insert(branch.to_ascii_lowercase(), task_id.clone());
         }
@@ -213,11 +189,7 @@ pub async fn auto_prune_completed_task_worktrees_after_merge(
 
     let mut updated_tasks = HashSet::new();
     for (entry, normalized_path, task) in candidates {
-        let task_worktree_normalized = task
-            .worktree_path
-            .as_deref()
-            .map(normalize_path_for_match)
-            .unwrap_or_default();
+        let task_worktree_normalized = task.worktree_path.as_deref().map(normalize_path_for_match).unwrap_or_default();
         remove_worktree_path(project_root, &entry.path);
 
         if updated_tasks.contains(&task.id) {
@@ -247,12 +219,7 @@ pub async fn cleanup_task_worktree_if_enabled(
         return Ok(());
     }
 
-    let Some(worktree_path_raw) = task
-        .worktree_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(worktree_path_raw) = task.worktree_path.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
     };
     let worktree_path = PathBuf::from(worktree_path_raw);
@@ -290,4 +257,3 @@ pub(crate) fn remove_worktree_path(project_root: &str, worktree_path: &str) {
         let _ = fs::remove_dir_all(path);
     }
 }
-

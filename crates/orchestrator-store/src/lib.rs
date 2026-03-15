@@ -29,18 +29,11 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     std::fs::create_dir_all(parent)?;
 
     let payload = serde_json::to_vec_pretty(value)?;
-    let mut temp_file = NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to create temp file for {}", path.display()))?;
-    temp_file
-        .write_all(&payload)
-        .with_context(|| format!("failed to write temp file for {}", path.display()))?;
-    temp_file
-        .flush()
-        .with_context(|| format!("failed to flush temp file for {}", path.display()))?;
-    temp_file
-        .as_file()
-        .sync_all()
-        .with_context(|| format!("failed to sync temp file for {}", path.display()))?;
+    let mut temp_file =
+        NamedTempFile::new_in(parent).with_context(|| format!("failed to create temp file for {}", path.display()))?;
+    temp_file.write_all(&payload).with_context(|| format!("failed to write temp file for {}", path.display()))?;
+    temp_file.flush().with_context(|| format!("failed to flush temp file for {}", path.display()))?;
+    temp_file.as_file().sync_all().with_context(|| format!("failed to sync temp file for {}", path.display()))?;
 
     persist_temp_path(temp_file.into_temp_path(), path)
 }
@@ -64,22 +57,16 @@ fn persist_temp_path(temp_path: TempPath, path: &Path) -> Result<()> {
     match temp_path.persist(path) {
         Ok(()) => Ok(()),
         Err(error) => {
-            let tempfile::PathPersistError {
-                error,
-                path: temp_path,
-            } = error;
+            let tempfile::PathPersistError { error, path: temp_path } = error;
             if path.exists() {
-                std::fs::remove_file(path).with_context(|| {
-                    format!("failed to replace {} after rename failure", path.display())
-                })?;
-                temp_path.persist(path).with_context(|| {
-                    format!("failed to atomically move temp file to {}", path.display())
-                })?;
+                std::fs::remove_file(path)
+                    .with_context(|| format!("failed to replace {} after rename failure", path.display()))?;
+                temp_path
+                    .persist(path)
+                    .with_context(|| format!("failed to atomically move temp file to {}", path.display()))?;
                 Ok(())
             } else {
-                Err(error).with_context(|| {
-                    format!("failed to atomically move temp file to {}", path.display())
-                })
+                Err(error).with_context(|| format!("failed to atomically move temp file to {}", path.display()))
             }
         }
     }

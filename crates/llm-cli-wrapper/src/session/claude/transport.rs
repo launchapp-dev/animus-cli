@@ -8,15 +8,11 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::cli::{
-    ensure_flag, ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation,
-};
+use crate::cli::{ensure_flag, ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation};
 use crate::error::{Error, Result};
 
 use super::parser::parse_claude_stdout_line;
-use crate::session::{
-    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
-};
+use crate::session::{session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun};
 
 pub(crate) async fn start_claude_session(
     request: SessionRequest,
@@ -32,24 +28,12 @@ pub(crate) async fn start_claude_session(
 
     tokio::spawn(async move {
         let _ = event_tx
-            .send(SessionEvent::Started {
-                backend: "claude-native".to_string(),
-                session_id: started_session_id,
-            })
+            .send(SessionEvent::Started { backend: "claude-native".to_string(), session_id: started_session_id })
             .await;
 
-        if let Err(error) =
-            run_claude_session(request, invocation, event_tx.clone(), cancel_rx).await
-        {
-            let _ = event_tx
-                .send(SessionEvent::Error {
-                    message: error.to_string(),
-                    recoverable: false,
-                })
-                .await;
-            let _ = event_tx
-                .send(SessionEvent::Finished { exit_code: Some(1) })
-                .await;
+        if let Err(error) = run_claude_session(request, invocation, event_tx.clone(), cancel_rx).await {
+            let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
+            let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
         unregister_session(&control_session_id);
     });
@@ -77,35 +61,21 @@ pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) =
-        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
-    {
+    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
         return Ok(invocation);
     }
 
-    let mut args = vec![
-        "--print".to_string(),
-        "--verbose".to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-    ];
+    let mut args =
+        vec!["--print".to_string(), "--verbose".to_string(), "--output-format".to_string(), "stream-json".to_string()];
 
-    if let Some(permission_mode) = request
-        .permission_mode
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(permission_mode) = request.permission_mode.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         args.push("--permission-mode".to_string());
         args.push(permission_mode.to_string());
     } else {
         args.push("--dangerously-skip-permissions".to_string());
     }
 
-    if let Some(session_id) = resume_session_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(session_id) = resume_session_id.map(str::trim).filter(|value| !value.is_empty()) {
         args.push("--resume".to_string());
         args.push(session_id.to_string());
     } else if let Some(session_id) = configured_claude_session_id(request) {
@@ -120,11 +90,7 @@ pub(crate) fn claude_invocation_for_request(
 
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation {
-        command: "claude".to_string(),
-        args,
-        prompt_via_stdin: false,
-    };
+    let mut invocation = LaunchInvocation { command: "claude".to_string(), args, prompt_via_stdin: false };
     ensure_flag(&mut invocation.args, "--verbose", 1);
     ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", 2);
 
@@ -157,14 +123,10 @@ async fn run_claude_session(
         drop(stdin);
     }
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture claude stdout".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture claude stderr".to_string()))?;
+    let stdout =
+        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture claude stdout".to_string()))?;
+    let stderr =
+        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture claude stderr".to_string()))?;
 
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -188,12 +150,7 @@ async fn run_claude_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx
-                .send(SessionEvent::Error {
-                    message: line,
-                    recoverable: true,
-                })
-                .await;
+            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
         }
     });
 
@@ -261,10 +218,7 @@ fn unregister_session(session_id: &str) {
 }
 
 fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
-    session_registry()
-        .lock()
-        .ok()
-        .and_then(|mut registry| registry.remove(session_id))
+    session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
 }
 
 fn configured_claude_session_id(request: &SessionRequest) -> Option<String> {

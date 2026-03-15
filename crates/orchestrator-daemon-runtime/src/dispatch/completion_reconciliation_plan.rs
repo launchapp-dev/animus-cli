@@ -14,19 +14,14 @@ pub fn build_completion_reconciliation_plan(
     let mut plan = CompletionReconciliationPlan::default();
 
     for completed in completed_processes {
-        let workflow_success = completed
-            .workflow_status
-            .map(workflow_status_is_success)
-            .unwrap_or(completed.success);
+        let workflow_success = completed.workflow_status.map(workflow_status_is_success).unwrap_or(completed.success);
         let failure_reason = completion_failure_reason(&completed);
 
         match completed.workflow_status {
             Some(WorkflowStatus::Completed) => {
                 plan.executed_workflow_phases = plan.executed_workflow_phases.saturating_add(1);
             }
-            Some(
-                WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled,
-            ) => {
+            Some(WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled) => {
                 plan.failed_workflow_phases = plan.failed_workflow_phases.saturating_add(1);
             }
             Some(WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused) => {}
@@ -57,38 +52,26 @@ pub fn build_completion_reconciliation_plan(
 }
 
 fn completion_reason(completed: &CompletedProcess) -> String {
-    completed.failure_reason.clone().unwrap_or_else(|| {
-        format!(
-            "workflow runner exited with status {:?}",
-            completed.exit_code
-        )
-    })
+    completed
+        .failure_reason
+        .clone()
+        .unwrap_or_else(|| format!("workflow runner exited with status {:?}", completed.exit_code))
 }
 
 fn completion_failure_reason(completed: &CompletedProcess) -> Option<String> {
     match completed.workflow_status {
         Some(
-            WorkflowStatus::Completed
-            | WorkflowStatus::Pending
-            | WorkflowStatus::Running
-            | WorkflowStatus::Paused,
+            WorkflowStatus::Completed | WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused,
         ) => None,
-        Some(WorkflowStatus::Failed | WorkflowStatus::Escalated) => Some(format!(
-            "workflow runner failed: {}",
-            completion_reason(completed)
-        )),
-        Some(WorkflowStatus::Cancelled) => Some(format!(
-            "workflow runner cancelled: {}",
-            completion_reason(completed)
-        )),
+        Some(WorkflowStatus::Failed | WorkflowStatus::Escalated) => {
+            Some(format!("workflow runner failed: {}", completion_reason(completed)))
+        }
+        Some(WorkflowStatus::Cancelled) => Some(format!("workflow runner cancelled: {}", completion_reason(completed))),
         None => {
             if completed.success {
                 None
             } else {
-                Some(format!(
-                    "workflow runner exited without workflow status: {}",
-                    completion_reason(completed)
-                ))
+                Some(format!("workflow runner exited without workflow status: {}", completion_reason(completed)))
             }
         }
     }
@@ -97,10 +80,7 @@ fn completion_failure_reason(completed: &CompletedProcess) -> Option<String> {
 fn workflow_status_is_success(status: WorkflowStatus) -> bool {
     matches!(
         status,
-        WorkflowStatus::Completed
-            | WorkflowStatus::Pending
-            | WorkflowStatus::Running
-            | WorkflowStatus::Paused
+        WorkflowStatus::Completed | WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused
     )
 }
 
@@ -128,18 +108,9 @@ mod tests {
         assert_eq!(plan.failed_workflow_phases, 0);
         assert_eq!(plan.execution_facts.len(), 1);
         assert_eq!(plan.execution_facts[0].task_id.as_deref(), Some("TASK-123"));
-        assert_eq!(
-            plan.execution_facts[0].workflow_id.as_deref(),
-            Some("WF-123")
-        );
-        assert_eq!(
-            plan.execution_facts[0].workflow_ref.as_deref(),
-            Some("standard")
-        );
-        assert_eq!(
-            plan.execution_facts[0].workflow_status,
-            Some(WorkflowStatus::Completed)
-        );
+        assert_eq!(plan.execution_facts[0].workflow_id.as_deref(), Some("WF-123"));
+        assert_eq!(plan.execution_facts[0].workflow_ref.as_deref(), Some("standard"));
+        assert_eq!(plan.execution_facts[0].workflow_status, Some(WorkflowStatus::Completed));
         assert!(plan.execution_facts[0].schedule_id.is_none());
         assert!(plan.execution_facts[0].failure_reason.is_none());
     }
@@ -163,10 +134,7 @@ mod tests {
         assert_eq!(plan.failed_workflow_phases, 1);
         assert_eq!(plan.execution_facts[0].task_id.as_deref(), Some("TASK-999"));
         assert_eq!(plan.execution_facts[0].workflow_ref.as_deref(), Some("ops"));
-        assert_eq!(
-            plan.execution_facts[0].schedule_id.as_deref(),
-            Some("nightly")
-        );
+        assert_eq!(plan.execution_facts[0].schedule_id.as_deref(), Some("nightly"));
         assert_eq!(plan.execution_facts[0].completion_status(), "failed");
     }
 
@@ -186,10 +154,7 @@ mod tests {
         }]);
 
         assert!(plan.execution_facts[0].task_id.is_none());
-        assert_eq!(
-            plan.execution_facts[0].schedule_id.as_deref(),
-            Some("daily-review")
-        );
+        assert_eq!(plan.execution_facts[0].schedule_id.as_deref(), Some("daily-review"));
         assert_eq!(plan.execution_facts[0].completion_status(), "running");
     }
 

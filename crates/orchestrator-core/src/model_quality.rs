@@ -32,8 +32,7 @@ impl ModelQualityRecord {
     }
 
     fn should_suppress(&self) -> bool {
-        self.attempts >= MIN_ATTEMPTS_FOR_SUPPRESSION
-            && self.fail_rate() >= SUPPRESSION_FAIL_RATE_THRESHOLD
+        self.attempts >= MIN_ATTEMPTS_FOR_SUPPRESSION && self.fail_rate() >= SUPPRESSION_FAIL_RATE_THRESHOLD
     }
 }
 
@@ -52,10 +51,7 @@ fn ledger_key(model_id: &str, phase_id: &str) -> String {
 }
 
 pub fn model_quality_ledger_path(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join("state")
-        .join(MODEL_QUALITY_LEDGER_FILE_NAME)
+    project_root.join(".ao").join("state").join(MODEL_QUALITY_LEDGER_FILE_NAME)
 }
 
 pub fn load_model_quality_ledger(project_root: &Path) -> ModelQualityLedger {
@@ -79,9 +75,7 @@ fn save_model_quality_ledger(project_root: &Path, ledger: &ModelQualityLedger) {
     };
     let tmp_path = path.with_file_name(format!(
         "{}.{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(MODEL_QUALITY_LEDGER_FILE_NAME),
+        path.file_name().and_then(|n| n.to_str()).unwrap_or(MODEL_QUALITY_LEDGER_FILE_NAME),
         uuid::Uuid::new_v4()
     ));
     if std::fs::write(&tmp_path, payload).is_ok() {
@@ -89,12 +83,7 @@ fn save_model_quality_ledger(project_root: &Path, ledger: &ModelQualityLedger) {
     }
 }
 
-pub fn record_model_phase_outcome(
-    project_root: &Path,
-    model_id: &str,
-    phase_id: &str,
-    verdict: PhaseDecisionVerdict,
-) {
+pub fn record_model_phase_outcome(project_root: &Path, model_id: &str, phase_id: &str, verdict: PhaseDecisionVerdict) {
     let model_id = model_id.trim();
     let phase_id = phase_id.trim();
     if model_id.is_empty() || phase_id.is_empty() {
@@ -103,14 +92,11 @@ pub fn record_model_phase_outcome(
 
     let mut ledger = load_model_quality_ledger(project_root);
     let key = ledger_key(model_id, phase_id);
-    let record = ledger
-        .records
-        .entry(key)
-        .or_insert_with(|| ModelQualityRecord {
-            model_id: model_id.to_string(),
-            phase_id: phase_id.to_string(),
-            ..Default::default()
-        });
+    let record = ledger.records.entry(key).or_insert_with(|| ModelQualityRecord {
+        model_id: model_id.to_string(),
+        phase_id: phase_id.to_string(),
+        ..Default::default()
+    });
 
     record.attempts = record.attempts.saturating_add(1);
     match verdict {
@@ -136,11 +122,7 @@ pub fn record_model_phase_outcome(
 pub fn is_model_suppressed_for_phase(project_root: &Path, model_id: &str, phase_id: &str) -> bool {
     let ledger = load_model_quality_ledger(project_root);
     let key = ledger_key(model_id, phase_id);
-    ledger
-        .records
-        .get(&key)
-        .map(|record| record.suppressed)
-        .unwrap_or(false)
+    ledger.records.get(&key).map(|record| record.suppressed).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -154,19 +136,10 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..3 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Fail,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
         }
 
-        assert!(is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(is_model_suppressed_for_phase(root, "test-model", "implementation"));
     }
 
     #[test]
@@ -174,24 +147,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
 
-        record_model_phase_outcome(
-            root,
-            "test-model",
-            "implementation",
-            PhaseDecisionVerdict::Fail,
-        );
-        record_model_phase_outcome(
-            root,
-            "test-model",
-            "implementation",
-            PhaseDecisionVerdict::Fail,
-        );
+        record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
+        record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
 
-        assert!(!is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(!is_model_suppressed_for_phase(root, "test-model", "implementation"));
     }
 
     #[test]
@@ -200,32 +159,14 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..3 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Fail,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
         }
-        assert!(is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(is_model_suppressed_for_phase(root, "test-model", "implementation"));
 
         for _ in 0..7 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Advance,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Advance);
         }
-        assert!(!is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(!is_model_suppressed_for_phase(root, "test-model", "implementation"));
     }
 
     #[test]
@@ -234,29 +175,12 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..3 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Fail,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
         }
 
-        assert!(is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
-        assert!(!is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "testing"
-        ));
-        assert!(!is_model_suppressed_for_phase(
-            root,
-            "other-model",
-            "implementation"
-        ));
+        assert!(is_model_suppressed_for_phase(root, "test-model", "implementation"));
+        assert!(!is_model_suppressed_for_phase(root, "test-model", "testing"));
+        assert!(!is_model_suppressed_for_phase(root, "other-model", "implementation"));
     }
 
     #[test]
@@ -265,12 +189,7 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..10 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Rework,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Rework);
         }
 
         let ledger = load_model_quality_ledger(root);
@@ -287,32 +206,14 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..7 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Fail,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Fail);
         }
-        assert!(is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(is_model_suppressed_for_phase(root, "test-model", "implementation"));
 
         for _ in 0..10 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Advance,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Advance);
         }
-        assert!(!is_model_suppressed_for_phase(
-            root,
-            "test-model",
-            "implementation"
-        ));
+        assert!(!is_model_suppressed_for_phase(root, "test-model", "implementation"));
     }
 
     #[test]
@@ -321,12 +222,7 @@ mod tests {
         let root = temp.path();
 
         for _ in 0..3 {
-            record_model_phase_outcome(
-                root,
-                "test-model",
-                "implementation",
-                PhaseDecisionVerdict::Unknown,
-            );
+            record_model_phase_outcome(root, "test-model", "implementation", PhaseDecisionVerdict::Unknown);
         }
 
         let ledger = load_model_quality_ledger(root);

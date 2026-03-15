@@ -314,11 +314,7 @@ pub struct RequirementsDraftInput {
 
 impl Default for RequirementsDraftInput {
     fn default() -> Self {
-        Self {
-            include_codebase_scan: true,
-            append_only: true,
-            max_requirements: default_requirements_limit(),
-        }
+        Self { include_codebase_scan: true, append_only: true, max_requirements: default_requirements_limit() }
     }
 }
 
@@ -424,11 +420,7 @@ pub struct ResourceRequirements {
 
 impl Default for ResourceRequirements {
     fn default() -> Self {
-        Self {
-            max_cpu_percent: None,
-            max_memory_mb: None,
-            requires_network: true,
-        }
+        Self { max_cpu_percent: None, max_memory_mb: None, requires_network: true }
     }
 }
 
@@ -531,38 +523,13 @@ pub struct OrchestratorTask {
     pub dispatch_history: Vec<DispatchHistoryEntry>,
 }
 
-const FRONTEND_TAGS: &[&str] = &[
-    "frontend",
-    "ui",
-    "ux",
-    "design",
-    "react",
-    "web",
-    "landing-page",
-    "design-system",
-    "nextjs",
-];
+const FRONTEND_TAGS: &[&str] =
+    &["frontend", "ui", "ux", "design", "react", "web", "landing-page", "design-system", "nextjs"];
 
-const FRONTEND_TOKENS: &[&str] = &[
-    "frontend",
-    "ui",
-    "ux",
-    "react",
-    "tailwind",
-    "css",
-    "component",
-    "storybook",
-    "wireframe",
-    "mockup",
-    "nextjs",
-];
+const FRONTEND_TOKENS: &[&str] =
+    &["frontend", "ui", "ux", "react", "tailwind", "css", "component", "storybook", "wireframe", "mockup", "nextjs"];
 
-const FRONTEND_PHRASES: &[&str] = &[
-    "user interface",
-    "user experience",
-    "design system",
-    "landing page",
-];
+const FRONTEND_PHRASES: &[&str] = &["user interface", "user experience", "design system", "landing page"];
 
 pub fn is_frontend_related_content(tags: &[String], text: &str) -> bool {
     if tags.iter().any(|tag| {
@@ -573,25 +540,15 @@ pub fn is_frontend_related_content(tags: &[String], text: &str) -> bool {
     }
 
     let haystack = text.to_ascii_lowercase();
-    let tokenized: String = haystack
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                ' '
-            }
-        })
-        .collect();
+    let tokenized: String =
+        haystack.chars().map(|character| if character.is_ascii_alphanumeric() { character } else { ' ' }).collect();
     let tokens: HashSet<&str> = tokenized.split_whitespace().collect();
 
     if FRONTEND_TOKENS.iter().any(|needle| tokens.contains(needle)) {
         return true;
     }
 
-    FRONTEND_PHRASES
-        .iter()
-        .any(|needle| haystack.contains(needle))
+    FRONTEND_PHRASES.iter().any(|needle| haystack.contains(needle))
 }
 
 impl OrchestratorTask {
@@ -600,11 +557,7 @@ impl OrchestratorTask {
             return true;
         }
 
-        if self
-            .impact_area
-            .iter()
-            .any(|area| matches!(area, ImpactArea::Frontend))
-        {
+        if self.impact_area.iter().any(|area| matches!(area, ImpactArea::Frontend)) {
             return true;
         }
 
@@ -749,10 +702,7 @@ pub struct ProjectModelPreferences {
 impl Default for ProjectModelPreferences {
     fn default() -> Self {
         Self {
-            allowed_models: crate::default_model_specs()
-                .into_iter()
-                .map(|(model_id, _tool)| model_id)
-                .collect(),
+            allowed_models: crate::default_model_specs().into_iter().map(|(model_id, _tool)| model_id).collect(),
             default_model: crate::default_model_for_tool("claude").map(str::to_string),
             phase_overrides: HashMap::new(),
         }
@@ -767,10 +717,7 @@ pub struct ProjectConcurrencyLimits {
 
 impl Default for ProjectConcurrencyLimits {
     fn default() -> Self {
-        Self {
-            max_workflows: 3,
-            max_agents: 10,
-        }
+        Self { max_workflows: 3, max_agents: 10 }
     }
 }
 
@@ -1392,7 +1339,6 @@ impl OrchestratorWorkflow {
     pub fn sync_status(&mut self) {
         self.status = self.machine_state.to_workflow_status();
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1485,7 +1431,6 @@ impl WorkflowSubject {
             Self::Custom { title, .. } => title,
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1530,9 +1475,7 @@ impl SubjectDispatch {
         trigger_source: impl Into<String>,
     ) -> Self {
         Self {
-            subject: WorkflowSubject::Requirement {
-                id: requirement_id.into(),
-            },
+            subject: WorkflowSubject::Requirement { id: requirement_id.into() },
             workflow_ref: workflow_ref.into(),
             input: None,
             vars: HashMap::new(),
@@ -1550,10 +1493,7 @@ impl SubjectDispatch {
         trigger_source: impl Into<String>,
     ) -> Self {
         Self {
-            subject: WorkflowSubject::Custom {
-                title: title.into(),
-                description: description.into(),
-            },
+            subject: WorkflowSubject::Custom { title: title.into(), description: description.into() },
             workflow_ref: workflow_ref.into(),
             input,
             vars: HashMap::new(),
@@ -1593,17 +1533,13 @@ impl SubjectDispatch {
 
     pub fn to_workflow_run_input(&self) -> WorkflowRunInput {
         match &self.subject {
-            WorkflowSubject::Task { id } => {
-                WorkflowRunInput::for_task(id.clone(), Some(self.workflow_ref.clone()))
-            }
+            WorkflowSubject::Task { id } => WorkflowRunInput::for_task(id.clone(), Some(self.workflow_ref.clone())),
             WorkflowSubject::Requirement { id } => {
                 WorkflowRunInput::for_requirement(id.clone(), Some(self.workflow_ref.clone()))
             }
-            WorkflowSubject::Custom { title, description } => WorkflowRunInput::for_custom(
-                title.clone(),
-                description.clone(),
-                Some(self.workflow_ref.clone()),
-            ),
+            WorkflowSubject::Custom { title, description } => {
+                WorkflowRunInput::for_custom(title.clone(), description.clone(), Some(self.workflow_ref.clone()))
+            }
         }
         .with_input(self.input.clone())
         .with_vars(self.vars.clone())
@@ -1688,9 +1624,7 @@ pub struct WorkflowRunInput {
 impl WorkflowRunInput {
     pub fn for_task(task_id: String, workflow_ref: Option<String>) -> Self {
         Self {
-            subject: WorkflowSubject::Task {
-                id: task_id.clone(),
-            },
+            subject: WorkflowSubject::Task { id: task_id.clone() },
             task_id,
             workflow_ref,
             input: None,
@@ -1703,9 +1637,7 @@ impl WorkflowRunInput {
 
     pub fn for_requirement(requirement_id: String, workflow_ref: Option<String>) -> Self {
         Self {
-            subject: WorkflowSubject::Requirement {
-                id: requirement_id.clone(),
-            },
+            subject: WorkflowSubject::Requirement { id: requirement_id.clone() },
             task_id: String::new(),
             workflow_ref,
             input: None,
@@ -1718,10 +1650,7 @@ impl WorkflowRunInput {
 
     pub fn for_custom(title: String, description: String, workflow_ref: Option<String>) -> Self {
         Self {
-            subject: WorkflowSubject::Custom {
-                title: title.clone(),
-                description: description.clone(),
-            },
+            subject: WorkflowSubject::Custom { title: title.clone(), description: description.clone() },
             task_id: String::new(),
             workflow_ref,
             input: None,

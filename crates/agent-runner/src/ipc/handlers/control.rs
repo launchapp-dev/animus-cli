@@ -31,10 +31,7 @@ pub(crate) async fn handle_control_request<W: AsyncWrite + Unpin>(
             AgentControlResponse {
                 run_id: req.run_id,
                 success: false,
-                message: Some(format!(
-                    "{:?} is not supported by the agent runner",
-                    req.action
-                )),
+                message: Some(format!("{:?} is not supported by the agent runner", req.action)),
             }
         }
         AgentControlAction::Terminate => {

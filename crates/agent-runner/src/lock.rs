@@ -42,11 +42,7 @@ pub fn acquire_runner_lock() -> Result<File> {
                     ipc_address = %ipc_addr,
                     "Runner lock is held by an active process"
                 );
-                bail!(
-                    "Another agent runner is already running (PID: {}, IPC: {}).",
-                    existing_pid,
-                    ipc_addr
-                );
+                bail!("Another agent runner is already running (PID: {}, IPC: {}).", existing_pid, ipc_addr);
             }
             warn!(
                 existing_pid,
@@ -64,10 +60,7 @@ pub fn acquire_runner_lock() -> Result<File> {
 fn read_runner_lock(lock_path: &Path) -> Result<(i32, String)> {
     let content = fs::read_to_string(lock_path)?;
     let parts: Vec<&str> = content.split('|').collect();
-    let pid = parts
-        .first()
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(0);
+    let pid = parts.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
     let ipc_addr = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
     Ok((pid, ipc_addr))
 }
@@ -75,10 +68,7 @@ fn read_runner_lock(lock_path: &Path) -> Result<(i32, String)> {
 fn get_ipc_address() -> String {
     #[cfg(unix)]
     {
-        config::app_config_dir()
-            .join("agent-runner.sock")
-            .display()
-            .to_string()
+        config::app_config_dir().join("agent-runner.sock").display().to_string()
     }
 
     #[cfg(not(unix))]

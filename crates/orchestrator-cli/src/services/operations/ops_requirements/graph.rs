@@ -24,9 +24,6 @@ pub(super) fn load_requirements_graph(project_root: &str) -> Result<Requirements
     read_json_or_default(&requirements_graph_path(project_root))
 }
 
-pub(super) fn save_requirements_graph(
-    project_root: &str,
-    graph: &RequirementsGraphState,
-) -> Result<()> {
+pub(super) fn save_requirements_graph(project_root: &str, graph: &RequirementsGraphState) -> Result<()> {
     write_json_pretty(&requirements_graph_path(project_root), graph)
 }

@@ -65,32 +65,11 @@ pub struct TestResult {
 
 impl TestResult {
     pub fn success(test_name: String, cli_type: CliType, duration_ms: u64, output: String) -> Self {
-        Self {
-            test_name,
-            cli_type,
-            passed: true,
-            duration_ms,
-            output,
-            error: None,
-            failures: Vec::new(),
-        }
+        Self { test_name, cli_type, passed: true, duration_ms, output, error: None, failures: Vec::new() }
     }
 
-    pub fn failure(
-        test_name: String,
-        cli_type: CliType,
-        duration_ms: u64,
-        failures: Vec<String>,
-    ) -> Self {
-        Self {
-            test_name,
-            cli_type,
-            passed: false,
-            duration_ms,
-            output: String::new(),
-            error: None,
-            failures,
-        }
+    pub fn failure(test_name: String, cli_type: CliType, duration_ms: u64, failures: Vec<String>) -> Self {
+        Self { test_name, cli_type, passed: false, duration_ms, output: String::new(), error: None, failures }
     }
 
     pub fn error(test_name: String, cli_type: CliType, error: String) -> Self {
@@ -116,11 +95,7 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            test_cases: Vec::new(),
-        }
+        Self { name: name.into(), description: String::new(), test_cases: Vec::new() }
     }
 
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
@@ -161,29 +136,20 @@ impl TestSuite {
                     .with_timeout(30),
             )
             .add_test(
-                TestCase::new(
-                    "write_file",
-                    "Create a file named output.txt with 'Test content'",
-                )
-                .with_description("Test file writing")
-                .expect_file(PathBuf::from("output.txt"))
-                .with_timeout(30),
+                TestCase::new("write_file", "Create a file named output.txt with 'Test content'")
+                    .with_description("Test file writing")
+                    .expect_file(PathBuf::from("output.txt"))
+                    .with_timeout(30),
             )
     }
 
     /// Create a test suite for code generation
     pub fn code_generation() -> Self {
-        Self::new("Code Generation")
-            .with_description("Tests code generation capabilities")
-            .add_test(
-                TestCase::new(
-                    "simple_function",
-                    "Create a function that adds two numbers in Python",
-                )
+        Self::new("Code Generation").with_description("Tests code generation capabilities").add_test(
+            TestCase::new("simple_function", "Create a function that adds two numbers in Python")
                 .with_description("Generate a simple Python function")
                 .expect_output("def")
                 .with_timeout(60),
-            )
+        )
     }
-
 }

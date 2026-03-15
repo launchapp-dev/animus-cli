@@ -1,7 +1,6 @@
 use protocol::{
-    AgentControlAction, AgentControlRequest, AgentRunEvent, AgentRunRequest, ModelId,
-    OutputStreamType, RequirementPriority, RunId, Timestamp, TokenUsage, ToolCallInfo,
-    PROTOCOL_VERSION,
+    AgentControlAction, AgentControlRequest, AgentRunEvent, AgentRunRequest, ModelId, OutputStreamType,
+    RequirementPriority, RunId, Timestamp, TokenUsage, ToolCallInfo, PROTOCOL_VERSION,
 };
 use serde_json::json;
 
@@ -57,13 +56,7 @@ fn metadata_tokens_shape_is_stable() {
     let event = AgentRunEvent::Metadata {
         run_id: RunId("run-123".to_string()),
         cost: Some(0.12),
-        tokens: Some(TokenUsage {
-            input: 120,
-            output: 48,
-            reasoning: Some(5),
-            cache_read: Some(2),
-            cache_write: None,
-        }),
+        tokens: Some(TokenUsage { input: 120, output: 48, reasoning: Some(5), cache_read: Some(2), cache_write: None }),
     };
 
     let value = serde_json::to_value(event).expect("serialize metadata event");
@@ -93,36 +86,28 @@ fn tool_call_event_serialization_shape_is_stable() {
     assert_eq!(value["run_id"], "run-123");
     assert_eq!(value["tool_info"]["tool_name"], "search_query");
     assert_eq!(value["tool_info"]["parameters"]["q"], "rust serde");
-    assert!(
-        value["tool_info"]["timestamp"].is_string(),
-        "tool_call timestamp must remain string-encoded"
-    );
+    assert!(value["tool_info"]["timestamp"].is_string(), "tool_call timestamp must remain string-encoded");
 }
 
 #[test]
 fn control_request_roundtrip_shape_is_stable() {
-    let request = AgentControlRequest {
-        run_id: RunId("run-control-1".to_string()),
-        action: AgentControlAction::Terminate,
-    };
+    let request =
+        AgentControlRequest { run_id: RunId("run-control-1".to_string()), action: AgentControlAction::Terminate };
 
     let value = serde_json::to_value(&request).expect("serialize control request");
     assert_eq!(value["run_id"], "run-control-1");
     assert_eq!(value["action"], "terminate");
 
-    let decoded: AgentControlRequest =
-        serde_json::from_value(value).expect("deserialize control request");
+    let decoded: AgentControlRequest = serde_json::from_value(value).expect("deserialize control request");
     assert_eq!(decoded.run_id.0, "run-control-1");
     assert_eq!(decoded.action, AgentControlAction::Terminate);
 }
 
 #[test]
 fn requirement_priority_serialization_is_lowercase_and_stable() {
-    let value =
-        serde_json::to_value(RequirementPriority::Must).expect("serialize requirement priority");
+    let value = serde_json::to_value(RequirementPriority::Must).expect("serialize requirement priority");
     assert_eq!(value, json!("must"));
 
-    let decoded: RequirementPriority =
-        serde_json::from_value(json!("wont")).expect("deserialize requirement priority");
+    let decoded: RequirementPriority = serde_json::from_value(json!("wont")).expect("deserialize requirement priority");
     assert_eq!(decoded, RequirementPriority::Wont);
 }

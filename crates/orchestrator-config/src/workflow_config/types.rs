@@ -150,7 +150,6 @@ pub enum MergeStrategy {
     Rebase,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeConfig {
     #[serde(default)]
@@ -185,19 +184,11 @@ pub struct PostSuccessConfig {
 
 impl WorkflowDefinition {
     pub fn phase_ids(&self) -> Vec<String> {
-        self.phases
-            .iter()
-            .map(|entry| entry.phase_id().trim().to_owned())
-            .filter(|id| !id.is_empty())
-            .collect()
+        self.phases.iter().map(|entry| entry.phase_id().trim().to_owned()).filter(|id| !id.is_empty()).collect()
     }
-
 }
 
-pub fn expand_workflow_phases(
-    workflows: &[WorkflowDefinition],
-    workflow_ref: &str,
-) -> Result<Vec<WorkflowPhaseEntry>> {
+pub fn expand_workflow_phases(workflows: &[WorkflowDefinition], workflow_ref: &str) -> Result<Vec<WorkflowPhaseEntry>> {
     let mut visited = HashSet::new();
     expand_workflow_phases_inner(workflows, workflow_ref, &mut visited)
 }
@@ -226,8 +217,7 @@ fn expand_workflow_phases_inner(
     for entry in &workflow.phases {
         match entry {
             WorkflowPhaseEntry::SubWorkflow(sub) => {
-                let sub_phases =
-                    expand_workflow_phases_inner(workflows, &sub.workflow_ref, visited)?;
+                let sub_phases = expand_workflow_phases_inner(workflows, &sub.workflow_ref, visited)?;
                 expanded.extend(sub_phases);
             }
             other => {
@@ -259,10 +249,7 @@ pub fn resolve_workflow_variables(
 
     if !missing.is_empty() {
         missing.sort();
-        return Err(anyhow!(
-            "missing required workflow variable(s): {}",
-            missing.join(", ")
-        ));
+        return Err(anyhow!("missing required workflow variable(s): {}", missing.join(", ")));
     }
 
     Ok(resolved)
@@ -384,12 +371,7 @@ pub(crate) fn default_keep_last_per_phase() -> usize {
     crate::workflow::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE
 }
 
-pub(crate) fn phase_ui_definition(
-    label: &str,
-    description: &str,
-    category: &str,
-    tags: &[&str],
-) -> PhaseUiDefinition {
+pub(crate) fn phase_ui_definition(label: &str, description: &str, category: &str, tags: &[&str]) -> PhaseUiDefinition {
     PhaseUiDefinition {
         label: label.to_string(),
         description: description.to_string(),
@@ -402,10 +384,7 @@ pub(crate) fn phase_ui_definition(
 }
 
 pub(crate) fn merge_strategy_is_valid(strategy: &MergeStrategy) -> bool {
-    matches!(
-        strategy,
-        MergeStrategy::Squash | MergeStrategy::Merge | MergeStrategy::Rebase
-    )
+    matches!(strategy, MergeStrategy::Squash | MergeStrategy::Merge | MergeStrategy::Rebase)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

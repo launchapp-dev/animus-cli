@@ -2,9 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::agent_runtime_config::{
-    CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode, PhaseManualDefinition,
-};
+use crate::agent_runtime_config::{CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode, PhaseManualDefinition};
 use crate::PhaseExecutionDefinition;
 
 use super::builtins::builtin_workflow_config;
@@ -17,10 +15,7 @@ pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
         "project_root" => Ok(CommandCwdMode::ProjectRoot),
         "task_root" => Ok(CommandCwdMode::TaskRoot),
         "path" => Ok(CommandCwdMode::Path),
-        other => Err(anyhow!(
-            "unknown cwd_mode '{}' (expected project_root, task_root, or path)",
-            other
-        )),
+        other => Err(anyhow!("unknown cwd_mode '{}' (expected project_root, task_root, or path)", other)),
     }
 }
 
@@ -29,10 +24,7 @@ pub(super) fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
         "squash" => Ok(MergeStrategy::Squash),
         "merge" => Ok(MergeStrategy::Merge),
         "rebase" => Ok(MergeStrategy::Rebase),
-        _ => Err(anyhow!(
-            "phases['merge'].strategy must be one of: squash, merge, rebase (got '{}')",
-            value
-        )),
+        _ => Err(anyhow!("phases['merge'].strategy must be one of: squash, merge, rebase (got '{}')", value)),
     }
 }
 
@@ -48,12 +40,7 @@ pub(super) fn yaml_phase_to_execution_definition(
             program: cmd.program,
             args: cmd.args,
             env: cmd.env,
-            cwd_mode: cmd
-                .cwd_mode
-                .as_deref()
-                .map(parse_cwd_mode)
-                .transpose()?
-                .unwrap_or(CommandCwdMode::ProjectRoot),
+            cwd_mode: cmd.cwd_mode.as_deref().map(parse_cwd_mode).transpose()?.unwrap_or(CommandCwdMode::ProjectRoot),
             cwd_path: cmd.cwd_path,
             timeout_secs: cmd.timeout_secs,
             success_exit_codes: cmd.success_exit_codes.unwrap_or_else(|| vec![0]),
@@ -69,10 +56,7 @@ pub(super) fn yaml_phase_to_execution_definition(
             failure_risk: cmd.failure_risk,
         }),
         (PhaseExecutionMode::Command, None) => {
-            return Err(anyhow!(
-                "phases['{}'] mode 'command' requires a command block",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'] mode 'command' requires a command block", phase_id));
         }
         (_, Some(_)) => {
             return Err(anyhow!(
@@ -91,17 +75,10 @@ pub(super) fn yaml_phase_to_execution_definition(
             timeout_secs: m.timeout_secs,
         }),
         (PhaseExecutionMode::Manual, None) => {
-            return Err(anyhow!(
-                "phases['{}'] mode 'manual' requires a manual block",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'] mode 'manual' requires a manual block", phase_id));
         }
         (_, Some(_)) => {
-            return Err(anyhow!(
-                "phases['{}'] mode '{}' must not include a manual block",
-                phase_id,
-                mode_label
-            ));
+            return Err(anyhow!("phases['{}'] mode '{}' must not include a manual block", phase_id, mode_label));
         }
         _ => None,
     };
@@ -127,9 +104,9 @@ pub(super) fn yaml_phase_to_execution_definition(
 pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPhaseEntry {
     match entry {
         WorkflowPhaseEntry::Simple(id) => YamlPhaseEntry::Simple(id.clone()),
-        WorkflowPhaseEntry::SubWorkflow(sub) => YamlPhaseEntry::SubWorkflow(YamlSubWorkflowRef {
-            workflow_ref: sub.workflow_ref.clone(),
-        }),
+        WorkflowPhaseEntry::SubWorkflow(sub) => {
+            YamlPhaseEntry::SubWorkflow(YamlSubWorkflowRef { workflow_ref: sub.workflow_ref.clone() })
+        }
         WorkflowPhaseEntry::Rich(config) => {
             let mut map = HashMap::new();
             map.insert(
@@ -145,30 +122,19 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
     }
 }
 
-pub(super) fn workflow_definition_to_yaml(
-    definition: &WorkflowDefinition,
-) -> YamlWorkflowDefinition {
+pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> YamlWorkflowDefinition {
     YamlWorkflowDefinition {
         id: definition.id.clone(),
         name: Some(definition.name.clone()),
         description: Some(definition.description.clone()),
-        phases: definition
-            .phases
-            .iter()
-            .map(workflow_phase_entry_to_yaml)
-            .collect(),
-        post_success: definition
-            .post_success
-            .clone()
-            .map(post_success_config_to_yaml),
+        phases: definition.phases.iter().map(workflow_phase_entry_to_yaml).collect(),
+        post_success: definition.post_success.clone().map(post_success_config_to_yaml),
         variables: definition.variables.clone(),
     }
 }
 
 pub(super) fn post_success_config_to_yaml(config: PostSuccessConfig) -> YamlPostSuccessConfig {
-    YamlPostSuccessConfig {
-        merge: config.merge.map(merge_config_to_yaml),
-    }
+    YamlPostSuccessConfig { merge: config.merge.map(merge_config_to_yaml) }
 }
 
 pub(super) fn merge_config_to_yaml(config: MergeConfig) -> YamlMergeConfig {
@@ -185,46 +151,38 @@ pub(super) fn merge_config_to_yaml(config: MergeConfig) -> YamlMergeConfig {
     }
 }
 
-pub(super) fn phase_execution_definition_to_yaml(
-    definition: &PhaseExecutionDefinition,
-) -> YamlPhaseDefinition {
+pub(super) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefinition) -> YamlPhaseDefinition {
     YamlPhaseDefinition {
         mode: definition.mode.clone(),
         agent: definition.agent_id.clone(),
-        command: definition
-            .command
-            .clone()
-            .map(|command| YamlCommandDefinition {
-                program: command.program,
-                args: command.args,
-                env: command.env,
-                cwd_mode: Some(match command.cwd_mode {
-                    CommandCwdMode::ProjectRoot => "project_root".to_string(),
-                    CommandCwdMode::TaskRoot => "task_root".to_string(),
-                    CommandCwdMode::Path => "path".to_string(),
-                }),
-                cwd_path: command.cwd_path,
-                timeout_secs: command.timeout_secs,
-                success_exit_codes: Some(command.success_exit_codes),
-                parse_json_output: Some(command.parse_json_output),
-                expected_result_kind: command.expected_result_kind,
-                expected_schema: command.expected_schema,
-                category: command.category,
-                failure_pattern: command.failure_pattern,
-                excerpt_max_chars: command.excerpt_max_chars,
-                on_success_verdict: command.on_success_verdict,
-                on_failure_verdict: command.on_failure_verdict,
-                confidence: command.confidence,
-                failure_risk: command.failure_risk,
+        command: definition.command.clone().map(|command| YamlCommandDefinition {
+            program: command.program,
+            args: command.args,
+            env: command.env,
+            cwd_mode: Some(match command.cwd_mode {
+                CommandCwdMode::ProjectRoot => "project_root".to_string(),
+                CommandCwdMode::TaskRoot => "task_root".to_string(),
+                CommandCwdMode::Path => "path".to_string(),
             }),
-        manual: definition
-            .manual
-            .clone()
-            .map(|manual| YamlManualDefinition {
-                instructions: manual.instructions,
-                approval_note_required: Some(manual.approval_note_required),
-                timeout_secs: manual.timeout_secs,
-            }),
+            cwd_path: command.cwd_path,
+            timeout_secs: command.timeout_secs,
+            success_exit_codes: Some(command.success_exit_codes),
+            parse_json_output: Some(command.parse_json_output),
+            expected_result_kind: command.expected_result_kind,
+            expected_schema: command.expected_schema,
+            category: command.category,
+            failure_pattern: command.failure_pattern,
+            excerpt_max_chars: command.excerpt_max_chars,
+            on_success_verdict: command.on_success_verdict,
+            on_failure_verdict: command.on_failure_verdict,
+            confidence: command.confidence,
+            failure_risk: command.failure_risk,
+        }),
+        manual: definition.manual.clone().map(|manual| YamlManualDefinition {
+            instructions: manual.instructions,
+            approval_note_required: Some(manual.approval_note_required),
+            timeout_secs: manual.timeout_secs,
+        }),
         directive: definition.directive.clone(),
         system_prompt: definition.system_prompt.clone(),
         runtime: definition.runtime.clone(),
@@ -240,16 +198,8 @@ pub(super) fn phase_execution_definition_to_yaml(
 pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkflowFile {
     YamlWorkflowFile {
         default_workflow_ref: Some(config.default_workflow_ref.clone()),
-        phase_catalog: if config.phase_catalog.is_empty() {
-            None
-        } else {
-            Some(config.phase_catalog.clone())
-        },
-        workflows: config
-            .workflows
-            .iter()
-            .map(workflow_definition_to_yaml)
-            .collect(),
+        phase_catalog: if config.phase_catalog.is_empty() { None } else { Some(config.phase_catalog.clone()) },
+        workflows: config.workflows.iter().map(workflow_definition_to_yaml).collect(),
         phases: config
             .phase_definitions
             .iter()
@@ -265,20 +215,15 @@ pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
     }
 }
 
-pub(super) fn yaml_phase_entry_to_workflow_phase_entry(
-    entry: YamlPhaseEntry,
-) -> Result<WorkflowPhaseEntry> {
+pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) -> Result<WorkflowPhaseEntry> {
     match entry {
         YamlPhaseEntry::Simple(id) => Ok(WorkflowPhaseEntry::Simple(id)),
-        YamlPhaseEntry::SubWorkflow(sub) => Ok(WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-            workflow_ref: sub.workflow_ref,
-        })),
+        YamlPhaseEntry::SubWorkflow(sub) => {
+            Ok(WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: sub.workflow_ref }))
+        }
         YamlPhaseEntry::Rich(map) => {
             if map.len() != 1 {
-                return Err(anyhow!(
-                    "rich phase entry must have exactly one key (the phase id), got {}",
-                    map.len()
-                ));
+                return Err(anyhow!("rich phase entry must have exactly one key (the phase id), got {}", map.len()));
             }
             let (id, config) = map.into_iter().next().unwrap();
             Ok(WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
@@ -291,19 +236,13 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(
     }
 }
 
-pub(super) fn yaml_workflow_to_workflow_definition(
-    yaml: YamlWorkflowDefinition,
-) -> Result<WorkflowDefinition> {
+pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition) -> Result<WorkflowDefinition> {
     let post_success = match yaml.post_success {
         Some(post_success) => Some(yaml_post_success_to_post_success_config(post_success)?),
         None => None,
     };
 
-    let phases = yaml
-        .phases
-        .into_iter()
-        .map(yaml_phase_entry_to_workflow_phase_entry)
-        .collect::<Result<Vec<_>>>()?;
+    let phases = yaml.phases.into_iter().map(yaml_phase_entry_to_workflow_phase_entry).collect::<Result<Vec<_>>>()?;
     Ok(WorkflowDefinition {
         id: yaml.id.clone(),
         name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
@@ -314,9 +253,7 @@ pub(super) fn yaml_workflow_to_workflow_definition(
     })
 }
 
-pub(super) fn yaml_post_success_to_post_success_config(
-    yaml: YamlPostSuccessConfig,
-) -> Result<PostSuccessConfig> {
+pub(super) fn yaml_post_success_to_post_success_config(yaml: YamlPostSuccessConfig) -> Result<PostSuccessConfig> {
     let merge = match yaml.merge {
         Some(merge) => Some(yaml_merge_to_merge_config(merge)?),
         None => None,
@@ -326,12 +263,7 @@ pub(super) fn yaml_post_success_to_post_success_config(
 
 pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeConfig> {
     Ok(MergeConfig {
-        strategy: yaml
-            .strategy
-            .as_deref()
-            .map(parse_merge_strategy)
-            .transpose()?
-            .unwrap_or_default(),
+        strategy: yaml.strategy.as_deref().map(parse_merge_strategy).transpose()?.unwrap_or_default(),
         target_branch: yaml.target_branch,
         create_pr: yaml.create_pr,
         auto_merge: yaml.auto_merge,
@@ -339,18 +271,11 @@ pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeC
     })
 }
 
-pub fn parse_yaml_workflow_config_with_base(
-    yaml_str: &str,
-    base: &WorkflowConfig,
-) -> Result<WorkflowConfig> {
-    let yaml_file: YamlWorkflowFile =
-        serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
+pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfig) -> Result<WorkflowConfig> {
+    let yaml_file: YamlWorkflowFile = serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
 
-    let workflows = yaml_file
-        .workflows
-        .into_iter()
-        .map(yaml_workflow_to_workflow_definition)
-        .collect::<Result<Vec<_>>>()?;
+    let workflows =
+        yaml_file.workflows.into_iter().map(yaml_workflow_to_workflow_definition).collect::<Result<Vec<_>>>()?;
 
     let mut phase_definitions = BTreeMap::new();
     let mut auto_phase_catalog = BTreeMap::new();
@@ -379,9 +304,7 @@ pub fn parse_yaml_workflow_config_with_base(
     }
 
     let default_workflow_ref = yaml_file.default_workflow_ref.unwrap_or_default();
-    let mut phase_catalog = yaml_file
-        .phase_catalog
-        .unwrap_or_else(|| base.phase_catalog.clone());
+    let mut phase_catalog = yaml_file.phase_catalog.unwrap_or_else(|| base.phase_catalog.clone());
     for (id, ui_def) in auto_phase_catalog {
         phase_catalog.entry(id).or_insert(ui_def);
     }
@@ -391,11 +314,7 @@ pub fn parse_yaml_workflow_config_with_base(
         version: WORKFLOW_CONFIG_VERSION,
         default_workflow_ref,
         phase_catalog,
-        workflows: if workflows.is_empty() {
-            base.workflows.clone()
-        } else {
-            workflows
-        },
+        workflows: if workflows.is_empty() { base.workflows.clone() } else { workflows },
         checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
         phase_definitions,
         agent_profiles: yaml_file.agents,

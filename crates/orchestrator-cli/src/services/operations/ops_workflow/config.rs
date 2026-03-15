@@ -64,8 +64,7 @@ pub(crate) fn validate_state_machine_payload(project_root: &str) -> Value {
         }
     };
 
-    let document = match serde_json::from_str::<orchestrator_core::StateMachinesDocument>(&content)
-    {
+    let document = match serde_json::from_str::<orchestrator_core::StateMachinesDocument>(&content) {
         Ok(document) => document,
         Err(error) => {
             return serde_json::json!({
@@ -105,8 +104,7 @@ pub(crate) fn set_state_machine_payload(project_root: &str, input_json: &str) ->
         serde_json::from_str(input_json).with_context(|| {
             "invalid --input-json payload for workflow state-machine set; run 'ao workflow state-machine set --help' for schema"
         })?;
-    let compiled =
-        orchestrator_core::write_state_machines_document(Path::new(project_root), &document)?;
+    let compiled = orchestrator_core::write_state_machines_document(Path::new(project_root), &document)?;
     let path = orchestrator_core::state_machines_path(Path::new(project_root));
 
     Ok(serde_json::json!({
@@ -121,9 +119,7 @@ pub(crate) fn set_state_machine_payload(project_root: &str, input_json: &str) ->
 
 pub(crate) fn get_agent_runtime_payload(project_root: &str) -> Value {
     let path = agent_runtime_path(project_root);
-    match orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(
-        Path::new(project_root),
-    ) {
+    match orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root)) {
         Ok(loaded) => serde_json::json!({
             "path": path.display().to_string(),
             "source": loaded.metadata.source,
@@ -146,9 +142,7 @@ pub(crate) fn get_agent_runtime_payload(project_root: &str) -> Value {
 
 pub(crate) fn validate_agent_runtime_payload(project_root: &str) -> Value {
     let path = agent_runtime_path(project_root);
-    match orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(
-        Path::new(project_root),
-    ) {
+    match orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root)) {
         Ok(loaded) => serde_json::json!({
             "path": path.display().to_string(),
             "valid": true,
@@ -208,19 +202,13 @@ pub(crate) fn get_workflow_config_payload(project_root: &str) -> Value {
 }
 
 pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
-    let workflow_loaded =
-        orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root));
+    let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root));
     let runtime_loaded =
-        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(
-            Path::new(project_root),
-        );
+        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root));
 
     match (workflow_loaded, runtime_loaded) {
         (Ok(workflow), Ok(runtime)) => {
-            match orchestrator_core::validate_workflow_and_runtime_configs(
-                &workflow.config,
-                &runtime.config,
-            ) {
+            match orchestrator_core::validate_workflow_and_runtime_configs(&workflow.config, &runtime.config) {
                 Ok(()) => serde_json::json!({
                     "valid": true,
                     "errors": [],
@@ -255,11 +243,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
 pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value> {
     match orchestrator_core::compile_and_write_yaml_workflows(Path::new(project_root))? {
         Some(result) => {
-            let source_files: Vec<String> = result
-                .source_files
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect();
+            let source_files: Vec<String> = result.source_files.iter().map(|p| p.display().to_string()).collect();
             Ok(serde_json::json!({
                 "compiled": true,
                 "source_files": source_files,

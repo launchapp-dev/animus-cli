@@ -38,9 +38,7 @@ pub(super) struct ResolveSkillResult {
 }
 
 fn parse_version_req(raw: &str) -> Result<VersionReq> {
-    VersionReq::parse(raw).map_err(|error| {
-        invalid_input_error(format!("invalid version constraint '{raw}': {error}"))
-    })
+    VersionReq::parse(raw).map_err(|error| invalid_input_error(format!("invalid version constraint '{raw}': {error}")))
 }
 
 fn parse_exact_version_req(version: &str) -> Result<VersionReq> {
@@ -57,15 +55,11 @@ fn compare_semver_desc(left: &str, right: &str) -> Ordering {
 }
 
 fn version_matches(requirement: &VersionReq, version: &str) -> bool {
-    Version::parse(version)
-        .map(|parsed| requirement.matches(&parsed))
-        .unwrap_or(false)
+    Version::parse(version).map(|parsed| requirement.matches(&parsed)).unwrap_or(false)
 }
 
 fn is_stable_release(version: &str) -> bool {
-    Version::parse(version)
-        .map(|parsed| parsed.pre.is_empty())
-        .unwrap_or(false)
+    Version::parse(version).map(|parsed| parsed.pre.is_empty()).unwrap_or(false)
 }
 
 fn winner_sort(left: &SkillVersionRecord, right: &SkillVersionRecord) -> Ordering {
@@ -88,10 +82,7 @@ pub(super) fn resolve_skill_version(
         return Err(invalid_input_error("invalid skill name"));
     }
 
-    let mut candidates: Vec<&SkillVersionRecord> = catalog
-        .iter()
-        .filter(|record| record.name == name)
-        .collect();
+    let mut candidates: Vec<&SkillVersionRecord> = catalog.iter().filter(|record| record.name == name).collect();
     if candidates.is_empty() {
         return Err(not_found_error(format!("skill not found: {name}")));
     }
@@ -117,10 +108,7 @@ pub(super) fn resolve_skill_version(
             .or_else(|| project_default.and_then(|item| item.registry.clone()))
         {
             Some(registry) => {
-                if lock_pin
-                    .and_then(|pin| pin.registry.as_deref())
-                    .is_some_and(|candidate| candidate == registry)
-                {
+                if lock_pin.and_then(|pin| pin.registry.as_deref()).is_some_and(|candidate| candidate == registry) {
                     (Some(registry), ConstraintOrigin::Lock)
                 } else {
                     (Some(registry), ConstraintOrigin::Project)
@@ -134,31 +122,20 @@ pub(super) fn resolve_skill_version(
     }
 
     if candidates.is_empty() {
-        return Err(not_found_error(format!(
-            "skill not found for source/registry constraints: {name}"
-        )));
+        return Err(not_found_error(format!("skill not found for source/registry constraints: {name}")));
     }
 
-    let (version_constraint, version_origin): (Option<VersionReq>, VersionConstraintOrigin) =
-        match request.cli_version {
-            Some(version) => (
-                Some(parse_version_req(version)?),
-                VersionConstraintOrigin::Cli,
-            ),
-            None => match lock_pin {
-                Some(pin) => (
-                    Some(parse_exact_version_req(&pin.version)?),
-                    VersionConstraintOrigin::Lock,
-                ),
-                None => match project_default.and_then(|item| item.version.as_deref()) {
-                    Some(version) => (
-                        Some(parse_version_req(version)?),
-                        VersionConstraintOrigin::Project,
-                    ),
-                    None => (None, VersionConstraintOrigin::None),
-                },
+    let (version_constraint, version_origin): (Option<VersionReq>, VersionConstraintOrigin) = match request.cli_version
+    {
+        Some(version) => (Some(parse_version_req(version)?), VersionConstraintOrigin::Cli),
+        None => match lock_pin {
+            Some(pin) => (Some(parse_exact_version_req(&pin.version)?), VersionConstraintOrigin::Lock),
+            None => match project_default.and_then(|item| item.version.as_deref()) {
+                Some(version) => (Some(parse_version_req(version)?), VersionConstraintOrigin::Project),
+                None => (None, VersionConstraintOrigin::None),
             },
-        };
+        },
+    };
 
     if let Some(constraint) = version_constraint.as_ref() {
         let before = candidates.len();
@@ -173,43 +150,29 @@ pub(super) fn resolve_skill_version(
                     )));
                 }
                 VersionConstraintOrigin::Lock => {
-                    return Err(not_found_error(format!(
-                        "skill version not found for lock pin: {}",
-                        name
-                    )));
+                    return Err(not_found_error(format!("skill version not found for lock pin: {}", name)));
                 }
                 VersionConstraintOrigin::Project => {
-                    return Err(not_found_error(format!(
-                        "skill version not found for project default: {}",
-                        name
-                    )));
+                    return Err(not_found_error(format!("skill version not found for project default: {}", name)));
                 }
                 VersionConstraintOrigin::None => {}
             }
         }
     }
 
-    let allow_prerelease = request.allow_prerelease
-        || project_default
-            .map(|item| item.allow_prerelease)
-            .unwrap_or(false);
+    let allow_prerelease =
+        request.allow_prerelease || project_default.map(|item| item.allow_prerelease).unwrap_or(false);
     if !allow_prerelease {
-        let stable_candidates: Vec<&SkillVersionRecord> = candidates
-            .iter()
-            .copied()
-            .filter(|record| is_stable_release(&record.version))
-            .collect();
+        let stable_candidates: Vec<&SkillVersionRecord> =
+            candidates.iter().copied().filter(|record| is_stable_release(&record.version)).collect();
         if !stable_candidates.is_empty() {
             candidates = stable_candidates;
         }
     }
 
     candidates.sort_by(|left, right| winner_sort(left, right));
-    let selected = candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| not_found_error(format!("skill not found: {name}")))?
-        .clone();
+    let selected =
+        candidates.into_iter().next().ok_or_else(|| not_found_error(format!("skill not found: {name}")))?.clone();
 
     let used_lock_pin = matches!(source_origin, ConstraintOrigin::Lock)
         || matches!(registry_origin, ConstraintOrigin::Lock)
@@ -218,11 +181,7 @@ pub(super) fn resolve_skill_version(
         || matches!(registry_origin, ConstraintOrigin::Project)
         || matches!(version_origin, VersionConstraintOrigin::Project);
 
-    Ok(ResolveSkillResult {
-        selected,
-        used_lock_pin,
-        used_project_default,
-    })
+    Ok(ResolveSkillResult { selected, used_lock_pin, used_project_default })
 }
 
 #[cfg(test)]
@@ -230,12 +189,7 @@ mod tests {
     use super::*;
     use crate::{classify_cli_error_kind, CliErrorKind};
 
-    fn catalog_record(
-        name: &str,
-        version: &str,
-        source: &str,
-        registry: &str,
-    ) -> SkillVersionRecord {
+    fn catalog_record(name: &str, version: &str, source: &str, registry: &str) -> SkillVersionRecord {
         SkillVersionRecord {
             name: name.to_string(),
             version: version.to_string(),
@@ -248,10 +202,8 @@ mod tests {
 
     #[test]
     fn resolver_prefers_cli_constraints_over_lock_and_project_defaults() {
-        let catalog = vec![
-            catalog_record("lint", "1.2.0", "s1", "project"),
-            catalog_record("lint", "1.3.0", "s2", "project"),
-        ];
+        let catalog =
+            vec![catalog_record("lint", "1.2.0", "s1", "project"), catalog_record("lint", "1.3.0", "s2", "project")];
         let lock_pin = SkillLockEntry {
             name: "lint".to_string(),
             version: "1.2.0".to_string(),
@@ -275,9 +227,8 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let resolved =
-            resolve_skill_version(&request, &catalog, Some(&lock_pin), Some(&project_default))
-                .expect("resolution should succeed");
+        let resolved = resolve_skill_version(&request, &catalog, Some(&lock_pin), Some(&project_default))
+            .expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.3.0");
         assert_eq!(resolved.selected.source, "s2");
         assert!(!resolved.used_lock_pin);
@@ -298,8 +249,7 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let resolved = resolve_skill_version(&request, &catalog, None, None)
-            .expect("resolution should succeed");
+        let resolved = resolve_skill_version(&request, &catalog, None, None).expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.9.0");
     }
 
@@ -317,8 +267,7 @@ mod tests {
             allow_prerelease: true,
         };
 
-        let resolved = resolve_skill_version(&request, &catalog, None, None)
-            .expect("resolution should succeed");
+        let resolved = resolve_skill_version(&request, &catalog, None, None).expect("resolution should succeed");
         assert_eq!(resolved.selected.source, "alpha");
     }
 
@@ -337,8 +286,7 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let resolved = resolve_skill_version(&request, &catalog, None, None)
-            .expect("resolution should succeed");
+        let resolved = resolve_skill_version(&request, &catalog, None, None).expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.6.0");
     }
 
@@ -371,9 +319,8 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let resolved =
-            resolve_skill_version(&request, &catalog, Some(&lock_pin), Some(&project_default))
-                .expect("resolution should succeed");
+        let resolved = resolve_skill_version(&request, &catalog, Some(&lock_pin), Some(&project_default))
+            .expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.0.0");
         assert_eq!(resolved.selected.source, "lock-source");
         assert!(resolved.used_lock_pin);
@@ -401,8 +348,8 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let resolved = resolve_skill_version(&request, &catalog, None, Some(&project_default))
-            .expect("resolution should succeed");
+        let resolved =
+            resolve_skill_version(&request, &catalog, None, Some(&project_default)).expect("resolution should succeed");
         assert_eq!(resolved.selected.version, "1.0.0");
         assert_eq!(resolved.selected.source, "default-source");
         assert!(!resolved.used_lock_pin);
@@ -419,8 +366,8 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let error = resolve_skill_version(&request, &[], None, None)
-            .expect_err("missing skill should produce an error");
+        let error =
+            resolve_skill_version(&request, &[], None, None).expect_err("missing skill should produce an error");
         assert_eq!(classify_cli_error_kind(&error), CliErrorKind::NotFound);
     }
 
@@ -435,8 +382,8 @@ mod tests {
             allow_prerelease: false,
         };
 
-        let error = resolve_skill_version(&request, &catalog, None, None)
-            .expect_err("invalid version constraint should fail");
+        let error =
+            resolve_skill_version(&request, &catalog, None, None).expect_err("invalid version constraint should fail");
         assert_eq!(classify_cli_error_kind(&error), CliErrorKind::InvalidInput);
     }
 }

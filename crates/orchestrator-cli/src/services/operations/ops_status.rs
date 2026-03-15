@@ -6,8 +6,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
-    TaskStatus, WorkflowPhaseStatus, WorkflowStatus,
+    DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics, TaskStatus,
+    WorkflowPhaseStatus, WorkflowStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -181,11 +181,7 @@ struct GhRunListEntry {
     url: Option<String>,
 }
 
-pub(crate) async fn handle_status(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, json: bool) -> Result<()> {
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
@@ -213,11 +209,7 @@ pub(crate) async fn handle_status(
             daemon_health.as_ref(),
             workflows.as_deref(),
             tasks.as_deref(),
-            combine_errors([
-                daemon_error.as_deref(),
-                workflows_error.as_deref(),
-                tasks_error.as_deref(),
-            ]),
+            combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), tasks_error.as_deref()]),
         ),
         task_summary: build_task_summary_slice(
             task_stats.as_ref(),
@@ -245,12 +237,8 @@ fn split_result<T>(result: Result<T>) -> (Option<T>, Option<String>) {
 }
 
 fn combine_errors<'a>(errors: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
-    let messages: Vec<&str> = errors
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
-        .collect();
+    let messages: Vec<&str> =
+        errors.into_iter().flatten().map(str::trim).filter(|message| !message.is_empty()).collect();
     if messages.is_empty() {
         return None;
     }
@@ -299,20 +287,9 @@ fn build_active_agents_slice(
     tasks: Option<&[OrchestratorTask]>,
     error: Option<String>,
 ) -> ActiveAgentsSlice {
-    let count = daemon_health
-        .map(|health| health.active_agents)
-        .unwrap_or(0);
-    let assignments = active_agent_assignments(
-        count,
-        workflows.unwrap_or_default(),
-        tasks.unwrap_or_default(),
-    );
-    ActiveAgentsSlice {
-        available: daemon_health.is_some(),
-        count,
-        assignments,
-        error,
-    }
+    let count = daemon_health.map(|health| health.active_agents).unwrap_or(0);
+    let assignments = active_agent_assignments(count, workflows.unwrap_or_default(), tasks.unwrap_or_default());
+    ActiveAgentsSlice { available: daemon_health.is_some(), count, assignments, error }
 }
 
 fn active_agent_assignments(
@@ -320,20 +297,11 @@ fn active_agent_assignments(
     workflows: &[OrchestratorWorkflow],
     tasks: &[OrchestratorTask],
 ) -> Vec<ActiveAgentAssignment> {
-    let task_titles: HashMap<&str, &str> = tasks
-        .iter()
-        .map(|task| (task.id.as_str(), task.title.as_str()))
-        .collect();
+    let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
 
-    let mut running: Vec<&OrchestratorWorkflow> = workflows
-        .iter()
-        .filter(|workflow| workflow.status == WorkflowStatus::Running)
-        .collect();
-    running.sort_by(|left, right| {
-        left.id
-            .cmp(&right.id)
-            .then_with(|| left.task_id.cmp(&right.task_id))
-    });
+    let mut running: Vec<&OrchestratorWorkflow> =
+        workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Running).collect();
+    running.sort_by(|left, right| left.id.cmp(&right.id).then_with(|| left.task_id.cmp(&right.task_id)));
 
     let attributed_count = active_count.min(running.len());
     let mut assignments: Vec<ActiveAgentAssignment> = running
@@ -341,11 +309,7 @@ fn active_agent_assignments(
         .take(attributed_count)
         .map(|workflow| ActiveAgentAssignment {
             task_id: workflow.task_id.clone(),
-            task_title: task_titles
-                .get(workflow.task_id.as_str())
-                .copied()
-                .unwrap_or("Unknown task")
-                .to_string(),
+            task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
             workflow_id: workflow.id.clone(),
             phase_id: workflow_active_phase(workflow),
             attributed: true,
@@ -397,38 +361,18 @@ fn build_task_summary_slice(
         return TaskSummarySlice {
             available: true,
             total: tasks.len(),
-            done: tasks
-                .iter()
-                .filter(|task| task.status == TaskStatus::Done)
-                .count(),
-            in_progress: tasks
-                .iter()
-                .filter(|task| task.status == TaskStatus::InProgress)
-                .count(),
-            ready: tasks
-                .iter()
-                .filter(|task| task.status == TaskStatus::Ready)
-                .count(),
+            done: tasks.iter().filter(|task| task.status == TaskStatus::Done).count(),
+            in_progress: tasks.iter().filter(|task| task.status == TaskStatus::InProgress).count(),
+            ready: tasks.iter().filter(|task| task.status == TaskStatus::Ready).count(),
             blocked: tasks.iter().filter(|task| task.status.is_blocked()).count(),
             error,
         };
     }
 
-    TaskSummarySlice {
-        available: false,
-        total: 0,
-        done: 0,
-        in_progress: 0,
-        ready: 0,
-        blocked: 0,
-        error,
-    }
+    TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
 }
 
-fn build_recent_completions_slice(
-    tasks: Option<&[OrchestratorTask]>,
-    error: Option<String>,
-) -> RecentCompletionsSlice {
+fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
     RecentCompletionsSlice {
         available: tasks.is_some(),
         entries: tasks.map(recent_completions).unwrap_or_default(),
@@ -441,21 +385,15 @@ fn recent_completions(tasks: &[OrchestratorTask]) -> Vec<RecentCompletionEntry> 
         .iter()
         .filter(|task| task.status == TaskStatus::Done)
         .filter_map(|task| {
-            task.metadata
-                .completed_at
-                .as_ref()
-                .map(|completed_at| RecentCompletionEntry {
-                    task_id: task.id.clone(),
-                    title: task.title.clone(),
-                    completed_at: completed_at.with_timezone(&Utc),
-                })
+            task.metadata.completed_at.as_ref().map(|completed_at| RecentCompletionEntry {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                completed_at: completed_at.with_timezone(&Utc),
+            })
         })
         .collect();
     entries.sort_by(|left, right| {
-        right
-            .completed_at
-            .cmp(&left.completed_at)
-            .then_with(|| left.task_id.cmp(&right.task_id))
+        right.completed_at.cmp(&left.completed_at).then_with(|| left.task_id.cmp(&right.task_id))
     });
     entries.truncate(RECENT_COMPLETIONS_LIMIT);
     entries
@@ -488,10 +426,7 @@ fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry
         })
         .collect();
     entries.sort_by(|left, right| {
-        right
-            .failed_at
-            .cmp(&left.failed_at)
-            .then_with(|| left.workflow_id.cmp(&right.workflow_id))
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
     });
     entries.truncate(RECENT_FAILURES_LIMIT);
     entries
@@ -503,12 +438,7 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
         .iter()
         .enumerate()
         .filter(|(_, phase)| phase.status == WorkflowPhaseStatus::Failed)
-        .max_by(|left, right| {
-            left.1
-                .completed_at
-                .cmp(&right.1.completed_at)
-                .then_with(|| left.0.cmp(&right.0))
-        })
+        .max_by(|left, right| left.1.completed_at.cmp(&right.1.completed_at).then_with(|| left.0.cmp(&right.0)))
         .map(|(_, phase)| phase);
 
     let phase_id = failed_phase
@@ -526,11 +456,7 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
 
 async fn collect_ci_status(project_root: &str) -> CiStatusSlice {
     let project_root = project_root.to_string();
-    match tokio::task::spawn_blocking(move || {
-        ci_status_from_lookup(lookup_ci_status(project_root.as_str()))
-    })
-    .await
-    {
+    match tokio::task::spawn_blocking(move || ci_status_from_lookup(lookup_ci_status(project_root.as_str()))).await {
         Ok(status) => status,
         Err(error) => CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
@@ -565,11 +491,7 @@ fn ci_status_from_lookup(outcome: CiLookupOutcome) -> CiStatusSlice {
         CiLookupOutcome::Success(run) => CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: true,
-            reason: if run.is_none() {
-                Some("no workflow runs found".to_string())
-            } else {
-                None
-            },
+            reason: if run.is_none() { Some("no workflow runs found".to_string()) } else { None },
             last_run: run,
             error: None,
         },
@@ -604,16 +526,12 @@ fn query_latest_gh_run(project_root: &str) -> Result<Option<CiRunSummary>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let message = if stderr.is_empty() {
-            format!("gh run list exited with status {}", output.status)
-        } else {
-            stderr
-        };
+        let message =
+            if stderr.is_empty() { format!("gh run list exited with status {}", output.status) } else { stderr };
         return Err(anyhow!(message));
     }
 
-    let payload =
-        String::from_utf8(output.stdout).context("gh run list emitted non-UTF8 output")?;
+    let payload = String::from_utf8(output.stdout).context("gh run list emitted non-UTF8 output")?;
     parse_gh_run_list(payload.as_str())
 }
 
@@ -643,29 +561,17 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "AO Status Dashboard");
     let _ = writeln!(&mut output, "Project Root: {}", dashboard.project_root);
-    let _ = writeln!(
-        &mut output,
-        "Generated At: {}",
-        dashboard.generated_at.to_rfc3339()
-    );
+    let _ = writeln!(&mut output, "Generated At: {}", dashboard.generated_at.to_rfc3339());
     let _ = writeln!(&mut output);
 
     let _ = writeln!(&mut output, "Daemon");
     let _ = writeln!(&mut output, "  status: {}", dashboard.daemon.status);
     let _ = writeln!(&mut output, "  running: {}", dashboard.daemon.running);
-    let _ = writeln!(
-        &mut output,
-        "  runner_connected: {}",
-        dashboard.daemon.runner_connected
-    );
+    let _ = writeln!(&mut output, "  runner_connected: {}", dashboard.daemon.runner_connected);
     let _ = writeln!(
         &mut output,
         "  runner_pid: {}",
-        dashboard
-            .daemon
-            .runner_pid
-            .map(|pid| pid.to_string())
-            .unwrap_or_else(|| "n/a".to_string())
+        dashboard.daemon.runner_pid.map(|pid| pid.to_string()).unwrap_or_else(|| "n/a".to_string())
     );
     if let Some(error) = dashboard.daemon.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
@@ -681,11 +587,7 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
             let _ = writeln!(
                 &mut output,
                 "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={}",
-                entry.task_id,
-                entry.task_title,
-                entry.workflow_id,
-                entry.phase_id,
-                entry.attributed
+                entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed
             );
         }
     }
@@ -697,11 +599,7 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "Task Summary");
     let _ = writeln!(&mut output, "  total: {}", dashboard.task_summary.total);
     let _ = writeln!(&mut output, "  done: {}", dashboard.task_summary.done);
-    let _ = writeln!(
-        &mut output,
-        "  in_progress: {}",
-        dashboard.task_summary.in_progress
-    );
+    let _ = writeln!(&mut output, "  in_progress: {}", dashboard.task_summary.in_progress);
     let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
     let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
     if let Some(error) = dashboard.task_summary.error.as_deref() {
@@ -756,9 +654,7 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         let _ = writeln!(
             &mut output,
             "  last_run: id={} workflow_name={} status={} conclusion={} url={}",
-            run.id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "n/a".to_string()),
+            run.id.map(|id| id.to_string()).unwrap_or_else(|| "n/a".to_string()),
             run.workflow_name.as_deref().unwrap_or("n/a"),
             run.status,
             run.conclusion.as_deref().unwrap_or("n/a"),
@@ -781,25 +677,17 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
 mod tests {
     use super::*;
     use orchestrator_core::{
-        Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel,
-        Scope, TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata,
-        WorkflowDecisionRecord, WorkflowMachineState, WorkflowMetadata, WorkflowPhaseExecution,
-        WorkflowSubject,
+        Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope,
+        TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord,
+        WorkflowMachineState, WorkflowMetadata, WorkflowPhaseExecution, WorkflowSubject,
     };
     use std::collections::HashMap;
 
     fn parse_time(value: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(value)
-            .expect("timestamp should be valid RFC3339")
-            .with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(value).expect("timestamp should be valid RFC3339").with_timezone(&Utc)
     }
 
-    fn make_task(
-        id: &str,
-        title: &str,
-        status: TaskStatus,
-        completed_at: Option<DateTime<Utc>>,
-    ) -> OrchestratorTask {
+    fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<DateTime<Utc>>) -> OrchestratorTask {
         let now = parse_time("2026-02-01T00:00:00Z");
         OrchestratorTask {
             id: id.to_string(),
@@ -890,67 +778,27 @@ mod tests {
             rework_counts: HashMap::<String, u32>::new(),
             total_reworks: 0,
             decision_history: Vec::<WorkflowDecisionRecord>::new(),
-            subject: WorkflowSubject::Task {
-                id: task_id.to_string(),
-            },
+            subject: WorkflowSubject::Task { id: task_id.to_string() },
         }
     }
 
     #[test]
     fn recent_completions_are_sorted_and_limited() {
         let tasks = vec![
-            make_task(
-                "TASK-003",
-                "third",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-21T12:00:00Z")),
-            ),
-            make_task(
-                "TASK-001",
-                "first",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-20T10:00:00Z")),
-            ),
-            make_task(
-                "TASK-002",
-                "second",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-20T10:00:00Z")),
-            ),
-            make_task(
-                "TASK-004",
-                "fourth",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-19T10:00:00Z")),
-            ),
-            make_task(
-                "TASK-005",
-                "fifth",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-18T10:00:00Z")),
-            ),
-            make_task(
-                "TASK-006",
-                "sixth",
-                TaskStatus::Done,
-                Some(parse_time("2026-02-17T10:00:00Z")),
-            ),
+            make_task("TASK-003", "third", TaskStatus::Done, Some(parse_time("2026-02-21T12:00:00Z"))),
+            make_task("TASK-001", "first", TaskStatus::Done, Some(parse_time("2026-02-20T10:00:00Z"))),
+            make_task("TASK-002", "second", TaskStatus::Done, Some(parse_time("2026-02-20T10:00:00Z"))),
+            make_task("TASK-004", "fourth", TaskStatus::Done, Some(parse_time("2026-02-19T10:00:00Z"))),
+            make_task("TASK-005", "fifth", TaskStatus::Done, Some(parse_time("2026-02-18T10:00:00Z"))),
+            make_task("TASK-006", "sixth", TaskStatus::Done, Some(parse_time("2026-02-17T10:00:00Z"))),
             make_task("TASK-007", "skip-no-completed-at", TaskStatus::Done, None),
-            make_task(
-                "TASK-008",
-                "skip-cancelled",
-                TaskStatus::Cancelled,
-                Some(parse_time("2026-02-22T10:00:00Z")),
-            ),
+            make_task("TASK-008", "skip-cancelled", TaskStatus::Cancelled, Some(parse_time("2026-02-22T10:00:00Z"))),
         ];
 
         let entries = recent_completions(&tasks);
         assert_eq!(entries.len(), 5, "entries should be capped at 5");
         let ids: Vec<&str> = entries.iter().map(|entry| entry.task_id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec!["TASK-003", "TASK-001", "TASK-002", "TASK-004", "TASK-005"]
-        );
+        assert_eq!(ids, vec!["TASK-003", "TASK-001", "TASK-002", "TASK-004", "TASK-005"]);
     }
 
     #[test]
@@ -1011,12 +859,7 @@ mod tests {
                 Some("implementation"),
                 parse_time("2026-02-20T00:00:00Z"),
                 None,
-                vec![make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Running,
-                    None,
-                    None,
-                )],
+                vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
                 None,
             ),
             make_workflow(
@@ -1035,14 +878,8 @@ mod tests {
         assert_eq!(entries.len(), 3, "entries should be capped at 3");
         assert_eq!(entries[0].workflow_id, "WF-005");
         assert_eq!(entries[1].workflow_id, "WF-002");
-        assert_eq!(
-            entries[1].phase_id, "implementation",
-            "current_phase should be used when no failed phase exists"
-        );
-        assert_eq!(
-            entries[2].phase_id, "qa",
-            "latest failed phase should be selected"
-        );
+        assert_eq!(entries[1].phase_id, "implementation", "current_phase should be used when no failed phase exists");
+        assert_eq!(entries[2].phase_id, "qa", "latest failed phase should be selected");
     }
 
     #[test]
@@ -1055,18 +892,8 @@ mod tests {
             parse_time("2026-02-20T00:00:00Z"),
             Some(parse_time("2026-02-27T09:00:00Z")),
             vec![
-                make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Failed,
-                    None,
-                    Some("compile failed"),
-                ),
-                make_phase(
-                    "qa",
-                    WorkflowPhaseStatus::Failed,
-                    None,
-                    Some("tests failed"),
-                ),
+                make_phase("implementation", WorkflowPhaseStatus::Failed, None, Some("compile failed")),
+                make_phase("qa", WorkflowPhaseStatus::Failed, None, Some("tests failed")),
             ],
             None,
         );
@@ -1086,20 +913,10 @@ mod tests {
             Some("implementation"),
             parse_time("2026-02-20T00:00:00Z"),
             None,
-            vec![make_phase(
-                "implementation",
-                WorkflowPhaseStatus::Running,
-                None,
-                None,
-            )],
+            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
             None,
         )];
-        let tasks = vec![make_task(
-            "TASK-001",
-            "Implement status",
-            TaskStatus::InProgress,
-            None,
-        )];
+        let tasks = vec![make_task("TASK-001", "Implement status", TaskStatus::InProgress, None)];
 
         let assignments = active_agent_assignments(3, &workflows, &tasks);
         assert_eq!(assignments.len(), 3);
@@ -1119,12 +936,7 @@ mod tests {
                 Some("implementation"),
                 parse_time("2026-02-20T00:00:00Z"),
                 None,
-                vec![make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Running,
-                    None,
-                    None,
-                )],
+                vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
                 None,
             ),
             make_workflow(
@@ -1157,12 +969,7 @@ mod tests {
             Some("implementation"),
             parse_time("2026-02-20T00:00:00Z"),
             None,
-            vec![make_phase(
-                "implementation",
-                WorkflowPhaseStatus::Running,
-                None,
-                None,
-            )],
+            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
             None,
         )];
 
@@ -1218,9 +1025,7 @@ mod tests {
 
     #[test]
     fn ci_status_marks_gh_unavailable_without_failing() {
-        let status = ci_status_from_lookup(CiLookupOutcome::Unavailable(
-            "gh CLI is not installed".to_string(),
-        ));
+        let status = ci_status_from_lookup(CiLookupOutcome::Unavailable("gh CLI is not installed".to_string()));
         assert!(!status.available);
         assert!(status.error.is_none());
         assert_eq!(status.reason.as_deref(), Some("gh CLI is not installed"));
@@ -1255,9 +1060,7 @@ mod tests {
   }
 ]
 "#;
-        let run = parse_gh_run_list(payload)
-            .expect("payload should parse")
-            .expect("payload should include one run");
+        let run = parse_gh_run_list(payload).expect("payload should parse").expect("payload should include one run");
         assert_eq!(run.id, Some(42));
         assert_eq!(run.status, "completed");
         assert_eq!(run.conclusion.as_deref(), Some("success"));
@@ -1274,9 +1077,7 @@ mod tests {
   }
 ]
 "#;
-        let run = parse_gh_run_list(payload)
-            .expect("payload should parse")
-            .expect("payload should include one run");
+        let run = parse_gh_run_list(payload).expect("payload should parse").expect("payload should include one run");
         assert_eq!(run.id, Some(43));
         assert_eq!(run.status, "unknown");
     }
@@ -1284,9 +1085,7 @@ mod tests {
     #[test]
     fn parse_gh_run_list_rejects_invalid_payload() {
         let error = parse_gh_run_list("{invalid json").expect_err("invalid JSON should fail");
-        assert!(error
-            .to_string()
-            .contains("failed to parse gh run list JSON payload"));
+        assert!(error.to_string().contains("failed to parse gh run list JSON payload"));
     }
 
     #[test]
@@ -1322,12 +1121,7 @@ mod tests {
                 }),
                 None,
             ),
-            active_agents: ActiveAgentsSlice {
-                available: true,
-                count: 0,
-                assignments: Vec::new(),
-                error: None,
-            },
+            active_agents: ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None },
             task_summary: TaskSummarySlice {
                 available: true,
                 total: 0,
@@ -1337,16 +1131,8 @@ mod tests {
                 blocked: 0,
                 error: None,
             },
-            recent_completions: RecentCompletionsSlice {
-                available: true,
-                entries: Vec::new(),
-                error: None,
-            },
-            recent_failures: RecentFailuresSlice {
-                available: true,
-                entries: Vec::new(),
-                error: None,
-            },
+            recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
+            recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
             ci: CiStatusSlice {
                 provider: CI_PROVIDER_GITHUB,
                 available: false,
@@ -1358,18 +1144,10 @@ mod tests {
 
         let output = render_status_dashboard(&dashboard);
         let daemon_idx = output.find("Daemon").expect("daemon section should exist");
-        let agents_idx = output
-            .find("Active Agents")
-            .expect("active agents section should exist");
-        let summary_idx = output
-            .find("Task Summary")
-            .expect("task summary section should exist");
-        let completions_idx = output
-            .find("Recent Completions")
-            .expect("recent completions section should exist");
-        let failures_idx = output
-            .find("Recent Failures")
-            .expect("recent failures section should exist");
+        let agents_idx = output.find("Active Agents").expect("active agents section should exist");
+        let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+        let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
+        let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
         let ci_idx = output.find("CI Status").expect("ci section should exist");
 
         assert!(daemon_idx < agents_idx);

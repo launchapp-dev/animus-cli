@@ -45,10 +45,7 @@ pub fn search_files(
     let total = stdout.lines().count();
     let mut result = lines.join("\n");
     if total > 200 {
-        result.push_str(&format!(
-            "\n... ({} total matches, showing first 200)",
-            total
-        ));
+        result.push_str(&format!("\n... ({} total matches, showing first 200)", total));
     }
 
     Ok(result)
@@ -64,24 +61,14 @@ fn try_ripgrep(base: &Path, pattern: &str, include: Option<&str>) -> Result<std:
 
     cmd.arg(base.to_string_lossy().as_ref());
 
-    cmd.output()
-        .map_err(|e| anyhow::anyhow!("rg not available: {}", e))
+    cmd.output().map_err(|e| anyhow::anyhow!("rg not available: {}", e))
 }
 
 fn try_grep(base: &Path, pattern: &str, include: Option<&str>) -> Result<std::process::Output> {
     let mut cmd = std::process::Command::new("grep");
     cmd.arg("-rn").arg("--color=never").arg("-E").arg(pattern);
 
-    for dir in &[
-        "target",
-        ".git",
-        "node_modules",
-        ".ao",
-        "__pycache__",
-        ".next",
-        "dist",
-        "build",
-    ] {
+    for dir in &["target", ".git", "node_modules", ".ao", "__pycache__", ".next", "dist", "build"] {
         cmd.arg("--exclude-dir").arg(dir);
     }
 
@@ -91,6 +78,5 @@ fn try_grep(base: &Path, pattern: &str, include: Option<&str>) -> Result<std::pr
 
     cmd.arg(base.to_string_lossy().as_ref());
 
-    cmd.output()
-        .map_err(|e| anyhow::anyhow!("Failed to execute grep: {}", e))
+    cmd.output().map_err(|e| anyhow::anyhow!("Failed to execute grep: {}", e))
 }

@@ -9,24 +9,18 @@ pub(crate) fn parse_gemini_json_chunk(chunk: &str) -> Vec<SessionEvent> {
     }
 
     let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-        return vec![SessionEvent::TextDelta {
-            text: chunk.to_string(),
-        }];
+        return vec![SessionEvent::TextDelta { text: chunk.to_string() }];
     };
 
     let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
     if event_type == "partialResult" {
         if let Some(text) = value.pointer("/partialResult/text").and_then(Value::as_str) {
-            return vec![SessionEvent::TextDelta {
-                text: text.to_string(),
-            }];
+            return vec![SessionEvent::TextDelta { text: text.to_string() }];
         }
     }
 
     if let Some(text) = value.get("text").and_then(Value::as_str) {
-        return vec![SessionEvent::TextDelta {
-            text: text.to_string(),
-        }];
+        return vec![SessionEvent::TextDelta { text: text.to_string() }];
     }
 
     let mut events = Vec::new();
@@ -83,10 +77,7 @@ fn extract_gemini_final_text(value: &Value) -> Option<String> {
 
     if let Some(candidates) = value.get("candidates").and_then(Value::as_array) {
         for candidate in candidates {
-            if let Some(parts) = candidate
-                .pointer("/content/parts")
-                .and_then(Value::as_array)
-            {
+            if let Some(parts) = candidate.pointer("/content/parts").and_then(Value::as_array) {
                 let mut text = String::new();
                 for part in parts {
                     if let Some(segment) = part.get("text").and_then(Value::as_str) {

@@ -45,11 +45,7 @@ impl SessionBackend for ClaudeSessionBackend {
         start_claude_session(request, None).await
     }
 
-    async fn resume_session(
-        &self,
-        request: SessionRequest,
-        session_id: &str,
-    ) -> Result<SessionRun> {
+    async fn resume_session(&self, request: SessionRequest, session_id: &str) -> Result<SessionRun> {
         start_claude_session(request, Some(session_id.to_string())).await
     }
 
@@ -70,9 +66,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::super::{
-        parser::parse_claude_stdout_line, transport::claude_invocation_for_request,
-    };
+    use super::super::{parser::parse_claude_stdout_line, transport::claude_invocation_for_request};
     use super::ClaudeSessionBackend;
     use crate::session::{SessionBackend, SessionEvent, SessionRequest};
 
@@ -91,16 +85,13 @@ mod tests {
             extras: json!({}),
         };
 
-        let invocation =
-            claude_invocation_for_request(&request, None).expect("launch should build");
+        let invocation = claude_invocation_for_request(&request, None).expect("launch should build");
         assert_eq!(invocation.command, "claude");
         assert!(invocation.args.contains(&"--print".to_string()));
         assert!(invocation.args.contains(&"--verbose".to_string()));
         assert!(invocation.args.contains(&"--output-format".to_string()));
         assert!(invocation.args.contains(&"stream-json".to_string()));
-        assert!(invocation
-            .args
-            .contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(invocation.args.contains(&"--dangerously-skip-permissions".to_string()));
     }
 
     #[test]
@@ -110,10 +101,7 @@ mod tests {
         let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#;
 
         let init_events = parse_claude_stdout_line(init);
-        assert!(matches!(
-            init_events.first(),
-            Some(SessionEvent::Metadata { .. })
-        ));
+        assert!(matches!(init_events.first(), Some(SessionEvent::Metadata { .. })));
 
         let tool_events = parse_claude_stdout_line(tool_call);
         assert_eq!(
@@ -126,12 +114,7 @@ mod tests {
         );
 
         let result_events = parse_claude_stdout_line(result);
-        assert_eq!(
-            result_events,
-            vec![SessionEvent::FinalText {
-                text: "done".to_string(),
-            }]
-        );
+        assert_eq!(result_events, vec![SessionEvent::FinalText { text: "done".to_string() }]);
     }
 
     #[tokio::test]
@@ -161,10 +144,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         assert_eq!(run.selected_backend, "claude-native");
 
@@ -179,8 +159,7 @@ mod tests {
     #[cfg(unix)]
     async fn claude_backend_emits_metadata_and_final_text_from_fixture() {
         let backend = ClaudeSessionBackend::new();
-        let fixture =
-            "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl";
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl";
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),
@@ -204,10 +183,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         let mut saw_metadata = false;
         let mut saw_final_text = false;

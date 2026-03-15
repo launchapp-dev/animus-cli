@@ -62,11 +62,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(log_level).init();
 
     // Load config
-    let config = if let Some(config_path) = cli.config {
-        Config::load_from_file(&config_path)?
-    } else {
-        Config::default()
-    };
+    let config =
+        if let Some(config_path) = cli.config { Config::load_from_file(&config_path)? } else { Config::default() };
 
     // Create registry
     let mut registry = CliRegistry::new();
@@ -110,10 +107,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            println!(
-                "{}",
-                format!("\nRunning test suite: {}", test_suite.name).bold()
-            );
+            println!("{}", format!("\nRunning test suite: {}", test_suite.name).bold());
             println!("{}", "─".repeat(60));
 
             // Create test workspace directory if it doesn't exist
@@ -137,11 +131,7 @@ async fn main() -> anyhow::Result<()> {
 
             // Print results
             for result in &results {
-                let status = if result.passed {
-                    "✓ PASS".green()
-                } else {
-                    "✗ FAIL".red()
-                };
+                let status = if result.passed { "✓ PASS".green() } else { "✗ FAIL".red() };
 
                 println!(
                     "{} {} - {} ({}ms)",
@@ -168,11 +158,7 @@ async fn main() -> anyhow::Result<()> {
             println!("\n{}", "─".repeat(60));
             println!(
                 "Summary: {}/{} tests passed",
-                if passed == total {
-                    format!("{}", passed).green()
-                } else {
-                    format!("{}", passed).yellow()
-                },
+                if passed == total { format!("{}", passed).green() } else { format!("{}", passed).yellow() },
                 total
             );
         }
@@ -199,18 +185,9 @@ async fn main() -> anyhow::Result<()> {
             for cli_impl in clis_to_check {
                 let result = tester.health_check(cli_impl).await?;
 
-                let status = if result.passed {
-                    "✓ HEALTHY".green()
-                } else {
-                    "✗ UNHEALTHY".red()
-                };
+                let status = if result.passed { "✓ HEALTHY".green() } else { "✗ UNHEALTHY".red() };
 
-                println!(
-                    "{} {} ({}ms)",
-                    status,
-                    result.cli_type.display_name(),
-                    result.duration_ms
-                );
+                println!("{} {} ({}ms)", status, result.cli_type.display_name(), result.duration_ms);
 
                 if !result.output.is_empty() {
                     println!("    {}", result.output.dimmed());
@@ -238,44 +215,18 @@ async fn main() -> anyhow::Result<()> {
                 println!("\nCapabilities:");
                 println!(
                     "  File editing: {}",
-                    if metadata.capabilities.supports_file_editing {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    }
+                    if metadata.capabilities.supports_file_editing { "✓".green() } else { "✗".red() }
                 );
                 println!(
                     "  Streaming: {}",
-                    if metadata.capabilities.supports_streaming {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    }
+                    if metadata.capabilities.supports_streaming { "✓".green() } else { "✗".red() }
                 );
                 println!(
                     "  Tool use: {}",
-                    if metadata.capabilities.supports_tool_use {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    }
+                    if metadata.capabilities.supports_tool_use { "✓".green() } else { "✗".red() }
                 );
-                println!(
-                    "  Vision: {}",
-                    if metadata.capabilities.supports_vision {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    }
-                );
-                println!(
-                    "  MCP Support: {}",
-                    if metadata.capabilities.supports_mcp {
-                        "✓".green()
-                    } else {
-                        "✗".red()
-                    }
-                );
+                println!("  Vision: {}", if metadata.capabilities.supports_vision { "✓".green() } else { "✗".red() });
+                println!("  MCP Support: {}", if metadata.capabilities.supports_mcp { "✓".green() } else { "✗".red() });
                 if let Some(max_tokens) = metadata.capabilities.max_context_tokens {
                     println!("  Max context: {} tokens", max_tokens);
                 }

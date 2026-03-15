@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use protocol::{
-    AgentControlRequest, AgentRunEvent, AgentRunRequest, AgentStatusRequest, ModelStatusRequest,
-    RunId, RunnerStatusRequest,
+    AgentControlRequest, AgentRunEvent, AgentRunRequest, AgentStatusRequest, ModelStatusRequest, RunId,
+    RunnerStatusRequest,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,11 +50,7 @@ pub(super) async fn write_json_line<W: AsyncWrite + Unpin, T: serde::Serialize>(
     Ok(())
 }
 
-pub(super) async fn handle_connection<S>(
-    stream: S,
-    runner: Arc<Mutex<Runner>>,
-    connection_id: u64,
-) -> Result<()>
+pub(super) async fn handle_connection<S>(stream: S, runner: Arc<Mutex<Runner>>, connection_id: u64) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -76,11 +72,7 @@ where
     .await;
 
     if !connection_run_ids.is_empty() {
-        info!(
-            connection_id,
-            run_count = connection_run_ids.len(),
-            "Client disconnected; cancelling owned runs"
-        );
+        info!(connection_id, run_count = connection_run_ids.len(), "Client disconnected; cancelling owned runs");
         runner.lock().await.cancel_runs(&connection_run_ids);
     }
 
@@ -128,10 +120,7 @@ where
                     info!(connection_id, "IPC connection authenticated");
                 }
                 auth::AuthResult::Rejected => {
-                    info!(
-                        connection_id,
-                        "Closing unauthenticated IPC connection after auth failure"
-                    );
+                    info!(connection_id, "Closing unauthenticated IPC connection after auth failure");
                     break;
                 }
             }
@@ -268,9 +257,7 @@ mod tests {
         let (mut client, server) = tokio::io::duplex(1024);
         let server_task = tokio::spawn(handle_connection(server, runner_for_test(), 1001));
 
-        write_json_line(&mut client, &RunnerStatusRequest::default())
-            .await
-            .expect("write runner status request");
+        write_json_line(&mut client, &RunnerStatusRequest::default()).await.expect("write runner status request");
 
         let mut reader = BufReader::new(client);
         let mut line = String::new();
@@ -280,13 +267,9 @@ mod tests {
             .expect("read auth response");
         assert!(read_len > 0, "expected auth rejection response");
 
-        let response: IpcAuthResult =
-            serde_json::from_str(line.trim()).expect("parse auth rejection payload");
+        let response: IpcAuthResult = serde_json::from_str(line.trim()).expect("parse auth rejection payload");
         assert!(!response.ok, "non-auth first payload must be rejected");
-        assert_eq!(
-            response.code,
-            Some(IpcAuthFailureCode::MalformedAuthPayload)
-        );
+        assert_eq!(response.code, Some(IpcAuthFailureCode::MalformedAuthPayload));
 
         line.clear();
         let eof_len = tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut line))
@@ -295,10 +278,7 @@ mod tests {
             .expect("read socket close");
         assert_eq!(eof_len, 0, "server should close connection after rejection");
 
-        server_task
-            .await
-            .expect("join server task")
-            .expect("handle connection");
+        server_task.await.expect("join server task").expect("handle connection");
     }
 
     #[tokio::test]
@@ -307,21 +287,12 @@ mod tests {
         let server_task = tokio::spawn(handle_connection(server, runner_for_test(), 1002));
 
         let mut buf = [0_u8; 1];
-        let read_len = tokio::time::timeout(
-            AUTH_PAYLOAD_TIMEOUT + Duration::from_secs(1),
-            client.read(&mut buf),
-        )
-        .await
-        .expect("auth-timeout close window exceeded")
-        .expect("read after timeout close");
-        assert_eq!(
-            read_len, 0,
-            "server should close idle unauthenticated connection"
-        );
-
-        server_task
+        let read_len = tokio::time::timeout(AUTH_PAYLOAD_TIMEOUT + Duration::from_secs(1), client.read(&mut buf))
             .await
-            .expect("join server task")
-            .expect("handle connection");
+            .expect("auth-timeout close window exceeded")
+            .expect("read after timeout close");
+        assert_eq!(read_len, 0, "server should close idle unauthenticated connection");
+
+        server_task.await.expect("join server task").expect("handle connection");
     }
 }

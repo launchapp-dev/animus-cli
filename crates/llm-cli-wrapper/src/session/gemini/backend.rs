@@ -45,11 +45,7 @@ impl SessionBackend for GeminiSessionBackend {
         start_gemini_session(request, None).await
     }
 
-    async fn resume_session(
-        &self,
-        request: SessionRequest,
-        session_id: &str,
-    ) -> Result<SessionRun> {
+    async fn resume_session(&self, request: SessionRequest, session_id: &str) -> Result<SessionRun> {
         start_gemini_session(request, Some(session_id.to_string())).await
     }
 
@@ -89,8 +85,7 @@ mod tests {
             extras: json!({}),
         };
 
-        let invocation =
-            gemini_invocation_for_request(&request, None).expect("launch should build");
+        let invocation = gemini_invocation_for_request(&request, None).expect("launch should build");
         assert_eq!(invocation.command, "gemini");
         assert!(invocation.args.contains(&"--output-format".to_string()));
         assert!(invocation.args.contains(&"json".to_string()));
@@ -99,13 +94,10 @@ mod tests {
 
     #[test]
     fn gemini_parser_emits_metadata_and_final_text() {
-        let result =
-            r#"{"session_id":"session-123","response":"done","stats":{"tools":{"totalCalls":0}}}"#;
+        let result = r#"{"session_id":"session-123","response":"done","stats":{"tools":{"totalCalls":0}}}"#;
         let events = parse_gemini_json_chunk(result);
 
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, SessionEvent::Metadata { .. })));
+        assert!(events.iter().any(|event| matches!(event, SessionEvent::Metadata { .. })));
         assert!(events.iter().any(|event| matches!(
             event,
             SessionEvent::FinalText { text } if text == "done"
@@ -139,10 +131,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         assert_eq!(run.selected_backend, "gemini-native");
 
@@ -157,8 +146,7 @@ mod tests {
     #[cfg(unix)]
     async fn gemini_backend_emits_metadata_and_final_text_from_fixture() {
         let backend = GeminiSessionBackend::new();
-        let fixture =
-            "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),
@@ -182,10 +170,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         let mut saw_metadata = false;
         let mut saw_final_text = false;

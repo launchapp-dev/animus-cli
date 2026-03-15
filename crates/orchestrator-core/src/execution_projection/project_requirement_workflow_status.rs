@@ -39,16 +39,9 @@ pub async fn project_requirement_workflow_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority,
-        RequirementStatus,
-    };
+    use crate::{InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus};
 
-    async fn upsert_requirement(
-        hub: &Arc<InMemoryServiceHub>,
-        id: &str,
-        status: RequirementStatus,
-    ) -> RequirementItem {
+    async fn upsert_requirement(hub: &Arc<InMemoryServiceHub>, id: &str, status: RequirementStatus) -> RequirementItem {
         let now = Utc::now();
         let requirement = RequirementItem {
             id: id.to_string(),
@@ -71,10 +64,7 @@ mod tests {
             updated_at: now,
         };
 
-        hub.planning()
-            .upsert_requirement(requirement.clone())
-            .await
-            .expect("upsert requirement");
+        hub.planning().upsert_requirement(requirement.clone()).await.expect("upsert requirement");
         requirement
     }
 
@@ -83,19 +73,11 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_requirement(&hub, "REQ-1", RequirementStatus::Refined).await;
 
-        project_requirement_workflow_status(
-            hub.clone(),
-            "REQ-1",
-            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
-        )
-        .await
-        .expect("projection should succeed");
-
-        let updated = hub
-            .planning()
-            .get_requirement("REQ-1")
+        project_requirement_workflow_status(hub.clone(), "REQ-1", REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
             .await
-            .expect("requirement should exist");
+            .expect("projection should succeed");
+
+        let updated = hub.planning().get_requirement("REQ-1").await.expect("requirement should exist");
         assert_eq!(updated.status, RequirementStatus::Planned);
     }
 
@@ -104,19 +86,11 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_requirement(&hub, "REQ-2", RequirementStatus::Refined).await;
 
-        project_requirement_workflow_status(
-            hub.clone(),
-            "REQ-2",
-            REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
-        )
-        .await
-        .expect("projection should succeed");
-
-        let updated = hub
-            .planning()
-            .get_requirement("REQ-2")
+        project_requirement_workflow_status(hub.clone(), "REQ-2", REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF)
             .await
-            .expect("requirement should exist");
+            .expect("projection should succeed");
+
+        let updated = hub.planning().get_requirement("REQ-2").await.expect("requirement should exist");
         assert_eq!(updated.status, RequirementStatus::InProgress);
     }
 
@@ -129,11 +103,7 @@ mod tests {
             .await
             .expect("projection should ignore unrelated workflow refs");
 
-        let updated = hub
-            .planning()
-            .get_requirement("REQ-3")
-            .await
-            .expect("requirement should exist");
+        let updated = hub.planning().get_requirement("REQ-3").await.expect("requirement should exist");
         assert_eq!(updated.status, RequirementStatus::Refined);
     }
 }

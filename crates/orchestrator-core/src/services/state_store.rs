@@ -31,10 +31,7 @@ pub(super) struct CoreState {
 
 impl CoreState {
     pub(super) fn default_with_stopped() -> Self {
-        Self {
-            daemon_status: DaemonStatus::Stopped,
-            ..Self::default()
-        }
+        Self { daemon_status: DaemonStatus::Stopped, ..Self::default() }
     }
 }
 
@@ -44,15 +41,9 @@ fn normalize_legacy_task(task: &mut serde_json::Value) {
     };
 
     if !task_obj.contains_key("assignee") || task_obj["assignee"].is_null() {
-        task_obj.insert(
-            "assignee".to_string(),
-            serde_json::json!({ "type": "unassigned" }),
-        );
+        task_obj.insert("assignee".to_string(), serde_json::json!({ "type": "unassigned" }));
     } else if let Some(user_id) = task_obj["assignee"].as_str() {
-        task_obj.insert(
-            "assignee".to_string(),
-            serde_json::json!({ "type": "human", "user_id": user_id }),
-        );
+        task_obj.insert("assignee".to_string(), serde_json::json!({ "type": "human", "user_id": user_id }));
     }
 
     if let Some(status) = task_obj.get("status").and_then(|value| value.as_str()) {
@@ -63,17 +54,11 @@ fn normalize_legacy_task(task: &mut serde_json::Value) {
             _ => None,
         };
         if let Some(normalized) = normalized {
-            task_obj.insert(
-                "status".to_string(),
-                serde_json::Value::String(normalized.to_string()),
-            );
+            task_obj.insert("status".to_string(), serde_json::Value::String(normalized.to_string()));
         }
     }
 
-    if let Some(metadata) = task_obj
-        .get_mut("metadata")
-        .and_then(|value| value.as_object_mut())
-    {
+    if let Some(metadata) = task_obj.get_mut("metadata").and_then(|value| value.as_object_mut()) {
         if !metadata.contains_key("started_at") {
             metadata.insert("started_at".to_string(), serde_json::Value::Null);
         }
@@ -86,17 +71,10 @@ fn normalize_legacy_task(task: &mut serde_json::Value) {
     }
 }
 
-fn default_legacy_project_config(
-    project_type: &str,
-    tech_stack: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    let allowed_models: Vec<String> = protocol::default_model_specs()
-        .into_iter()
-        .map(|(model_id, _tool)| model_id)
-        .collect();
-    let default_model = protocol::default_model_for_tool("claude")
-        .unwrap_or("sonnet")
-        .to_string();
+fn default_legacy_project_config(project_type: &str, tech_stack: Vec<serde_json::Value>) -> serde_json::Value {
+    let allowed_models: Vec<String> =
+        protocol::default_model_specs().into_iter().map(|(model_id, _tool)| model_id).collect();
+    let default_model = protocol::default_model_for_tool("claude").unwrap_or("sonnet").to_string();
 
     serde_json::json!({
         "project_type": project_type,
@@ -123,27 +101,15 @@ fn normalize_legacy_project(project: &mut serde_json::Value) {
     };
 
     if !project_obj.contains_key("config") || project_obj["config"].is_null() {
-        let project_type = project_obj
-            .get("project_type")
-            .and_then(|value| value.as_str())
-            .unwrap_or("other");
-        let tech_stack = project_obj
-            .get("tech_stack")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let project_type = project_obj.get("project_type").and_then(|value| value.as_str()).unwrap_or("other");
+        let tech_stack = project_obj.get("tech_stack").and_then(|value| value.as_array()).cloned().unwrap_or_default();
 
-        project_obj.insert(
-            "config".to_string(),
-            default_legacy_project_config(project_type, tech_stack),
-        );
+        project_obj.insert("config".to_string(), default_legacy_project_config(project_type, tech_stack));
     }
 
     if !project_obj.contains_key("metadata") || project_obj["metadata"].is_null() {
-        let description = project_obj
-            .get("description")
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string());
+        let description =
+            project_obj.get("description").and_then(|value| value.as_str()).map(|value| value.to_string());
 
         project_obj.insert(
             "metadata".to_string(),
@@ -163,12 +129,8 @@ fn deserialize_core_state(contents: &str) -> Result<CoreState> {
         return Ok(state);
     }
 
-    let mut raw: serde_json::Value =
-        serde_json::from_str(contents).context("core-state JSON is invalid")?;
-    if let Some(projects) = raw
-        .get_mut("projects")
-        .and_then(|value| value.as_object_mut())
-    {
+    let mut raw: serde_json::Value = serde_json::from_str(contents).context("core-state JSON is invalid")?;
+    if let Some(projects) = raw.get_mut("projects").and_then(|value| value.as_object_mut()) {
         for project in projects.values_mut() {
             normalize_legacy_project(project);
         }
@@ -179,8 +141,7 @@ fn deserialize_core_state(contents: &str) -> Result<CoreState> {
         }
     }
 
-    serde_json::from_value::<CoreState>(raw)
-        .context("core-state JSON does not match expected schema")
+    serde_json::from_value::<CoreState>(raw).context("core-state JSON does not match expected schema")
 }
 
 pub(super) fn load_core_state(state_file: &Path) -> CoreState {
@@ -203,10 +164,7 @@ pub(super) fn load_core_state_for_mutation(state_file: &Path) -> Result<CoreStat
     let contents = std::fs::read_to_string(state_file)
         .with_context(|| format!("failed to read core-state at {}", state_file.display()))?;
     deserialize_core_state(&contents).with_context(|| {
-        format!(
-            "failed to parse core-state at {}; refusing mutation to avoid data loss",
-            state_file.display()
-        )
+        format!("failed to parse core-state at {}; refusing mutation to avoid data loss", state_file.display())
     })
 }
 
@@ -232,8 +190,7 @@ mod tests {
         let state_path = temp.path().join("core-state.json");
         std::fs::write(&state_path, "{not-valid-json").expect("write malformed state");
 
-        let error = load_core_state_for_mutation(&state_path)
-            .expect_err("invalid core-state should fail closed");
+        let error = load_core_state_for_mutation(&state_path).expect_err("invalid core-state should fail closed");
         let message = format!("{error:#}");
         assert!(message.contains("refusing mutation to avoid data loss"));
     }

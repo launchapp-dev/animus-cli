@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-pub use orchestrator_store::{
-    project_state_dir, read_json_or_default, write_json_atomic, write_json_pretty,
-};
+pub use orchestrator_store::{project_state_dir, read_json_or_default, write_json_atomic, write_json_pretty};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -157,20 +155,10 @@ pub fn compute_entity_review_status(
         .collect();
     decisions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
-    let latest_po = decisions
-        .iter()
-        .rev()
-        .find(|review| review.reviewer_role == ReviewerRole::Po);
-    let latest_em = decisions
-        .iter()
-        .rev()
-        .find(|review| review.reviewer_role == ReviewerRole::Em);
-    let po_approved = latest_po
-        .map(|review| review.decision == ReviewDecision::Approve)
-        .unwrap_or(false);
-    let em_approved = latest_em
-        .map(|review| review.decision == ReviewDecision::Approve)
-        .unwrap_or(false);
+    let latest_po = decisions.iter().rev().find(|review| review.reviewer_role == ReviewerRole::Po);
+    let latest_em = decisions.iter().rev().find(|review| review.reviewer_role == ReviewerRole::Em);
+    let po_approved = latest_po.map(|review| review.decision == ReviewDecision::Approve).unwrap_or(false);
+    let em_approved = latest_em.map(|review| review.decision == ReviewDecision::Approve).unwrap_or(false);
 
     EntityReviewStatus {
         entity_type: serde_json::to_string(&entity_type)

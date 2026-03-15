@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use orchestrator_core::{
-    services::ServiceHub, RequirementsExecutionInput, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
-};
+use orchestrator_core::{services::ServiceHub, RequirementsExecutionInput, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF};
 
 mod graph;
 mod mockups;
@@ -11,8 +9,7 @@ mod recommendations;
 mod state;
 
 use crate::{
-    print_ok, print_value, RequirementGraphCommand, RequirementsCommand, RequirementsExecuteArgs,
-    WorkflowExecuteArgs,
+    print_ok, print_value, RequirementGraphCommand, RequirementsCommand, RequirementsExecuteArgs, WorkflowExecuteArgs,
 };
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
@@ -35,9 +32,7 @@ pub(crate) async fn handle_requirements(
             super::ops_workflow::execute::handle_workflow_execute(execute_args, hub.clone(), project_root, json).await
         }
         RequirementsCommand::List => print_value(planning.list_requirements().await?, json),
-        RequirementsCommand::Get(args) => {
-            print_value(planning.get_requirement(&args.id).await?, json)
-        }
+        RequirementsCommand::Get(args) => print_value(planning.get_requirement(&args.id).await?, json),
         RequirementsCommand::Create(args) => {
             let created = create_requirement_cli(project_root, args)?;
             print_value(created, json)
@@ -62,23 +57,15 @@ pub(crate) async fn handle_requirements(
                 print_value(graph, json)
             }
         },
-        RequirementsCommand::Mockups { command } => {
-            handle_requirement_mockups(command, project_root, json).await
-        }
+        RequirementsCommand::Mockups { command } => handle_requirement_mockups(command, project_root, json).await,
         RequirementsCommand::Recommendations { command } => {
             handle_requirement_recommendations(command, hub.clone(), project_root, json).await
         }
     }
 }
 
-fn build_requirements_execute_args(
-    args: RequirementsExecuteArgs,
-) -> Result<WorkflowExecuteArgs> {
-    let mut requirement_ids = args
-        .requirement_ids
-        .into_iter()
-        .filter(|id| !id.trim().is_empty())
-        .collect::<Vec<_>>();
+fn build_requirements_execute_args(args: RequirementsExecuteArgs) -> Result<WorkflowExecuteArgs> {
+    let mut requirement_ids = args.requirement_ids.into_iter().filter(|id| !id.trim().is_empty()).collect::<Vec<_>>();
 
     if requirement_ids.is_empty() {
         return Err(anyhow!(

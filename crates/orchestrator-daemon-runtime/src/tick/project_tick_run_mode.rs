@@ -1,8 +1,6 @@
 use chrono::NaiveTime;
 
-use crate::{
-    DaemonRuntimeOptions, ProjectTickContext, ProjectTickPreparation, ProjectTickSnapshot,
-};
+use crate::{DaemonRuntimeOptions, ProjectTickContext, ProjectTickPreparation, ProjectTickSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectTickRunMode {
@@ -32,10 +30,7 @@ impl ProjectTickRunMode {
             options,
             now,
             pool_draining,
-            snapshot
-                .daemon_health
-                .as_ref()
-                .and_then(|health| health.pool_size),
+            snapshot.daemon_health.as_ref().and_then(|health| health.pool_size),
             self.active_process_count,
         )
     }

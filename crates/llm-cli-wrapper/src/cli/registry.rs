@@ -22,9 +22,7 @@ pub struct CliRegistry {
 
 impl CliRegistry {
     pub fn new() -> Self {
-        Self {
-            clis: HashMap::new(),
-        }
+        Self { clis: HashMap::new() }
     }
 
     /// Discover all available CLIs on the system
@@ -34,14 +32,9 @@ impl CliRegistry {
         let mut discovered = 0;
 
         // Try to discover each CLI type
-        for cli_type in [
-            CliType::Claude,
-            CliType::Codex,
-            CliType::Gemini,
-            CliType::OpenCode,
-            CliType::OaiRunner,
-            CliType::Aider,
-        ] {
+        for cli_type in
+            [CliType::Claude, CliType::Codex, CliType::Gemini, CliType::OpenCode, CliType::OaiRunner, CliType::Aider]
+        {
             if let Ok(path) = which(cli_type.executable_name()) {
                 info!("Found {} at {:?}", cli_type.display_name(), path);
 
@@ -92,11 +85,7 @@ impl CliRegistry {
         statuses
     }
 
-    async fn create_cli_instance(
-        &self,
-        cli_type: CliType,
-        path: PathBuf,
-    ) -> Result<Arc<dyn CliInterface>> {
+    async fn create_cli_instance(&self, cli_type: CliType, path: PathBuf) -> Result<Arc<dyn CliInterface>> {
         let metadata = CliMetadata::new(cli_type, path);
 
         let cli: Arc<dyn CliInterface> = match cli_type {
@@ -105,12 +94,7 @@ impl CliRegistry {
             CliType::Gemini => Arc::new(GeminiCli::new(metadata)),
             CliType::OpenCode => Arc::new(OpenCodeCli::new(metadata)),
             CliType::OaiRunner => Arc::new(OaiRunnerCli::new(metadata)),
-            _ => {
-                return Err(Error::CliNotFound(format!(
-                    "No implementation for {:?}",
-                    cli_type
-                )))
-            }
+            _ => return Err(Error::CliNotFound(format!("No implementation for {:?}", cli_type))),
         };
 
         Ok(cli)

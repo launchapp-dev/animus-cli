@@ -47,8 +47,7 @@ pub trait GitProvider: Send + Sync {
 
     async fn push_branch(&self, cwd: &str, remote: &str, branch: &str) -> Result<()>;
 
-    async fn is_branch_merged(&self, project_root: &str, branch_name: &str)
-        -> Result<Option<bool>>;
+    async fn is_branch_merged(&self, project_root: &str, branch_name: &str) -> Result<Option<bool>>;
 
     async fn merge_branch(
         &self,
@@ -73,46 +72,28 @@ pub struct BuiltinGitProvider {
 
 impl BuiltinGitProvider {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
-        Self {
-            project_root: project_root.into(),
-        }
+        Self { project_root: project_root.into() }
     }
 
     async fn run_git(&self, args: &[String], cwd: Option<&str>) -> Result<std::process::Output> {
         let cwd = cwd.map_or(self.project_root.as_path(), Path::new);
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .await?;
+        let output = Command::new("git").args(args).current_dir(cwd).output().await?;
         Ok(output)
     }
 
     async fn run_gh(&self, args: &[String], cwd: Option<&str>) -> Result<std::process::Output> {
         let cwd = cwd.map_or(self.project_root.as_path(), Path::new);
-        let output = Command::new("gh")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .await?;
+        let output = Command::new("gh").args(args).current_dir(cwd).output().await?;
         Ok(output)
     }
 
-    fn command_failed(
-        output: &std::process::Output,
-        command: &str,
-        args: &[String],
-    ) -> anyhow::Error {
+    fn command_failed(output: &std::process::Output, command: &str, args: &[String]) -> anyhow::Error {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::anyhow!(
             "{command} {} failed (exit {}): stdout: {stdout}, stderr: {stderr}",
             args.join(" "),
-            output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
+            output.status.code().map(|code| code.to_string()).unwrap_or_else(|| "unknown".to_string())
         )
     }
 }
@@ -137,11 +118,7 @@ impl GitProvider for GitHubProvider {
         todo!()
     }
 
-    async fn is_branch_merged(
-        &self,
-        _project_root: &str,
-        _branch_name: &str,
-    ) -> Result<Option<bool>> {
+    async fn is_branch_merged(&self, _project_root: &str, _branch_name: &str) -> Result<Option<bool>> {
         todo!()
     }
 
@@ -195,11 +172,7 @@ impl GitProvider for BuiltinGitProvider {
     }
 
     async fn remove_worktree(&self, _project_root: &str, worktree_path: &str) -> Result<()> {
-        let args = vec![
-            "worktree".to_string(),
-            "remove".to_string(),
-            worktree_path.to_string(),
-        ];
+        let args = vec!["worktree".to_string(), "remove".to_string(), worktree_path.to_string()];
         let output = self.run_git(&args, None).await?;
 
         if !output.status.success() {
@@ -210,12 +183,7 @@ impl GitProvider for BuiltinGitProvider {
     }
 
     async fn push_branch(&self, _cwd: &str, _remote: &str, branch: &str) -> Result<()> {
-        let args = vec![
-            "push".to_string(),
-            "-u".to_string(),
-            "origin".to_string(),
-            branch.to_string(),
-        ];
+        let args = vec!["push".to_string(), "-u".to_string(), "origin".to_string(), branch.to_string()];
         let output = self.run_git(&args, None).await?;
 
         if !output.status.success() {
@@ -225,16 +193,8 @@ impl GitProvider for BuiltinGitProvider {
         Ok(())
     }
 
-    async fn is_branch_merged(
-        &self,
-        _project_root: &str,
-        branch_name: &str,
-    ) -> Result<Option<bool>> {
-        let args = vec![
-            "branch".to_string(),
-            "--merged".to_string(),
-            "main".to_string(),
-        ];
+    async fn is_branch_merged(&self, _project_root: &str, branch_name: &str) -> Result<Option<bool>> {
+        let args = vec!["branch".to_string(), "--merged".to_string(), "main".to_string()];
         let output = self.run_git(&args, None).await?;
 
         if !output.status.success() {
@@ -256,21 +216,14 @@ impl GitProvider for BuiltinGitProvider {
         _target_branch: &str,
         _no_fast_forward: bool,
     ) -> Result<MergeResult> {
-        let args = vec![
-            "merge".to_string(),
-            source_branch.to_string(),
-            "--no-edit".to_string(),
-        ];
+        let args = vec!["merge".to_string(), source_branch.to_string(), "--no-edit".to_string()];
         let output = self.run_git(&args, None).await?;
 
         if !output.status.success() {
             return Err(Self::command_failed(&output, "git", &args));
         }
 
-        Ok(MergeResult {
-            merged: true,
-            conflicted_files: vec![],
-        })
+        Ok(MergeResult { merged: true, conflicted_files: vec![] })
     }
 
     async fn create_pull_request(&self, input: CreatePrInput) -> Result<PullRequestInfo> {
@@ -296,15 +249,7 @@ impl GitProvider for BuiltinGitProvider {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(PullRequestInfo {
-            id: None,
-            number: None,
-            url: if stdout.is_empty() {
-                None
-            } else {
-                Some(stdout)
-            },
-        })
+        Ok(PullRequestInfo { id: None, number: None, url: if stdout.is_empty() { None } else { Some(stdout) } })
     }
 
     async fn enable_auto_merge(&self, _cwd: &str, head_branch: &str) -> Result<()> {

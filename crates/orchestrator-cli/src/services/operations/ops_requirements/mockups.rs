@@ -68,11 +68,7 @@ fn save_mockups(project_root: &str, state: &MockupState) -> Result<()> {
     write_json_pretty(&mockups_path(project_root), state)
 }
 
-pub(super) async fn handle_requirement_mockups(
-    command: MockupCommand,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(super) async fn handle_requirement_mockups(command: MockupCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         MockupCommand::List => print_value(load_mockups(project_root)?.mockups, json),
         MockupCommand::Create(args) => {
@@ -94,9 +90,7 @@ pub(super) async fn handle_requirement_mockups(
 
             let now = Utc::now().to_rfc3339();
             let record = MockupRecord {
-                id: input
-                    .id
-                    .unwrap_or_else(|| format!("MOCK-{}", Uuid::new_v4().simple())),
+                id: input.id.unwrap_or_else(|| format!("MOCK-{}", Uuid::new_v4().simple())),
                 name: input.name,
                 description: input.description,
                 mockup_type: input.mockup_type.unwrap_or_else(|| "wireframe".to_string()),
@@ -118,11 +112,7 @@ pub(super) async fn handle_requirement_mockups(
                 .find(|mockup| mockup.id == args.id)
                 .ok_or_else(|| not_found_error(format!("mockup not found: {}", args.id)))?;
             for requirement_id in args.requirement_id {
-                if !mockup
-                    .requirement_ids
-                    .iter()
-                    .any(|existing| existing == &requirement_id)
-                {
+                if !mockup.requirement_ids.iter().any(|existing| existing == &requirement_id) {
                     mockup.requirement_ids.push(requirement_id);
                 }
             }
@@ -147,9 +137,7 @@ pub(super) async fn handle_requirement_mockups(
                 .files
                 .iter()
                 .find(|file| file.relative_path == args.relative_path)
-                .ok_or_else(|| {
-                    not_found_error(format!("mockup file not found: {}", args.relative_path))
-                })?;
+                .ok_or_else(|| not_found_error(format!("mockup file not found: {}", args.relative_path)))?;
             print_value(file, json)
         }
     }

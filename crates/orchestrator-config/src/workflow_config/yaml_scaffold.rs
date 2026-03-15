@@ -51,21 +51,14 @@ tools_allowlist:
 
 pub fn ensure_workflow_yaml_scaffold(project_root: &Path) -> Result<Vec<PathBuf>> {
     let workflows_dir = yaml_workflows_dir(project_root);
-    fs::create_dir_all(&workflows_dir)
-        .with_context(|| format!("failed to create {}", workflows_dir.display()))?;
+    fs::create_dir_all(&workflows_dir).with_context(|| format!("failed to create {}", workflows_dir.display()))?;
 
     let single_file = project_root.join(".ao").join("workflows.yaml");
     let has_existing_yaml = single_file.exists()
         || fs::read_dir(&workflows_dir)
             .with_context(|| format!("failed to read {}", workflows_dir.display()))?
             .filter_map(|entry| entry.ok())
-            .any(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-            });
+            .any(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false));
 
     if has_existing_yaml {
         return Ok(Vec::new());

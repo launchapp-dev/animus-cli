@@ -44,5 +44,4 @@ impl Config {
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
-
 }

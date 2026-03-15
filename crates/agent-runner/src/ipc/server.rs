@@ -53,19 +53,13 @@ impl IpcServer {
                 socket_path = %socket_path.display(),
                 "IPC endpoint configured for unix socket"
             );
-            Ok(Self {
-                endpoint: IpcEndpoint::Unix(socket_path),
-                runner,
-            })
+            Ok(Self { endpoint: IpcEndpoint::Unix(socket_path), runner })
         }
 
         #[cfg(not(unix))]
         {
             info!("IPC endpoint configured for TCP loopback");
-            Ok(Self {
-                endpoint: IpcEndpoint::Tcp("127.0.0.1:9001".to_string()),
-                runner,
-            })
+            Ok(Self { endpoint: IpcEndpoint::Tcp("127.0.0.1:9001".to_string()), runner })
         }
     }
 
@@ -82,12 +76,8 @@ impl IpcServer {
         match self.endpoint {
             #[cfg(unix)]
             IpcEndpoint::Unix(socket_path) => {
-                let listener = UnixListener::bind(&socket_path).with_context(|| {
-                    format!(
-                        "Failed to bind IPC unix socket at {}",
-                        socket_path.display()
-                    )
-                })?;
+                let listener = UnixListener::bind(&socket_path)
+                    .with_context(|| format!("Failed to bind IPC unix socket at {}", socket_path.display()))?;
                 let _socket_guard = SocketCleanupGuard::new(socket_path.clone());
 
                 info!(endpoint = %socket_path.display(), "IPC server listening on unix socket");
@@ -99,9 +89,7 @@ impl IpcServer {
                             info!(connection_id, "Client connected via unix socket");
                             let runner = Arc::clone(&self.runner);
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    router::handle_connection(stream, runner, connection_id).await
-                                {
+                                if let Err(e) = router::handle_connection(stream, runner, connection_id).await {
                                     error!(connection_id, error = %e, "Connection error");
                                 }
                                 info!(connection_id, "Connection closed");
@@ -113,9 +101,7 @@ impl IpcServer {
             }
             #[cfg(not(unix))]
             IpcEndpoint::Tcp(address) => {
-                let listener = TcpListener::bind(&address)
-                    .await
-                    .context("Failed to bind IPC server")?;
+                let listener = TcpListener::bind(&address).await.context("Failed to bind IPC server")?;
 
                 info!("IPC server listening on tcp://{}", address);
 
@@ -126,9 +112,7 @@ impl IpcServer {
                             info!(connection_id, %addr, "Client connected over TCP");
                             let runner = Arc::clone(&self.runner);
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    router::handle_connection(stream, runner, connection_id).await
-                                {
+                                if let Err(e) = router::handle_connection(stream, runner, connection_id).await {
                                     error!(connection_id, error = %e, "Connection error");
                                 }
                                 info!(connection_id, "Connection closed");
@@ -145,31 +129,20 @@ impl IpcServer {
 #[cfg(unix)]
 fn prepare_socket_path(socket_path: &Path) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create agent runner socket directory {}",
-                parent.display()
-            )
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create agent runner socket directory {}", parent.display()))?;
     }
 
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(socket_path) {
-            Ok(_) => bail!(
-                "IPC socket already in use at {} (runner likely already running)",
-                socket_path.display()
-            ),
+            Ok(_) => bail!("IPC socket already in use at {} (runner likely already running)", socket_path.display()),
             Err(_) => {
                 warn!(
                     socket_path = %socket_path.display(),
                     "Found stale socket path; removing before bind"
                 );
-                std::fs::remove_file(socket_path).with_context(|| {
-                    format!(
-                        "Failed to remove stale agent runner socket {}",
-                        socket_path.display()
-                    )
-                })?;
+                std::fs::remove_file(socket_path)
+                    .with_context(|| format!("Failed to remove stale agent runner socket {}", socket_path.display()))?;
             }
         }
     }
@@ -194,11 +167,7 @@ impl Drop for SocketCleanupGuard {
     fn drop(&mut self) {
         if self.path.exists() {
             if let Err(e) = std::fs::remove_file(&self.path) {
-                warn!(
-                    "Failed to remove agent runner socket on shutdown {}: {}",
-                    self.path.display(),
-                    e
-                );
+                warn!("Failed to remove agent runner socket on shutdown {}: {}", self.path.display(), e);
             }
         }
     }

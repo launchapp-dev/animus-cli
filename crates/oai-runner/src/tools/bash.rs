@@ -2,11 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use std::time::Duration;
 
-pub fn execute_command(
-    working_dir: &Path,
-    command: &str,
-    timeout_secs: Option<u64>,
-) -> Result<String> {
+pub fn execute_command(working_dir: &Path, command: &str, timeout_secs: Option<u64>) -> Result<String> {
     let timeout = Duration::from_secs(timeout_secs.unwrap_or(120));
 
     let child = std::process::Command::new("sh")
@@ -20,13 +16,7 @@ pub fn execute_command(
 
     let output = match wait_with_timeout(child, timeout) {
         Ok(output) => output,
-        Err(e) => {
-            return Ok(format!(
-                "Command timed out after {}s: {}",
-                timeout.as_secs(),
-                e
-            ))
-        }
+        Err(e) => return Ok(format!("Command timed out after {}s: {}", timeout.as_secs(), e)),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -51,19 +41,13 @@ pub fn execute_command(
 
     if result.len() > 50_000 {
         let truncated = &result[..50_000];
-        return Ok(format!(
-            "{}...\n[output truncated at 50000 chars]",
-            truncated
-        ));
+        return Ok(format!("{}...\n[output truncated at 50000 chars]", truncated));
     }
 
     Ok(result)
 }
 
-fn wait_with_timeout(
-    child: std::process::Child,
-    timeout: Duration,
-) -> Result<std::process::Output> {
+fn wait_with_timeout(child: std::process::Child, timeout: Duration) -> Result<std::process::Output> {
     let start = std::time::Instant::now();
     let mut child = child;
 

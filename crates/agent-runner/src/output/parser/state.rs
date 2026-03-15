@@ -36,10 +36,7 @@ impl OutputParser {
         let mut events = Vec::new();
 
         if let Some((tool_name, parameters)) = parse_json_tool_call(line) {
-            events.push(ParsedEvent::ToolCall {
-                tool_name,
-                parameters,
-            });
+            events.push(ParsedEvent::ToolCall { tool_name, parameters });
         }
 
         if line.contains("<thinking>") {
@@ -78,12 +75,9 @@ impl OutputParser {
             self.in_tool_call = false;
             if let Some(tool_name) = self.current_tool.take() {
                 let tool_content = self.tool_buffer.clone();
-                let parameters = parse_xml_tool_parameters(&tool_content)
-                    .unwrap_or_else(|| json!({ "content": tool_content }));
-                events.push(ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                });
+                let parameters =
+                    parse_xml_tool_parameters(&tool_content).unwrap_or_else(|| json!({ "content": tool_content }));
+                events.push(ParsedEvent::ToolCall { tool_name, parameters });
                 self.tool_buffer.clear();
             }
         }
@@ -119,16 +113,14 @@ impl OutputParser {
                     self.json_accum.clear();
                     self.json_depth = 0;
                     let text = match extract_text_from_line(&accumulated, &self.tool) {
-                        NormalizedTextEvent::TextChunk { text }
-                        | NormalizedTextEvent::FinalResult { text } => text,
+                        NormalizedTextEvent::TextChunk { text } | NormalizedTextEvent::FinalResult { text } => text,
                         NormalizedTextEvent::Ignored => accumulated,
                     };
                     events.push(ParsedEvent::Output(text));
                 }
             } else {
                 let text = match extract_text_from_line(line, &self.tool) {
-                    NormalizedTextEvent::TextChunk { text }
-                    | NormalizedTextEvent::FinalResult { text } => text,
+                    NormalizedTextEvent::TextChunk { text } | NormalizedTextEvent::FinalResult { text } => text,
                     NormalizedTextEvent::Ignored => line.to_string(),
                 };
                 events.push(ParsedEvent::Output(text));

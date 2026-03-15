@@ -11,27 +11,13 @@ pub struct ProjectTickContext {
 }
 
 impl ProjectTickContext {
-    pub fn load(
-        project_root: &str,
-        options: &DaemonRuntimeOptions,
-        now: NaiveTime,
-        pool_draining: bool,
-    ) -> Self {
+    pub fn load(project_root: &str, options: &DaemonRuntimeOptions, now: NaiveTime, pool_draining: bool) -> Self {
         let _ = orchestrator_core::ensure_workflow_config_compiled(Path::new(project_root));
         let active_hours = load_active_hours(project_root);
-        let initial_preparation = ProjectTickPreparation::build(
-            options,
-            active_hours.as_deref(),
-            now,
-            pool_draining,
-            None,
-            0,
-        );
+        let initial_preparation =
+            ProjectTickPreparation::build(options, active_hours.as_deref(), now, pool_draining, None, 0);
 
-        Self {
-            active_hours,
-            initial_preparation,
-        }
+        Self { active_hours, initial_preparation }
     }
 
     pub fn build_preparation(
@@ -51,7 +37,6 @@ impl ProjectTickContext {
             active_process_count,
         )
     }
-
 }
 
 fn load_active_hours(project_root: &str) -> Option<String> {

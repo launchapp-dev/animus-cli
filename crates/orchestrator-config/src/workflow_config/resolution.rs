@@ -2,23 +2,15 @@ use std::collections::HashMap;
 
 use super::types::*;
 
-pub fn resolve_workflow_phase_plan(
-    config: &WorkflowConfig,
-    workflow_ref: Option<&str>,
-) -> Option<Vec<String>> {
-    let requested = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.default_workflow_ref.trim());
+pub fn resolve_workflow_phase_plan(config: &WorkflowConfig, workflow_ref: Option<&str>) -> Option<Vec<String>> {
+    let requested =
+        workflow_ref.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(config.default_workflow_ref.trim());
 
     if requested.is_empty() {
         return None;
     }
 
-    config
-        .workflows
-        .iter()
-        .find(|workflow| workflow.id.eq_ignore_ascii_case(requested))?;
+    config.workflows.iter().find(|workflow| workflow.id.eq_ignore_ascii_case(requested))?;
 
     let expanded = expand_workflow_phases(&config.workflows, requested).ok()?;
 
@@ -41,10 +33,8 @@ pub fn resolve_workflow_verdict_routing(
     config: &WorkflowConfig,
     workflow_ref: Option<&str>,
 ) -> HashMap<String, HashMap<String, PhaseTransitionConfig>> {
-    let requested = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.default_workflow_ref.trim());
+    let requested =
+        workflow_ref.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(config.default_workflow_ref.trim());
 
     if requested.is_empty() {
         return HashMap::new();
@@ -66,14 +56,9 @@ pub fn resolve_workflow_verdict_routing(
     routing
 }
 
-pub fn resolve_workflow_rework_attempts(
-    config: &WorkflowConfig,
-    workflow_ref: Option<&str>,
-) -> HashMap<String, u32> {
-    let requested = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.default_workflow_ref.trim());
+pub fn resolve_workflow_rework_attempts(config: &WorkflowConfig, workflow_ref: Option<&str>) -> HashMap<String, u32> {
+    let requested =
+        workflow_ref.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(config.default_workflow_ref.trim());
 
     if requested.is_empty() {
         return HashMap::new();
@@ -86,9 +71,8 @@ pub fn resolve_workflow_rework_attempts(
 
     let mut limits = HashMap::new();
     for entry in &expanded {
-        if let Some(max_rework_attempts) = entry
-            .max_rework_attempts()
-            .filter(|value| *value != default_max_rework_attempts())
+        if let Some(max_rework_attempts) =
+            entry.max_rework_attempts().filter(|value| *value != default_max_rework_attempts())
         {
             limits.insert(entry.phase_id().to_owned(), max_rework_attempts);
         }
@@ -100,10 +84,8 @@ pub fn resolve_workflow_skip_guards(
     config: &WorkflowConfig,
     workflow_ref: Option<&str>,
 ) -> HashMap<String, Vec<String>> {
-    let requested = workflow_ref
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.default_workflow_ref.trim());
+    let requested =
+        workflow_ref.map(str::trim).filter(|value| !value.is_empty()).unwrap_or(config.default_workflow_ref.trim());
 
     if requested.is_empty() {
         return HashMap::new();

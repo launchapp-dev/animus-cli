@@ -1,63 +1,43 @@
 use chrono::Utc;
 use orchestrator_core::{
-    FileServiceHub, RequirementItem, RequirementPriority, RequirementStatus,
-    RequirementsDraftInput, RequirementsRefineInput, ServiceHub,
+    FileServiceHub, RequirementItem, RequirementPriority, RequirementStatus, RequirementsDraftInput,
+    RequirementsRefineInput, ServiceHub,
 };
 use serde_json::{json, Value};
 
 use super::{
     parsing::{
-        normalize_optional_string, normalize_string_list, parse_json_body,
-        parse_requirement_priority, parse_requirement_priority_opt, parse_requirement_status,
-        parse_requirement_status_opt, parse_requirement_type_opt,
+        normalize_optional_string, normalize_string_list, parse_json_body, parse_requirement_priority,
+        parse_requirement_priority_opt, parse_requirement_status, parse_requirement_status_opt,
+        parse_requirement_type_opt,
     },
     requests::{
-        RequirementCreateRequest, RequirementPatchRequest, RequirementsDraftRequest,
-        RequirementsRefineRequest,
+        RequirementCreateRequest, RequirementPatchRequest, RequirementsDraftRequest, RequirementsRefineRequest,
     },
     WebApiError, WebApiService, DEFAULT_REQUIREMENT_SOURCE,
 };
 
 impl WebApiService {
     pub async fn requirements_list(&self) -> Result<Value, WebApiError> {
-        Ok(json!(
-            self.context.hub.planning().list_requirements().await?
-        ))
+        Ok(json!(self.context.hub.planning().list_requirements().await?))
     }
 
     pub async fn requirements_get(&self, id: &str) -> Result<Value, WebApiError> {
-        Ok(json!(
-            self.context.hub.planning().get_requirement(id).await?
-        ))
+        Ok(json!(self.context.hub.planning().get_requirement(id).await?))
     }
 
     pub async fn requirements_create(&self, body: Value) -> Result<Value, WebApiError> {
         let request: RequirementCreateRequest = parse_json_body(body)?;
         let mut title = request.title.trim().to_string();
         if title.is_empty() {
-            return Err(WebApiError::new(
-                "invalid_input",
-                "requirement title is required",
-                2,
-            ));
+            return Err(WebApiError::new("invalid_input", "requirement title is required", 2));
         }
         title.shrink_to_fit();
 
         let mut requirement_id = String::new();
         if let Some(id) = normalize_optional_string(request.id) {
-            if self
-                .context
-                .hub
-                .planning()
-                .get_requirement(&id)
-                .await
-                .is_ok()
-            {
-                return Err(WebApiError::new(
-                    "conflict",
-                    format!("requirement already exists: {id}"),
-                    4,
-                ));
+            if self.context.hub.planning().get_requirement(&id).await.is_ok() {
+                return Err(WebApiError::new("conflict", format!("requirement already exists: {id}"), 4));
             }
             requirement_id = id;
         }
@@ -74,10 +54,8 @@ impl WebApiService {
             acceptance_criteria: normalize_string_list(request.acceptance_criteria),
             priority: parse_requirement_priority_opt(request.priority.as_deref())?
                 .unwrap_or(RequirementPriority::Should),
-            status: parse_requirement_status_opt(request.status.as_deref())?
-                .unwrap_or(RequirementStatus::Draft),
-            source: normalize_optional_string(request.source)
-                .unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string()),
+            status: parse_requirement_status_opt(request.status.as_deref())?.unwrap_or(RequirementStatus::Draft),
+            source: normalize_optional_string(request.source).unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string()),
             tags: normalize_string_list(request.tags),
             links: Default::default(),
             comments: Vec::new(),
@@ -87,16 +65,8 @@ impl WebApiService {
             updated_at: now,
         };
 
-        let created = self
-            .context
-            .hub
-            .planning()
-            .upsert_requirement(requirement)
-            .await?;
-        self.publish_event(
-            "requirement-create",
-            json!({ "requirement_id": created.id, "status": created.status }),
-        );
+        let created = self.context.hub.planning().upsert_requirement(requirement).await?;
+        self.publish_event("requirement-create", json!({ "requirement_id": created.id, "status": created.status }));
         Ok(json!(created))
     }
 
@@ -107,11 +77,7 @@ impl WebApiService {
         if let Some(title) = request.title {
             let title = title.trim().to_string();
             if title.is_empty() {
-                return Err(WebApiError::new(
-                    "invalid_input",
-                    "requirement title must be non-empty when provided",
-                    2,
-                ));
+                return Err(WebApiError::new("invalid_input", "requirement title must be non-empty when provided", 2));
             }
             requirement.title = title;
         }
@@ -129,8 +95,7 @@ impl WebApiService {
         }
 
         if let Some(requirement_type) = request.requirement_type {
-            requirement.requirement_type =
-                parse_requirement_type_opt(Some(requirement_type.as_str()))?;
+            requirement.requirement_type = parse_requirement_type_opt(Some(requirement_type.as_str()))?;
         }
 
         if let Some(criteria) = request.acceptance_criteria {
@@ -146,8 +111,8 @@ impl WebApiService {
         }
 
         if let Some(source) = request.source {
-            requirement.source = normalize_optional_string(Some(source))
-                .unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string());
+            requirement.source =
+                normalize_optional_string(Some(source)).unwrap_or_else(|| DEFAULT_REQUIREMENT_SOURCE.to_string());
         }
 
         if let Some(tags) = request.tags {
@@ -162,16 +127,8 @@ impl WebApiService {
             requirement.relative_path = normalize_optional_string(Some(relative_path));
         }
 
-        let updated = self
-            .context
-            .hub
-            .planning()
-            .upsert_requirement(requirement)
-            .await?;
-        self.publish_event(
-            "requirement-update",
-            json!({ "requirement_id": updated.id, "status": updated.status }),
-        );
+        let updated = self.context.hub.planning().upsert_requirement(requirement).await?;
+        self.publish_event("requirement-update", json!({ "requirement_id": updated.id, "status": updated.status }));
         Ok(json!(updated))
     }
 
@@ -189,16 +146,8 @@ impl WebApiService {
             max_requirements: request.max_requirements.unwrap_or_default(),
         };
 
-        let result = self
-            .context
-            .hub
-            .planning()
-            .draft_requirements(input)
-            .await?;
-        self.publish_event(
-            "requirements-draft",
-            json!({ "appended_count": result.appended_count }),
-        );
+        let result = self.context.hub.planning().draft_requirements(input).await?;
+        self.publish_event("requirements-draft", json!({ "appended_count": result.appended_count }));
         Ok(json!(result))
     }
 
@@ -217,10 +166,7 @@ impl WebApiService {
             })
             .await?;
 
-        let mut updated_ids: Vec<String> = refined
-            .iter()
-            .map(|requirement| requirement.id.clone())
-            .collect();
+        let mut updated_ids: Vec<String> = refined.iter().map(|requirement| requirement.id.clone()).collect();
         updated_ids.sort();
         updated_ids.dedup();
 
@@ -241,11 +187,7 @@ impl WebApiService {
         }))
     }
 
-    pub async fn project_requirement_get(
-        &self,
-        project_id: &str,
-        requirement_id: &str,
-    ) -> Result<Value, WebApiError> {
+    pub async fn project_requirement_get(&self, project_id: &str, requirement_id: &str) -> Result<Value, WebApiError> {
         let project = self.context.hub.projects().get(project_id).await?;
         let hub = FileServiceHub::new(&project.path)?;
         let requirement = hub.planning().get_requirement(requirement_id).await?;

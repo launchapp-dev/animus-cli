@@ -39,11 +39,7 @@ impl DaemonRuntimeState {
         save_daemon_runtime_state(project_root, &state)
     }
 
-    pub fn set_shutdown_requested(
-        project_root: &str,
-        requested: bool,
-        timeout_secs: Option<u64>,
-    ) -> Result<()> {
+    pub fn set_shutdown_requested(project_root: &str, requested: bool, timeout_secs: Option<u64>) -> Result<()> {
         let mut state = load_daemon_runtime_state(project_root)?;
         state.shutdown_requested = requested;
         state.shutdown_timeout_secs = if requested { timeout_secs } else { None };
@@ -65,31 +61,21 @@ impl DaemonRuntimeState {
     }
 
     pub fn read_daemon_pid_file(project_root: &str) -> Option<u32> {
-        fs::read_to_string(daemon_pid_path(project_root))
-            .ok()
-            .and_then(|value| value.trim().parse().ok())
+        fs::read_to_string(daemon_pid_path(project_root)).ok().and_then(|value| value.trim().parse().ok())
     }
 }
 
 fn canonicalize_lossy(path: &str) -> String {
     let candidate = PathBuf::from(path);
-    candidate
-        .canonicalize()
-        .unwrap_or(candidate)
-        .to_string_lossy()
-        .to_string()
+    candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }
 
 fn daemon_runtime_state_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root))
-        .join(".ao")
-        .join("daemon-state.json")
+    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("daemon-state.json")
 }
 
 fn daemon_pid_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root))
-        .join(".ao")
-        .join("daemon.pid")
+    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("daemon.pid")
 }
 
 fn load_daemon_runtime_state(project_root: &str) -> Result<DaemonRuntimeStateRecord> {
@@ -104,22 +90,16 @@ fn load_daemon_runtime_state(project_root: &str) -> Result<DaemonRuntimeStateRec
         return Ok(DaemonRuntimeStateRecord::default());
     }
 
-    serde_json::from_str(&content)
-        .with_context(|| format!("invalid daemon runtime state JSON at {}", path.display()))
+    serde_json::from_str(&content).with_context(|| format!("invalid daemon runtime state JSON at {}", path.display()))
 }
 
 fn save_daemon_runtime_state(project_root: &str, state: &DaemonRuntimeStateRecord) -> Result<()> {
     let path = daemon_runtime_state_path(project_root);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create daemon runtime state directory {}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create daemon runtime state directory {}", parent.display()))?;
     }
-    let content = serde_json::to_string_pretty(state)
-        .context("failed to serialize daemon runtime state JSON")?;
+    let content = serde_json::to_string_pretty(state).context("failed to serialize daemon runtime state JSON")?;
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, format!("{content}\n"))
         .with_context(|| format!("failed to write temp daemon state at {}", tmp_path.display()))?;

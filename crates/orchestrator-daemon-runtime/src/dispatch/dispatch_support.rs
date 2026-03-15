@@ -5,13 +5,7 @@ use orchestrator_core::{DaemonHealth, OrchestratorWorkflow, WorkflowStatus};
 use crate::DaemonRuntimeOptions;
 
 pub fn ready_dispatch_limit(max_tasks_per_tick: usize, health: &DaemonHealth) -> usize {
-    dispatch_headroom(
-        max_tasks_per_tick,
-        health.active_agents,
-        effective_capacity_limit(&[
-            health.pool_size,
-        ]),
-    )
+    dispatch_headroom(max_tasks_per_tick, health.active_agents, effective_capacity_limit(&[health.pool_size]))
 }
 
 pub fn ready_dispatch_limit_for_options(
@@ -22,10 +16,7 @@ pub fn ready_dispatch_limit_for_options(
     dispatch_headroom(
         options.max_tasks_per_tick,
         active_agents,
-        effective_capacity_limit(&[
-            options.pool_size,
-            observed_pool_size,
-        ]),
+        effective_capacity_limit(&[options.pool_size, observed_pool_size]),
     )
 }
 
@@ -33,11 +24,7 @@ fn effective_capacity_limit(candidates: &[Option<usize>]) -> Option<usize> {
     candidates.iter().flatten().copied().min()
 }
 
-fn dispatch_headroom(
-    max_tasks_per_tick: usize,
-    active_agents: usize,
-    capacity_limit: Option<usize>,
-) -> usize {
+fn dispatch_headroom(max_tasks_per_tick: usize, active_agents: usize, capacity_limit: Option<usize>) -> usize {
     if max_tasks_per_tick == 0 {
         return 0;
     }
@@ -49,10 +36,7 @@ fn dispatch_headroom(
 }
 
 pub fn normalize_optional_id(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|candidate| !candidate.is_empty())
-        .map(|candidate| candidate.to_string())
+    value.map(str::trim).filter(|candidate| !candidate.is_empty()).map(|candidate| candidate.to_string())
 }
 
 pub fn is_terminally_completed_workflow(workflow: &OrchestratorWorkflow) -> bool {
@@ -65,10 +49,8 @@ pub fn active_workflow_task_ids(workflows: &[OrchestratorWorkflow]) -> HashSet<S
     workflows
         .iter()
         .filter(|workflow| {
-            matches!(
-                workflow.status,
-                WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
-            ) && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
+            matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending)
+                && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
         })
         .map(|workflow| workflow.task_id.clone())
         .collect()
@@ -78,10 +60,8 @@ pub fn active_workflow_subject_ids(workflows: &[OrchestratorWorkflow]) -> HashSe
     workflows
         .iter()
         .filter(|workflow| {
-            matches!(
-                workflow.status,
-                WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
-            ) && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
+            matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending)
+                && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
         })
         .map(|workflow| workflow.subject.id().to_string())
         .collect()
@@ -92,12 +72,7 @@ pub fn workflow_current_phase_id(workflow: &OrchestratorWorkflow) -> Option<Stri
         .current_phase
         .as_deref()
         .map(str::to_string)
-        .or_else(|| {
-            workflow
-                .phases
-                .get(workflow.current_phase_index)
-                .map(|phase| phase.phase_id.clone())
-        })
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
         .and_then(|phase_id| normalize_optional_id(Some(phase_id.as_str())))
 }
 
@@ -132,24 +107,15 @@ mod tests {
 
     #[test]
     fn ready_dispatch_limit_for_options_uses_smallest_available_capacity() {
-        let options = DaemonRuntimeOptions {
-            pool_size: Some(2),
-            max_tasks_per_tick: 5,
-            ..DaemonRuntimeOptions::default()
-        };
+        let options =
+            DaemonRuntimeOptions { pool_size: Some(2), max_tasks_per_tick: 5, ..DaemonRuntimeOptions::default() };
 
-        assert_eq!(
-            ready_dispatch_limit_for_options(&options, 1, Some(3)),
-            1
-        );
+        assert_eq!(ready_dispatch_limit_for_options(&options, 1, Some(3)), 1);
     }
 
     #[test]
     fn ready_dispatch_limit_for_options_returns_max_tasks_when_uncapped() {
-        let options = DaemonRuntimeOptions {
-            max_tasks_per_tick: 4,
-            ..DaemonRuntimeOptions::default()
-        };
+        let options = DaemonRuntimeOptions { max_tasks_per_tick: 4, ..DaemonRuntimeOptions::default() };
 
         assert_eq!(ready_dispatch_limit_for_options(&options, 2, None), 4);
     }

@@ -19,11 +19,7 @@ pub trait ProjectTickHooks {
         Ok(0)
     }
 
-    async fn dispatch_ready_tasks(
-        &mut self,
-        root: &str,
-        _limit: usize,
-    ) -> Result<DispatchWorkflowStartSummary>;
+    async fn dispatch_ready_tasks(&mut self, root: &str, _limit: usize) -> Result<DispatchWorkflowStartSummary>;
 
     async fn collect_health(&mut self, root: &str) -> Result<Value>;
 

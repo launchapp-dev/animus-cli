@@ -2,9 +2,7 @@ use super::*;
 use crate::types::{ArchitectureEntity, RequirementPriority, RequirementStatus, WorkflowStatus};
 
 fn global_requirements_index_dir(project_root: &std::path::Path) -> std::path::PathBuf {
-    scoped_ao_root(project_root)
-        .join("index")
-        .join("requirements")
+    scoped_ao_root(project_root).join("index").join("requirements")
 }
 
 fn scoped_ao_root(project_root: &std::path::Path) -> std::path::PathBuf {
@@ -20,10 +18,7 @@ fn assert_core_state_json_is_valid(project_root: &std::path::Path) {
 fn ensure_test_config_env() {
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
-        let config_dir = std::env::temp_dir().join(format!(
-            "ao-orchestrator-core-test-config-{}",
-            std::process::id()
-        ));
+        let config_dir = std::env::temp_dir().join(format!("ao-orchestrator-core-test-config-{}", std::process::id()));
         let home_dir = config_dir.join("home");
         std::fs::create_dir_all(&config_dir).expect("create test AO config dir");
         std::fs::create_dir_all(&home_dir).expect("create test home dir");
@@ -64,17 +59,12 @@ async fn file_hub_persists_projects_with_rich_payload() {
     .expect("create project");
 
     let second_hub = file_hub(temp.path()).expect("reload hub");
-    let loaded = ProjectServiceApi::load(&second_hub, &created.path)
-        .await
-        .expect("load by path");
+    let loaded = ProjectServiceApi::load(&second_hub, &created.path).await.expect("load by path");
     assert_eq!(loaded.id, created.id);
     assert_eq!(loaded.config.project_type, ProjectType::WebApp);
     assert_eq!(loaded.config.tech_stack, vec!["rust", "desktop-gui"]);
     assert_eq!(loaded.metadata.goals, vec!["single runtime"]);
-    assert_eq!(
-        loaded.metadata.description,
-        Some("Core project".to_string())
-    );
+    assert_eq!(loaded.metadata.description, Some("Core project".to_string()));
 }
 
 #[test]
@@ -83,19 +73,14 @@ fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     let _hub = file_hub(temp.path()).expect("create hub");
 
     let state_path = scoped_ao_root(temp.path()).join("core-state.json");
-    let mut raw: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&state_path).expect("core-state should be readable"),
-    )
-    .expect("core-state should parse");
-    raw.as_object_mut().expect("core-state is object").insert(
-        "__sentinel".to_string(),
-        serde_json::json!({"source":"regression-test"}),
-    );
-    std::fs::write(
-        &state_path,
-        serde_json::to_string_pretty(&raw).expect("serialize state"),
-    )
-    .expect("write state with sentinel");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).expect("core-state should be readable"))
+            .expect("core-state should parse");
+    raw.as_object_mut()
+        .expect("core-state is object")
+        .insert("__sentinel".to_string(), serde_json::json!({"source":"regression-test"}));
+    std::fs::write(&state_path, serde_json::to_string_pretty(&raw).expect("serialize state"))
+        .expect("write state with sentinel");
     let before = std::fs::read_to_string(&state_path).expect("read sentinel state");
 
     let _reloaded = file_hub(temp.path()).expect("reload hub");
@@ -132,10 +117,7 @@ workflows:
 
     assert_eq!(config.default_workflow_ref.as_str(), "yaml-standard");
     assert!(
-        config
-            .workflows
-            .iter()
-            .any(|workflow| workflow.id == "yaml-standard"),
+        config.workflows.iter().any(|workflow| workflow.id == "yaml-standard"),
         "resolved workflow config should include repo-local YAML workflow"
     );
 }
@@ -194,16 +176,8 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     assert!(scoped.join("core-state.json").exists());
     assert!(project_path.join(".ao").join("config.json").exists());
     assert!(scoped.join("resume-config.json").exists());
-    assert!(project_path
-        .join(".ao")
-        .join("workflows")
-        .join("custom.yaml")
-        .exists());
-    assert!(project_path
-        .join(".ao")
-        .join("workflows")
-        .join("standard-workflow.yaml")
-        .exists());
+    assert!(project_path.join(".ao").join("workflows").join("custom.yaml").exists());
+    assert!(project_path.join(".ao").join("workflows").join("standard-workflow.yaml").exists());
     assert!(scoped.join("state").join("state-machines.v1.json").exists());
     assert!(!project_path.join(".git").exists());
 }
@@ -213,8 +187,7 @@ fn file_hub_explicit_git_bootstrap_initializes_repository_and_head() {
     let temp = tempfile::tempdir().expect("tempdir");
     let project_path = temp.path().join("explicit-git-bootstrap");
 
-    FileServiceHub::bootstrap_project_git_repository(&project_path)
-        .expect("bootstrap git repository");
+    FileServiceHub::bootstrap_project_git_repository(&project_path).expect("bootstrap git repository");
     assert!(project_path.join(".git").exists());
 
     let git_repo_status = std::process::Command::new("git")
@@ -264,13 +237,7 @@ async fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
     assert_eq!(config.schema.as_str(), "ao.workflow-config.v2");
     assert_eq!(config.version, 2);
     assert_eq!(config.default_workflow_ref.as_str(), "standard");
-    assert_eq!(
-        config
-            .phase_catalog
-            .get("implementation")
-            .map(|phase| phase.label.as_str()),
-        Some("Implementation")
-    );
+    assert_eq!(config.phase_catalog.get("implementation").map(|phase| phase.label.as_str()), Some("Implementation"));
     assert_eq!(
         config
             .workflows
@@ -287,21 +254,13 @@ async fn file_hub_bootstraps_architecture_docs_file() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _hub = file_hub(temp.path()).expect("create hub");
 
-    let architecture_path = scoped_ao_root(temp.path())
-        .join("docs")
-        .join("architecture.json");
+    let architecture_path = scoped_ao_root(temp.path()).join("docs").join("architecture.json");
     assert!(architecture_path.exists());
 
-    let architecture_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(architecture_path).expect("architecture doc should be readable"),
-    )
-    .expect("architecture doc should be json");
-    assert_eq!(
-        architecture_json
-            .get("schema")
-            .and_then(serde_json::Value::as_str),
-        Some("ao.architecture.v1")
-    );
+    let architecture_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(architecture_path).expect("architecture doc should be readable"))
+            .expect("architecture doc should be json");
+    assert_eq!(architecture_json.get("schema").and_then(serde_json::Value::as_str), Some("ao.architecture.v1"));
 }
 
 #[tokio::test]
@@ -338,15 +297,11 @@ async fn file_hub_load_persists_active_project_selection() {
     .expect("create second");
 
     assert_ne!(first.id, second.id);
-    ProjectServiceApi::load(&hub, &first.id)
-        .await
-        .expect("load first");
+    ProjectServiceApi::load(&hub, &first.id).await.expect("load first");
 
     let reloaded = file_hub(temp.path()).expect("reload hub");
-    let active = ProjectServiceApi::active(&reloaded)
-        .await
-        .expect("active project")
-        .expect("active project should exist");
+    let active =
+        ProjectServiceApi::active(&reloaded).await.expect("active project").expect("active project should exist");
     assert_eq!(active.id, first.id);
 }
 
@@ -371,9 +326,7 @@ async fn file_hub_persists_tasks() {
     .expect("create task");
 
     let second_hub = file_hub(temp.path()).expect("reload hub");
-    let loaded = TaskServiceApi::get(&second_hub, &created.id)
-        .await
-        .expect("load task");
+    let loaded = TaskServiceApi::get(&second_hub, &created.id).await.expect("load task");
     assert_eq!(loaded.title, "Persist me");
 }
 
@@ -401,10 +354,7 @@ async fn file_hub_mutations_fail_closed_for_invalid_core_state_json() {
     .expect_err("malformed core-state should reject mutation");
     let message = format!("{error:#}");
     assert!(message.contains("refusing mutation to avoid data loss"));
-    assert_eq!(
-        std::fs::read_to_string(&state_path).expect("malformed state remains on disk"),
-        "{not-valid-json"
-    );
+    assert_eq!(std::fs::read_to_string(&state_path).expect("malformed state remains on disk"), "{not-valid-json");
 }
 
 #[test]
@@ -416,10 +366,7 @@ fn file_hub_concurrent_requirement_upserts_keep_unique_ids() {
 
     let barrier_a = barrier.clone();
     let thread_a = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_a.wait();
         runtime.block_on(async {
             let now = chrono::Utc::now();
@@ -454,10 +401,7 @@ fn file_hub_concurrent_requirement_upserts_keep_unique_ids() {
 
     let barrier_b = barrier.clone();
     let thread_b = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_b.wait();
         runtime.block_on(async {
             let now = chrono::Utc::now();
@@ -496,20 +440,11 @@ fn file_hub_concurrent_requirement_upserts_keep_unique_ids() {
     assert_ne!(first_id, second_id, "requirement IDs must be unique");
 
     let reloaded = file_hub(temp.path()).expect("reload hub");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime should build");
-    let requirements = runtime.block_on(async {
-        PlanningServiceApi::list_requirements(&reloaded)
-            .await
-            .expect("list requirements")
-    });
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
+    let requirements =
+        runtime.block_on(async { PlanningServiceApi::list_requirements(&reloaded).await.expect("list requirements") });
 
-    let ids: std::collections::HashSet<String> = requirements
-        .into_iter()
-        .map(|requirement| requirement.id)
-        .collect();
+    let ids: std::collections::HashSet<String> = requirements.into_iter().map(|requirement| requirement.id).collect();
     assert_eq!(ids.len(), 2, "both concurrent requirements must persist");
     assert!(ids.contains(&first_id));
     assert!(ids.contains(&second_id));
@@ -525,10 +460,7 @@ fn file_hub_concurrent_task_creates_keep_unique_ids() {
 
     let barrier_a = barrier.clone();
     let thread_a = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_a.wait();
         runtime.block_on(async {
             TaskServiceApi::create(
@@ -552,10 +484,7 @@ fn file_hub_concurrent_task_creates_keep_unique_ids() {
 
     let barrier_b = barrier.clone();
     let thread_b = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_b.wait();
         runtime.block_on(async {
             TaskServiceApi::create(
@@ -583,12 +512,8 @@ fn file_hub_concurrent_task_creates_keep_unique_ids() {
     assert_ne!(first_id, second_id, "task IDs must be unique");
 
     let reloaded = file_hub(temp.path()).expect("reload hub");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime should build");
-    let tasks =
-        runtime.block_on(async { TaskServiceApi::list(&reloaded).await.expect("list tasks") });
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
+    let tasks = runtime.block_on(async { TaskServiceApi::list(&reloaded).await.expect("list tasks") });
 
     let ids: std::collections::HashSet<String> = tasks.into_iter().map(|task| task.id).collect();
     assert_eq!(ids.len(), 2, "both concurrent tasks must persist");
@@ -606,24 +531,16 @@ fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() 
 
     let barrier_a = barrier.clone();
     let daemon_thread = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_a.wait();
         runtime.block_on(async {
-            DaemonServiceApi::pause(&hub_a)
-                .await
-                .expect("daemon pause should succeed");
+            DaemonServiceApi::pause(&hub_a).await.expect("daemon pause should succeed");
         });
     });
 
     let barrier_b = barrier.clone();
     let task_thread = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
         barrier_b.wait();
         runtime.block_on(async {
             TaskServiceApi::create(
@@ -650,21 +567,12 @@ fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() 
     let task_id = task_thread.join().expect("task thread should finish");
 
     let reloaded = file_hub(temp.path()).expect("reload hub");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime should build");
-    let status = runtime.block_on(async {
-        DaemonServiceApi::status(&reloaded)
-            .await
-            .expect("daemon status should load")
-    });
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime should build");
+    let status =
+        runtime.block_on(async { DaemonServiceApi::status(&reloaded).await.expect("daemon status should load") });
     assert_eq!(status, DaemonStatus::Paused);
-    let task = runtime.block_on(async {
-        TaskServiceApi::get(&reloaded, &task_id)
-            .await
-            .expect("interleaved task should exist")
-    });
+    let task = runtime
+        .block_on(async { TaskServiceApi::get(&reloaded, &task_id).await.expect("interleaved task should exist") });
     assert_eq!(task.id, task_id);
     assert_core_state_json_is_valid(temp.path());
 }
@@ -673,31 +581,21 @@ fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() 
 async fn file_hub_persists_workflows_with_machine_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
-    let workflow = WorkflowServiceApi::run(
-        &hub,
-        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())),
-    )
-    .await
-    .expect("run workflow");
+    let workflow =
+        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())))
+            .await
+            .expect("run workflow");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
-    assert_eq!(
-        workflow.machine_state,
-        crate::types::WorkflowMachineState::RunPhase
-    );
+    assert_eq!(workflow.machine_state, crate::types::WorkflowMachineState::RunPhase);
     assert_eq!(workflow.checkpoint_metadata.checkpoint_count, 1);
     assert!(workflow.decision_history.is_empty());
 
     let second_hub = file_hub(temp.path()).expect("reload hub");
-    let loaded = WorkflowServiceApi::get(&second_hub, &workflow.id)
-        .await
-        .expect("load workflow");
+    let loaded = WorkflowServiceApi::get(&second_hub, &workflow.id).await.expect("load workflow");
     assert_eq!(loaded.id, workflow.id);
     assert_eq!(loaded.status, WorkflowStatus::Running);
-    assert_eq!(
-        loaded.machine_state,
-        crate::types::WorkflowMachineState::RunPhase
-    );
+    assert_eq!(loaded.machine_state, crate::types::WorkflowMachineState::RunPhase);
 }
 
 #[tokio::test]
@@ -719,20 +617,12 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
     .expect("run workflow");
 
     while workflow.status == WorkflowStatus::Running {
-        workflow = WorkflowServiceApi::complete_current_phase(&hub, &workflow.id)
-            .await
-            .expect("complete phase");
+        workflow = WorkflowServiceApi::complete_current_phase(&hub, &workflow.id).await.expect("complete phase");
     }
     assert_eq!(workflow.status, WorkflowStatus::Completed);
 
-    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id)
-        .await
-        .expect("list checkpoints");
-    assert_eq!(
-        checkpoints.len(),
-        5,
-        "completion should auto-prune to one checkpoint per phase"
-    );
+    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id).await.expect("list checkpoints");
+    assert_eq!(checkpoints.len(), 5, "completion should auto-prune to one checkpoint per phase");
     assert!(checkpoints.contains(&5));
 }
 
@@ -761,14 +651,8 @@ async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
     }
     assert_eq!(workflow.status, WorkflowStatus::Completed);
 
-    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id)
-        .await
-        .expect("list checkpoints");
-    assert_eq!(
-        checkpoints.len(),
-        5,
-        "failed auto-prune should not remove checkpoints when completion succeeds"
-    );
+    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id).await.expect("list checkpoints");
+    assert_eq!(checkpoints.len(), 5, "failed auto-prune should not remove checkpoints when completion succeeds");
 }
 
 #[tokio::test]
@@ -803,8 +687,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
         post_success: None,
         variables: Vec::new(),
     });
-    crate::write_workflow_config(temp.path(), &workflow_config)
-        .expect("workflow config should be written");
+    crate::write_workflow_config(temp.path(), &workflow_config).expect("workflow config should be written");
 
     let mut runtime_config = crate::AgentRuntimeConfig {
         schema: crate::agent_runtime_config::AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
@@ -890,32 +773,16 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             default_tool: None,
         },
     );
-    crate::write_agent_runtime_config(temp.path(), &runtime_config)
-        .expect("agent runtime config should be written");
+    crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("agent runtime config should be written");
 
     let hub = file_hub(temp.path()).expect("create hub");
-    let workflow = WorkflowServiceApi::run(
-        &hub,
-        WorkflowRunInput::for_task("TASK-1".to_string(), Some("xhigh-dev".to_string())),
-    )
-    .await
-    .expect("run workflow");
+    let workflow =
+        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("xhigh-dev".to_string())))
+            .await
+            .expect("run workflow");
 
-    let phase_ids = workflow
-        .phases
-        .iter()
-        .map(|phase| phase.phase_id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        phase_ids,
-        vec![
-            "requirements",
-            "implementation",
-            "code-review",
-            "testing",
-            "qa-signoff"
-        ]
-    );
+    let phase_ids = workflow.phases.iter().map(|phase| phase.phase_id.as_str()).collect::<Vec<_>>();
+    assert_eq!(phase_ids, vec!["requirements", "implementation", "code-review", "testing", "qa-signoff"]);
 }
 
 #[tokio::test]
@@ -976,8 +843,7 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         RequirementItem {
             id: String::new(),
             title: "Use configured planning pipeline".to_string(),
-            description: "Planning execution should honor workflow config pipeline phases."
-                .to_string(),
+            description: "Planning execution should honor workflow config pipeline phases.".to_string(),
             body: None,
             legacy_id: None,
             category: None,
@@ -1015,20 +881,14 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
     assert!(!execution.workflow_ids_started.is_empty());
 
     for workflow_id in &execution.workflow_ids_started {
-        let workflow = WorkflowServiceApi::get(&hub, workflow_id)
-            .await
-            .expect("workflow should exist");
+        let workflow = WorkflowServiceApi::get(&hub, workflow_id).await.expect("workflow should exist");
         assert_eq!(
             workflow.workflow_ref.as_deref(),
             Some("planning-custom"),
             "workflow should preserve configured workflow ref"
         );
 
-        let phase_ids = workflow
-            .phases
-            .iter()
-            .map(|phase| phase.phase_id.as_str())
-            .collect::<Vec<_>>();
+        let phase_ids = workflow.phases.iter().map(|phase| phase.phase_id.as_str()).collect::<Vec<_>>();
         assert_eq!(
             phase_ids,
             vec!["requirements", "testing", "implementation"],
@@ -1067,26 +927,16 @@ async fn project_service_tracks_active_project_and_rename() {
     .await
     .expect("create second project");
 
-    let active = ProjectServiceApi::active(&hub)
-        .await
-        .expect("active project")
-        .expect("expected active project");
+    let active = ProjectServiceApi::active(&hub).await.expect("active project").expect("expected active project");
     assert_eq!(active.id, second.id);
 
-    let loaded = ProjectServiceApi::load(&hub, &first.id)
-        .await
-        .expect("load by id");
+    let loaded = ProjectServiceApi::load(&hub, &first.id).await.expect("load by id");
     assert_eq!(loaded.id, first.id);
 
-    let renamed = ProjectServiceApi::rename(&hub, &first.id, "Renamed")
-        .await
-        .expect("rename project");
+    let renamed = ProjectServiceApi::rename(&hub, &first.id, "Renamed").await.expect("rename project");
     assert_eq!(renamed.name, "Renamed");
 
-    let active = ProjectServiceApi::active(&hub)
-        .await
-        .expect("active project")
-        .expect("expected active project");
+    let active = ProjectServiceApi::active(&hub).await.expect("active project").expect("expected active project");
     assert_eq!(active.id, first.id);
 }
 
@@ -1124,51 +974,32 @@ async fn task_service_supports_priority_checklists_and_dependencies() {
     .await
     .expect("create high");
 
-    let prioritized = TaskServiceApi::list_prioritized(&hub)
-        .await
-        .expect("prioritized list");
-    assert_eq!(
-        prioritized.first().map(|task| task.id.as_str()),
-        Some(high.id.as_str())
-    );
+    let prioritized = TaskServiceApi::list_prioritized(&hub).await.expect("prioritized list");
+    assert_eq!(prioritized.first().map(|task| task.id.as_str()), Some(high.id.as_str()));
 
-    let updated = TaskServiceApi::add_checklist_item(
-        &hub,
-        &high.id,
-        "Write tests".to_string(),
-        "tester".to_string(),
-    )
-    .await
-    .expect("add checklist");
+    let updated = TaskServiceApi::add_checklist_item(&hub, &high.id, "Write tests".to_string(), "tester".to_string())
+        .await
+        .expect("add checklist");
     assert_eq!(updated.checklist.len(), 1);
 
     let item_id = updated.checklist[0].id.clone();
-    let updated =
-        TaskServiceApi::update_checklist_item(&hub, &high.id, &item_id, true, "tester".to_string())
-            .await
-            .expect("update checklist");
+    let updated = TaskServiceApi::update_checklist_item(&hub, &high.id, &item_id, true, "tester".to_string())
+        .await
+        .expect("update checklist");
     assert!(updated.checklist[0].completed);
 
-    let with_dep = TaskServiceApi::add_dependency(
-        &hub,
-        &high.id,
-        &low.id,
-        DependencyType::BlockedBy,
-        "tester".to_string(),
-    )
-    .await
-    .expect("add dependency");
+    let with_dep =
+        TaskServiceApi::add_dependency(&hub, &high.id, &low.id, DependencyType::BlockedBy, "tester".to_string())
+            .await
+            .expect("add dependency");
     assert_eq!(with_dep.dependencies.len(), 1);
 
-    let without_dep =
-        TaskServiceApi::remove_dependency(&hub, &high.id, &low.id, "tester".to_string())
-            .await
-            .expect("remove dependency");
+    let without_dep = TaskServiceApi::remove_dependency(&hub, &high.id, &low.id, "tester".to_string())
+        .await
+        .expect("remove dependency");
     assert!(without_dep.dependencies.is_empty());
 
-    let stats = TaskServiceApi::statistics(&hub)
-        .await
-        .expect("task statistics");
+    let stats = TaskServiceApi::statistics(&hub).await.expect("task statistics");
     assert_eq!(stats.total, 2);
 }
 
@@ -1220,15 +1051,9 @@ async fn task_priority_policy_reports_active_high_budget_overflow() {
     )
     .await
     .expect("create terminal high task");
-    TaskServiceApi::set_status(&hub, &first.id, TaskStatus::Ready, false)
-        .await
-        .expect("set first status");
-    TaskServiceApi::set_status(&hub, &second.id, TaskStatus::InProgress, false)
-        .await
-        .expect("set second status");
-    TaskServiceApi::set_status(&hub, &done.id, TaskStatus::Done, false)
-        .await
-        .expect("set terminal status");
+    TaskServiceApi::set_status(&hub, &first.id, TaskStatus::Ready, false).await.expect("set first status");
+    TaskServiceApi::set_status(&hub, &second.id, TaskStatus::InProgress, false).await.expect("set second status");
+    TaskServiceApi::set_status(&hub, &done.id, TaskStatus::Done, false).await.expect("set terminal status");
 
     let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
     let report = evaluate_task_priority_policy(&tasks, 20).expect("evaluate policy");
@@ -1258,9 +1083,7 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     )
     .await
     .expect("create blocked task");
-    TaskServiceApi::set_status(&hub, &blocked.id, TaskStatus::Blocked, false)
-        .await
-        .expect("set blocked status");
+    TaskServiceApi::set_status(&hub, &blocked.id, TaskStatus::Blocked, false).await.expect("set blocked status");
 
     let essential = TaskServiceApi::create(
         &hub,
@@ -1277,9 +1100,7 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     )
     .await
     .expect("create essential task");
-    TaskServiceApi::set_status(&hub, &essential.id, TaskStatus::Ready, false)
-        .await
-        .expect("set essential status");
+    TaskServiceApi::set_status(&hub, &essential.id, TaskStatus::Ready, false).await.expect("set essential status");
 
     let early = TaskServiceApi::create(
         &hub,
@@ -1296,16 +1117,10 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     )
     .await
     .expect("create early task");
-    TaskServiceApi::set_status(&hub, &early.id, TaskStatus::InProgress, false)
-        .await
-        .expect("set early status");
-    let mut early_with_deadline = TaskServiceApi::get(&hub, &early.id)
-        .await
-        .expect("load early");
+    TaskServiceApi::set_status(&hub, &early.id, TaskStatus::InProgress, false).await.expect("set early status");
+    let mut early_with_deadline = TaskServiceApi::get(&hub, &early.id).await.expect("load early");
     early_with_deadline.deadline = Some("2026-03-01T09:00:00Z".to_string());
-    TaskServiceApi::replace(&hub, early_with_deadline)
-        .await
-        .expect("set early deadline");
+    TaskServiceApi::replace(&hub, early_with_deadline).await.expect("set early deadline");
 
     let late = TaskServiceApi::create(
         &hub,
@@ -1322,16 +1137,10 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     )
     .await
     .expect("create late task");
-    TaskServiceApi::set_status(&hub, &late.id, TaskStatus::InProgress, false)
-        .await
-        .expect("set late status");
-    let mut late_with_deadline = TaskServiceApi::get(&hub, &late.id)
-        .await
-        .expect("load late");
+    TaskServiceApi::set_status(&hub, &late.id, TaskStatus::InProgress, false).await.expect("set late status");
+    let mut late_with_deadline = TaskServiceApi::get(&hub, &late.id).await.expect("load late");
     late_with_deadline.deadline = Some("2026-03-10T09:00:00Z".to_string());
-    TaskServiceApi::replace(&hub, late_with_deadline)
-        .await
-        .expect("set late deadline");
+    TaskServiceApi::replace(&hub, late_with_deadline).await.expect("set late deadline");
 
     let nice_to_have = TaskServiceApi::create(
         &hub,
@@ -1367,9 +1176,7 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     )
     .await
     .expect("create low task");
-    TaskServiceApi::set_status(&hub, &low_existing.id, TaskStatus::Backlog, false)
-        .await
-        .expect("set low status");
+    TaskServiceApi::set_status(&hub, &low_existing.id, TaskStatus::Backlog, false).await.expect("set low status");
 
     let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
     let options = TaskPriorityRebalanceOptions {
@@ -1385,32 +1192,18 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     assert_eq!(plan.after.active_by_priority.critical, 1);
     assert!(plan.after.high_budget_compliant);
 
-    let mut resulting_priorities: std::collections::HashMap<String, Priority> = tasks
-        .iter()
-        .map(|task| (task.id.clone(), task.priority))
-        .collect();
+    let mut resulting_priorities: std::collections::HashMap<String, Priority> =
+        tasks.iter().map(|task| (task.id.clone(), task.priority)).collect();
     for change in &plan.changes {
         resulting_priorities.insert(change.task_id.clone(), change.to);
     }
 
-    assert_eq!(
-        resulting_priorities.get(&blocked.id),
-        Some(&Priority::Critical)
-    );
-    assert_eq!(
-        resulting_priorities.get(&essential.id),
-        Some(&Priority::High)
-    );
+    assert_eq!(resulting_priorities.get(&blocked.id), Some(&Priority::Critical));
+    assert_eq!(resulting_priorities.get(&essential.id), Some(&Priority::High));
     assert_eq!(resulting_priorities.get(&early.id), Some(&Priority::High));
     assert_eq!(resulting_priorities.get(&late.id), Some(&Priority::Medium));
-    assert_eq!(
-        resulting_priorities.get(&nice_to_have.id),
-        Some(&Priority::Low)
-    );
-    assert_eq!(
-        resulting_priorities.get(&low_existing.id),
-        Some(&Priority::Low)
-    );
+    assert_eq!(resulting_priorities.get(&nice_to_have.id), Some(&Priority::Low));
+    assert_eq!(resulting_priorities.get(&low_existing.id), Some(&Priority::Low));
 }
 
 #[tokio::test]
@@ -1431,9 +1224,7 @@ async fn task_priority_rebalance_rejects_conflicting_override_task_ids() {
     )
     .await
     .expect("create task");
-    TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Ready, false)
-        .await
-        .expect("set status");
+    TaskServiceApi::set_status(&hub, &task.id, TaskStatus::Ready, false).await.expect("set status");
 
     let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
     let error = plan_task_priority_rebalance(
@@ -1468,9 +1259,7 @@ async fn task_service_rejects_unknown_architecture_entities() {
     )
     .await
     .expect_err("task create should reject unknown architecture entity");
-    assert!(error
-        .to_string()
-        .contains("linked architecture entity not found"));
+    assert!(error.to_string().contains("linked architecture entity not found"));
 }
 
 #[tokio::test]
@@ -1523,10 +1312,7 @@ async fn task_filter_supports_linked_architecture_entity() {
 
     let filtered = TaskServiceApi::list_filtered(
         &hub,
-        TaskFilter {
-            linked_architecture_entity: Some("arch-api".to_string()),
-            ..TaskFilter::default()
-        },
+        TaskFilter { linked_architecture_entity: Some("arch-api".to_string()), ..TaskFilter::default() },
     )
     .await
     .expect("filter should succeed");
@@ -1538,31 +1324,22 @@ async fn task_filter_supports_linked_architecture_entity() {
 async fn workflow_service_exposes_decisions_and_checkpoints() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
-    let workflow = WorkflowServiceApi::run(
-        &hub,
-        WorkflowRunInput::for_task("TASK-123".to_string(), Some("standard".to_string())),
-    )
-    .await
-    .expect("run workflow");
+    let workflow =
+        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-123".to_string(), Some("standard".to_string())))
+            .await
+            .expect("run workflow");
 
-    let workflow = WorkflowServiceApi::complete_current_phase(&hub, &workflow.id)
-        .await
-        .expect("complete current phase");
+    let workflow =
+        WorkflowServiceApi::complete_current_phase(&hub, &workflow.id).await.expect("complete current phase");
     assert!(!workflow.decision_history.is_empty());
 
-    let decisions = WorkflowServiceApi::decisions(&hub, &workflow.id)
-        .await
-        .expect("get decisions");
+    let decisions = WorkflowServiceApi::decisions(&hub, &workflow.id).await.expect("get decisions");
     assert!(!decisions.is_empty());
 
-    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id)
-        .await
-        .expect("list checkpoints");
+    let checkpoints = WorkflowServiceApi::list_checkpoints(&hub, &workflow.id).await.expect("list checkpoints");
     assert_eq!(checkpoints, vec![1, 2]);
 
-    let checkpoint = WorkflowServiceApi::get_checkpoint(&hub, &workflow.id, 1)
-        .await
-        .expect("get checkpoint");
+    let checkpoint = WorkflowServiceApi::get_checkpoint(&hub, &workflow.id, 1).await.expect("get checkpoint");
     assert_eq!(checkpoint.id, workflow.id);
 }
 
@@ -1576,10 +1353,7 @@ async fn planning_service_drafts_and_executes_requirements() {
             project_name: Some("Parity Test".to_string()),
             problem_statement: "Users cannot ship quickly".to_string(),
             target_users: vec!["Founders".to_string()],
-            goals: vec![
-                "Draft requirements from vision".to_string(),
-                "Execute tasks from requirements".to_string(),
-            ],
+            goals: vec!["Draft requirements from vision".to_string(), "Execute tasks from requirements".to_string()],
             constraints: vec!["Keep current stack".to_string()],
             value_proposition: Some("Faster delivery with lower coordination cost".to_string()),
             complexity_assessment: None,
@@ -1591,11 +1365,7 @@ async fn planning_service_drafts_and_executes_requirements() {
 
     let drafted = PlanningServiceApi::draft_requirements(
         &hub,
-        RequirementsDraftInput {
-            include_codebase_scan: false,
-            append_only: true,
-            max_requirements: 4,
-        },
+        RequirementsDraftInput { include_codebase_scan: false, append_only: true, max_requirements: 4 },
     )
     .await
     .expect("draft requirements");
@@ -1603,17 +1373,12 @@ async fn planning_service_drafts_and_executes_requirements() {
 
     let refined = PlanningServiceApi::refine_requirements(
         &hub,
-        RequirementsRefineInput {
-            requirement_ids: vec![],
-            focus: Some("testability".to_string()),
-        },
+        RequirementsRefineInput { requirement_ids: vec![], focus: Some("testability".to_string()) },
     )
     .await
     .expect("refine requirements");
     assert!(!refined.is_empty());
-    assert!(refined
-        .iter()
-        .all(|item| item.status == RequirementStatus::Refined));
+    assert!(refined.iter().all(|item| item.status == RequirementStatus::Refined));
 
     let execution = PlanningServiceApi::execute_requirements(
         &hub,
@@ -1654,31 +1419,20 @@ async fn planning_draft_requirements_preserves_vision_constraints_when_max_is_sm
 
     let drafted = PlanningServiceApi::draft_requirements(
         &hub,
-        RequirementsDraftInput {
-            include_codebase_scan: false,
-            append_only: true,
-            max_requirements: 1,
-        },
+        RequirementsDraftInput { include_codebase_scan: false, append_only: true, max_requirements: 1 },
     )
     .await
     .expect("draft requirements");
 
+    assert!(drafted.requirements.iter().any(|requirement| requirement.source == "vision-constraint"));
     assert!(drafted
         .requirements
         .iter()
-        .any(|requirement| requirement.source == "vision-constraint"));
-    assert!(drafted.requirements.iter().any(|requirement| {
-        requirement
-            .title
-            .to_ascii_lowercase()
-            .contains("next.js app router with typescript")
-    }));
-    assert!(drafted.requirements.iter().any(|requirement| {
-        requirement
-            .title
-            .to_ascii_lowercase()
-            .contains("primary database must be postgresql")
-    }));
+        .any(|requirement| { requirement.title.to_ascii_lowercase().contains("next.js app router with typescript") }));
+    assert!(drafted
+        .requirements
+        .iter()
+        .any(|requirement| { requirement.title.to_ascii_lowercase().contains("primary database must be postgresql") }));
 }
 
 #[tokio::test]
@@ -1739,10 +1493,7 @@ async fn execute_requirements_blocks_when_vision_constraints_are_not_covered() {
     .await
     .expect_err("execution should be blocked by missing constraint coverage");
 
-    assert!(error
-        .to_string()
-        .to_ascii_lowercase()
-        .contains("vision constraints missing from requirements"));
+    assert!(error.to_string().to_ascii_lowercase().contains("vision constraints missing from requirements"));
 }
 
 #[tokio::test]
@@ -1765,9 +1516,7 @@ async fn file_hub_persists_planning_artifacts() {
     .await
     .expect("draft vision");
 
-    PlanningServiceApi::draft_requirements(&hub, RequirementsDraftInput::default())
-        .await
-        .expect("draft requirements");
+    PlanningServiceApi::draft_requirements(&hub, RequirementsDraftInput::default()).await.expect("draft requirements");
 
     let scoped = scoped_ao_root(temp.path());
     let vision_path = scoped.join("docs").join("product-vision.md");
@@ -1817,9 +1566,7 @@ async fn requirements_refine_propagates_research_metadata_to_tasks() {
         updated_at: now,
     };
 
-    let requirement = PlanningServiceApi::upsert_requirement(&hub, requirement)
-        .await
-        .expect("upsert requirement");
+    let requirement = PlanningServiceApi::upsert_requirement(&hub, requirement).await.expect("upsert requirement");
 
     let refined = PlanningServiceApi::refine_requirements(
         &hub,
@@ -1831,22 +1578,13 @@ async fn requirements_refine_propagates_research_metadata_to_tasks() {
     .await
     .expect("refine requirements");
 
-    let refined_requirement = refined
-        .iter()
-        .find(|item| item.id == requirement.id)
-        .expect("requirement should be refined");
-    assert!(refined_requirement
-        .tags
-        .iter()
-        .any(|tag| tag == "needs-research"));
+    let refined_requirement =
+        refined.iter().find(|item| item.id == requirement.id).expect("requirement should be refined");
+    assert!(refined_requirement.tags.iter().any(|tag| tag == "needs-research"));
     assert!(refined_requirement
         .acceptance_criteria
         .iter()
-        .any(|criterion| {
-            criterion
-                .to_ascii_lowercase()
-                .contains("research findings documented")
-        }));
+        .any(|criterion| { criterion.to_ascii_lowercase().contains("research findings documented") }));
 
     let execution = PlanningServiceApi::execute_requirements(
         &hub,
@@ -1859,13 +1597,8 @@ async fn requirements_refine_propagates_research_metadata_to_tasks() {
     )
     .await
     .expect("execute requirements");
-    let task_id = execution
-        .task_ids_created
-        .first()
-        .expect("task should be created");
-    let task = TaskServiceApi::get(&hub, task_id)
-        .await
-        .expect("task should exist");
+    let task_id = execution.task_ids_created.first().expect("task should be created");
+    let task = TaskServiceApi::get(&hub, task_id).await.expect("task should exist");
     assert!(task.tags.iter().any(|tag| tag == "needs-research"));
     assert!(task.workflow_metadata.requires_architecture);
 }
@@ -1929,61 +1662,28 @@ async fn execute_requirements_runs_requirement_state_machine_before_task_materia
     .expect("execute requirements");
     assert!(!execution.task_ids_created.is_empty());
 
-    let updated_requirement = PlanningServiceApi::get_requirement(&hub, &requirement.id)
-        .await
-        .expect("requirement should exist");
+    let updated_requirement =
+        PlanningServiceApi::get_requirement(&hub, &requirement.id).await.expect("requirement should exist");
     assert_eq!(updated_requirement.status, RequirementStatus::Planned);
-    assert!(updated_requirement
-        .tags
-        .iter()
-        .any(|tag| tag.eq_ignore_ascii_case("needs-research")));
+    assert!(updated_requirement.tags.iter().any(|tag| tag.eq_ignore_ascii_case("needs-research")));
     assert!(updated_requirement
         .acceptance_criteria
         .iter()
-        .any(|criterion| {
-            criterion
-                .to_ascii_lowercase()
-                .contains("research findings documented")
-        }));
+        .any(|criterion| { criterion.to_ascii_lowercase().contains("research findings documented") }));
     assert!(updated_requirement
         .acceptance_criteria
         .iter()
-        .any(|criterion| {
-            criterion
-                .to_ascii_lowercase()
-                .contains("automated test coverage")
-        }));
-    assert!(updated_requirement
-        .comments
-        .iter()
-        .any(|comment| comment.phase.as_deref() == Some("po-review")));
-    assert!(updated_requirement
-        .comments
-        .iter()
-        .any(|comment| comment.phase.as_deref() == Some("em-review")));
-    assert!(updated_requirement
-        .comments
-        .iter()
-        .any(|comment| comment.phase.as_deref() == Some("rework")));
-    assert!(updated_requirement
-        .comments
-        .iter()
-        .any(|comment| comment.phase.as_deref() == Some("approved")));
+        .any(|criterion| { criterion.to_ascii_lowercase().contains("automated test coverage") }));
+    assert!(updated_requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("po-review")));
+    assert!(updated_requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("em-review")));
+    assert!(updated_requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("rework")));
+    assert!(updated_requirement.comments.iter().any(|comment| comment.phase.as_deref() == Some("approved")));
 
-    let created_task_id = execution
-        .task_ids_created
-        .first()
-        .expect("task should exist");
-    let task = TaskServiceApi::get(&hub, created_task_id)
-        .await
-        .expect("task should be loadable");
+    let created_task_id = execution.task_ids_created.first().expect("task should exist");
+    let task = TaskServiceApi::get(&hub, created_task_id).await.expect("task should be loadable");
     assert!(task.workflow_metadata.requires_architecture);
     assert!(!task.checklist.is_empty());
-    assert!(task.checklist.iter().any(|item| {
-        item.description
-            .to_ascii_lowercase()
-            .contains("code review gate")
-    }));
+    assert!(task.checklist.iter().any(|item| { item.description.to_ascii_lowercase().contains("code review gate") }));
 }
 
 #[tokio::test]
@@ -2008,20 +1708,11 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
 
     let drafted = PlanningServiceApi::draft_requirements(
         &hub,
-        RequirementsDraftInput {
-            include_codebase_scan: false,
-            append_only: true,
-            max_requirements: 2,
-        },
+        RequirementsDraftInput { include_codebase_scan: false, append_only: true, max_requirements: 2 },
     )
     .await
     .expect("draft requirements");
-    let requirement_id = drafted
-        .requirements
-        .first()
-        .expect("requirement should exist")
-        .id
-        .clone();
+    let requirement_id = drafted.requirements.first().expect("requirement should exist").id.clone();
 
     let execution = PlanningServiceApi::execute_requirements(
         &hub,
@@ -2034,56 +1725,34 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
     )
     .await
     .expect("execute requirements");
-    let task_id = execution
-        .task_ids_created
-        .first()
-        .expect("task should be created")
-        .clone();
+    let task_id = execution.task_ids_created.first().expect("task should be created").clone();
 
-    let requirement = PlanningServiceApi::get_requirement(&hub, &requirement_id)
-        .await
-        .expect("load requirement");
+    let requirement = PlanningServiceApi::get_requirement(&hub, &requirement_id).await.expect("load requirement");
     assert!(!requirement.links.tasks.is_empty());
     assert!(requirement.links.tasks.contains(&task_id));
-    let requirement_relative_path = requirement
-        .relative_path
-        .clone()
-        .expect("relative path should be set");
+    let requirement_relative_path = requirement.relative_path.clone().expect("relative path should be set");
 
     let scoped = scoped_ao_root(temp.path());
     let requirement_file_path = scoped.join("requirements").join(requirement_relative_path);
     assert!(requirement_file_path.exists());
 
     let requirement_file_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&requirement_file_path)
-            .expect("requirement file should be readable"),
+        &std::fs::read_to_string(&requirement_file_path).expect("requirement file should be readable"),
     )
     .expect("requirement file should be json");
-    assert_eq!(
-        requirement_file_json
-            .get("id")
-            .and_then(serde_json::Value::as_str),
-        Some(requirement_id.as_str())
-    );
+    assert_eq!(requirement_file_json.get("id").and_then(serde_json::Value::as_str), Some(requirement_id.as_str()));
 
     let requirement_index_path = global_requirements_index_dir(temp.path()).join("index.json");
     assert!(requirement_index_path.exists());
 
     let task_file_path = scoped.join("tasks").join(format!("{}.json", task_id));
     assert!(task_file_path.exists());
-    let task_file_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&task_file_path).expect("task file should be readable"),
-    )
-    .expect("task file should be json");
-    let task_description = task_file_json
-        .get("description")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let task_file_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&task_file_path).expect("task file should be readable"))
+            .expect("task file should be json");
+    let task_description = task_file_json.get("description").and_then(serde_json::Value::as_str).unwrap_or_default();
     assert!(!task_description.trim().is_empty());
-    assert!(
-        task_description.contains("Acceptance Criteria")
-            || task_description.contains("## Implementation Notes")
-    );
+    assert!(task_description.contains("Acceptance Criteria") || task_description.contains("## Implementation Notes"));
 }
 
 #[tokio::test]
@@ -2095,10 +1764,7 @@ async fn execute_requirements_generates_stable_task_titles() {
             project_name: Some("Task Title Parity".to_string()),
             problem_statement: "Need structured task generation".to_string(),
             target_users: vec!["Engineering".to_string()],
-            goals: vec![
-                "Deliver end-to-end workflow".to_string(),
-                "Ship with tests and review gates".to_string(),
-            ],
+            goals: vec!["Deliver end-to-end workflow".to_string(), "Ship with tests and review gates".to_string()],
             constraints: vec![],
             value_proposition: None,
             complexity_assessment: None,
@@ -2110,12 +1776,7 @@ async fn execute_requirements_generates_stable_task_titles() {
     let drafted = PlanningServiceApi::draft_requirements(&hub, RequirementsDraftInput::default())
         .await
         .expect("draft requirements");
-    let requirement_id = drafted
-        .requirements
-        .first()
-        .expect("requirement should exist")
-        .id
-        .clone();
+    let requirement_id = drafted.requirements.first().expect("requirement should exist").id.clone();
 
     let execution = PlanningServiceApi::execute_requirements(
         &hub,
@@ -2131,9 +1792,7 @@ async fn execute_requirements_generates_stable_task_titles() {
 
     assert!(!execution.task_ids_created.is_empty());
     for task_id in execution.task_ids_created {
-        let task = TaskServiceApi::get(&hub, &task_id)
-            .await
-            .expect("task should exist");
+        let task = TaskServiceApi::get(&hub, &task_id).await.expect("task should exist");
         assert!(!task.title.contains("[AC"));
         assert!(!task.title.contains("[Integration]"));
     }
@@ -2160,15 +1819,9 @@ async fn execute_requirements_excludes_wont_by_default() {
     let drafted = PlanningServiceApi::draft_requirements(&hub, RequirementsDraftInput::default())
         .await
         .expect("draft requirements");
-    let mut requirement = drafted
-        .requirements
-        .first()
-        .cloned()
-        .expect("requirement should exist");
+    let mut requirement = drafted.requirements.first().cloned().expect("requirement should exist");
     requirement.priority = RequirementPriority::Wont;
-    PlanningServiceApi::upsert_requirement(&hub, requirement.clone())
-        .await
-        .expect("upsert requirement");
+    PlanningServiceApi::upsert_requirement(&hub, requirement.clone()).await.expect("upsert requirement");
 
     let error = PlanningServiceApi::execute_requirements(
         &hub,
@@ -2205,15 +1858,9 @@ async fn execute_requirements_can_include_wont_with_opt_in() {
     let drafted = PlanningServiceApi::draft_requirements(&hub, RequirementsDraftInput::default())
         .await
         .expect("draft requirements");
-    let mut requirement = drafted
-        .requirements
-        .first()
-        .cloned()
-        .expect("requirement should exist");
+    let mut requirement = drafted.requirements.first().cloned().expect("requirement should exist");
     requirement.priority = RequirementPriority::Wont;
-    PlanningServiceApi::upsert_requirement(&hub, requirement.clone())
-        .await
-        .expect("upsert requirement");
+    PlanningServiceApi::upsert_requirement(&hub, requirement.clone()).await.expect("upsert requirement");
 
     let result = PlanningServiceApi::execute_requirements(
         &hub,
@@ -2254,9 +1901,7 @@ async fn execute_requirements_maps_requirement_priority_to_task_priority() {
         (RequirementPriority::Wont, Priority::Low, "wont"),
     ];
 
-    for (index, (requirement_priority, expected_task_priority, label)) in
-        cases.into_iter().enumerate()
-    {
+    for (index, (requirement_priority, expected_task_priority, label)) in cases.into_iter().enumerate() {
         let now = chrono::Utc::now();
         let requirement = PlanningServiceApi::upsert_requirement(
             &hub,
@@ -2268,9 +1913,7 @@ async fn execute_requirements_maps_requirement_priority_to_task_priority() {
                 legacy_id: None,
                 category: None,
                 requirement_type: None,
-                acceptance_criteria: vec![format!(
-                    "Task priority generated for `{label}` is deterministic"
-                )],
+                acceptance_criteria: vec![format!("Task priority generated for `{label}` is deterministic")],
                 priority: requirement_priority,
                 status: RequirementStatus::Draft,
                 source: "manual".to_string(),
@@ -2297,19 +1940,11 @@ async fn execute_requirements_maps_requirement_priority_to_task_priority() {
         )
         .await
         .expect("execute requirements");
-        assert!(
-            !execution.task_ids_created.is_empty(),
-            "expected tasks for case {index} ({label})"
-        );
+        assert!(!execution.task_ids_created.is_empty(), "expected tasks for case {index} ({label})");
 
         for task_id in execution.task_ids_created {
-            let task = TaskServiceApi::get(&hub, &task_id)
-                .await
-                .expect("task should exist");
-            assert_eq!(
-                task.priority, expected_task_priority,
-                "unexpected task priority for case {index} ({label})"
-            );
+            let task = TaskServiceApi::get(&hub, &task_id).await.expect("task should exist");
+            assert_eq!(task.priority, expected_task_priority, "unexpected task priority for case {index} ({label})");
         }
     }
 }
@@ -2342,16 +1977,14 @@ async fn set_status_from_blocked_to_ready_clears_paused_and_blocked_fields() {
     .await
     .expect("create task");
 
-    let blocked = TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Blocked, false)
-        .await
-        .expect("set blocked status");
+    let blocked =
+        TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Blocked, false).await.expect("set blocked status");
     assert!(blocked.paused);
     assert!(blocked.blocked_reason.is_some());
     assert!(blocked.blocked_at.is_some());
 
-    let ready = TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Ready, false)
-        .await
-        .expect("set ready status");
+    let ready =
+        TaskServiceApi::set_status(&hub, &created.id, TaskStatus::Ready, false).await.expect("set ready status");
     assert_unblocked_task_state(&ready, TaskStatus::Ready);
 }
 
@@ -2395,8 +2028,5 @@ async fn update_status_from_on_hold_to_in_progress_clears_paused_and_blocked_fie
     .expect("update status to in-progress");
 
     assert_unblocked_task_state(&in_progress, TaskStatus::InProgress);
-    assert!(
-        in_progress.metadata.started_at.is_some(),
-        "in-progress transition should set started_at"
-    );
+    assert!(in_progress.metadata.started_at.is_some(), "in-progress transition should set started_at");
 }

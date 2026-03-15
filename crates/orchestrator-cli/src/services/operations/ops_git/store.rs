@@ -24,10 +24,7 @@ pub(super) fn load_git_confirmations(project_root: &str) -> Result<GitConfirmati
     read_json_or_default(&git_confirmations_path(project_root))
 }
 
-pub(super) fn save_git_confirmations(
-    project_root: &str,
-    store: &GitConfirmationStoreCli,
-) -> Result<()> {
+pub(super) fn save_git_confirmations(project_root: &str, store: &GitConfirmationStoreCli) -> Result<()> {
     write_json_pretty(&git_confirmations_path(project_root), store)
 }
 
@@ -69,9 +66,7 @@ pub(super) fn resolve_repo_path(project_root: &str, repo_name: &str) -> Result<P
         return Ok(repo_path);
     }
 
-    Err(not_found_error(format!(
-        "repository not found: {repo_name}"
-    )))
+    Err(not_found_error(format!("repository not found: {repo_name}")))
 }
 
 fn parse_worktree_list_output(output: &str) -> Vec<GitWorktreeInfoCli> {
@@ -91,17 +86,9 @@ fn parse_worktree_list_output(output: &str) -> Vec<GitWorktreeInfoCli> {
                 worktrees.push(record);
             }
             let path = path.trim().to_string();
-            let worktree_name = PathBuf::from(&path)
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("worktree")
-                .to_string();
-            current = Some(GitWorktreeInfoCli {
-                worktree_name,
-                path,
-                head: None,
-                branch: None,
-            });
+            let worktree_name =
+                PathBuf::from(&path).file_name().and_then(|value| value.to_str()).unwrap_or("worktree").to_string();
+            current = Some(GitWorktreeInfoCli { worktree_name, path, head: None, branch: None });
             continue;
         }
 
@@ -159,25 +146,19 @@ pub(super) fn ensure_confirmation(
     operation_type: &str,
     repo_name: &str,
 ) -> Result<()> {
-    let confirmation_id = confirmation_id.ok_or_else(|| {
-        invalid_input_error(git_confirmation_required_message(operation_type, repo_name))
-    })?;
+    let confirmation_id = confirmation_id
+        .ok_or_else(|| invalid_input_error(git_confirmation_required_message(operation_type, repo_name)))?;
     let store = load_git_confirmations(project_root)?;
     let request = store
         .requests
         .iter()
         .find(|request| request.id == confirmation_id)
-        .ok_or_else(|| {
-            not_found_error(format!("confirmation request not found: {confirmation_id}"))
-        })?;
+        .ok_or_else(|| not_found_error(format!("confirmation request not found: {confirmation_id}")))?;
     if request.blocked {
         anyhow::bail!("operation blocked by policy: {}", request.reason);
     }
     if !request.required {
-        anyhow::bail!(
-            "confirmation_id '{}' is not marked as required for destructive operations",
-            confirmation_id
-        );
+        anyhow::bail!("confirmation_id '{}' is not marked as required for destructive operations", confirmation_id);
     }
     if !request.operation_type.eq_ignore_ascii_case(operation_type) {
         anyhow::bail!(

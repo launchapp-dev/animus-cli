@@ -9,11 +9,7 @@ pub struct ResolvedConfig {
     pub model_id: String,
 }
 
-pub fn resolve_config(
-    model: &str,
-    api_base: Option<String>,
-    api_key: Option<String>,
-) -> Result<ResolvedConfig> {
+pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<String>) -> Result<ResolvedConfig> {
     let normalized = model.to_ascii_lowercase();
 
     let api_base = match api_base {
@@ -28,21 +24,14 @@ pub fn resolve_config(
 
     let model_id = strip_provider_prefix(model);
 
-    Ok(ResolvedConfig {
-        api_base,
-        api_key,
-        model_id,
-    })
+    Ok(ResolvedConfig { api_base, api_key, model_id })
 }
 
 fn infer_api_base(normalized_model: &str) -> Result<String> {
     if normalized_model.starts_with("minimax/") || normalized_model.contains("minimax") {
         return Ok("https://api.minimax.io/v1".to_string());
     }
-    if normalized_model.starts_with("zai")
-        || normalized_model.starts_with("glm")
-        || normalized_model.contains("glm")
-    {
+    if normalized_model.starts_with("zai") || normalized_model.starts_with("glm") || normalized_model.contains("glm") {
         return Ok("https://api.z.ai/api/coding/paas/v4".to_string());
     }
     if normalized_model.starts_with("deepseek/") || normalized_model.contains("deepseek") {
@@ -51,16 +40,11 @@ fn infer_api_base(normalized_model: &str) -> Result<String> {
     if normalized_model.starts_with("openrouter/") {
         return Ok("https://openrouter.ai/api/v1".to_string());
     }
-    bail!(
-        "Cannot infer API base URL for model '{}'. Use --api-base to specify.",
-        normalized_model
-    )
+    bail!("Cannot infer API base URL for model '{}'. Use --api-base to specify.", normalized_model)
 }
 
 fn resolve_api_key(normalized_model: &str, api_base: &str) -> Result<String> {
-    if let Some(key) =
-        protocol::credentials::Credentials::load_global().resolve(normalized_model, api_base)
-    {
+    if let Some(key) = protocol::credentials::Credentials::load_global().resolve(normalized_model, api_base) {
         return Ok(key);
     }
 
@@ -104,13 +88,7 @@ fn try_opencode_auth_json(normalized_model: &str, api_base: &str) -> Option<Stri
 }
 
 fn strip_provider_prefix(model: &str) -> String {
-    let prefixes = [
-        "minimax/",
-        "zai-coding-plan/",
-        "zai/",
-        "deepseek/",
-        "openrouter/",
-    ];
+    let prefixes = ["minimax/", "zai-coding-plan/", "zai/", "deepseek/", "openrouter/"];
     for prefix in prefixes {
         if let Some(stripped) = model.strip_prefix(prefix) {
             return stripped.to_string();

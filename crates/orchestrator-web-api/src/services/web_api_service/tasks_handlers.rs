@@ -3,13 +3,12 @@ use serde_json::{json, Value};
 
 use super::{
     parsing::{
-        build_task_filter, is_empty_task_filter, parse_dependency_type, parse_json_body,
-        parse_priority_opt, parse_task_status, parse_task_type_opt,
+        build_task_filter, is_empty_task_filter, parse_dependency_type, parse_json_body, parse_priority_opt,
+        parse_task_status, parse_task_type_opt,
     },
     requests::{
-        TaskAssignAgentRequest, TaskAssignHumanRequest, TaskChecklistAddRequest,
-        TaskChecklistUpdateRequest, TaskCreateRequest, TaskDependencyAddRequest,
-        TaskDependencyRemoveRequest, TaskPatchRequest, TaskStatusRequest,
+        TaskAssignAgentRequest, TaskAssignHumanRequest, TaskChecklistAddRequest, TaskChecklistUpdateRequest,
+        TaskCreateRequest, TaskDependencyAddRequest, TaskDependencyRemoveRequest, TaskPatchRequest, TaskStatusRequest,
     },
     WebApiError, WebApiService, DEFAULT_UPDATED_BY,
 };
@@ -44,9 +43,7 @@ impl WebApiService {
             return Ok(json!(self.context.hub.tasks().list().await?));
         }
 
-        Ok(json!(
-            self.context.hub.tasks().list_filtered(task_filter).await?
-        ))
+        Ok(json!(self.context.hub.tasks().list_filtered(task_filter).await?))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -112,21 +109,14 @@ impl WebApiService {
             description: request.description,
             task_type: parse_task_type_opt(request.task_type.as_deref())?,
             priority: parse_priority_opt(request.priority.as_deref())?,
-            created_by: Some(
-                request
-                    .created_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
-            ),
+            created_by: Some(request.created_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string())),
             tags: request.tags,
             linked_requirements: request.linked_requirements,
             linked_architecture_entities: request.linked_architecture_entities,
         };
 
         let task = self.context.hub.tasks().create(input).await?;
-        self.publish_event(
-            "task-create",
-            json!({ "task_id": task.id, "status": task.status }),
-        );
+        self.publish_event("task-create", json!({ "task_id": task.id, "status": task.status }));
         Ok(json!(task))
     }
 
@@ -136,27 +126,16 @@ impl WebApiService {
             title: request.title,
             description: request.description,
             priority: parse_priority_opt(request.priority.as_deref())?,
-            status: request
-                .status
-                .as_deref()
-                .map(parse_task_status)
-                .transpose()?,
+            status: request.status.as_deref().map(parse_task_status).transpose()?,
             assignee: request.assignee,
             tags: request.tags,
-            updated_by: Some(
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
-            ),
+            updated_by: Some(request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string())),
             deadline: request.deadline,
             linked_architecture_entities: request.linked_architecture_entities,
         };
 
         let task = self.context.hub.tasks().update(id, input).await?;
-        self.publish_event(
-            "task-update",
-            json!({ "task_id": task.id, "status": task.status }),
-        );
+        self.publish_event("task-update", json!({ "task_id": task.id, "status": task.status }));
         Ok(json!(task))
     }
 
@@ -169,16 +148,8 @@ impl WebApiService {
     pub async fn tasks_status(&self, id: &str, body: Value) -> Result<Value, WebApiError> {
         let request: TaskStatusRequest = parse_json_body(body)?;
         let status = parse_task_status(&request.status)?;
-        let task = self
-            .context
-            .hub
-            .tasks()
-            .set_status(id, status, true)
-            .await?;
-        self.publish_event(
-            "task-status",
-            json!({ "task_id": task.id, "status": task.status }),
-        );
+        let task = self.context.hub.tasks().set_status(id, status, true).await?;
+        self.publish_event("task-status", json!({ "task_id": task.id, "status": task.status }));
         Ok(json!(task))
     }
 
@@ -192,15 +163,10 @@ impl WebApiService {
                 id,
                 request.role,
                 request.model,
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
+                request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
             )
             .await?;
-        self.publish_event(
-            "task-assign-agent",
-            json!({ "task_id": task.id, "assignee": task.assignee }),
-        );
+        self.publish_event("task-assign-agent", json!({ "task_id": task.id, "assignee": task.assignee }));
         Ok(json!(task))
     }
 
@@ -210,18 +176,9 @@ impl WebApiService {
             .context
             .hub
             .tasks()
-            .assign_human(
-                id,
-                request.user_id,
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
-            )
+            .assign_human(id, request.user_id, request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()))
             .await?;
-        self.publish_event(
-            "task-assign-human",
-            json!({ "task_id": task.id, "assignee": task.assignee }),
-        );
+        self.publish_event("task-assign-human", json!({ "task_id": task.id, "assignee": task.assignee }));
         Ok(json!(task))
     }
 
@@ -234,9 +191,7 @@ impl WebApiService {
             .add_checklist_item(
                 id,
                 request.description,
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
+                request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
             )
             .await?;
         self.publish_event(
@@ -246,12 +201,7 @@ impl WebApiService {
         Ok(json!(task))
     }
 
-    pub async fn tasks_checklist_update(
-        &self,
-        id: &str,
-        item_id: &str,
-        body: Value,
-    ) -> Result<Value, WebApiError> {
+    pub async fn tasks_checklist_update(&self, id: &str, item_id: &str, body: Value) -> Result<Value, WebApiError> {
         let request: TaskChecklistUpdateRequest = parse_json_body(body)?;
         let task = self
             .context
@@ -261,9 +211,7 @@ impl WebApiService {
                 id,
                 item_id,
                 request.completed,
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
+                request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
             )
             .await?;
         self.publish_event(
@@ -284,9 +232,7 @@ impl WebApiService {
                 id,
                 &request.dependency_id,
                 dependency_type,
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
+                request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string()),
             )
             .await?;
         self.publish_event(
@@ -305,24 +251,14 @@ impl WebApiService {
         let updated_by = match body {
             Some(value) => {
                 let request: TaskDependencyRemoveRequest = parse_json_body(value)?;
-                request
-                    .updated_by
-                    .unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string())
+                request.updated_by.unwrap_or_else(|| DEFAULT_UPDATED_BY.to_string())
             }
             None => DEFAULT_UPDATED_BY.to_string(),
         };
 
-        let task = self
-            .context
-            .hub
-            .tasks()
-            .remove_dependency(id, dependency_id, updated_by)
-            .await?;
+        let task = self.context.hub.tasks().remove_dependency(id, dependency_id, updated_by).await?;
 
-        self.publish_event(
-            "task-dependency-remove",
-            json!({ "task_id": task.id, "dependency_id": dependency_id }),
-        );
+        self.publish_event("task-dependency-remove", json!({ "task_id": task.id, "dependency_id": dependency_id }));
         Ok(json!(task))
     }
 }

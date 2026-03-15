@@ -6,10 +6,10 @@ mod queue_handlers;
 mod requests;
 mod requirements_handlers;
 mod reviews_handlers;
+mod skills_handlers;
 mod system_handlers;
 mod tasks_handlers;
 mod vision_handlers;
-mod skills_handlers;
 mod workflows_handlers;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,21 +39,14 @@ impl WebApiService {
         let (event_tx, _event_rx) = broadcast::channel(1024);
         let max_seq = event_stream::read_max_seq_for_project(&context.project_root).unwrap_or(0);
 
-        Self {
-            context,
-            event_tx,
-            next_seq: Arc::new(AtomicU64::new(max_seq)),
-        }
+        Self { context, event_tx, next_seq: Arc::new(AtomicU64::new(max_seq)) }
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<DaemonEventRecord> {
         self.event_tx.subscribe()
     }
 
-    pub fn read_events_since(
-        &self,
-        after_seq: Option<u64>,
-    ) -> Result<Vec<DaemonEventRecord>, WebApiError> {
+    pub fn read_events_since(&self, after_seq: Option<u64>) -> Result<Vec<DaemonEventRecord>, WebApiError> {
         let mut records = event_stream::read_events_for_project(&self.context.project_root)?;
         if let Some(after_seq) = after_seq {
             records.retain(|record| record.seq > after_seq);

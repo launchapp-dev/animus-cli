@@ -1,8 +1,8 @@
 use clap::{ArgAction, Args, Subcommand};
 
 use super::{
-    IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_CATEGORY_HELP, REQUIREMENT_PRIORITY_HELP,
-    REQUIREMENT_STATUS_HELP, REQUIREMENT_TYPE_HELP,
+    IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_CATEGORY_HELP, REQUIREMENT_PRIORITY_HELP, REQUIREMENT_STATUS_HELP,
+    REQUIREMENT_TYPE_HELP,
 };
 
 #[derive(Debug, Subcommand)]
@@ -69,11 +69,7 @@ pub(crate) struct RequirementCreateArgs {
     pub(crate) category: Option<String>,
     #[arg(long = "type", value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
     pub(crate) requirement_type: Option<String>,
-    #[arg(
-        long,
-        value_name = "SOURCE",
-        help = "Optional source describing where this requirement originated."
-    )]
+    #[arg(long, value_name = "SOURCE", help = "Optional source describing where this requirement originated.")]
     pub(crate) source: Option<String>,
     #[arg(
         long = "acceptance-criterion",
@@ -101,11 +97,7 @@ pub(crate) struct RequirementUpdateArgs {
     pub(crate) category: Option<String>,
     #[arg(long = "type", value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
     pub(crate) requirement_type: Option<String>,
-    #[arg(
-        long,
-        value_name = "SOURCE",
-        help = "Updated source describing where this requirement originated."
-    )]
+    #[arg(long, value_name = "SOURCE", help = "Updated source describing where this requirement originated.")]
     pub(crate) source: Option<String>,
     #[arg(
         long = "linked-task-id",
@@ -139,11 +131,7 @@ pub(crate) enum RequirementGraphCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementGraphSaveArgs {
-    #[arg(
-        long,
-        value_name = "JSON",
-        help = "Complete requirement graph JSON payload to persist."
-    )]
+    #[arg(long, value_name = "JSON", help = "Complete requirement graph JSON payload to persist.")]
     pub(crate) input_json: String,
 }
 

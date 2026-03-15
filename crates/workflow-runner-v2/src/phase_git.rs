@@ -11,12 +11,7 @@ fn git_status(cwd: &str, args: &[&str], operation: &str) -> Result<()> {
         .status()
         .with_context(|| format!("failed to run git operation '{operation}' in {}", cwd))?;
     if !status.success() {
-        anyhow::bail!(
-            "git operation '{}' failed in {}: git {}",
-            operation,
-            cwd,
-            args.join(" ")
-        );
+        anyhow::bail!("git operation '{}' failed in {}: git {}", operation, cwd, args.join(" "));
     }
     Ok(())
 }
@@ -62,14 +57,9 @@ pub fn ensure_git_identity(cwd: &str) -> Result<()> {
             .output()
             .with_context(|| format!("failed to read git config {} in {}", key, cwd))?;
 
-        let configured =
-            output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty();
+        let configured = output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty();
         if !configured {
-            git_status(
-                cwd,
-                &["config", key, default_value],
-                "configure git identity",
-            )?;
+            git_status(cwd, &["config", key, default_value], "configure git identity")?;
         }
     }
 
@@ -82,24 +72,14 @@ pub fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<
         anyhow::bail!("implementation phase requires a non-empty commit message");
     }
     if !is_git_repo(cwd) {
-        anyhow::bail!(
-            "implementation phase requires a git repository for commit at {}",
-            cwd
-        );
+        anyhow::bail!("implementation phase requires a git repository for commit at {}", cwd);
     }
     if !git_has_pending_changes(cwd)? {
-        anyhow::bail!(
-            "implementation phase requires file changes to commit, but no changes were detected in {}",
-            cwd
-        );
+        anyhow::bail!("implementation phase requires file changes to commit, but no changes were detected in {}", cwd);
     }
 
     ensure_git_identity(cwd)?;
     git_status(cwd, &["add", "-A"], "stage implementation changes")?;
-    git_status(
-        cwd,
-        &["commit", "-m", commit_message],
-        "commit implementation changes",
-    )?;
+    git_status(cwd, &["commit", "-m", commit_message], "commit implementation changes")?;
     Ok(())
 }

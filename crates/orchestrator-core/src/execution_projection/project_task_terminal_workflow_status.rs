@@ -5,10 +5,7 @@ use crate::{services::ServiceHub, TaskStatus, WorkflowStatus};
 use super::{project_task_blocked_with_reason, project_task_status};
 
 fn default_failure_reason(workflow_status: WorkflowStatus) -> String {
-    format!(
-        "workflow ended with status {}",
-        format!("{workflow_status:?}").to_ascii_lowercase()
-    )
+    format!("workflow ended with status {}", format!("{workflow_status:?}").to_ascii_lowercase())
 }
 
 pub async fn project_task_terminal_workflow_status(
@@ -19,10 +16,7 @@ pub async fn project_task_terminal_workflow_status(
 ) {
     if !matches!(
         workflow_status,
-        WorkflowStatus::Completed
-            | WorkflowStatus::Failed
-            | WorkflowStatus::Escalated
-            | WorkflowStatus::Cancelled
+        WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
     ) {
         return;
     }

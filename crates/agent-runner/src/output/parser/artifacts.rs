@@ -1,9 +1,7 @@
 use protocol::{ArtifactInfo, ArtifactType};
 
 pub(super) fn extract_artifact(line: &str) -> Option<ArtifactInfo> {
-    let path = line
-        .split_once(':')
-        .and_then(|(_, rest)| rest.split_whitespace().next())?;
+    let path = line.split_once(':').and_then(|(_, rest)| rest.split_whitespace().next())?;
 
     Some(ArtifactInfo {
         artifact_id: format!("artifact_{}", chrono::Utc::now().timestamp_millis()),

@@ -36,12 +36,7 @@ impl Default for ProcessManager {
 
 impl ProcessManager {
     pub fn new() -> Self {
-        Self {
-            processes: Vec::new(),
-            process_timeout_secs: None,
-            phase_routing: None,
-            mcp_config: None,
-        }
+        Self { processes: Vec::new(), process_timeout_secs: None, phase_routing: None, mcp_config: None }
     }
 
     pub fn with_timeout(mut self, timeout_secs: Option<u64>) -> Self {
@@ -49,23 +44,13 @@ impl ProcessManager {
         self
     }
 
-    pub fn spawn_workflow_runner(
-        &mut self,
-        dispatch: &SubjectDispatch,
-        project_root: &str,
-    ) -> Result<()> {
-        let std_cmd = build_runner_command(
-            dispatch,
-            project_root,
-            self.phase_routing.as_ref(),
-            self.mcp_config.as_ref(),
-        );
+    pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
+        let std_cmd =
+            build_runner_command(dispatch, project_root, self.phase_routing.as_ref(), self.mcp_config.as_ref());
         let mut command = Command::from(std_cmd);
         command.stdout(Stdio::null()).stderr(Stdio::piped());
 
-        let mut child = command
-            .spawn()
-            .context("failed to spawn ao-workflow-runner")?;
+        let mut child = command.spawn().context("failed to spawn ao-workflow-runner")?;
 
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let stderr_reader = if let Some(stderr) = child.stderr.take() {
@@ -107,21 +92,14 @@ impl ProcessManager {
         self.check_running_with_timeout(timeout).await
     }
 
-    async fn check_running_with_timeout(
-        &mut self,
-        timeout_secs: Option<u64>,
-    ) -> Vec<CompletedProcess> {
+    async fn check_running_with_timeout(&mut self, timeout_secs: Option<u64>) -> Vec<CompletedProcess> {
         let mut completed = Vec::new();
         let mut active = Vec::with_capacity(self.processes.len());
 
         for mut process in self.processes.drain(..) {
             if let Some(timeout) = timeout_secs {
                 if process.started_at.elapsed().as_secs() > timeout {
-                    let pid = process
-                        .child
-                        .lock()
-                        .ok()
-                        .and_then(|c| c.id());
+                    let pid = process.child.lock().ok().and_then(|c| c.id());
                     if let Some(pid) = pid {
                         protocol::graceful_kill_process(pid as i32);
                     }
@@ -135,10 +113,7 @@ impl ProcessManager {
                         schedule_id: process.schedule_id,
                         exit_code: None,
                         success: false,
-                        failure_reason: Some(format!(
-                            "workflow runner exceeded timeout of {} seconds",
-                            timeout
-                        )),
+                        failure_reason: Some(format!("workflow runner exceeded timeout of {} seconds", timeout)),
                         events: parse_runner_events(&process.stderr_lines),
                     });
                     continue;
@@ -157,10 +132,7 @@ impl ProcessManager {
                             schedule_id: process.schedule_id,
                             exit_code: None,
                             success: false,
-                            failure_reason: Some(format!(
-                                "failed to lock workflow process handle: {}",
-                                error
-                            )),
+                            failure_reason: Some(format!("failed to lock workflow process handle: {}", error)),
                             events: Vec::new(),
                         });
                         continue;
@@ -180,13 +152,7 @@ impl ProcessManager {
                     let (success, failure_reason) = if status.success() {
                         (true, None)
                     } else {
-                        (
-                            false,
-                            Some(format!(
-                                "workflow runner exited unsuccessfully with status {:?}",
-                                exit_code
-                            )),
-                        )
+                        (false, Some(format!("workflow runner exited unsuccessfully with status {:?}", exit_code)))
                     };
 
                     completed.push(CompletedProcess {
@@ -213,10 +179,7 @@ impl ProcessManager {
                         schedule_id: process.schedule_id,
                         exit_code: None,
                         success: false,
-                        failure_reason: Some(format!(
-                            "failed to probe workflow process status: {}",
-                            error
-                        )),
+                        failure_reason: Some(format!("failed to probe workflow process status: {}", error)),
                         events: Vec::new(),
                     });
                 }
@@ -232,10 +195,7 @@ impl ProcessManager {
     }
 
     pub fn active_subject_ids(&self) -> HashSet<String> {
-        self.processes
-            .iter()
-            .map(|process| process.subject_id.clone())
-            .collect()
+        self.processes.iter().map(|process| process.subject_id.clone()).collect()
     }
 }
 
@@ -250,17 +210,11 @@ fn parse_runner_events(stderr_lines: &Arc<Mutex<Vec<String>>>) -> Vec<RunnerEven
         Ok(guard) => guard.clone(),
         Err(_) => return Vec::new(),
     };
-    lines
-        .iter()
-        .filter_map(|line| serde_json::from_str::<RunnerEvent>(line).ok())
-        .collect()
+    lines.iter().filter_map(|line| serde_json::from_str::<RunnerEvent>(line).ok()).collect()
 }
 
 fn latest_runner_workflow_id(events: &[RunnerEvent]) -> Option<String> {
-    events
-        .iter()
-        .rev()
-        .find_map(|event| event.workflow_id.clone())
+    events.iter().rev().find_map(|event| event.workflow_id.clone())
 }
 
 fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatus> {
@@ -316,9 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_workflow_runner_tracks_active_processes() {
-        let _lock = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let temp_dir = TempDir::new().expect("temp directory should be created");
         let runner_path = {
@@ -337,12 +289,10 @@ mod tests {
         fs::write(&runner_path, runner_payload).expect("mock runner should be written");
         #[cfg(unix)]
         {
-            let mut permissions = fs::metadata(&runner_path)
-                .expect("mock runner metadata should be available")
-                .permissions();
+            let mut permissions =
+                fs::metadata(&runner_path).expect("mock runner metadata should be available").permissions();
             permissions.set_mode(0o755);
-            fs::set_permissions(&runner_path, permissions)
-                .expect("mock runner should be executable");
+            fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
         }
 
         let original_path = env::var_os("PATH").unwrap_or_default();
@@ -384,9 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn custom_subject_tracks_schedule_id_and_parses_events() {
-        let _lock = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let temp_dir = TempDir::new().expect("temp directory should be created");
         let runner_path = temp_dir.path().join("ao-workflow-runner");
@@ -394,12 +342,10 @@ mod tests {
         fs::write(&runner_path, runner_payload).expect("mock runner should be written");
         #[cfg(unix)]
         {
-            let mut permissions = fs::metadata(&runner_path)
-                .expect("mock runner metadata should be available")
-                .permissions();
+            let mut permissions =
+                fs::metadata(&runner_path).expect("mock runner metadata should be available").permissions();
             permissions.set_mode(0o755);
-            fs::set_permissions(&runner_path, permissions)
-                .expect("mock runner should be executable");
+            fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
         }
 
         let original_path = env::var_os("PATH").unwrap_or_default();
@@ -410,13 +356,7 @@ mod tests {
         let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
 
         let mut manager = ProcessManager::new();
-        let dispatch = SubjectDispatch::for_custom(
-            "schedule:nightly",
-            "nightly run",
-            "standard",
-            None,
-            "schedule",
-        );
+        let dispatch = SubjectDispatch::for_custom("schedule:nightly", "nightly run", "standard", None, "schedule");
         manager
             .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
             .expect("mock runner should spawn");
@@ -438,13 +378,7 @@ mod tests {
         assert_eq!(completed.events.len(), 2);
         assert!(completed.workflow_id.is_none());
         assert!(completed.workflow_status.is_none());
-        assert_eq!(
-            completed.events[0].workflow_ref.as_deref(),
-            Some("standard")
-        );
-        assert_eq!(
-            completed.events[1].workflow_ref.as_deref(),
-            Some("standard")
-        );
+        assert_eq!(completed.events[0].workflow_ref.as_deref(), Some("standard"));
+        assert_eq!(completed.events[1].workflow_ref.as_deref(), Some("standard"));
     }
 }

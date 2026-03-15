@@ -30,14 +30,12 @@ impl RunnerMetrics {
 
     pub fn record_completion(&self, duration_ms: u64) {
         self.runs_completed.fetch_add(1, Ordering::Relaxed);
-        self.total_duration_ms
-            .fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self, duration_ms: u64) {
         self.runs_failed.fetch_add(1, Ordering::Relaxed);
-        self.total_duration_ms
-            .fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     pub fn record_timeout(&self) {
@@ -59,11 +57,7 @@ impl RunnerMetrics {
             runs_failed: self.runs_failed.load(Ordering::Relaxed),
             runs_timed_out: self.runs_timed_out.load(Ordering::Relaxed),
             runs_cancelled: self.runs_cancelled.load(Ordering::Relaxed),
-            avg_duration_ms: if completed > 0 {
-                total_ms / completed
-            } else {
-                0
-            },
+            avg_duration_ms: if completed > 0 { total_ms / completed } else { 0 },
         }
     }
 }

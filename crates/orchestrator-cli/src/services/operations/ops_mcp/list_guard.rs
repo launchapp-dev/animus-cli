@@ -4,15 +4,13 @@ use serde_json::{json, Value};
 use crate::invalid_input_error;
 
 use super::{
-    list_profiles::list_tool_profile, ListGuardInput, ListSizeGuardMode, ListSizeGuardResult,
-    ListToolProfile, DEFAULT_MCP_LIST_LIMIT, DEFAULT_MCP_LIST_MAX_TOKENS, MAX_MCP_LIST_LIMIT,
-    MAX_MCP_LIST_MAX_TOKENS, MCP_LIST_RESULT_SCHEMA, MIN_MCP_LIST_MAX_TOKENS,
+    list_profiles::list_tool_profile, ListGuardInput, ListSizeGuardMode, ListSizeGuardResult, ListToolProfile,
+    DEFAULT_MCP_LIST_LIMIT, DEFAULT_MCP_LIST_MAX_TOKENS, MAX_MCP_LIST_LIMIT, MAX_MCP_LIST_MAX_TOKENS,
+    MCP_LIST_RESULT_SCHEMA, MIN_MCP_LIST_MAX_TOKENS,
 };
 
 pub(super) fn list_limit(limit: Option<usize>) -> usize {
-    limit
-        .unwrap_or(DEFAULT_MCP_LIST_LIMIT)
-        .clamp(1, MAX_MCP_LIST_LIMIT)
+    limit.unwrap_or(DEFAULT_MCP_LIST_LIMIT).clamp(1, MAX_MCP_LIST_LIMIT)
 }
 
 fn list_offset(offset: Option<usize>) -> usize {
@@ -20,33 +18,20 @@ fn list_offset(offset: Option<usize>) -> usize {
 }
 
 pub(super) fn list_max_tokens(max_tokens: Option<usize>) -> usize {
-    max_tokens
-        .unwrap_or(DEFAULT_MCP_LIST_MAX_TOKENS)
-        .clamp(MIN_MCP_LIST_MAX_TOKENS, MAX_MCP_LIST_MAX_TOKENS)
+    max_tokens.unwrap_or(DEFAULT_MCP_LIST_MAX_TOKENS).clamp(MIN_MCP_LIST_MAX_TOKENS, MAX_MCP_LIST_MAX_TOKENS)
 }
 
 fn estimate_json_tokens(value: &Value) -> usize {
-    let char_count = serde_json::to_string(value)
-        .map(|serialized| serialized.chars().count())
-        .unwrap_or_default();
+    let char_count = serde_json::to_string(value).map(|serialized| serialized.chars().count()).unwrap_or_default();
     char_count.div_ceil(4).max(1)
 }
 
-pub(super) fn build_guarded_list_result(
-    tool_name: &str,
-    data: Value,
-    guard: ListGuardInput,
-) -> Result<Value> {
+pub(super) fn build_guarded_list_result(tool_name: &str, data: Value, guard: ListGuardInput) -> Result<Value> {
     let profile = list_tool_profile(tool_name).ok_or_else(|| {
-        invalid_input_error(format!(
-            "unsupported MCP list tool '{tool_name}' for paginated response"
-        ))
+        invalid_input_error(format!("unsupported MCP list tool '{tool_name}' for paginated response"))
     })?;
     let all_items = data.as_array().cloned().ok_or_else(|| {
-        invalid_input_error(format!(
-            "{tool_name} expected list data as JSON array but received {}",
-            value_kind(&data)
-        ))
+        invalid_input_error(format!("{tool_name} expected list data as JSON array but received {}", value_kind(&data)))
     })?;
 
     let limit = list_limit(guard.limit);
@@ -98,11 +83,8 @@ fn apply_list_size_guard(
         };
     }
 
-    let summary_items: Vec<Value> = full_page_items
-        .iter()
-        .cloned()
-        .map(|item| retain_fields(item, profile.summary_fields))
-        .collect();
+    let summary_items: Vec<Value> =
+        full_page_items.iter().cloned().map(|item| retain_fields(item, profile.summary_fields)).collect();
     let summary_value = Value::Array(summary_items.clone());
     let summary_tokens = estimate_json_tokens(&summary_value);
     if summary_tokens <= max_tokens {
@@ -125,11 +107,7 @@ fn apply_list_size_guard(
     }
 }
 
-fn build_summary_only_digest(
-    items: &[Value],
-    profile: ListToolProfile,
-    max_tokens: usize,
-) -> Value {
+fn build_summary_only_digest(items: &[Value], profile: ListToolProfile, max_tokens: usize) -> Value {
     let mut ids = Vec::new();
     let mut status_counts = std::collections::BTreeMap::new();
 
@@ -149,12 +127,7 @@ fn build_summary_only_digest(
     let mut omitted_status_item_count = 0usize;
 
     loop {
-        let digest = build_summary_only_digest_value(
-            items.len(),
-            &ids,
-            &status_entries,
-            omitted_status_item_count,
-        );
+        let digest = build_summary_only_digest_value(items.len(), &ids, &status_entries, omitted_status_item_count);
         if estimate_json_tokens(&digest) <= max_tokens {
             return digest;
         }
@@ -189,10 +162,7 @@ fn build_summary_only_digest_value(
     digest.insert("ids".to_string(), json!(ids));
     digest.insert("status_counts".to_string(), Value::Object(status_counts));
     if omitted_status_item_count > 0 {
-        digest.insert(
-            "omitted_status_item_count".to_string(),
-            json!(omitted_status_item_count),
-        );
+        digest.insert("omitted_status_item_count".to_string(), json!(omitted_status_item_count));
     }
     Value::Object(digest)
 }
@@ -235,10 +205,8 @@ fn value_kind(value: &Value) -> &'static str {
 fn retain_fields(value: Value, fields: &[&str]) -> Value {
     match value {
         Value::Object(map) => {
-            let filtered: serde_json::Map<String, Value> = map
-                .into_iter()
-                .filter(|(key, _)| fields.contains(&key.as_str()))
-                .collect();
+            let filtered: serde_json::Map<String, Value> =
+                map.into_iter().filter(|(key, _)| fields.contains(&key.as_str())).collect();
             Value::Object(filtered)
         }
         other => other,

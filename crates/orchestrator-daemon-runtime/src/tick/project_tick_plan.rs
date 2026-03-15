@@ -20,18 +20,9 @@ impl ProjectTickPlan {
         let within_active_hours = ScheduleDispatch::allows_proactive_dispatch(active_hours, now);
         let should_process_due_schedules = within_active_hours;
         let should_prepare_ready_tasks = !pool_draining && options.auto_run_ready;
-        let ready_dispatch_limit = if should_prepare_ready_tasks {
-            requested_ready_dispatch_limit
-        } else {
-            0
-        };
+        let ready_dispatch_limit = if should_prepare_ready_tasks { requested_ready_dispatch_limit } else { 0 };
 
-        Self {
-            within_active_hours,
-            should_process_due_schedules,
-            should_prepare_ready_tasks,
-            ready_dispatch_limit,
-        }
+        Self { within_active_hours, should_process_due_schedules, should_prepare_ready_tasks, ready_dispatch_limit }
     }
 
     pub fn for_slim_tick(
@@ -42,19 +33,10 @@ impl ProjectTickPlan {
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
-        let requested_ready_dispatch_limit = ready_dispatch_limit_for_options(
-            options,
-            active_process_count,
-            daemon_pool_size,
-        );
+        let requested_ready_dispatch_limit =
+            ready_dispatch_limit_for_options(options, active_process_count, daemon_pool_size);
 
-        Self::build(
-            options,
-            active_hours,
-            now,
-            pool_draining,
-            requested_ready_dispatch_limit,
-        )
+        Self::build(options, active_hours, now, pool_draining, requested_ready_dispatch_limit)
     }
 }
 
@@ -100,10 +82,7 @@ mod tests {
     #[test]
     fn disables_ready_task_preparation_when_auto_run_ready_is_off() {
         let plan = ProjectTickPlan::build(
-            &DaemonRuntimeOptions {
-                auto_run_ready: false,
-                ..DaemonRuntimeOptions::default()
-            },
+            &DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() },
             None,
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
@@ -119,11 +98,7 @@ mod tests {
     #[test]
     fn slim_tick_uses_active_process_count_against_configured_capacity() {
         let plan = ProjectTickPlan::for_slim_tick(
-            &DaemonRuntimeOptions {
-                pool_size: Some(4),
-                max_tasks_per_tick: 5,
-                ..DaemonRuntimeOptions::default()
-            },
+            &DaemonRuntimeOptions { pool_size: Some(4), max_tasks_per_tick: 5, ..DaemonRuntimeOptions::default() },
             None,
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
@@ -137,11 +112,7 @@ mod tests {
     #[test]
     fn slim_tick_uses_smallest_capacity_across_pool_sizes() {
         let plan = ProjectTickPlan::for_slim_tick(
-            &DaemonRuntimeOptions {
-                pool_size: Some(6),
-                max_tasks_per_tick: 5,
-                ..DaemonRuntimeOptions::default()
-            },
+            &DaemonRuntimeOptions { pool_size: Some(6), max_tasks_per_tick: 5, ..DaemonRuntimeOptions::default() },
             None,
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,

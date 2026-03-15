@@ -25,103 +25,45 @@ fn assert_shared_destructive_dry_run_contract(
     expected_operation: &str,
     expected_requires_confirmation: bool,
 ) {
-    let data = payload
-        .pointer("/data")
-        .expect("envelope should include /data payload");
+    let data = payload.pointer("/data").expect("envelope should include /data payload");
 
     for key in SHARED_DESTRUCTIVE_DRY_RUN_KEYS {
-        assert!(
-            data.get(key).is_some(),
-            "dry-run payload should include shared key '{}'",
-            key
-        );
+        assert!(data.get(key).is_some(), "dry-run payload should include shared key '{}'", key);
     }
 
-    assert_eq!(
-        data.get("operation").and_then(Value::as_str),
-        Some(expected_operation)
-    );
-    assert_eq!(
-        data.get("action").and_then(Value::as_str),
-        Some(expected_operation)
-    );
+    assert_eq!(data.get("operation").and_then(Value::as_str), Some(expected_operation));
+    assert_eq!(data.get("action").and_then(Value::as_str), Some(expected_operation));
     assert_eq!(data.get("dry_run").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        data.get("requires_confirmation").and_then(Value::as_bool),
-        Some(expected_requires_confirmation)
-    );
+    assert_eq!(data.get("requires_confirmation").and_then(Value::as_bool), Some(expected_requires_confirmation));
+    assert!(data.get("target").and_then(Value::as_object).is_some(), "dry-run payload target should be a JSON object");
     assert!(
-        data.get("target").and_then(Value::as_object).is_some(),
-        "dry-run payload target should be a JSON object"
-    );
-    assert!(
-        data.get("planned_effects")
-            .and_then(Value::as_array)
-            .map(|effects| !effects.is_empty())
-            .unwrap_or(false),
+        data.get("planned_effects").and_then(Value::as_array).map(|effects| !effects.is_empty()).unwrap_or(false),
         "dry-run payload planned_effects should be a non-empty array"
     );
-    assert!(
-        data.get("next_step").and_then(Value::as_str).is_some(),
-        "dry-run payload next_step should be a string"
-    );
+    assert!(data.get("next_step").and_then(Value::as_str).is_some(), "dry-run payload next_step should be a string");
 }
 
 #[test]
 fn e2e_task_lifecycle_round_trip() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let created = harness.run_json_ok(&[
-        "task",
-        "create",
-        "--title",
-        "E2E Task",
-        "--description",
-        "Created by e2e test",
-    ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
-    assert_eq!(
-        created.pointer("/data/title").and_then(Value::as_str),
-        Some("E2E Task")
-    );
-    assert_eq!(
-        created.pointer("/data/status").and_then(Value::as_str),
-        Some("backlog")
-    );
+    let created =
+        harness.run_json_ok(&["task", "create", "--title", "E2E Task", "--description", "Created by e2e test"])?;
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
+    assert_eq!(created.pointer("/data/title").and_then(Value::as_str), Some("E2E Task"));
+    assert_eq!(created.pointer("/data/status").and_then(Value::as_str), Some("backlog"));
 
     harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "ready"])?;
 
     let fetched = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
-    assert_eq!(
-        fetched.pointer("/data/id").and_then(Value::as_str),
-        Some(task_id.as_str())
-    );
-    assert_eq!(
-        fetched.pointer("/data/status").and_then(Value::as_str),
-        Some("ready")
-    );
+    assert_eq!(fetched.pointer("/data/id").and_then(Value::as_str), Some(task_id.as_str()));
+    assert_eq!(fetched.pointer("/data/status").and_then(Value::as_str), Some("ready"));
 
     let stats = harness.run_json_ok(&["task", "stats"])?;
-    assert_eq!(
-        stats.pointer("/data/total").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        stats
-            .pointer("/data/by_status/ready")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        stats
-            .pointer("/data/stale_in_progress/count")
-            .and_then(Value::as_u64),
-        Some(0)
-    );
+    assert_eq!(stats.pointer("/data/total").and_then(Value::as_u64), Some(1));
+    assert_eq!(stats.pointer("/data/by_status/ready").and_then(Value::as_u64), Some(1));
+    assert_eq!(stats.pointer("/data/stale_in_progress/count").and_then(Value::as_u64), Some(0));
 
     Ok(())
 }
@@ -140,35 +82,17 @@ fn e2e_task_create_warns_for_unlinked_non_chore_in_json_mode() -> Result<()> {
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
 
-    let payload: Value =
-        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
-    assert_eq!(
-        payload.get("schema").and_then(Value::as_str),
-        Some(CLI_SCHEMA_ID)
-    );
+    let payload: Value = serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(payload.get("schema").and_then(Value::as_str), Some(CLI_SCHEMA_ID));
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
-    assert!(
-        payload
-            .pointer("/data/id")
-            .and_then(Value::as_str)
-            .is_some(),
-        "task create should still return a task id"
-    );
+    assert!(payload.pointer("/data/id").and_then(Value::as_str).is_some(), "task create should still return a task id");
     assert!(
         stderr.contains("creating non-chore task without linked requirements"),
         "stderr should include missing linked requirement warning"
     );
-    assert!(
-        stderr.contains("--linked-requirement"),
-        "warning should include actionable flag guidance"
-    );
+    assert!(stderr.contains("--linked-requirement"), "warning should include actionable flag guidance");
 
     Ok(())
 }
@@ -189,12 +113,7 @@ fn e2e_task_create_does_not_warn_for_unlinked_chore() -> Result<()> {
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
     assert!(
         !stderr.contains("creating non-chore task without linked requirements"),
         "chore tasks should not emit missing linked requirement warning"
@@ -219,21 +138,10 @@ fn e2e_task_create_does_not_warn_when_linked_requirement_is_provided() -> Result
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
 
-    let payload: Value =
-        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
-    assert_eq!(
-        payload
-            .pointer("/data/linked_requirements/0")
-            .and_then(Value::as_str),
-        Some("REQ-123")
-    );
+    let payload: Value = serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(payload.pointer("/data/linked_requirements/0").and_then(Value::as_str), Some("REQ-123"));
     assert!(
         !stderr.contains("creating non-chore task without linked requirements"),
         "linked tasks should not emit missing linked requirement warning"
@@ -260,15 +168,9 @@ fn e2e_task_create_warns_when_linked_requirements_are_blank() -> Result<()> {
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
 
-    let payload: Value =
-        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    let payload: Value = serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
     assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
     assert!(
         stderr.contains("creating non-chore task without linked requirements"),
@@ -296,21 +198,10 @@ fn e2e_task_create_does_not_warn_when_any_linked_requirement_is_non_blank() -> R
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
 
-    let payload: Value =
-        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
-    assert_eq!(
-        payload
-            .pointer("/data/linked_requirements/1")
-            .and_then(Value::as_str),
-        Some("REQ-123")
-    );
+    let payload: Value = serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(payload.pointer("/data/linked_requirements/1").and_then(Value::as_str), Some("REQ-123"));
     assert!(
         !stderr.contains("creating non-chore task without linked requirements"),
         "warning should not be emitted when at least one linked requirement is non-blank"
@@ -338,30 +229,12 @@ fn e2e_task_create_warning_uses_resolved_input_json_payload() -> Result<()> {
 
     let stdout = String::from_utf8(output.stdout).context("stdout should be utf-8")?;
     let stderr = String::from_utf8(output.stderr).context("stderr should be utf-8")?;
-    assert!(
-        output.status.success(),
-        "task create should succeed; stdout:\n{}\nstderr:\n{}",
-        stdout,
-        stderr
-    );
+    assert!(output.status.success(), "task create should succeed; stdout:\n{}\nstderr:\n{}", stdout, stderr);
 
-    let payload: Value =
-        serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
-    assert_eq!(
-        payload.pointer("/data/title").and_then(Value::as_str),
-        Some("input-json task")
-    );
-    assert_eq!(
-        payload.pointer("/data/type").and_then(Value::as_str),
-        Some("feature")
-    );
-    assert_eq!(
-        payload
-            .pointer("/data/linked_requirements")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
-    );
+    let payload: Value = serde_json::from_str(&stdout).context("stdout should remain valid JSON envelope")?;
+    assert_eq!(payload.pointer("/data/title").and_then(Value::as_str), Some("input-json task"));
+    assert_eq!(payload.pointer("/data/type").and_then(Value::as_str), Some("feature"));
+    assert_eq!(payload.pointer("/data/linked_requirements").and_then(Value::as_array).map(Vec::len), Some(0));
     assert!(
         stderr.contains("creating non-chore task without linked requirements"),
         "warning should be based on resolved --input-json payload"
@@ -389,10 +262,7 @@ fn e2e_requirements_create_update_and_list() -> Result<()> {
         .and_then(Value::as_str)
         .context("requirements create should return data.id")?
         .to_string();
-    assert_eq!(
-        created.pointer("/data/status").and_then(Value::as_str),
-        Some("draft")
-    );
+    assert_eq!(created.pointer("/data/status").and_then(Value::as_str), Some("draft"));
 
     harness.run_json_ok(&[
         "requirements",
@@ -406,53 +276,36 @@ fn e2e_requirements_create_update_and_list() -> Result<()> {
     ])?;
 
     let listed = harness.run_json_ok(&["requirements", "list"])?;
-    let requirements = listed
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .context("requirements list should return data as array")?;
+    let requirements =
+        listed.pointer("/data").and_then(Value::as_array).context("requirements list should return data as array")?;
     let requirement = requirements
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(requirement_id.as_str()))
         .context("updated requirement should be present in list")?;
 
-    assert_eq!(
-        requirement.get("status").and_then(Value::as_str),
-        Some("done")
-    );
+    assert_eq!(requirement.get("status").and_then(Value::as_str), Some("done"));
     let acceptance_criteria = requirement
         .get("acceptance_criteria")
         .and_then(Value::as_array)
         .context("requirement should include acceptance_criteria")?;
     assert!(
-        acceptance_criteria
-            .iter()
-            .any(|value| value.as_str() == Some("criterion one")),
+        acceptance_criteria.iter().any(|value| value.as_str() == Some("criterion one")),
         "first criterion should be retained"
     );
     assert!(
-        acceptance_criteria
-            .iter()
-            .any(|value| value.as_str() == Some("criterion two")),
+        acceptance_criteria.iter().any(|value| value.as_str() == Some("criterion two")),
         "second criterion should be appended"
     );
 
     let requirements_docs = harness.scoped_root().join("docs/requirements.json");
-    assert!(
-        requirements_docs.exists(),
-        "requirements docs file should exist"
-    );
+    assert!(requirements_docs.exists(), "requirements docs file should exist");
     let requirements_docs_payload: Value = serde_json::from_str(
-        &std::fs::read_to_string(&requirements_docs)
-            .context("requirements docs should be readable")?,
+        &std::fs::read_to_string(&requirements_docs).context("requirements docs should be readable")?,
     )
     .context("requirements docs should contain valid JSON")?;
-    let docs_items = requirements_docs_payload
-        .as_array()
-        .context("requirements docs should contain an array")?;
+    let docs_items = requirements_docs_payload.as_array().context("requirements docs should contain an array")?;
     assert!(
-        docs_items
-            .iter()
-            .any(|item| item.get("id").and_then(Value::as_str) == Some(requirement_id.as_str())),
+        docs_items.iter().any(|item| item.get("id").and_then(Value::as_str) == Some(requirement_id.as_str())),
         "requirements docs should contain the created requirement"
     );
 
@@ -480,14 +333,8 @@ fn e2e_requirements_generated_docs_persist_metadata_and_prune_on_delete() -> Res
         .and_then(Value::as_str)
         .context("requirements create should return data.id")?
         .to_string();
-    assert_eq!(
-        created.pointer("/data/category").and_then(Value::as_str),
-        Some("usability")
-    );
-    assert_eq!(
-        created.pointer("/data/type").and_then(Value::as_str),
-        Some("product")
-    );
+    assert_eq!(created.pointer("/data/category").and_then(Value::as_str), Some("usability"));
+    assert_eq!(created.pointer("/data/type").and_then(Value::as_str), Some("product"));
 
     harness.run_json_ok(&[
         "requirements",
@@ -502,39 +349,20 @@ fn e2e_requirements_generated_docs_persist_metadata_and_prune_on_delete() -> Res
         "done",
     ])?;
 
-    let generated_path = harness
-        .scoped_root()
-        .join("requirements")
-        .join("generated")
-        .join(format!("{requirement_id}.json"));
-    assert!(
-        generated_path.exists(),
-        "requirements update should emit generated requirement docs"
-    );
+    let generated_path =
+        harness.scoped_root().join("requirements").join("generated").join(format!("{requirement_id}.json"));
+    assert!(generated_path.exists(), "requirements update should emit generated requirement docs");
 
     let generated_payload: Value = serde_json::from_str(
-        &std::fs::read_to_string(&generated_path)
-            .context("generated requirement docs should be readable")?,
+        &std::fs::read_to_string(&generated_path).context("generated requirement docs should be readable")?,
     )
     .context("generated requirement docs should contain valid JSON")?;
-    assert_eq!(
-        generated_payload.get("category").and_then(Value::as_str),
-        Some("runtime")
-    );
-    assert_eq!(
-        generated_payload.get("type").and_then(Value::as_str),
-        Some("technical")
-    );
-    assert_eq!(
-        generated_payload.get("status").and_then(Value::as_str),
-        Some("implemented")
-    );
+    assert_eq!(generated_payload.get("category").and_then(Value::as_str), Some("runtime"));
+    assert_eq!(generated_payload.get("type").and_then(Value::as_str), Some("technical"));
+    assert_eq!(generated_payload.get("status").and_then(Value::as_str), Some("implemented"));
 
     harness.run_json_ok(&["requirements", "delete", "--id", &requirement_id])?;
-    assert!(
-        !generated_path.exists(),
-        "requirements delete should prune generated requirement docs"
-    );
+    assert!(!generated_path.exists(), "requirements delete should prune generated requirement docs");
 
     Ok(())
 }
@@ -608,13 +436,11 @@ fn e2e_requirements_backfill_category_and_type_for_req_007_through_req_024() -> 
             .find(|item| item.get("id").and_then(Value::as_str) == Some(*id))
             .with_context(|| format!("{id} should exist before backfill"))?;
         assert!(
-            requirement.get("category").is_none()
-                || requirement.get("category").is_some_and(Value::is_null),
+            requirement.get("category").is_none() || requirement.get("category").is_some_and(Value::is_null),
             "{id} should start with category unset"
         );
         assert!(
-            requirement.get("type").is_none()
-                || requirement.get("type").is_some_and(Value::is_null),
+            requirement.get("type").is_none() || requirement.get("type").is_some_and(Value::is_null),
             "{id} should start with type unset"
         );
     }
@@ -653,15 +479,8 @@ fn e2e_requirements_backfill_category_and_type_for_req_007_through_req_024() -> 
             "{id} should persist backfilled type"
         );
 
-        let generated_path = harness
-            .scoped_root()
-            .join("requirements")
-            .join("generated")
-            .join(format!("{id}.json"));
-        assert!(
-            generated_path.exists(),
-            "{id} generated requirement docs should exist"
-        );
+        let generated_path = harness.scoped_root().join("requirements").join("generated").join(format!("{id}.json"));
+        assert!(generated_path.exists(), "{id} generated requirement docs should exist");
 
         let generated_payload: Value = serde_json::from_str(
             &std::fs::read_to_string(&generated_path)
@@ -730,9 +549,7 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
         "1",
     ])?;
     assert_eq!(
-        already_running
-            .pointer("/data/daemon_pid")
-            .and_then(Value::as_u64),
+        already_running.pointer("/data/daemon_pid").and_then(Value::as_u64),
         Some(daemon_pid),
         "second autonomous start should report the same running daemon pid"
     );
@@ -755,9 +572,7 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
         .write(true)
         .open(&lock_path)
         .context("daemon lock should be opened")?;
-    lock_file
-        .try_lock_exclusive()
-        .context("daemon lock should be acquired in test")?;
+    lock_file.try_lock_exclusive().context("daemon lock should be acquired in test")?;
 
     let (failure, exit_code) = harness.run_json_err_with_exit(&[
         "daemon",
@@ -777,10 +592,7 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
         "--max-tasks-per-tick",
         "1",
     ])?;
-    assert_ne!(
-        exit_code, 0,
-        "daemon start should fail when autonomous child exits"
-    );
+    assert_ne!(exit_code, 0, "daemon start should fail when autonomous child exits");
     let message = failure
         .pointer("/error/message")
         .and_then(Value::as_str)
@@ -789,14 +601,8 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
         message.contains("autonomous daemon failed startup validation"),
         "daemon start failure should indicate startup validation failure"
     );
-    assert!(
-        message.contains("startup log path"),
-        "daemon start failure should include startup log path diagnostics"
-    );
-    assert!(
-        message.contains("startup log tail"),
-        "daemon start failure should include startup log tail diagnostics"
-    );
+    assert!(message.contains("startup log path"), "daemon start failure should include startup log path diagnostics");
+    assert!(message.contains("startup log tail"), "daemon start failure should include startup log tail diagnostics");
 
     drop(lock_file);
     Ok(())
@@ -806,30 +612,13 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
 fn e2e_daemon_config_persists_auto_prune_worktrees_after_merge() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let configured = harness.run_json_ok(&[
-        "daemon",
-        "config",
-        "--auto-prune-worktrees-after-merge",
-        "true",
-    ])?;
-    assert_eq!(
-        configured
-            .pointer("/data/auto_prune_worktrees_after_merge")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    let configured = harness.run_json_ok(&["daemon", "config", "--auto-prune-worktrees-after-merge", "true"])?;
+    assert_eq!(configured.pointer("/data/auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));
 
     let pm_config_path = harness.project_root().join(".ao").join("pm-config.json");
-    let pm_config_content =
-        std::fs::read_to_string(pm_config_path).context("pm-config should be readable")?;
-    let pm_config: Value =
-        serde_json::from_str(&pm_config_content).context("pm-config should parse as JSON")?;
-    assert_eq!(
-        pm_config
-            .get("auto_prune_worktrees_after_merge")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    let pm_config_content = std::fs::read_to_string(pm_config_path).context("pm-config should be readable")?;
+    let pm_config: Value = serde_json::from_str(&pm_config_content).context("pm-config should parse as JSON")?;
+    assert_eq!(pm_config.get("auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));
 
     Ok(())
 }
@@ -846,17 +635,11 @@ fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
         "--description",
         "Task deletion confirmation test",
     ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
 
     let confirmation_error = harness.run_json_err(&["task", "delete", "--id", &task_id])?;
-    let confirmation_message = confirmation_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let confirmation_message = confirmation_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         confirmation_message,
         format!(
@@ -873,10 +656,7 @@ fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
     harness.run_json_ok(&["task", "delete", "--id", &task_id, "--confirm", &task_id])?;
 
     let not_found = harness.run_json_err(&["task", "get", "--id", &task_id])?;
-    assert_eq!(
-        not_found.pointer("/error/code").and_then(Value::as_str),
-        Some("not_found")
-    );
+    assert_eq!(not_found.pointer("/error/code").and_then(Value::as_str), Some("not_found"));
 
     Ok(())
 }
@@ -893,17 +673,11 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
         "--description",
         "Task control cancellation confirmation test",
     ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
 
     let confirmation_error = harness.run_json_err(&["task", "cancel", "--task-id", &task_id])?;
-    let confirmation_message = confirmation_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let confirmation_message = confirmation_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         confirmation_message,
         format!(
@@ -917,37 +691,14 @@ fn e2e_task_control_cancel_requires_confirmation_and_supports_dry_run() -> Resul
     assert_shared_destructive_dry_run_contract(&preview, "task.cancel", true);
 
     let before_cancel = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
-    assert_eq!(
-        before_cancel
-            .pointer("/data/cancelled")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(before_cancel.pointer("/data/cancelled").and_then(Value::as_bool), Some(false));
 
-    let cancelled = harness.run_json_ok(&[
-        "task",
-        "cancel",
-        "--task-id",
-        &task_id,
-        "--confirm",
-        &task_id,
-    ])?;
-    assert_eq!(
-        cancelled.pointer("/data/success").and_then(Value::as_bool),
-        Some(true)
-    );
+    let cancelled = harness.run_json_ok(&["task", "cancel", "--task-id", &task_id, "--confirm", &task_id])?;
+    assert_eq!(cancelled.pointer("/data/success").and_then(Value::as_bool), Some(true));
 
     let after_cancel = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
-    assert_eq!(
-        after_cancel
-            .pointer("/data/cancelled")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        after_cancel.pointer("/data/status").and_then(Value::as_str),
-        Some("cancelled")
-    );
+    assert_eq!(after_cancel.pointer("/data/cancelled").and_then(Value::as_bool), Some(true));
+    assert_eq!(after_cancel.pointer("/data/status").and_then(Value::as_str), Some("cancelled"));
 
     Ok(())
 }
@@ -966,11 +717,8 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "--priority",
         "high",
     ])?;
-    let blocked_id = blocked
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("blocked task should return id")?
-        .to_string();
+    let blocked_id =
+        blocked.pointer("/data/id").and_then(Value::as_str).context("blocked task should return id")?.to_string();
     harness.run_json_ok(&["task", "status", "--id", &blocked_id, "--status", "blocked"])?;
 
     let early = harness.run_json_ok(&[
@@ -983,27 +731,10 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "--priority",
         "medium",
     ])?;
-    let early_id = early
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("early task should return id")?
-        .to_string();
-    harness.run_json_ok(&[
-        "task",
-        "status",
-        "--id",
-        &early_id,
-        "--status",
-        "in-progress",
-    ])?;
-    harness.run_json_ok(&[
-        "task",
-        "set-deadline",
-        "--task-id",
-        &early_id,
-        "--deadline",
-        "2026-03-01T09:00:00Z",
-    ])?;
+    let early_id =
+        early.pointer("/data/id").and_then(Value::as_str).context("early task should return id")?.to_string();
+    harness.run_json_ok(&["task", "status", "--id", &early_id, "--status", "in-progress"])?;
+    harness.run_json_ok(&["task", "set-deadline", "--task-id", &early_id, "--deadline", "2026-03-01T09:00:00Z"])?;
 
     let late = harness.run_json_ok(&[
         "task",
@@ -1015,66 +746,20 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "--priority",
         "high",
     ])?;
-    let late_id = late
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("late task should return id")?
-        .to_string();
-    harness.run_json_ok(&[
-        "task",
-        "status",
-        "--id",
-        &late_id,
-        "--status",
-        "in-progress",
-    ])?;
-    harness.run_json_ok(&[
-        "task",
-        "set-deadline",
-        "--task-id",
-        &late_id,
-        "--deadline",
-        "2026-03-10T09:00:00Z",
-    ])?;
+    let late_id = late.pointer("/data/id").and_then(Value::as_str).context("late task should return id")?.to_string();
+    harness.run_json_ok(&["task", "status", "--id", &late_id, "--status", "in-progress"])?;
+    harness.run_json_ok(&["task", "set-deadline", "--task-id", &late_id, "--deadline", "2026-03-10T09:00:00Z"])?;
 
-    let dry_run =
-        harness.run_json_ok(&["task", "rebalance-priority", "--high-budget-percent", "34"])?;
-    assert_eq!(
-        dry_run.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        dry_run.pointer("/data/operation").and_then(Value::as_str),
-        Some("task.rebalance-priority")
-    );
-    assert_eq!(
-        dry_run
-            .pointer("/data/plan/high_budget_percent")
-            .and_then(Value::as_u64),
-        Some(34)
-    );
-    assert_eq!(
-        dry_run
-            .pointer("/data/plan/after/active_by_priority/high")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
+    let dry_run = harness.run_json_ok(&["task", "rebalance-priority", "--high-budget-percent", "34"])?;
+    assert_eq!(dry_run.pointer("/data/dry_run").and_then(Value::as_bool), Some(true));
+    assert_eq!(dry_run.pointer("/data/operation").and_then(Value::as_str), Some("task.rebalance-priority"));
+    assert_eq!(dry_run.pointer("/data/plan/high_budget_percent").and_then(Value::as_u64), Some(34));
+    assert_eq!(dry_run.pointer("/data/plan/after/active_by_priority/high").and_then(Value::as_u64), Some(1));
 
-    let confirmation_error = harness.run_json_err(&[
-        "task",
-        "rebalance-priority",
-        "--high-budget-percent",
-        "34",
-        "--apply",
-    ])?;
-    let confirmation_message = confirmation_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(
-        confirmation_message.contains("CONFIRMATION_REQUIRED"),
-        "apply mode should require confirmation"
-    );
+    let confirmation_error =
+        harness.run_json_err(&["task", "rebalance-priority", "--high-budget-percent", "34", "--apply"])?;
+    let confirmation_message = confirmation_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
+    assert!(confirmation_message.contains("CONFIRMATION_REQUIRED"), "apply mode should require confirmation");
 
     let applied = harness.run_json_ok(&[
         "task",
@@ -1085,36 +770,17 @@ fn e2e_task_control_rebalance_priority_dry_run_and_apply() -> Result<()> {
         "--confirm",
         "apply",
     ])?;
-    assert_eq!(
-        applied.pointer("/data/success").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        applied.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(applied.pointer("/data/success").and_then(Value::as_bool), Some(true));
+    assert_eq!(applied.pointer("/data/dry_run").and_then(Value::as_bool), Some(false));
 
     let blocked_after = harness.run_json_ok(&["task", "get", "--id", &blocked_id])?;
-    assert_eq!(
-        blocked_after
-            .pointer("/data/priority")
-            .and_then(Value::as_str),
-        Some("critical")
-    );
+    assert_eq!(blocked_after.pointer("/data/priority").and_then(Value::as_str), Some("critical"));
 
     let early_after = harness.run_json_ok(&["task", "get", "--id", &early_id])?;
-    assert_eq!(
-        early_after
-            .pointer("/data/priority")
-            .and_then(Value::as_str),
-        Some("high")
-    );
+    assert_eq!(early_after.pointer("/data/priority").and_then(Value::as_str), Some("high"));
 
     let late_after = harness.run_json_ok(&["task", "get", "--id", &late_id])?;
-    assert_eq!(
-        late_after.pointer("/data/priority").and_then(Value::as_str),
-        Some("medium")
-    );
+    assert_eq!(late_after.pointer("/data/priority").and_then(Value::as_str), Some("medium"));
 
     Ok(())
 }
@@ -1131,11 +797,8 @@ fn e2e_task_control_rebalance_priority_rejects_conflicting_overrides() -> Result
         "--description",
         "Should fail validation",
     ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
     harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "ready"])?;
 
     let payload = harness.run_json_err(&[
@@ -1146,10 +809,7 @@ fn e2e_task_control_rebalance_priority_rejects_conflicting_overrides() -> Result
         "--nice-to-have-task-id",
         &task_id,
     ])?;
-    let message = payload
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let message = payload.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert!(message.contains("conflicting task ids provided in overrides"));
     assert!(message.contains(task_id.as_str()));
 
@@ -1168,23 +828,14 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         "--description",
         "workflow cancellation test",
     ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
     let workflow = harness.run_json_ok(&["workflow", "run", "--task-id", &task_id])?;
-    let workflow_id = workflow
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("workflow run should return data.id")?
-        .to_string();
+    let workflow_id =
+        workflow.pointer("/data/id").and_then(Value::as_str).context("workflow run should return data.id")?.to_string();
 
     let pause_error = harness.run_json_err(&["workflow", "pause", "--id", &workflow_id])?;
-    let pause_confirmation_message = pause_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let pause_confirmation_message = pause_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         pause_confirmation_message,
         format!(
@@ -1194,15 +845,12 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         "workflow pause confirmation message should use canonical token order"
     );
 
-    let pause_preview =
-        harness.run_json_ok(&["workflow", "pause", "--id", &workflow_id, "--dry-run"])?;
+    let pause_preview = harness.run_json_ok(&["workflow", "pause", "--id", &workflow_id, "--dry-run"])?;
     assert_shared_destructive_dry_run_contract(&pause_preview, "workflow.pause", true);
 
     let cancel_error = harness.run_json_err(&["workflow", "cancel", "--id", &workflow_id])?;
-    let cancel_confirmation_message = cancel_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let cancel_confirmation_message =
+        cancel_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         cancel_confirmation_message,
         format!(
@@ -1212,45 +860,20 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         "workflow cancel confirmation message should use canonical token order"
     );
 
-    let cancel_preview =
-        harness.run_json_ok(&["workflow", "cancel", "--id", &workflow_id, "--dry-run"])?;
+    let cancel_preview = harness.run_json_ok(&["workflow", "cancel", "--id", &workflow_id, "--dry-run"])?;
     assert_shared_destructive_dry_run_contract(&cancel_preview, "workflow.cancel", true);
 
-    let cancelled = harness.run_json_ok(&[
-        "workflow",
-        "cancel",
-        "--id",
-        &workflow_id,
-        "--confirm",
-        &workflow_id,
-    ])?;
-    assert_eq!(
-        cancelled.pointer("/data/id").and_then(Value::as_str),
-        Some(workflow_id.as_str())
-    );
-    assert_eq!(
-        cancelled.pointer("/data/status").and_then(Value::as_str),
-        Some("cancelled")
-    );
+    let cancelled = harness.run_json_ok(&["workflow", "cancel", "--id", &workflow_id, "--confirm", &workflow_id])?;
+    assert_eq!(cancelled.pointer("/data/id").and_then(Value::as_str), Some(workflow_id.as_str()));
+    assert_eq!(cancelled.pointer("/data/status").and_then(Value::as_str), Some("cancelled"));
 
     let phase_id = "tmp-removable-phase";
     let phase_definition = "{\"mode\":\"agent\",\"agent_id\":\"default\",\"directive\":null,\"runtime\":null,\"output_contract\":null,\"output_json_schema\":null,\"command\":null,\"manual\":null}";
-    harness.run_json_ok(&[
-        "workflow",
-        "phases",
-        "upsert",
-        "--phase",
-        phase_id,
-        "--input-json",
-        phase_definition,
-    ])?;
+    harness.run_json_ok(&["workflow", "phases", "upsert", "--phase", phase_id, "--input-json", phase_definition])?;
 
-    let remove_error =
-        harness.run_json_err(&["workflow", "phases", "remove", "--phase", phase_id])?;
-    let remove_confirmation_message = remove_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let remove_error = harness.run_json_err(&["workflow", "phases", "remove", "--phase", phase_id])?;
+    let remove_confirmation_message =
+        remove_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         remove_confirmation_message,
         format!(
@@ -1260,35 +883,12 @@ fn e2e_workflow_destructive_commands_require_confirmation_and_dry_run_support() 
         "workflow phases remove confirmation message should use canonical token order"
     );
 
-    let remove_preview = harness.run_json_ok(&[
-        "workflow",
-        "phases",
-        "remove",
-        "--phase",
-        phase_id,
-        "--dry-run",
-    ])?;
+    let remove_preview = harness.run_json_ok(&["workflow", "phases", "remove", "--phase", phase_id, "--dry-run"])?;
     assert_shared_destructive_dry_run_contract(&remove_preview, "workflow.phases.remove", true);
-    assert_eq!(
-        remove_preview
-            .pointer("/data/can_remove")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_eq!(remove_preview.pointer("/data/can_remove").and_then(Value::as_bool), Some(true));
 
-    let removed = harness.run_json_ok(&[
-        "workflow",
-        "phases",
-        "remove",
-        "--phase",
-        phase_id,
-        "--confirm",
-        phase_id,
-    ])?;
-    assert_eq!(
-        removed.pointer("/data/removed").and_then(Value::as_str),
-        Some(phase_id)
-    );
+    let removed = harness.run_json_ok(&["workflow", "phases", "remove", "--phase", phase_id, "--confirm", phase_id])?;
+    assert_eq!(removed.pointer("/data/removed").and_then(Value::as_str), Some(phase_id));
 
     Ok(())
 }
@@ -1305,31 +905,17 @@ fn e2e_workflow_checkpoints_prune_dry_run_then_apply() -> Result<()> {
         "--description",
         "workflow checkpoint prune test",
     ])?;
-    let task_id = created
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("task create should return data.id")?
-        .to_string();
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
 
     let workflow = harness.run_json_ok(&["workflow", "run", "--task-id", &task_id])?;
-    let workflow_id = workflow
-        .pointer("/data/id")
-        .and_then(Value::as_str)
-        .context("workflow run should return data.id")?
-        .to_string();
+    let workflow_id =
+        workflow.pointer("/data/id").and_then(Value::as_str).context("workflow run should return data.id")?.to_string();
 
-    harness.run_json_ok(&[
-        "workflow",
-        "pause",
-        "--id",
-        &workflow_id,
-        "--confirm",
-        &workflow_id,
-    ])?;
+    harness.run_json_ok(&["workflow", "pause", "--id", &workflow_id, "--confirm", &workflow_id])?;
     harness.run_json_ok(&["workflow", "resume", "--id", &workflow_id])?;
 
-    let checkpoints_before =
-        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let checkpoints_before = harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
     let before_numbers: Vec<u64> = checkpoints_before
         .pointer("/data")
         .and_then(Value::as_array)
@@ -1349,19 +935,10 @@ fn e2e_workflow_checkpoints_prune_dry_run_then_apply() -> Result<()> {
         "1",
         "--dry-run",
     ])?;
-    assert_eq!(
-        dry_run
-            .pointer("/data/pruned_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        dry_run.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_eq!(dry_run.pointer("/data/pruned_count").and_then(Value::as_u64), Some(2));
+    assert_eq!(dry_run.pointer("/data/dry_run").and_then(Value::as_bool), Some(true));
 
-    let checkpoints_after_dry_run =
-        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let checkpoints_after_dry_run = harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
     let dry_run_numbers: Vec<u64> = checkpoints_after_dry_run
         .pointer("/data")
         .and_then(Value::as_array)
@@ -1380,19 +957,10 @@ fn e2e_workflow_checkpoints_prune_dry_run_then_apply() -> Result<()> {
         "--keep-last-per-phase",
         "1",
     ])?;
-    assert_eq!(
-        applied
-            .pointer("/data/pruned_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        applied.pointer("/data/dry_run").and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(applied.pointer("/data/pruned_count").and_then(Value::as_u64), Some(2));
+    assert_eq!(applied.pointer("/data/dry_run").and_then(Value::as_bool), Some(false));
 
-    let checkpoints_after_apply =
-        harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
+    let checkpoints_after_apply = harness.run_json_ok(&["workflow", "checkpoints", "list", "--id", &workflow_id])?;
     let apply_numbers: Vec<u64> = checkpoints_after_apply
         .pointer("/data")
         .and_then(Value::as_array)
@@ -1411,43 +979,20 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
 
     harness.run_json_ok(&["git", "repo", "init", "--name", "demo"])?;
     let repo = harness.run_json_ok(&["git", "repo", "get", "--repo", "demo"])?;
-    let repo_path = repo
-        .pointer("/data/path")
-        .and_then(Value::as_str)
-        .context("git repo get should return data.path")?;
+    let repo_path =
+        repo.pointer("/data/path").and_then(Value::as_str).context("git repo get should return data.path")?;
 
     let seed_file = std::path::Path::new(repo_path).join("README.md");
     std::fs::write(&seed_file, "seed\n").context("failed to seed git repo")?;
 
-    let git_add = Command::new("git")
-        .args(["-C", repo_path, "add", "."])
-        .output()
-        .context("failed to run git add")?;
-    assert!(
-        git_add.status.success(),
-        "git add failed: {}",
-        String::from_utf8_lossy(&git_add.stderr)
-    );
+    let git_add = Command::new("git").args(["-C", repo_path, "add", "."]).output().context("failed to run git add")?;
+    assert!(git_add.status.success(), "git add failed: {}", String::from_utf8_lossy(&git_add.stderr));
 
     let git_commit = Command::new("git")
-        .args([
-            "-C",
-            repo_path,
-            "-c",
-            "user.name=AO Test",
-            "-c",
-            "user.email=ao@example.com",
-            "commit",
-            "-m",
-            "seed",
-        ])
+        .args(["-C", repo_path, "-c", "user.name=AO Test", "-c", "user.email=ao@example.com", "commit", "-m", "seed"])
         .output()
         .context("failed to run git commit")?;
-    assert!(
-        git_commit.status.success(),
-        "git commit failed: {}",
-        String::from_utf8_lossy(&git_commit.stderr)
-    );
+    assert!(git_commit.status.success(), "git commit failed: {}", String::from_utf8_lossy(&git_commit.stderr));
 
     let worktree_name = "wt-preview";
     let worktree_path = harness.project_root().join(worktree_name);
@@ -1467,19 +1012,10 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
         "--create-branch",
     ])?;
 
-    let remove_error = harness.run_json_err(&[
-        "git",
-        "worktree",
-        "remove",
-        "--repo",
-        "demo",
-        "--worktree-name",
-        worktree_name,
-    ])?;
-    let remove_confirmation_message = remove_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let remove_error =
+        harness.run_json_err(&["git", "worktree", "remove", "--repo", "demo", "--worktree-name", worktree_name])?;
+    let remove_confirmation_message =
+        remove_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         remove_confirmation_message,
         "CONFIRMATION_REQUIRED: request and approve a git confirmation for 'remove_worktree' on 'demo', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
@@ -1504,8 +1040,7 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
         )
     );
 
-    let push_preview =
-        harness.run_json_ok(&["git", "push", "--repo", "demo", "--force", "--dry-run"])?;
+    let push_preview = harness.run_json_ok(&["git", "push", "--repo", "demo", "--force", "--dry-run"])?;
     assert_shared_destructive_dry_run_contract(&push_preview, "git.push", true);
     assert_eq!(
         push_preview.pointer("/data/next_step").and_then(Value::as_str),
@@ -1514,10 +1049,7 @@ fn e2e_git_worktree_remove_requires_confirmation_and_supports_dry_run() -> Resul
         )
     );
 
-    assert!(
-        worktree_path.exists(),
-        "dry-run should not remove worktree path"
-    );
+    assert!(worktree_path.exists(), "dry-run should not remove worktree path");
 
     Ok(())
 }
@@ -1528,43 +1060,20 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
 
     harness.run_json_ok(&["git", "repo", "init", "--name", "demo"])?;
     let repo = harness.run_json_ok(&["git", "repo", "get", "--repo", "demo"])?;
-    let repo_path = repo
-        .pointer("/data/path")
-        .and_then(Value::as_str)
-        .context("git repo get should return data.path")?;
+    let repo_path =
+        repo.pointer("/data/path").and_then(Value::as_str).context("git repo get should return data.path")?;
 
     let seed_file = std::path::Path::new(repo_path).join("README.md");
     std::fs::write(&seed_file, "seed\n").context("failed to seed git repo")?;
 
-    let git_add = Command::new("git")
-        .args(["-C", repo_path, "add", "."])
-        .output()
-        .context("failed to run git add")?;
-    assert!(
-        git_add.status.success(),
-        "git add failed: {}",
-        String::from_utf8_lossy(&git_add.stderr)
-    );
+    let git_add = Command::new("git").args(["-C", repo_path, "add", "."]).output().context("failed to run git add")?;
+    assert!(git_add.status.success(), "git add failed: {}", String::from_utf8_lossy(&git_add.stderr));
 
     let git_commit = Command::new("git")
-        .args([
-            "-C",
-            repo_path,
-            "-c",
-            "user.name=AO Test",
-            "-c",
-            "user.email=ao@example.com",
-            "commit",
-            "-m",
-            "seed",
-        ])
+        .args(["-C", repo_path, "-c", "user.name=AO Test", "-c", "user.email=ao@example.com", "commit", "-m", "seed"])
         .output()
         .context("failed to run git commit")?;
-    assert!(
-        git_commit.status.success(),
-        "git commit failed: {}",
-        String::from_utf8_lossy(&git_commit.stderr)
-    );
+    assert!(git_commit.status.success(), "git commit failed: {}", String::from_utf8_lossy(&git_commit.stderr));
 
     let created_task = harness.run_json_ok(&[
         "task",
@@ -1579,14 +1088,7 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
         .and_then(Value::as_str)
         .context("task create should return data.id")?
         .to_string();
-    harness.run_json_ok(&[
-        "task",
-        "status",
-        "--id",
-        &task_id,
-        "--status",
-        "in-progress",
-    ])?;
+    harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "in-progress"])?;
     harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "done"])?;
 
     let task_token = task_id.to_ascii_lowercase();
@@ -1617,39 +1119,16 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
         "--create-branch",
     ])?;
 
-    let preview = harness.run_json_ok(&[
-        "git",
-        "worktree",
-        "prune",
-        "--repo",
-        "demo",
-        "--delete-remote-branch",
-        "--dry-run",
-    ])?;
+    let preview =
+        harness.run_json_ok(&["git", "worktree", "prune", "--repo", "demo", "--delete-remote-branch", "--dry-run"])?;
     assert_shared_destructive_dry_run_contract(&preview, "git.worktree.prune", true);
-    assert_eq!(
-        preview
-            .pointer("/data/candidate_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        preview
-            .pointer("/data/candidates/0/task_id")
-            .and_then(Value::as_str),
-        Some(task_id.as_str())
-    );
-    assert!(
-        worktree_path.exists(),
-        "dry-run should not remove candidate worktree path"
-    );
+    assert_eq!(preview.pointer("/data/candidate_count").and_then(Value::as_u64), Some(1));
+    assert_eq!(preview.pointer("/data/candidates/0/task_id").and_then(Value::as_str), Some(task_id.as_str()));
+    assert!(worktree_path.exists(), "dry-run should not remove candidate worktree path");
 
-    let prune_confirmation_error =
-        harness.run_json_err(&["git", "worktree", "prune", "--repo", "demo"])?;
-    let prune_confirmation_message = prune_confirmation_error
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let prune_confirmation_error = harness.run_json_err(&["git", "worktree", "prune", "--repo", "demo"])?;
+    let prune_confirmation_message =
+        prune_confirmation_error.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(
         prune_confirmation_message,
         "CONFIRMATION_REQUIRED: request and approve a git confirmation for 'prune_worktrees' on 'demo', then rerun with --confirmation-id <id>; use --dry-run to preview changes",
@@ -1670,54 +1149,25 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
         .and_then(Value::as_str)
         .context("git confirm request should return data.id")?
         .to_string();
-    harness.run_json_ok(&[
-        "git",
-        "confirm",
-        "respond",
-        "--request-id",
-        &confirmation_id,
-        "--approved",
-    ])?;
+    harness.run_json_ok(&["git", "confirm", "respond", "--request-id", &confirmation_id, "--approved"])?;
 
-    let pruned = harness.run_json_ok(&[
-        "git",
-        "worktree",
-        "prune",
-        "--repo",
-        "demo",
-        "--confirmation-id",
-        &confirmation_id,
-    ])?;
-    assert_eq!(
-        pruned.pointer("/data/pruned_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert!(
-        !worktree_path.exists(),
-        "prune should remove candidate worktree path"
-    );
+    let pruned =
+        harness.run_json_ok(&["git", "worktree", "prune", "--repo", "demo", "--confirmation-id", &confirmation_id])?;
+    assert_eq!(pruned.pointer("/data/pruned_count").and_then(Value::as_u64), Some(1));
+    assert!(!worktree_path.exists(), "prune should remove candidate worktree path");
 
     let task_after_prune = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
     assert!(
-        task_after_prune
-            .pointer("/data/worktree_path")
-            .map(Value::is_null)
-            .unwrap_or(true),
+        task_after_prune.pointer("/data/worktree_path").map(Value::is_null).unwrap_or(true),
         "prune should clear stale task worktree_path metadata"
     );
 
     let listed = harness.run_json_ok(&["git", "worktree", "list", "--repo", "demo"])?;
-    let entries = listed
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .context("git worktree list should return data array")?;
+    let entries =
+        listed.pointer("/data").and_then(Value::as_array).context("git worktree list should return data array")?;
     assert!(
         !entries.iter().any(|entry| {
-            entry
-                .get("path")
-                .and_then(Value::as_str)
-                .map(|path| path == worktree_path_string)
-                .unwrap_or(false)
+            entry.get("path").and_then(Value::as_str).map(|path| path == worktree_path_string).unwrap_or(false)
         }),
         "pruned worktree should not appear in git worktree list"
     );
@@ -1729,40 +1179,20 @@ fn e2e_git_worktree_prune_cleans_done_task_worktrees() -> Result<()> {
 fn e2e_git_repo_init_failure_is_reported_and_not_registered() -> Result<()> {
     let harness = CliHarness::new()?;
     let occupied_path = harness.project_root().join("occupied-path");
-    std::fs::write(&occupied_path, "blocking file\n")
-        .context("failed to create occupied path file")?;
+    std::fs::write(&occupied_path, "blocking file\n").context("failed to create occupied path file")?;
     let occupied_path_string = occupied_path.to_string_lossy().to_string();
 
-    let failed_init = harness.run_json_err(&[
-        "git",
-        "repo",
-        "init",
-        "--name",
-        "broken",
-        "--path",
-        &occupied_path_string,
-    ])?;
-    let error_message = failed_init
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(
-        error_message.contains("git init failed"),
-        "expected git init failure message, got: {error_message}"
-    );
+    let failed_init =
+        harness.run_json_err(&["git", "repo", "init", "--name", "broken", "--path", &occupied_path_string])?;
+    let error_message = failed_init.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
+    assert!(error_message.contains("git init failed"), "expected git init failure message, got: {error_message}");
 
     let listed = harness.run_json_ok(&["git", "repo", "list"])?;
-    let repos = listed
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .context("git repo list should return data array")?;
+    let repos = listed.pointer("/data").and_then(Value::as_array).context("git repo list should return data array")?;
     assert!(
-        !repos.iter().any(|repo| {
-            repo.get("name")
-                .and_then(Value::as_str)
-                .map(|name| name == "broken")
-                .unwrap_or(false)
-        }),
+        !repos
+            .iter()
+            .any(|repo| { repo.get("name").and_then(Value::as_str).map(|name| name == "broken").unwrap_or(false) }),
         "failed git init should not register repo entry"
     );
 

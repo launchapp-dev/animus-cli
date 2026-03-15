@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
-
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WorkflowPhaseRuntimeSettings {
     #[serde(default)]
@@ -47,13 +46,8 @@ pub struct WorkflowRuntimeConfigLite {
 
 fn workflow_runtime_config_paths(project_root: &str) -> [PathBuf; 2] {
     [
-        Path::new(project_root)
-            .join(".ao")
-            .join("state")
-            .join("workflow-config.json"),
-        Path::new(project_root)
-            .join(".ao")
-            .join("workflow-config.json"),
+        Path::new(project_root).join(".ao").join("state").join("workflow-config.json"),
+        Path::new(project_root).join(".ao").join("workflow-config.json"),
     ]
 }
 
@@ -76,30 +70,22 @@ pub fn load_workflow_runtime_config(project_root: &str) -> WorkflowRuntimeConfig
 }
 
 fn parse_env_usize(key: &str) -> Option<usize> {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
+    std::env::var(key).ok().and_then(|value| value.trim().parse::<usize>().ok())
 }
 
 const DEFAULT_PHASE_RUN_ATTEMPTS: usize = 3;
 const DEFAULT_PHASE_MAX_CONTINUATIONS: usize = 3;
 
 pub fn phase_runner_attempts() -> usize {
-    parse_env_usize("AO_PHASE_RUN_ATTEMPTS")
-        .unwrap_or(DEFAULT_PHASE_RUN_ATTEMPTS)
-        .clamp(1, 10)
+    parse_env_usize("AO_PHASE_RUN_ATTEMPTS").unwrap_or(DEFAULT_PHASE_RUN_ATTEMPTS).clamp(1, 10)
 }
 
 pub fn phase_max_continuations() -> usize {
-    parse_env_usize("AO_PHASE_MAX_CONTINUATIONS")
-        .unwrap_or(DEFAULT_PHASE_MAX_CONTINUATIONS)
-        .clamp(0, 10)
+    parse_env_usize("AO_PHASE_MAX_CONTINUATIONS").unwrap_or(DEFAULT_PHASE_MAX_CONTINUATIONS).clamp(0, 10)
 }
 
 fn codex_web_search_enabled(web_search_override: Option<bool>) -> bool {
-    web_search_override
-        .or_else(|| protocol::parse_env_bool_opt("AO_CODEX_WEB_SEARCH"))
-        .unwrap_or(true)
+    web_search_override.or_else(|| protocol::parse_env_bool_opt("AO_CODEX_WEB_SEARCH")).unwrap_or(true)
 }
 
 fn claude_bypass_permissions_enabled() -> bool {
@@ -107,16 +93,11 @@ fn claude_bypass_permissions_enabled() -> bool {
 }
 
 fn codex_reasoning_effort(reasoning_override: Option<&str>) -> Option<String> {
-    reasoning_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
+    reasoning_override.map(str::trim).filter(|value| !value.is_empty()).map(|value| value.to_ascii_lowercase())
 }
 
 fn codex_exec_insert_index(args: &[Value]) -> usize {
-    args.iter()
-        .position(|item| item.as_str().is_some_and(|v| v == "exec"))
-        .unwrap_or(0)
+    args.iter().position(|item| item.as_str().is_some_and(|v| v == "exec")).unwrap_or(0)
 }
 
 fn launch_prompt_insert_index(args: &[Value]) -> usize {
@@ -124,18 +105,12 @@ fn launch_prompt_insert_index(args: &[Value]) -> usize {
 }
 
 fn ensure_flag_value_if_missing(args: &mut Vec<Value>, flag: &str, value: &str, insert_at: usize) {
-    if args
-        .iter()
-        .any(|item| item.as_str().is_some_and(|v| v == flag))
-    {
+    if args.iter().any(|item| item.as_str().is_some_and(|v| v == flag)) {
         return;
     }
     let insert_at = insert_at.min(args.len());
     args.insert(insert_at, Value::String(flag.to_string()));
-    args.insert(
-        (insert_at + 1).min(args.len()),
-        Value::String(value.to_string()),
-    );
+    args.insert((insert_at + 1).min(args.len()), Value::String(value.to_string()));
 }
 
 fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &str) {
@@ -144,10 +119,7 @@ fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &s
     let mut index = 0usize;
     while index + 1 < args.len() {
         let flag = args[index].as_str().unwrap_or_default();
-        let value = args
-            .get(index + 1)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let value = args.get(index + 1).and_then(Value::as_str).unwrap_or_default();
         if (flag == "-c" || flag == "--config") && value.starts_with(&key_prefix) {
             args[index + 1] = Value::String(target);
             return;
@@ -160,27 +132,13 @@ fn ensure_codex_config_override(args: &mut Vec<Value>, key: &str, value_expr: &s
 }
 
 fn codex_network_access_enabled(network_access_override: Option<bool>) -> bool {
-    network_access_override
-        .or_else(|| protocol::parse_env_bool_opt("AO_CODEX_NETWORK_ACCESS"))
-        .unwrap_or(true)
+    network_access_override.or_else(|| protocol::parse_env_bool_opt("AO_CODEX_NETWORK_ACCESS")).unwrap_or(true)
 }
 
-fn parse_env_string_list_json(
-    key: &str,
-    fallback_key: Option<&str>,
-    split_by_semicolon: bool,
-) -> Vec<String> {
-    let parse_json = |raw: &str| {
-        serde_json::from_str::<Vec<String>>(raw)
-            .ok()
-            .unwrap_or_default()
-    };
+fn parse_env_string_list_json(key: &str, fallback_key: Option<&str>, split_by_semicolon: bool) -> Vec<String> {
+    let parse_json = |raw: &str| serde_json::from_str::<Vec<String>>(raw).ok().unwrap_or_default();
     let normalize = |items: Vec<String>| {
-        items
-            .into_iter()
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>()
+        items.into_iter().map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect::<Vec<_>>()
     };
 
     if let Ok(raw) = std::env::var(key) {
@@ -237,11 +195,7 @@ fn resolved_phase_extra_args(
         }
     }
 
-    let mut resolved = parse_env_string_list_json(
-        "AO_AI_CLI_EXTRA_ARGS_JSON",
-        Some("AO_AI_CLI_EXTRA_ARGS"),
-        false,
-    );
+    let mut resolved = parse_env_string_list_json("AO_AI_CLI_EXTRA_ARGS_JSON", Some("AO_AI_CLI_EXTRA_ARGS"), false);
     if let Some((json_key, plain_key)) = cli_tool_extra_args_env_keys(tool_id) {
         resolved.extend(parse_env_string_list_json(json_key, Some(plain_key), false));
     }
@@ -263,26 +217,19 @@ fn parse_codex_override_entry(entry: &str) -> Option<(String, String)> {
 fn resolved_codex_config_overrides(
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
 ) -> Vec<(String, String)> {
-    let from_settings = phase_runtime_settings
-        .map(|settings| settings.codex_config_overrides.as_slice())
-        .unwrap_or_default();
-    let overrides: Vec<(String, String)> = from_settings
-        .iter()
-        .filter_map(|entry| parse_codex_override_entry(entry))
-        .collect();
+    let from_settings =
+        phase_runtime_settings.map(|settings| settings.codex_config_overrides.as_slice()).unwrap_or_default();
+    let overrides: Vec<(String, String)> =
+        from_settings.iter().filter_map(|entry| parse_codex_override_entry(entry)).collect();
 
     if !overrides.is_empty() {
         return overrides;
     }
 
-    parse_env_string_list_json(
-        "AO_CODEX_EXTRA_CONFIG_OVERRIDES_JSON",
-        Some("AO_CODEX_EXTRA_CONFIG_OVERRIDES"),
-        true,
-    )
-    .iter()
-    .filter_map(|entry| parse_codex_override_entry(entry))
-    .collect()
+    parse_env_string_list_json("AO_CODEX_EXTRA_CONFIG_OVERRIDES_JSON", Some("AO_CODEX_EXTRA_CONFIG_OVERRIDES"), true)
+        .iter()
+        .filter_map(|entry| parse_codex_override_entry(entry))
+        .collect()
 }
 
 fn inject_cli_extra_args(
@@ -295,10 +242,7 @@ fn inject_cli_extra_args(
         return;
     }
 
-    let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    else {
+    let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) else {
         return;
     };
 
@@ -323,51 +267,32 @@ fn inject_codex_extra_config_overrides(
         return;
     }
 
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
         for (key, value_expr) in overrides {
             ensure_codex_config_override(args, &key, &value_expr);
         }
     }
 }
 
-pub fn inject_codex_search_launch_flag(
-    runtime_contract: &mut Value,
-    tool_id: &str,
-    web_search_override: Option<bool>,
-) {
+pub fn inject_codex_search_launch_flag(runtime_contract: &mut Value, tool_id: &str, web_search_override: Option<bool>) {
     if !tool_id.eq_ignore_ascii_case("codex") || !codex_web_search_enabled(web_search_override) {
         return;
     }
 
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
-        let has_search_flag = args
-            .iter()
-            .any(|item| item.as_str().is_some_and(|value| value == "--search"));
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
+        let has_search_flag = args.iter().any(|item| item.as_str().is_some_and(|value| value == "--search"));
         if !has_search_flag {
             let insert_at = codex_exec_insert_index(args);
             args.insert(insert_at, Value::String("--search".to_string()));
         }
     }
 
-    if let Some(capabilities) = runtime_contract
-        .pointer_mut("/cli/capabilities")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(capabilities) = runtime_contract.pointer_mut("/cli/capabilities").and_then(Value::as_object_mut) {
         capabilities.insert("supports_web_search".to_string(), Value::Bool(true));
     }
 }
 
-pub fn inject_codex_reasoning_effort(
-    runtime_contract: &mut Value,
-    tool_id: &str,
-    reasoning_override: Option<&str>,
-) {
+pub fn inject_codex_reasoning_effort(runtime_contract: &mut Value, tool_id: &str, reasoning_override: Option<&str>) {
     if !tool_id.eq_ignore_ascii_case("codex") {
         return;
     }
@@ -375,10 +300,7 @@ pub fn inject_codex_reasoning_effort(
         return;
     };
 
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
         let mut has_override = false;
         for window in args.windows(2) {
             let Some(flag) = window[0].as_str() else {
@@ -395,33 +317,19 @@ pub fn inject_codex_reasoning_effort(
         if !has_override {
             let insert_at = codex_exec_insert_index(args);
             args.insert(insert_at, Value::String("-c".to_string()));
-            args.insert(
-                insert_at + 1,
-                Value::String(format!("model_reasoning_effort={effort}")),
-            );
+            args.insert(insert_at + 1, Value::String(format!("model_reasoning_effort={effort}")));
         }
     }
 }
 
-pub fn inject_codex_network_access(
-    runtime_contract: &mut Value,
-    tool_id: &str,
-    network_access_override: Option<bool>,
-) {
+pub fn inject_codex_network_access(runtime_contract: &mut Value, tool_id: &str, network_access_override: Option<bool>) {
     if !tool_id.eq_ignore_ascii_case("codex") {
         return;
     }
 
-    let value_expr = if codex_network_access_enabled(network_access_override) {
-        "true"
-    } else {
-        "false"
-    };
+    let value_expr = if codex_network_access_enabled(network_access_override) { "true" } else { "false" };
 
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
         ensure_codex_config_override(args, "sandbox_workspace_write.network_access", value_expr);
     }
 }
@@ -431,10 +339,7 @@ pub fn inject_claude_permission_mode(runtime_contract: &mut Value, tool_id: &str
         return;
     }
 
-    if let Some(args) = runtime_contract
-        .pointer_mut("/cli/launch/args")
-        .and_then(Value::as_array_mut)
-    {
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
         ensure_flag_value_if_missing(args, "--permission-mode", "bypassPermissions", 0);
     }
 }

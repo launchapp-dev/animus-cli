@@ -17,11 +17,7 @@ pub(super) async fn authenticate_first_payload<W: AsyncWrite + Unpin>(
     let response = match validate_payload(payload) {
         Ok(()) => IpcAuthResult::ok(),
         Err(code) => {
-            warn!(
-                connection_id,
-                failure_code = code.as_str(),
-                "Rejected IPC connection during authentication"
-            );
+            warn!(connection_id, failure_code = code.as_str(), "Rejected IPC connection during authentication");
             IpcAuthResult::rejected(code, auth_failure_message(code))
         }
     };
@@ -39,8 +35,8 @@ pub(super) async fn authenticate_first_payload<W: AsyncWrite + Unpin>(
 }
 
 fn validate_payload(payload: &str) -> std::result::Result<(), IpcAuthFailureCode> {
-    let request = serde_json::from_str::<IpcAuthRequest>(payload)
-        .map_err(|_| IpcAuthFailureCode::MalformedAuthPayload)?;
+    let request =
+        serde_json::from_str::<IpcAuthRequest>(payload).map_err(|_| IpcAuthFailureCode::MalformedAuthPayload)?;
     let expected_token = Config::load_global()
         .and_then(|config| config.get_token())
         .map_err(|_| IpcAuthFailureCode::ServerTokenUnavailable)?;
@@ -73,14 +69,9 @@ mod tests {
     use protocol::test_utils::EnvVarGuard;
 
     fn temp_config_dir(label: &str) -> String {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "agent-runner-ipc-auth-{label}-{}-{nanos}",
-            std::process::id()
-        ));
+        let nanos =
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("system time should be after unix epoch").as_nanos();
+        let dir = std::env::temp_dir().join(format!("agent-runner-ipc-auth-{label}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp config dir should be created");
         dir.to_string_lossy().to_string()
     }
@@ -99,8 +90,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let config_dir = temp_config_dir("matching-token");
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
-        let _legacy_config_dir =
-            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
+        let _legacy_config_dir = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
         let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
         write_config_with_token(&config_dir, Some("runner-secret"));
 
@@ -113,8 +103,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let config_dir = temp_config_dir("malformed");
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
-        let _legacy_config_dir =
-            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
+        let _legacy_config_dir = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
         let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
         write_config_with_token(&config_dir, Some("runner-secret"));
 
@@ -128,8 +117,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let config_dir = temp_config_dir("incorrect-token");
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
-        let _legacy_config_dir =
-            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
+        let _legacy_config_dir = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
         let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
         write_config_with_token(&config_dir, Some("runner-secret"));
 
@@ -143,8 +131,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let config_dir = temp_config_dir("missing-token");
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
-        let _legacy_config_dir =
-            EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
+        let _legacy_config_dir = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
         let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
         write_config_with_token(&config_dir, None);
 

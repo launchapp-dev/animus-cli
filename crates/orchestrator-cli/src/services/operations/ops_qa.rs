@@ -3,8 +3,8 @@ use crate::{not_found_error, print_value};
 use anyhow::Result;
 use chrono::Utc;
 use orchestrator_core::{
-    load_qa_approvals, load_qa_results, save_qa_approvals, save_qa_results, QaGateResultRecord,
-    QaPhaseGateResult, QaReviewApprovalRecord,
+    load_qa_approvals, load_qa_results, save_qa_approvals, save_qa_results, QaGateResultRecord, QaPhaseGateResult,
+    QaReviewApprovalRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -63,10 +63,13 @@ pub(crate) async fn handle_qa(command: QaCommand, project_root: &str, json: bool
                         .get(metric_name)
                         .and_then(|value| value.as_f64())
                         .or_else(|| {
-                            metrics
-                                .get(metric_name)
-                                .and_then(|value| value.as_bool())
-                                .map(|value| if value { 1.0 } else { 0.0 })
+                            metrics.get(metric_name).and_then(|value| value.as_bool()).map(|value| {
+                                if value {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
+                            })
                         })
                         .unwrap_or(0.0);
                     metric_value >= gate.min_value.unwrap_or(1.0)
@@ -76,11 +79,7 @@ pub(crate) async fn handle_qa(command: QaCommand, project_root: &str, json: bool
                 gate_results.push(QaGateResultRecord {
                     gate_id: gate.id,
                     passed,
-                    reason: if passed {
-                        "gate passed".to_string()
-                    } else {
-                        "gate failed".to_string()
-                    },
+                    reason: if passed { "gate passed".to_string() } else { "gate failed".to_string() },
                     gate_type: None,
                     metric: gate.metric,
                     actual_value: None,
@@ -93,9 +92,9 @@ pub(crate) async fn handle_qa(command: QaCommand, project_root: &str, json: bool
 
             let passed = gate_results.iter().all(|result| result.passed);
             let mut store = load_qa_results(project_root)?;
-            store.results.retain(|result| {
-                !(result.workflow_id == args.workflow_id && result.phase_id == args.phase_id)
-            });
+            store
+                .results
+                .retain(|result| !(result.workflow_id == args.workflow_id && result.phase_id == args.phase_id));
             let result = QaPhaseGateResult {
                 workflow_id: args.workflow_id,
                 phase_id: args.phase_id,
@@ -116,19 +115,14 @@ pub(crate) async fn handle_qa(command: QaCommand, project_root: &str, json: bool
             let result = store
                 .results
                 .into_iter()
-                .find(|result| {
-                    result.workflow_id == args.workflow_id && result.phase_id == args.phase_id
-                })
+                .find(|result| result.workflow_id == args.workflow_id && result.phase_id == args.phase_id)
                 .ok_or_else(|| not_found_error("phase gate results not found"))?;
             print_value(result, json)
         }
         QaCommand::List(args) => {
             let store = load_qa_results(project_root)?;
-            let results: Vec<_> = store
-                .results
-                .into_iter()
-                .filter(|result| result.workflow_id == args.workflow_id)
-                .collect();
+            let results: Vec<_> =
+                store.results.into_iter().filter(|result| result.workflow_id == args.workflow_id).collect();
             print_value(results, json)
         }
         QaCommand::Approval { command } => match command {
@@ -150,9 +144,7 @@ pub(crate) async fn handle_qa(command: QaCommand, project_root: &str, json: bool
                 let approvals: Vec<_> = store
                     .approvals
                     .into_iter()
-                    .filter(|approval| {
-                        approval.workflow_id == args.workflow_id && approval.gate_id == args.gate_id
-                    })
+                    .filter(|approval| approval.workflow_id == args.workflow_id && approval.gate_id == args.gate_id)
                     .collect();
                 print_value(approvals, json)
             }

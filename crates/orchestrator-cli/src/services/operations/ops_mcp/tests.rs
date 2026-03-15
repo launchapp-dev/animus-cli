@@ -25,20 +25,14 @@ fn write_events(lines: &[String]) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("daemon event parent directory should exist");
     }
-    let content = lines
-        .iter()
-        .map(|line| format!("{line}\n"))
-        .collect::<String>();
+    let content = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
     std::fs::write(path, content).expect("daemon event log should be written");
 }
 
 fn write_run_events(project_root: &str, run_id: &str, lines: &[String]) {
     let run_path = run_dir(project_root, &RunId(run_id.to_string()), None);
     std::fs::create_dir_all(&run_path).expect("run directory should be created");
-    let payload = lines
-        .iter()
-        .map(|line| format!("{line}\n"))
-        .collect::<String>();
+    let payload = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
     std::fs::write(run_path.join("events.jsonl"), payload).expect("run events should be written");
 }
 
@@ -46,11 +40,7 @@ fn output_event(run_id: &str, text: &str) -> String {
     output_event_with_stream(run_id, text, protocol::OutputStreamType::Stdout)
 }
 
-fn output_event_with_stream(
-    run_id: &str,
-    text: &str,
-    stream_type: protocol::OutputStreamType,
-) -> String {
+fn output_event_with_stream(run_id: &str, text: &str, stream_type: protocol::OutputStreamType) -> String {
     serde_json::to_string(&AgentRunEvent::OutputChunk {
         run_id: RunId(run_id.to_string()),
         stream_type,
@@ -60,19 +50,13 @@ fn output_event_with_stream(
 }
 
 fn thinking_event(run_id: &str, content: &str) -> String {
-    serde_json::to_string(&AgentRunEvent::Thinking {
-        run_id: RunId(run_id.to_string()),
-        content: content.to_string(),
-    })
-    .expect("thinking event should serialize")
+    serde_json::to_string(&AgentRunEvent::Thinking { run_id: RunId(run_id.to_string()), content: content.to_string() })
+        .expect("thinking event should serialize")
 }
 
 fn error_event(run_id: &str, error: &str) -> String {
-    serde_json::to_string(&AgentRunEvent::Error {
-        run_id: RunId(run_id.to_string()),
-        error: error.to_string(),
-    })
-    .expect("error event should serialize")
+    serde_json::to_string(&AgentRunEvent::Error { run_id: RunId(run_id.to_string()), error: error.to_string() })
+        .expect("error event should serialize")
 }
 
 fn save_workflow(
@@ -103,9 +87,7 @@ fn save_workflow(
             rework_counts: HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
-            subject: WorkflowSubject::Task {
-                id: task_id.to_string(),
-            },
+            subject: WorkflowSubject::Task { id: task_id.to_string() },
         })
         .expect("workflow should be written");
 }
@@ -113,15 +95,7 @@ fn save_workflow(
 #[test]
 fn build_task_get_args_includes_id() {
     let args = build_task_get_args("task-123".to_string());
-    assert_eq!(
-        args,
-        vec![
-            "task".to_string(),
-            "get".to_string(),
-            "--id".to_string(),
-            "task-123".to_string()
-        ]
-    );
+    assert_eq!(args, vec!["task".to_string(), "get".to_string(), "--id".to_string(), "task-123".to_string()]);
 }
 
 fn sample_cli_failure_result() -> CliExecutionResult {
@@ -155,15 +129,9 @@ fn build_cli_error_payload_prefers_stderr_envelope_over_stdout_envelope() {
     result.stderr = "stderr body".to_string();
 
     let payload = build_cli_error_payload("ao.daemon.start", &result);
-    assert_eq!(
-        payload.pointer("/error/message").and_then(Value::as_str),
-        Some("stderr-error")
-    );
+    assert_eq!(payload.pointer("/error/message").and_then(Value::as_str), Some("stderr-error"));
     assert_eq!(payload.get("exit_code").and_then(Value::as_i64), Some(5));
-    assert_eq!(
-        payload.get("stderr").and_then(Value::as_str),
-        Some("stderr body")
-    );
+    assert_eq!(payload.get("stderr").and_then(Value::as_str), Some("stderr body"));
 }
 
 #[test]
@@ -176,10 +144,7 @@ fn build_cli_error_payload_falls_back_to_stdout_envelope_when_stderr_json_missin
     }));
 
     let payload = build_cli_error_payload("ao.daemon.start", &result);
-    assert_eq!(
-        payload.pointer("/error/message").and_then(Value::as_str),
-        Some("stdout-error")
-    );
+    assert_eq!(payload.pointer("/error/message").and_then(Value::as_str), Some("stdout-error"));
 }
 
 #[test]
@@ -241,15 +206,7 @@ fn build_task_create_args_uses_empty_description_when_omitted() {
 #[test]
 fn build_task_delete_args_includes_id() {
     let args = build_task_delete_args("task-123".to_string(), None, false);
-    assert_eq!(
-        args,
-        vec![
-            "task".to_string(),
-            "delete".to_string(),
-            "--id".to_string(),
-            "task-123".to_string()
-        ]
-    );
+    assert_eq!(args, vec!["task".to_string(), "delete".to_string(), "--id".to_string(), "task-123".to_string()]);
 }
 
 #[test]
@@ -272,43 +229,19 @@ fn build_task_delete_args_supports_confirmation_and_dry_run() {
 #[test]
 fn build_task_control_args_emits_pause() {
     let args = build_task_control_args("pause", "TASK-123".to_string());
-    assert_eq!(
-        args,
-        vec![
-            "task".to_string(),
-            "pause".to_string(),
-            "--id".to_string(),
-            "TASK-123".to_string(),
-        ]
-    );
+    assert_eq!(args, vec!["task".to_string(), "pause".to_string(), "--id".to_string(), "TASK-123".to_string(),]);
 }
 
 #[test]
 fn build_task_control_args_emits_resume() {
     let args = build_task_control_args("resume", "TASK-456".to_string());
-    assert_eq!(
-        args,
-        vec![
-            "task".to_string(),
-            "resume".to_string(),
-            "--id".to_string(),
-            "TASK-456".to_string(),
-        ]
-    );
+    assert_eq!(args, vec!["task".to_string(), "resume".to_string(), "--id".to_string(), "TASK-456".to_string(),]);
 }
 
 #[test]
 fn builds_requirements_get_args() {
     let args = build_requirements_get_args("REQ-123".to_string());
-    assert_eq!(
-        args,
-        vec![
-            "requirements".to_string(),
-            "get".to_string(),
-            "--id".to_string(),
-            "REQ-123".to_string(),
-        ]
-    );
+    assert_eq!(args, vec!["requirements".to_string(), "get".to_string(), "--id".to_string(), "REQ-123".to_string(),]);
 }
 
 #[test]
@@ -320,10 +253,7 @@ fn build_requirements_create_args_includes_acceptance_criteria() {
         category: Some("product".to_string()),
         requirement_type: Some("feature".to_string()),
         source: Some("research".to_string()),
-        acceptance_criterion: vec![
-            "Queues local writes".to_string(),
-            "Resumes sync".to_string(),
-        ],
+        acceptance_criterion: vec!["Queues local writes".to_string(), "Resumes sync".to_string()],
         input_json: None,
         project_root: None,
     });
@@ -433,10 +363,7 @@ fn build_requirements_refine_args_includes_ids_and_optional_flags() {
 
 #[test]
 fn build_bulk_status_item_args_basic() {
-    let item = BulkTaskStatusItem {
-        id: "TASK-1".to_string(),
-        status: "done".to_string(),
-    };
+    let item = BulkTaskStatusItem { id: "TASK-1".to_string(), status: "done".to_string() };
     let args = build_bulk_status_item_args(&item);
     assert_eq!(
         args,
@@ -513,21 +440,9 @@ fn build_bulk_update_item_args_all_optional_fields() {
 
 #[test]
 fn build_bulk_workflow_run_item_args_basic() {
-    let item = BulkWorkflowRunItem {
-        task_id: "TASK-4".to_string(),
-        workflow_ref: None,
-        input_json: None,
-    };
+    let item = BulkWorkflowRunItem { task_id: "TASK-4".to_string(), workflow_ref: None, input_json: None };
     let args = build_bulk_workflow_run_item_args(&item);
-    assert_eq!(
-        args,
-        vec![
-            "workflow".to_string(),
-            "run".to_string(),
-            "--task-id".to_string(),
-            "TASK-4".to_string(),
-        ]
-    );
+    assert_eq!(args, vec!["workflow".to_string(), "run".to_string(), "--task-id".to_string(), "TASK-4".to_string(),]);
 }
 
 #[test]
@@ -556,66 +471,39 @@ fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
 #[test]
 fn validate_bulk_status_input_rejects_empty() {
     let err = validate_bulk_status_input("ao.task.bulk-status", &[]).unwrap_err();
-    assert!(
-        err.contains("must not be empty"),
-        "expected empty-array error, got: {err}"
-    );
+    assert!(err.contains("must not be empty"), "expected empty-array error, got: {err}");
 }
 
 #[test]
 fn validate_bulk_status_input_rejects_over_max() {
     let updates: Vec<BulkTaskStatusItem> = (0..=MAX_BATCH_SIZE)
-        .map(|i| BulkTaskStatusItem {
-            id: format!("TASK-{i}"),
-            status: "done".to_string(),
-        })
+        .map(|i| BulkTaskStatusItem { id: format!("TASK-{i}"), status: "done".to_string() })
         .collect();
     let err = validate_bulk_status_input("ao.task.bulk-status", &updates).unwrap_err();
-    assert!(
-        err.contains("exceeds maximum"),
-        "expected max-size error, got: {err}"
-    );
+    assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
 }
 
 #[test]
 fn validate_bulk_status_input_rejects_duplicate_ids() {
     let updates = vec![
-        BulkTaskStatusItem {
-            id: "TASK-1".to_string(),
-            status: "done".to_string(),
-        },
-        BulkTaskStatusItem {
-            id: "TASK-1".to_string(),
-            status: "todo".to_string(),
-        },
+        BulkTaskStatusItem { id: "TASK-1".to_string(), status: "done".to_string() },
+        BulkTaskStatusItem { id: "TASK-1".to_string(), status: "todo".to_string() },
     ];
     let err = validate_bulk_status_input("ao.task.bulk-status", &updates).unwrap_err();
-    assert!(
-        err.contains("duplicate id"),
-        "expected duplicate-id error, got: {err}"
-    );
+    assert!(err.contains("duplicate id"), "expected duplicate-id error, got: {err}");
 }
 
 #[test]
 fn validate_bulk_status_input_rejects_empty_id() {
-    let updates = vec![BulkTaskStatusItem {
-        id: "  ".to_string(),
-        status: "done".to_string(),
-    }];
+    let updates = vec![BulkTaskStatusItem { id: "  ".to_string(), status: "done".to_string() }];
     let err = validate_bulk_status_input("ao.task.bulk-status", &updates).unwrap_err();
-    assert!(
-        err.contains(".id must not be empty"),
-        "expected empty-id error, got: {err}"
-    );
+    assert!(err.contains(".id must not be empty"), "expected empty-id error, got: {err}");
 }
 
 #[test]
 fn validate_bulk_update_input_rejects_empty() {
     let err = validate_bulk_update_input("ao.task.bulk-update", &[]).unwrap_err();
-    assert!(
-        err.contains("must not be empty"),
-        "expected empty-array error, got: {err}"
-    );
+    assert!(err.contains("must not be empty"), "expected empty-array error, got: {err}");
 }
 
 #[test]
@@ -630,10 +518,7 @@ fn validate_bulk_update_input_rejects_item_with_no_fields() {
         input_json: None,
     }];
     let err = validate_bulk_update_input("ao.task.bulk-update", &updates).unwrap_err();
-    assert!(
-        err.contains("must include at least one update field"),
-        "expected no-field error, got: {err}"
-    );
+    assert!(err.contains("must include at least one update field"), "expected no-field error, got: {err}");
 }
 
 #[test]
@@ -659,10 +544,7 @@ fn validate_bulk_update_input_rejects_duplicate_ids() {
         },
     ];
     let err = validate_bulk_update_input("ao.task.bulk-update", &updates).unwrap_err();
-    assert!(
-        err.contains("duplicate id"),
-        "expected duplicate-id error, got: {err}"
-    );
+    assert!(err.contains("duplicate id"), "expected duplicate-id error, got: {err}");
 }
 
 #[test]
@@ -693,39 +575,21 @@ fn validate_bulk_update_input_accepts_valid_items() {
 #[test]
 fn validate_workflow_run_multiple_rejects_empty() {
     let err = validate_workflow_run_multiple_input("ao.workflow.run-multiple", &[]).unwrap_err();
-    assert!(
-        err.contains("must not be empty"),
-        "expected empty-array error, got: {err}"
-    );
+    assert!(err.contains("must not be empty"), "expected empty-array error, got: {err}");
 }
 
 #[test]
 fn validate_workflow_run_multiple_rejects_empty_task_id() {
-    let runs = vec![BulkWorkflowRunItem {
-        task_id: "".to_string(),
-        workflow_ref: None,
-        input_json: None,
-    }];
+    let runs = vec![BulkWorkflowRunItem { task_id: "".to_string(), workflow_ref: None, input_json: None }];
     let err = validate_workflow_run_multiple_input("ao.workflow.run-multiple", &runs).unwrap_err();
-    assert!(
-        err.contains("task_id must not be empty"),
-        "expected empty-task-id error, got: {err}"
-    );
+    assert!(err.contains("task_id must not be empty"), "expected empty-task-id error, got: {err}");
 }
 
 #[test]
 fn validate_workflow_run_multiple_accepts_valid_runs() {
     let runs = vec![
-        BulkWorkflowRunItem {
-            task_id: "TASK-1".to_string(),
-            workflow_ref: None,
-            input_json: None,
-        },
-        BulkWorkflowRunItem {
-            task_id: "TASK-2".to_string(),
-            workflow_ref: Some("p1".to_string()),
-            input_json: None,
-        },
+        BulkWorkflowRunItem { task_id: "TASK-1".to_string(), workflow_ref: None, input_json: None },
+        BulkWorkflowRunItem { task_id: "TASK-2".to_string(), workflow_ref: Some("p1".to_string()), input_json: None },
     ];
     assert!(validate_workflow_run_multiple_input("ao.workflow.run-multiple", &runs).is_ok());
 }
@@ -756,46 +620,30 @@ fn validate_bulk_update_input_rejects_over_max() {
         })
         .collect();
     let err = validate_bulk_update_input("ao.task.bulk-update", &updates).unwrap_err();
-    assert!(
-        err.contains("exceeds maximum"),
-        "expected max-size error, got: {err}"
-    );
+    assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
 }
 
 #[test]
 fn validate_workflow_run_multiple_rejects_over_max() {
     let runs: Vec<BulkWorkflowRunItem> = (0..=MAX_BATCH_SIZE)
-        .map(|i| BulkWorkflowRunItem {
-            task_id: format!("TASK-{i}"),
-            workflow_ref: None,
-            input_json: None,
-        })
+        .map(|i| BulkWorkflowRunItem { task_id: format!("TASK-{i}"), workflow_ref: None, input_json: None })
         .collect();
     let err = validate_workflow_run_multiple_input("ao.workflow.run-multiple", &runs).unwrap_err();
-    assert!(
-        err.contains("exceeds maximum"),
-        "expected max-size error, got: {err}"
-    );
+    assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
 }
 
 #[test]
 fn list_limit_defaults_and_clamps() {
     assert_eq!(list_limit(None), DEFAULT_MCP_LIST_LIMIT);
     assert_eq!(list_limit(Some(0)), 1);
-    assert_eq!(
-        list_limit(Some(MAX_MCP_LIST_LIMIT + 10)),
-        MAX_MCP_LIST_LIMIT
-    );
+    assert_eq!(list_limit(Some(MAX_MCP_LIST_LIMIT + 10)), MAX_MCP_LIST_LIMIT);
 }
 
 #[test]
 fn list_max_tokens_defaults_and_clamps() {
     assert_eq!(list_max_tokens(None), DEFAULT_MCP_LIST_MAX_TOKENS);
     assert_eq!(list_max_tokens(Some(0)), MIN_MCP_LIST_MAX_TOKENS);
-    assert_eq!(
-        list_max_tokens(Some(MAX_MCP_LIST_MAX_TOKENS + 500)),
-        MAX_MCP_LIST_MAX_TOKENS
-    );
+    assert_eq!(list_max_tokens(Some(MAX_MCP_LIST_MAX_TOKENS + 500)), MAX_MCP_LIST_MAX_TOKENS);
 }
 
 #[test]
@@ -807,28 +655,14 @@ fn build_guarded_list_result_normalizes_limit_and_max_tokens_hint() {
     let result = build_guarded_list_result(
         "ao.task.list",
         data,
-        ListGuardInput {
-            limit: Some(0),
-            offset: Some(0),
-            max_tokens: Some(0),
-        },
+        ListGuardInput { limit: Some(0), offset: Some(0), max_tokens: Some(0) },
     )
     .expect("guarded list should build");
 
+    assert_eq!(result.pointer("/pagination/limit").and_then(Value::as_u64), Some(1));
+    assert_eq!(result.pointer("/pagination/returned").and_then(Value::as_u64), Some(1));
     assert_eq!(
-        result.pointer("/pagination/limit").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        result
-            .pointer("/pagination/returned")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        result
-            .pointer("/size_guard/max_tokens_hint")
-            .and_then(Value::as_u64),
+        result.pointer("/size_guard/max_tokens_hint").and_then(Value::as_u64),
         Some(MIN_MCP_LIST_MAX_TOKENS as u64)
     );
 }
@@ -842,43 +676,17 @@ fn build_guarded_list_result_handles_offset_beyond_total() {
     let result = build_guarded_list_result(
         "ao.task.list",
         data,
-        ListGuardInput {
-            limit: Some(5),
-            offset: Some(99),
-            max_tokens: Some(3000),
-        },
+        ListGuardInput { limit: Some(5), offset: Some(99), max_tokens: Some(3000) },
     )
     .expect("guarded list should build");
 
-    assert_eq!(
-        result.get("items").and_then(Value::as_array).map(Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        result.pointer("/pagination/offset").and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        result
-            .pointer("/pagination/returned")
-            .and_then(Value::as_u64),
-        Some(0)
-    );
-    assert_eq!(
-        result.pointer("/pagination/total").and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        result
-            .pointer("/pagination/has_more")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(result.get("items").and_then(Value::as_array).map(Vec::len), Some(0));
+    assert_eq!(result.pointer("/pagination/offset").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/pagination/returned").and_then(Value::as_u64), Some(0));
+    assert_eq!(result.pointer("/pagination/total").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/pagination/has_more").and_then(Value::as_bool), Some(false));
     assert!(
-        result
-            .pointer("/pagination/next_offset")
-            .map(Value::is_null)
-            .unwrap_or(false),
+        result.pointer("/pagination/next_offset").map(Value::is_null).unwrap_or(false),
         "next_offset should be null when page is exhausted"
     );
 }
@@ -894,56 +702,28 @@ fn build_guarded_list_result_applies_offset_then_limit() {
     let result = build_guarded_list_result(
         "ao.task.list",
         data,
-        ListGuardInput {
-            limit: Some(2),
-            offset: Some(1),
-            max_tokens: Some(3000),
-        },
+        ListGuardInput { limit: Some(2), offset: Some(1), max_tokens: Some(3000) },
     )
     .expect("guarded list should build");
 
-    assert_eq!(
-        result.get("schema").and_then(Value::as_str),
-        Some(MCP_LIST_RESULT_SCHEMA)
-    );
-    assert_eq!(
-        result.get("tool").and_then(Value::as_str),
-        Some("ao.task.list")
-    );
-    let items = result
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("items should be an array");
+    assert_eq!(result.get("schema").and_then(Value::as_str), Some(MCP_LIST_RESULT_SCHEMA));
+    assert_eq!(result.get("tool").and_then(Value::as_str), Some("ao.task.list"));
+    let items = result.get("items").and_then(Value::as_array).expect("items should be an array");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].get("id").and_then(Value::as_str), Some("TASK-2"));
     assert_eq!(items[1].get("id").and_then(Value::as_str), Some("TASK-3"));
 
-    let pagination = result
-        .get("pagination")
-        .and_then(Value::as_object)
-        .expect("pagination should be object");
+    let pagination = result.get("pagination").and_then(Value::as_object).expect("pagination should be object");
     assert_eq!(pagination.get("limit").and_then(Value::as_u64), Some(2));
     assert_eq!(pagination.get("offset").and_then(Value::as_u64), Some(1));
     assert_eq!(pagination.get("returned").and_then(Value::as_u64), Some(2));
     assert_eq!(pagination.get("total").and_then(Value::as_u64), Some(4));
-    assert_eq!(
-        pagination.get("has_more").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        pagination.get("next_offset").and_then(Value::as_u64),
-        Some(3)
-    );
+    assert_eq!(pagination.get("has_more").and_then(Value::as_bool), Some(true));
+    assert_eq!(pagination.get("next_offset").and_then(Value::as_u64), Some(3));
 
-    let size_guard = result
-        .get("size_guard")
-        .and_then(Value::as_object)
-        .expect("size_guard should be object");
+    let size_guard = result.get("size_guard").and_then(Value::as_object).expect("size_guard should be object");
     assert_eq!(size_guard.get("mode").and_then(Value::as_str), Some("full"));
-    assert_eq!(
-        size_guard.get("truncated").and_then(Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(size_guard.get("truncated").and_then(Value::as_bool), Some(false));
 }
 
 #[test]
@@ -960,31 +740,13 @@ fn build_guarded_list_result_falls_back_to_summary_fields_mode() {
     let result = build_guarded_list_result(
         "ao.workflow.list",
         data,
-        ListGuardInput {
-            limit: Some(25),
-            offset: Some(0),
-            max_tokens: Some(256),
-        },
+        ListGuardInput { limit: Some(25), offset: Some(0), max_tokens: Some(256) },
     )
     .expect("guarded list should build");
 
-    assert_eq!(
-        result
-            .pointer("/size_guard/mode")
-            .and_then(Value::as_str)
-            .expect("size guard mode"),
-        "summary_fields"
-    );
-    assert_eq!(
-        result
-            .pointer("/size_guard/truncated")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    let item = result
-        .pointer("/items/0")
-        .and_then(Value::as_object)
-        .expect("summary field item should be object");
+    assert_eq!(result.pointer("/size_guard/mode").and_then(Value::as_str).expect("size guard mode"), "summary_fields");
+    assert_eq!(result.pointer("/size_guard/truncated").and_then(Value::as_bool), Some(true));
+    let item = result.pointer("/items/0").and_then(Value::as_object).expect("summary field item should be object");
     assert_eq!(item.get("id").and_then(Value::as_str), Some("wf-1"));
     assert!(item.get("decision_history").is_none());
     assert!(item.get("raw_state").is_none());
@@ -1006,37 +768,17 @@ fn build_guarded_list_result_falls_back_to_summary_only_mode() {
     let result = build_guarded_list_result(
         "ao.task.list",
         Value::Array(items),
-        ListGuardInput {
-            limit: Some(25),
-            offset: Some(0),
-            max_tokens: Some(256),
-        },
+        ListGuardInput { limit: Some(25), offset: Some(0), max_tokens: Some(256) },
     )
     .expect("guarded list should build");
 
-    assert_eq!(
-        result
-            .pointer("/size_guard/mode")
-            .and_then(Value::as_str)
-            .expect("size guard mode"),
-        "summary_only"
-    );
-    let items = result
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("summary-only items should be array");
+    assert_eq!(result.pointer("/size_guard/mode").and_then(Value::as_str).expect("size guard mode"), "summary_only");
+    let items = result.get("items").and_then(Value::as_array).expect("summary-only items should be array");
     assert_eq!(items.len(), 1);
     let digest = items[0].as_object().expect("digest should be object");
-    assert_eq!(
-        digest.get("kind").and_then(Value::as_str),
-        Some("summary_only")
-    );
+    assert_eq!(digest.get("kind").and_then(Value::as_str), Some("summary_only"));
     assert_eq!(digest.get("item_count").and_then(Value::as_u64), Some(25));
-    assert!(digest
-        .get("ids")
-        .and_then(Value::as_array)
-        .map(|ids| ids.len() <= 10)
-        .unwrap_or(false));
+    assert!(digest.get("ids").and_then(Value::as_array).map(|ids| ids.len() <= 10).unwrap_or(false));
 }
 
 #[test]
@@ -1054,21 +796,11 @@ fn build_guarded_list_result_summary_only_respects_max_tokens_hint() {
     let result = build_guarded_list_result(
         "ao.task.list",
         Value::Array(items),
-        ListGuardInput {
-            limit: Some(MAX_MCP_LIST_LIMIT),
-            offset: Some(0),
-            max_tokens: Some(MIN_MCP_LIST_MAX_TOKENS),
-        },
+        ListGuardInput { limit: Some(MAX_MCP_LIST_LIMIT), offset: Some(0), max_tokens: Some(MIN_MCP_LIST_MAX_TOKENS) },
     )
     .expect("guarded list should build");
 
-    assert_eq!(
-        result
-            .pointer("/size_guard/mode")
-            .and_then(Value::as_str)
-            .expect("size guard mode"),
-        "summary_only"
-    );
+    assert_eq!(result.pointer("/size_guard/mode").and_then(Value::as_str).expect("size guard mode"), "summary_only");
     assert!(
         result
             .pointer("/size_guard/estimated_tokens")
@@ -1100,24 +832,12 @@ fn build_guarded_list_result_supports_workflow_decisions() {
             "confidence": 0.9,
             "risk": "low"
         }]),
-        ListGuardInput {
-            limit: Some(10),
-            offset: Some(0),
-            max_tokens: Some(3000),
-        },
+        ListGuardInput { limit: Some(10), offset: Some(0), max_tokens: Some(3000) },
     )
     .expect("workflow decisions should support guarded list responses");
 
-    assert_eq!(
-        result.get("tool").and_then(Value::as_str),
-        Some("ao.workflow.decisions")
-    );
-    assert_eq!(
-        result
-            .pointer("/pagination/returned")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
+    assert_eq!(result.get("tool").and_then(Value::as_str), Some("ao.workflow.decisions"));
+    assert_eq!(result.pointer("/pagination/returned").and_then(Value::as_u64), Some(1));
 }
 
 #[test]
@@ -1125,11 +845,7 @@ fn build_guarded_list_result_rejects_non_array_payloads() {
     let err = build_guarded_list_result(
         "ao.workflow.list",
         json!({"id": "wf-1"}),
-        ListGuardInput {
-            limit: None,
-            offset: None,
-            max_tokens: None,
-        },
+        ListGuardInput { limit: None, offset: None, max_tokens: None },
     )
     .expect_err("non-array list payload should fail");
     assert!(err.to_string().contains("expected list data as JSON array"));
@@ -1170,19 +886,11 @@ fn build_daemon_start_args_with_flags() {
 
 #[test]
 fn build_daemon_start_args_includes_stale_threshold_hours() {
-    let input = DaemonStartInput {
-        stale_threshold_hours: Some(48),
-        ..Default::default()
-    };
+    let input = DaemonStartInput { stale_threshold_hours: Some(48), ..Default::default() };
     let args = build_daemon_start_args(&input);
     assert_eq!(
         args,
-        vec![
-            "daemon".to_string(),
-            "start".to_string(),
-            "--stale-threshold-hours".to_string(),
-            "48".to_string(),
-        ]
+        vec!["daemon".to_string(), "start".to_string(), "--stale-threshold-hours".to_string(), "48".to_string(),]
     );
 }
 
@@ -1215,10 +923,7 @@ fn build_queue_enqueue_args_includes_optional_fields() {
 
 #[test]
 fn build_queue_reorder_args_repeats_subject_flags() {
-    let input = QueueReorderInput {
-        subject_ids: vec!["TASK-2".to_string(), "TASK-1".to_string()],
-        project_root: None,
-    };
+    let input = QueueReorderInput { subject_ids: vec!["TASK-2".to_string(), "TASK-1".to_string()], project_root: None };
     let args = build_queue_reorder_args(&input);
     assert_eq!(
         args,
@@ -1314,64 +1019,40 @@ fn build_agent_run_args_with_all_options() {
 fn daemon_events_poll_limit_defaults_and_clamps() {
     assert_eq!(daemon_events_poll_limit(None), DEFAULT_DAEMON_EVENTS_LIMIT);
     assert_eq!(daemon_events_poll_limit(Some(0)), 1);
-    assert_eq!(
-        daemon_events_poll_limit(Some(MAX_DAEMON_EVENTS_LIMIT + 25)),
-        MAX_DAEMON_EVENTS_LIMIT
-    );
+    assert_eq!(daemon_events_poll_limit(Some(MAX_DAEMON_EVENTS_LIMIT + 25)), MAX_DAEMON_EVENTS_LIMIT);
 }
 
 #[test]
 fn resolve_daemon_events_project_root_uses_default_when_override_blank() {
     let default_root = TempDir::new().expect("default project root");
-    let expected = crate::services::runtime::canonicalize_lossy(
-        default_root.path().to_string_lossy().as_ref(),
-    );
-    assert_eq!(
-        resolve_daemon_events_project_root(expected.as_str(), Some("   ".to_string())),
-        expected
-    );
+    let expected = crate::services::runtime::canonicalize_lossy(default_root.path().to_string_lossy().as_ref());
+    assert_eq!(resolve_daemon_events_project_root(expected.as_str(), Some("   ".to_string())), expected);
 }
 
 #[test]
 fn build_daemon_events_poll_result_returns_non_null_structured_events() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let config_root = TempDir::new().expect("config temp dir");
-    let _config_guard = EnvVarGuard::set(
-        "AO_CONFIG_DIR",
-        Some(config_root.path().to_string_lossy().as_ref()),
-    );
+    let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
     let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
     let project = TempDir::new().expect("project temp dir");
     let project_root = project.path().to_string_lossy().to_string();
     write_events(&[
-        serde_json::to_string(&sample_event(1, "queue", project_root.as_str()))
-            .expect("event json"),
+        serde_json::to_string(&sample_event(1, "queue", project_root.as_str())).expect("event json"),
         "{not-json".to_string(),
-        serde_json::to_string(&sample_event(2, "workflow", project_root.as_str()))
-            .expect("event json"),
+        serde_json::to_string(&sample_event(2, "workflow", project_root.as_str())).expect("event json"),
     ]);
 
     let result = build_daemon_events_poll_result(
         project_root.as_str(),
-        DaemonEventsInput {
-            limit: Some(10),
-            project_root: Some(project_root.clone()),
-        },
+        DaemonEventsInput { limit: Some(10), project_root: Some(project_root.clone()) },
     )
     .expect("poll result should be built");
 
-    assert_eq!(
-        result.get("schema").and_then(Value::as_str),
-        Some("ao.daemon.events.poll.v1")
-    );
+    assert_eq!(result.get("schema").and_then(Value::as_str), Some("ao.daemon.events.poll.v1"));
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
     assert_eq!(events[1].get("seq").and_then(Value::as_u64), Some(2));
@@ -1379,14 +1060,9 @@ fn build_daemon_events_poll_result_returns_non_null_structured_events() {
 
 #[test]
 fn build_daemon_events_poll_result_filters_by_project_root() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let config_root = TempDir::new().expect("config temp dir");
-    let _config_guard = EnvVarGuard::set(
-        "AO_CONFIG_DIR",
-        Some(config_root.path().to_string_lossy().as_ref()),
-    );
+    let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
     let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
     let project_a = TempDir::new().expect("project A");
@@ -1401,42 +1077,27 @@ fn build_daemon_events_poll_result_filters_by_project_root() {
 
     let result = build_daemon_events_poll_result(
         root_a.as_str(),
-        DaemonEventsInput {
-            limit: Some(50),
-            project_root: Some(root_a.clone()),
-        },
+        DaemonEventsInput { limit: Some(50), project_root: Some(root_a.clone()) },
     )
     .expect("poll result should be built");
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|event| {
-        event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str())
-    }));
+    assert!(events.iter().all(|event| { event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str()) }));
     assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
     assert_eq!(events[1].get("seq").and_then(Value::as_u64), Some(3));
 }
 
 #[test]
 fn build_daemon_events_poll_result_blank_project_root_falls_back_to_default() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let config_root = TempDir::new().expect("config temp dir");
-    let _config_guard = EnvVarGuard::set(
-        "AO_CONFIG_DIR",
-        Some(config_root.path().to_string_lossy().as_ref()),
-    );
+    let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
     let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
     let project_a = TempDir::new().expect("project A");
     let project_b = TempDir::new().expect("project B");
-    let root_a =
-        crate::services::runtime::canonicalize_lossy(project_a.path().to_string_lossy().as_ref());
-    let root_b =
-        crate::services::runtime::canonicalize_lossy(project_b.path().to_string_lossy().as_ref());
+    let root_a = crate::services::runtime::canonicalize_lossy(project_a.path().to_string_lossy().as_ref());
+    let root_b = crate::services::runtime::canonicalize_lossy(project_b.path().to_string_lossy().as_ref());
     write_events(&[
         serde_json::to_string(&sample_event(1, "queue", root_a.as_str())).expect("event json"),
         serde_json::to_string(&sample_event(2, "queue", root_b.as_str())).expect("event json"),
@@ -1445,37 +1106,20 @@ fn build_daemon_events_poll_result_blank_project_root_falls_back_to_default() {
 
     let result = build_daemon_events_poll_result(
         root_a.as_str(),
-        DaemonEventsInput {
-            limit: Some(50),
-            project_root: Some("   ".to_string()),
-        },
+        DaemonEventsInput { limit: Some(50), project_root: Some("   ".to_string()) },
     )
     .expect("poll result should be built");
-    assert_eq!(
-        result.get("project_root").and_then(Value::as_str),
-        Some(root_a.as_str())
-    );
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    assert_eq!(result.get("project_root").and_then(Value::as_str), Some(root_a.as_str()));
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|event| {
-        event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str())
-    }));
+    assert!(events.iter().all(|event| { event.get("project_root").and_then(Value::as_str) == Some(root_a.as_str()) }));
 }
 
 #[test]
 fn build_output_tail_result_requires_exactly_one_identifier() {
     let err_none = build_output_tail_result(
         "/tmp/project",
-        OutputTailInput {
-            run_id: None,
-            task_id: None,
-            limit: None,
-            event_types: None,
-            project_root: None,
-        },
+        OutputTailInput { run_id: None, task_id: None, limit: None, event_types: None, project_root: None },
     )
     .expect_err("missing identifiers should fail");
     assert!(err_none.to_string().contains("exactly one"));
@@ -1528,9 +1172,7 @@ fn build_output_tail_result_rejects_unsafe_run_id() {
 
 #[test]
 fn build_output_tail_result_filters_out_events_for_other_runs() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1556,41 +1198,23 @@ fn build_output_tail_result_filters_out_events_for_other_runs() {
             run_id: Some(run_id.to_string()),
             task_id: None,
             limit: Some(10),
-            event_types: Some(vec![
-                "output".to_string(),
-                "thinking".to_string(),
-                "error".to_string(),
-            ]),
+            event_types: Some(vec!["output".to_string(), "thinking".to_string(), "error".to_string()]),
             project_root: None,
         },
     )
     .expect("tail result should build");
 
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(3));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 3);
-    assert_eq!(
-        events[0].get("text").and_then(Value::as_str),
-        Some("keep-output")
-    );
-    assert_eq!(
-        events[1].get("text").and_then(Value::as_str),
-        Some("keep-thinking")
-    );
-    assert_eq!(
-        events[2].get("text").and_then(Value::as_str),
-        Some("keep-error")
-    );
+    assert_eq!(events[0].get("text").and_then(Value::as_str), Some("keep-output"));
+    assert_eq!(events[1].get("text").and_then(Value::as_str), Some("keep-thinking"));
+    assert_eq!(events[2].get("text").and_then(Value::as_str), Some("keep-error"));
 }
 
 #[test]
 fn build_output_tail_result_returns_empty_when_events_log_missing() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1613,17 +1237,12 @@ fn build_output_tail_result_returns_empty_when_events_log_missing() {
     .expect("tail result should build");
 
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(0));
-    assert_eq!(
-        result.get("events").and_then(Value::as_array).map(Vec::len),
-        Some(0)
-    );
+    assert_eq!(result.get("events").and_then(Value::as_array).map(Vec::len), Some(0));
 }
 
 #[test]
 fn build_output_tail_result_skips_invalid_utf8_log_lines() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1653,26 +1272,15 @@ fn build_output_tail_result_skips_invalid_utf8_log_lines() {
     .expect("tail result should build");
 
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 2);
-    assert_eq!(
-        events[0].get("text").and_then(Value::as_str),
-        Some("visible-output")
-    );
-    assert_eq!(
-        events[1].get("text").and_then(Value::as_str),
-        Some("visible-thinking")
-    );
+    assert_eq!(events[0].get("text").and_then(Value::as_str), Some("visible-output"));
+    assert_eq!(events[1].get("text").and_then(Value::as_str), Some("visible-thinking"));
 }
 
 #[test]
 fn build_output_tail_result_defaults_to_output_and_thinking() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1702,44 +1310,21 @@ fn build_output_tail_result_defaults_to_output_and_thinking() {
     )
     .expect("tail result should build");
 
-    assert_eq!(
-        result.get("schema").and_then(Value::as_str),
-        Some(OUTPUT_TAIL_SCHEMA)
-    );
-    assert_eq!(
-        result.get("resolved_from").and_then(Value::as_str),
-        Some("run_id")
-    );
+    assert_eq!(result.get("schema").and_then(Value::as_str), Some(OUTPUT_TAIL_SCHEMA));
+    assert_eq!(result.get("resolved_from").and_then(Value::as_str), Some("run_id"));
     assert_eq!(result.get("limit").and_then(Value::as_u64), Some(50));
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 2);
-    assert_eq!(
-        events[0].get("event_type").and_then(Value::as_str),
-        Some("output")
-    );
-    assert_eq!(
-        events[0].get("text").and_then(Value::as_str),
-        Some("first output")
-    );
-    assert_eq!(
-        events[1].get("event_type").and_then(Value::as_str),
-        Some("thinking")
-    );
-    assert_eq!(
-        events[1].get("text").and_then(Value::as_str),
-        Some("visible thought")
-    );
+    assert_eq!(events[0].get("event_type").and_then(Value::as_str), Some("output"));
+    assert_eq!(events[0].get("text").and_then(Value::as_str), Some("first output"));
+    assert_eq!(events[1].get("event_type").and_then(Value::as_str), Some("thinking"));
+    assert_eq!(events[1].get("text").and_then(Value::as_str), Some("visible thought"));
 }
 
 #[test]
 fn build_output_tail_result_normalizes_output_stream_types() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1769,30 +1354,16 @@ fn build_output_tail_result_normalizes_output_stream_types() {
     .expect("tail result should build");
 
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(3));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 3);
-    assert_eq!(
-        events[0].get("stream_type").and_then(Value::as_str),
-        Some("stdout")
-    );
-    assert_eq!(
-        events[1].get("stream_type").and_then(Value::as_str),
-        Some("stderr")
-    );
-    assert_eq!(
-        events[2].get("stream_type").and_then(Value::as_str),
-        Some("system")
-    );
+    assert_eq!(events[0].get("stream_type").and_then(Value::as_str), Some("stdout"));
+    assert_eq!(events[1].get("stream_type").and_then(Value::as_str), Some("stderr"));
+    assert_eq!(events[2].get("stream_type").and_then(Value::as_str), Some("system"));
 }
 
 #[test]
 fn build_output_tail_result_applies_filter_and_limit_in_order() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1816,45 +1387,29 @@ fn build_output_tail_result_applies_filter_and_limit_in_order() {
             run_id: Some(run_id.to_string()),
             task_id: None,
             limit: Some(2),
-            event_types: Some(vec![
-                "output".to_string(),
-                "thinking".to_string(),
-                "error".to_string(),
-            ]),
+            event_types: Some(vec!["output".to_string(), "thinking".to_string(), "error".to_string()]),
             project_root: None,
         },
     )
     .expect("tail result should build");
 
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(2));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events[0].get("text").and_then(Value::as_str), Some("out-2"));
     assert_eq!(events[1].get("text").and_then(Value::as_str), Some("err-1"));
-    assert_eq!(
-        events[1].get("event_type").and_then(Value::as_str),
-        Some("error")
-    );
+    assert_eq!(events[1].get("event_type").and_then(Value::as_str), Some("error"));
 }
 
 #[test]
 fn build_output_tail_result_clamps_limit_to_minimum() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
     std::fs::create_dir_all(&project_root).expect("project dir should exist");
     let root = project_root.to_string_lossy().to_string();
     let run_id = "wf-limit-min-phase-0-c3";
-    write_run_events(
-        root.as_str(),
-        run_id,
-        &[error_event(run_id, "first"), error_event(run_id, "second")],
-    );
+    write_run_events(root.as_str(), run_id, &[error_event(run_id, "first"), error_event(run_id, "second")]);
 
     let result = build_output_tail_result(
         root.as_str(),
@@ -1870,22 +1425,14 @@ fn build_output_tail_result_clamps_limit_to_minimum() {
 
     assert_eq!(result.get("limit").and_then(Value::as_u64), Some(1));
     assert_eq!(result.get("count").and_then(Value::as_u64), Some(1));
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 1);
-    assert_eq!(
-        events[0].get("text").and_then(Value::as_str),
-        Some("second")
-    );
+    assert_eq!(events[0].get("text").and_then(Value::as_str), Some("second"));
 }
 
 #[test]
 fn build_output_tail_result_resolves_task_to_running_workflow_run() {
-    let _lock = crate::shared::test_env_lock()
-        .lock()
-        .expect("env lock should be available");
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
     let temp = TempDir::new().expect("tempdir should be created");
     let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
     let project_root = temp.path().join("project");
@@ -1901,27 +1448,12 @@ fn build_output_tail_result_resolves_task_to_running_workflow_run() {
         now - Duration::minutes(20),
         Some(now - Duration::minutes(10)),
     );
-    save_workflow(
-        root.as_str(),
-        "wf-running",
-        "TASK-043",
-        WorkflowStatus::Running,
-        now - Duration::minutes(1),
-        None,
-    );
+    save_workflow(root.as_str(), "wf-running", "TASK-043", WorkflowStatus::Running, now - Duration::minutes(1), None);
 
     let completed_run = "wf-wf-completed-implementation-0-old";
     let running_run = "wf-wf-running-implementation-0-new";
-    write_run_events(
-        root.as_str(),
-        completed_run,
-        &[output_event(completed_run, "completed-output")],
-    );
-    write_run_events(
-        root.as_str(),
-        running_run,
-        &[output_event(running_run, "running-output")],
-    );
+    write_run_events(root.as_str(), completed_run, &[output_event(completed_run, "completed-output")]);
+    write_run_events(root.as_str(), running_run, &[output_event(running_run, "running-output")]);
 
     let result = build_output_tail_result(
         root.as_str(),
@@ -1935,29 +1467,16 @@ fn build_output_tail_result_resolves_task_to_running_workflow_run() {
     )
     .expect("tail result should build");
 
-    assert_eq!(
-        result.get("resolved_from").and_then(Value::as_str),
-        Some("task_id")
-    );
-    assert_eq!(
-        result.get("resolved_run_id").and_then(Value::as_str),
-        Some(running_run)
-    );
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .expect("events should be an array");
+    assert_eq!(result.get("resolved_from").and_then(Value::as_str), Some("task_id"));
+    assert_eq!(result.get("resolved_run_id").and_then(Value::as_str), Some(running_run));
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
     assert_eq!(events.len(), 1);
-    assert_eq!(
-        events[0].get("text").and_then(Value::as_str),
-        Some("running-output")
-    );
+    assert_eq!(events[0].get("text").and_then(Value::as_str), Some("running-output"));
 }
 
 #[test]
 fn compact_json_str_minifies_json_payloads() {
-    let compacted =
-        compact_json_str("{\n  \"a\": 1,\n  \"b\": [1, 2]\n}").expect("json should be compacted");
+    let compacted = compact_json_str("{\n  \"a\": 1,\n  \"b\": [1, 2]\n}").expect("json should be compacted");
     assert_eq!(compacted, r#"{"a":1,"b":[1,2]}"#);
 }
 
@@ -1978,14 +1497,10 @@ fn extract_cli_success_data_preserves_nested_json_strings() {
     })));
 
     assert_eq!(
-        data.pointer("/runtime_contract_json")
-            .and_then(Value::as_str),
+        data.pointer("/runtime_contract_json").and_then(Value::as_str),
         Some("{\n  \"mcp\": { \"enabled\": true }\n}")
     );
-    assert_eq!(
-        data.pointer("/label").and_then(Value::as_str),
-        Some("unchanged")
-    );
+    assert_eq!(data.pointer("/label").and_then(Value::as_str), Some("unchanged"));
 }
 
 #[test]

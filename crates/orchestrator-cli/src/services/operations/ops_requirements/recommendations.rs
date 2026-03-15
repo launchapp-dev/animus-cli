@@ -30,10 +30,7 @@ struct RecommendationConfigState {
 
 impl Default for RecommendationConfigState {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            mode: RecommendationMode::ReportOnly,
-        }
+        Self { enabled: true, mode: RecommendationMode::ReportOnly }
     }
 }
 
@@ -77,10 +74,7 @@ fn load_recommendation_config(project_root: &str) -> Result<RecommendationConfig
     read_json_or_default(&recommendations_config_path(project_root))
 }
 
-fn save_recommendation_config(
-    project_root: &str,
-    config: &RecommendationConfigState,
-) -> Result<()> {
+fn save_recommendation_config(project_root: &str, config: &RecommendationConfigState) -> Result<()> {
     write_json_pretty(&recommendations_config_path(project_root), config)
 }
 
@@ -88,10 +82,7 @@ fn load_recommendation_reports(project_root: &str) -> Result<RecommendationRepor
     read_json_or_default(&recommendations_reports_path(project_root))
 }
 
-fn save_recommendation_reports(
-    project_root: &str,
-    reports: &RecommendationReportsState,
-) -> Result<()> {
+fn save_recommendation_reports(project_root: &str, reports: &RecommendationReportsState) -> Result<()> {
     write_json_pretty(&recommendations_reports_path(project_root), reports)
 }
 
@@ -100,11 +91,7 @@ fn parse_recommendation_mode(value: &str) -> Result<RecommendationMode> {
         "report_only" | "report-only" => RecommendationMode::ReportOnly,
         "safe_apply" | "safe-apply" => RecommendationMode::SafeApply,
         "full_apply" | "full-apply" => RecommendationMode::FullApply,
-        _ => {
-            return Err(invalid_input_error(format!(
-                "invalid recommendation mode: {value}"
-            )))
-        }
+        _ => return Err(invalid_input_error(format!("invalid recommendation mode: {value}"))),
     };
     Ok(mode)
 }
@@ -156,17 +143,10 @@ pub(super) async fn handle_requirement_recommendations(
     match command {
         RecommendationCommand::Scan(args) => {
             let config = load_recommendation_config(project_root)?;
-            let mode = args
-                .mode
-                .as_deref()
-                .map(parse_recommendation_mode)
-                .transpose()?
-                .unwrap_or(config.mode);
+            let mode = args.mode.as_deref().map(parse_recommendation_mode).transpose()?.unwrap_or(config.mode);
             let mut requirements = hub.planning().list_requirements().await.unwrap_or_default();
             if requirements.is_empty() {
-                requirements = load_requirements_map_from_core_state(project_root)?
-                    .into_values()
-                    .collect();
+                requirements = load_requirements_map_from_core_state(project_root)?.into_values().collect();
             }
             let report = scan_requirement_recommendations(&requirements, mode);
             let mut reports = load_recommendation_reports(project_root)?;
@@ -180,23 +160,13 @@ pub(super) async fn handle_requirement_recommendations(
         }
         RecommendationCommand::Apply(args) => {
             let config = load_recommendation_config(project_root)?;
-            let mode = args
-                .mode
-                .as_deref()
-                .map(parse_recommendation_mode)
-                .transpose()?
-                .unwrap_or(config.mode);
+            let mode = args.mode.as_deref().map(parse_recommendation_mode).transpose()?.unwrap_or(config.mode);
             let mut reports = load_recommendation_reports(project_root)?;
             let report = reports
                 .reports
                 .iter_mut()
                 .find(|report| report.id == args.report_id)
-                .ok_or_else(|| {
-                    not_found_error(format!(
-                        "recommendation report not found: {}",
-                        args.report_id
-                    ))
-                })?;
+                .ok_or_else(|| not_found_error(format!("recommendation report not found: {}", args.report_id)))?;
 
             let mut requirements = load_requirements_map_from_core_state(project_root)?;
             let mut applied_actions = Vec::new();
@@ -216,20 +186,14 @@ pub(super) async fn handle_requirement_recommendations(
                                     "Requirement includes automated validation".to_string(),
                                 ];
                                 requirement.updated_at = Utc::now();
-                                applied_actions.push(format!(
-                                    "added acceptance criteria for {}",
-                                    requirement.id
-                                ));
+                                applied_actions.push(format!("added acceptance criteria for {}", requirement.id));
                             }
                         }
                         "requirement_still_draft" => {
-                            if mode == RecommendationMode::FullApply
-                                && requirement.status == RequirementStatus::Draft
-                            {
+                            if mode == RecommendationMode::FullApply && requirement.status == RequirementStatus::Draft {
                                 requirement.status = RequirementStatus::Refined;
                                 requirement.updated_at = Utc::now();
-                                applied_actions
-                                    .push(format!("marked {} as refined", requirement.id));
+                                applied_actions.push(format!("marked {} as refined", requirement.id));
                             }
                         }
                         _ => {}
@@ -245,9 +209,7 @@ pub(super) async fn handle_requirement_recommendations(
             save_recommendation_reports(project_root, &reports)?;
             print_value(updated, json)
         }
-        RecommendationCommand::ConfigGet => {
-            print_value(load_recommendation_config(project_root)?, json)
-        }
+        RecommendationCommand::ConfigGet => print_value(load_recommendation_config(project_root)?, json),
         RecommendationCommand::ConfigUpdate(args) => {
             let mut config = load_recommendation_config(project_root)?;
             if let Some(input_json) = args.input_json {

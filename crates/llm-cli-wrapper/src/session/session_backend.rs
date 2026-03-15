@@ -15,8 +15,7 @@ pub trait SessionBackend: Send + Sync {
 
     async fn start_session(&self, request: SessionRequest) -> Result<SessionRun>;
 
-    async fn resume_session(&self, request: SessionRequest, session_id: &str)
-        -> Result<SessionRun>;
+    async fn resume_session(&self, request: SessionRequest, session_id: &str) -> Result<SessionRun>;
 
     async fn terminate_session(&self, session_id: &str) -> Result<()>;
 }

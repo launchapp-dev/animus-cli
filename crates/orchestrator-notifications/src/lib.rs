@@ -163,24 +163,15 @@ struct DeliveryFailure {
 
 impl DeliveryFailure {
     fn transient(message: impl Into<String>) -> Self {
-        Self {
-            class: DeliveryFailureClass::Transient,
-            message: message.into(),
-        }
+        Self { class: DeliveryFailureClass::Transient, message: message.into() }
     }
 
     fn permanent(message: impl Into<String>) -> Self {
-        Self {
-            class: DeliveryFailureClass::Permanent,
-            message: message.into(),
-        }
+        Self { class: DeliveryFailureClass::Permanent, message: message.into() }
     }
 
     fn misconfigured(message: impl Into<String>) -> Self {
-        Self {
-            class: DeliveryFailureClass::Misconfigured,
-            message: message.into(),
-        }
+        Self { class: DeliveryFailureClass::Misconfigured, message: message.into() }
     }
 }
 
@@ -225,42 +216,24 @@ impl NotificationSubscription {
             return false;
         }
 
-        let matches_event_type = self
-            .event_types
-            .iter()
-            .any(|pattern| event_type_matches(pattern, &event.event_type));
+        let matches_event_type = self.event_types.iter().any(|pattern| event_type_matches(pattern, &event.event_type));
         if !matches_event_type {
             return false;
         }
 
-        if let Some(project_root) = self
-            .project_root
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(project_root) = self.project_root.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             if event.project_root.as_deref() != Some(project_root) {
                 return false;
             }
         }
 
-        if let Some(workflow_id) = self
-            .workflow_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(workflow_id) = self.workflow_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             if context.workflow_id != Some(workflow_id) {
                 return false;
             }
         }
 
-        if let Some(task_id) = self
-            .task_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(task_id) = self.task_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             if context.task_id != Some(task_id) {
                 return false;
             }
@@ -278,11 +251,7 @@ impl DaemonNotificationRuntime {
             .user_agent(format!("{}-notifier/1", protocol::ACTOR_DAEMON))
             .build()
             .context("failed to construct notification HTTP client")?;
-        Ok(Self {
-            project_root,
-            config,
-            client,
-        })
+        Ok(Self { project_root, config, client })
     }
 
     fn refresh_config(&mut self) -> Result<()> {
@@ -290,10 +259,7 @@ impl DaemonNotificationRuntime {
         Ok(())
     }
 
-    pub fn enqueue_for_event(
-        &mut self,
-        event: &DaemonEventRecord,
-    ) -> Result<Vec<NotificationLifecycleEvent>> {
+    pub fn enqueue_for_event(&mut self, event: &DaemonEventRecord) -> Result<Vec<NotificationLifecycleEvent>> {
         self.refresh_config()?;
 
         if self.config.connectors.is_empty() || self.config.subscriptions.is_empty() {
@@ -301,37 +267,23 @@ impl DaemonNotificationRuntime {
         }
 
         let mut outbox_entries = load_notification_outbox(&self.project_root)?;
-        let mut known_keys: HashSet<String> = outbox_entries
-            .iter()
-            .map(|entry| entry.delivery_key.clone())
-            .collect();
-        let connector_lookup: HashMap<&str, &NotificationConnectorConfig> = self
-            .config
-            .connectors
-            .iter()
-            .map(|connector| (connector.id(), connector))
-            .collect();
+        let mut known_keys: HashSet<String> = outbox_entries.iter().map(|entry| entry.delivery_key.clone()).collect();
+        let connector_lookup: HashMap<&str, &NotificationConnectorConfig> =
+            self.config.connectors.iter().map(|connector| (connector.id(), connector)).collect();
 
         let context = event_context(event);
-        let event_project_root = event
-            .project_root
-            .clone()
-            .or_else(|| Some(self.project_root.clone()));
+        let event_project_root = event.project_root.clone().or_else(|| Some(self.project_root.clone()));
         let now = Utc::now().timestamp();
         let mut lifecycle_events = Vec::new();
 
-        for subscription in self
-            .config
-            .subscriptions
-            .iter()
-            .filter(|subscription| subscription.matches(event, &context))
+        for subscription in
+            self.config.subscriptions.iter().filter(|subscription| subscription.matches(event, &context))
         {
             if !connector_lookup.contains_key(subscription.connector_id.as_str()) {
                 continue;
             }
 
-            let delivery_key =
-                delivery_key(&event.id, &subscription.connector_id, &subscription.id);
+            let delivery_key = delivery_key(&event.id, &subscription.connector_id, &subscription.id);
             if known_keys.contains(&delivery_key) {
                 continue;
             }
@@ -350,12 +302,7 @@ impl DaemonNotificationRuntime {
                 attempts: 0,
                 next_attempt_unix_secs: now,
                 last_error: None,
-                payload: build_delivery_payload(
-                    event,
-                    &delivery_id,
-                    &subscription.connector_id,
-                    &subscription.id,
-                ),
+                payload: build_delivery_payload(event, &delivery_id, &subscription.connector_id, &subscription.id),
             };
 
             known_keys.insert(delivery_key);
@@ -393,12 +340,8 @@ impl DaemonNotificationRuntime {
         let now = Utc::now().timestamp();
         let max_attempts = self.config.retry_policy.max_attempts.max(1);
         let flush_budget = self.config.max_deliveries_per_tick.max(1);
-        let connector_lookup: HashMap<&str, &NotificationConnectorConfig> = self
-            .config
-            .connectors
-            .iter()
-            .map(|connector| (connector.id(), connector))
-            .collect();
+        let connector_lookup: HashMap<&str, &NotificationConnectorConfig> =
+            self.config.connectors.iter().map(|connector| (connector.id(), connector)).collect();
 
         let mut processed = 0usize;
         for mut entry in entries {
@@ -410,16 +353,12 @@ impl DaemonNotificationRuntime {
 
             let connector = connector_lookup.get(entry.connector_id.as_str()).copied();
             if entry.attempts >= max_attempts {
-                let terminal_error = entry.last_error.clone().unwrap_or_else(|| {
-                    format!("delivery reached retry attempt limit ({max_attempts})")
-                });
+                let terminal_error = entry
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| format!("delivery reached retry attempt limit ({max_attempts})"));
                 let redacted_error = redact_error_message(terminal_error.as_str(), connector);
-                push_dead_letter(
-                    &mut dead_letter_entries,
-                    &mut lifecycle_events,
-                    &entry,
-                    redacted_error,
-                );
+                push_dead_letter(&mut dead_letter_entries, &mut lifecycle_events, &entry, redacted_error);
                 continue;
             }
 
@@ -443,8 +382,7 @@ impl DaemonNotificationRuntime {
                 Err(error) => {
                     entry.attempts = entry.attempts.saturating_add(1);
                     let redacted_error = redact_error_message(&error.message, connector);
-                    let should_retry = error.class == DeliveryFailureClass::Transient
-                        && entry.attempts < max_attempts;
+                    let should_retry = error.class == DeliveryFailureClass::Transient && entry.attempts < max_attempts;
 
                     lifecycle_events.push(NotificationLifecycleEvent {
                         event_type: "notification-delivery-failed".to_string(),
@@ -464,18 +402,11 @@ impl DaemonNotificationRuntime {
 
                     if should_retry {
                         entry.last_error = Some(redacted_error);
-                        entry.next_attempt_unix_secs = now.saturating_add(retry_delay_secs(
-                            entry.attempts,
-                            &self.config.retry_policy,
-                        ));
+                        entry.next_attempt_unix_secs =
+                            now.saturating_add(retry_delay_secs(entry.attempts, &self.config.retry_policy));
                         remaining_entries.push(entry);
                     } else {
-                        push_dead_letter(
-                            &mut dead_letter_entries,
-                            &mut lifecycle_events,
-                            &entry,
-                            redacted_error,
-                        );
+                        push_dead_letter(&mut dead_letter_entries, &mut lifecycle_events, &entry, redacted_error);
                     }
                 }
             }
@@ -499,19 +430,12 @@ impl DaemonNotificationRuntime {
         })?;
 
         if !connector.enabled() {
-            return Err(DeliveryFailure::misconfigured(format!(
-                "connector '{}' is disabled",
-                connector.id()
-            )));
+            return Err(DeliveryFailure::misconfigured(format!("connector '{}' is disabled", connector.id())));
         }
 
         match connector {
-            NotificationConnectorConfig::Webhook(config) => {
-                self.send_webhook_delivery(config, entry).await
-            }
-            NotificationConnectorConfig::SlackWebhook(config) => {
-                self.send_slack_delivery(config, entry).await
-            }
+            NotificationConnectorConfig::Webhook(config) => self.send_webhook_delivery(config, entry).await,
+            NotificationConnectorConfig::SlackWebhook(config) => self.send_slack_delivery(config, entry).await,
         }
     }
 
@@ -522,11 +446,7 @@ impl DaemonNotificationRuntime {
     ) -> std::result::Result<(), DeliveryFailure> {
         let url = resolve_env_var(config.url_env.as_str())?;
         let headers = resolve_headers(&config.headers_env)?;
-        let timeout = Duration::from_secs(
-            config
-                .timeout_secs
-                .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS),
-        );
+        let timeout = Duration::from_secs(config.timeout_secs.unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS));
 
         let response = self
             .client
@@ -549,11 +469,7 @@ impl DaemonNotificationRuntime {
     ) -> std::result::Result<(), DeliveryFailure> {
         let url = resolve_env_var(config.webhook_url_env.as_str())?;
         let headers = resolve_headers(&config.headers_env)?;
-        let timeout = Duration::from_secs(
-            config
-                .timeout_secs
-                .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS),
-        );
+        let timeout = Duration::from_secs(config.timeout_secs.unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_SECS));
 
         let text = format!(
             "AO daemon event '{}' (delivery: {}, event: {})",
@@ -563,28 +479,13 @@ impl DaemonNotificationRuntime {
         let mut payload = json!({
             "text": text,
         });
-        if let Some(username) = config
-            .username
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(username) = config.username.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             payload["username"] = Value::String(username.to_string());
         }
-        if let Some(channel) = config
-            .channel
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(channel) = config.channel.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             payload["channel"] = Value::String(channel.to_string());
         }
-        if let Some(icon_emoji) = config
-            .icon_emoji
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(icon_emoji) = config.icon_emoji.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             payload["icon_emoji"] = Value::String(icon_emoji.to_string());
         }
 
@@ -611,8 +512,8 @@ pub fn read_notification_config_from_pm_config(pm_config: &Value) -> Result<Noti
 }
 
 pub fn parse_notification_config_value(value: &Value) -> Result<NotificationConfig> {
-    let parsed: NotificationConfig = serde_json::from_value(value.clone())
-        .context("invalid daemon notification config payload")?;
+    let parsed: NotificationConfig =
+        serde_json::from_value(value.clone()).context("invalid daemon notification config payload")?;
     normalize_notification_config(parsed)
 }
 
@@ -673,16 +574,10 @@ fn default_event_type_wildcard() -> Vec<String> {
 
 fn normalize_notification_config(mut config: NotificationConfig) -> Result<NotificationConfig> {
     if config.schema.trim() != NOTIFICATION_CONFIG_SCHEMA {
-        anyhow::bail!(
-            "daemon notification config schema must be '{}'",
-            NOTIFICATION_CONFIG_SCHEMA
-        );
+        anyhow::bail!("daemon notification config schema must be '{}'", NOTIFICATION_CONFIG_SCHEMA);
     }
     if config.version != NOTIFICATION_CONFIG_VERSION {
-        anyhow::bail!(
-            "daemon notification config version must be {}",
-            NOTIFICATION_CONFIG_VERSION
-        );
+        anyhow::bail!("daemon notification config version must be {}", NOTIFICATION_CONFIG_VERSION);
     }
 
     let mut connector_ids = HashSet::new();
@@ -695,8 +590,7 @@ fn normalize_notification_config(mut config: NotificationConfig) -> Result<Notif
             }
             NotificationConnectorConfig::SlackWebhook(slack) => {
                 slack.id = normalize_nonempty_identifier(&slack.id, "connector id")?;
-                slack.webhook_url_env =
-                    normalize_env_ref(&slack.webhook_url_env, "slack_webhook.webhook_url_env")?;
+                slack.webhook_url_env = normalize_env_ref(&slack.webhook_url_env, "slack_webhook.webhook_url_env")?;
                 validate_header_env_refs(&slack.headers_env, slack.id.as_str())?;
             }
         }
@@ -738,18 +632,12 @@ fn normalize_notification_config(mut config: NotificationConfig) -> Result<Notif
 
     config.retry_policy.max_attempts = config.retry_policy.max_attempts.clamp(1, 20);
     config.retry_policy.base_delay_secs = config.retry_policy.base_delay_secs.clamp(1, 3600);
-    config.retry_policy.max_delay_secs = config
-        .retry_policy
-        .max_delay_secs
-        .clamp(config.retry_policy.base_delay_secs, 86_400);
+    config.retry_policy.max_delay_secs =
+        config.retry_policy.max_delay_secs.clamp(config.retry_policy.base_delay_secs, 86_400);
     config.max_deliveries_per_tick = config.max_deliveries_per_tick.clamp(1, 128);
 
-    config
-        .connectors
-        .sort_by(|left, right| left.id().cmp(right.id()));
-    config
-        .subscriptions
-        .sort_by(|left, right| left.id.cmp(&right.id));
+    config.connectors.sort_by(|left, right| left.id().cmp(right.id()));
+    config.subscriptions.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(config)
 }
@@ -763,11 +651,7 @@ fn normalize_nonempty_identifier(value: &str, label: &str) -> Result<String> {
 }
 
 fn normalize_optional_identifier(value: Option<String>) -> Option<String> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
+    value.as_deref().map(str::trim).filter(|item| !item.is_empty()).map(ToOwned::to_owned)
 }
 
 fn normalize_env_ref(value: &str, label: &str) -> Result<String> {
@@ -778,20 +662,14 @@ fn normalize_env_ref(value: &str, label: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-fn validate_header_env_refs(
-    headers_env: &BTreeMap<String, String>,
-    connector_id: &str,
-) -> Result<()> {
+fn validate_header_env_refs(headers_env: &BTreeMap<String, String>, connector_id: &str) -> Result<()> {
     for (header_name, env_ref) in headers_env {
         let normalized_name = header_name.trim();
         if normalized_name.is_empty() {
             anyhow::bail!("connector '{}' contains an empty header name", connector_id);
         }
         HeaderName::from_bytes(normalized_name.as_bytes()).with_context(|| {
-            format!(
-                "connector '{}' contains invalid header name '{}'",
-                connector_id, normalized_name
-            )
+            format!("connector '{}' contains invalid header name '{}'", connector_id, normalized_name)
         })?;
 
         let env_ref = env_ref.trim();
@@ -846,11 +724,7 @@ fn event_context(event: &DaemonEventRecord) -> EventContext<'_> {
 }
 
 fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
+    value.get(key).and_then(Value::as_str).map(str::trim).filter(|item| !item.is_empty())
 }
 
 fn build_delivery_payload(
@@ -888,44 +762,29 @@ fn delivery_key(event_id: &str, connector_id: &str, subscription_id: &str) -> St
 fn resolve_env_var(env_ref: &str) -> std::result::Result<String, DeliveryFailure> {
     let env_ref = env_ref.trim();
     if env_ref.is_empty() {
-        return Err(DeliveryFailure::misconfigured(
-            "connector credential env var reference is empty",
-        ));
+        return Err(DeliveryFailure::misconfigured("connector credential env var reference is empty"));
     }
 
-    let value = std::env::var(env_ref).map_err(|_| {
-        DeliveryFailure::misconfigured(format!("missing credential env var '{}'", env_ref))
-    })?;
+    let value = std::env::var(env_ref)
+        .map_err(|_| DeliveryFailure::misconfigured(format!("missing credential env var '{}'", env_ref)))?;
 
     if value.trim().is_empty() {
-        return Err(DeliveryFailure::misconfigured(format!(
-            "credential env var '{}' is empty",
-            env_ref
-        )));
+        return Err(DeliveryFailure::misconfigured(format!("credential env var '{}' is empty", env_ref)));
     }
 
     Ok(value)
 }
 
-fn resolve_headers(
-    headers_env: &BTreeMap<String, String>,
-) -> std::result::Result<HeaderMap, DeliveryFailure> {
+fn resolve_headers(headers_env: &BTreeMap<String, String>) -> std::result::Result<HeaderMap, DeliveryFailure> {
     let mut headers = HeaderMap::new();
     for (header_name_raw, env_ref) in headers_env {
-        let header_name =
-            HeaderName::from_bytes(header_name_raw.trim().as_bytes()).map_err(|_| {
-                DeliveryFailure::misconfigured(format!(
-                    "invalid configured header name '{}'",
-                    header_name_raw.trim()
-                ))
-            })?;
+        let header_name = HeaderName::from_bytes(header_name_raw.trim().as_bytes()).map_err(|_| {
+            DeliveryFailure::misconfigured(format!("invalid configured header name '{}'", header_name_raw.trim()))
+        })?;
 
         let header_value = resolve_env_var(env_ref.as_str())?;
         let header_value = HeaderValue::from_str(header_value.as_str()).map_err(|_| {
-            DeliveryFailure::misconfigured(format!(
-                "header '{}' resolved to invalid value",
-                header_name.as_str()
-            ))
+            DeliveryFailure::misconfigured(format!("header '{}' resolved to invalid value", header_name.as_str()))
         })?;
 
         headers.insert(header_name, header_value);
@@ -942,9 +801,7 @@ fn classify_request_error(error: reqwest::Error) -> DeliveryFailure {
         return DeliveryFailure::transient("notification connector is unreachable");
     }
     if error.is_builder() {
-        return DeliveryFailure::misconfigured(
-            "invalid notification connector request configuration",
-        );
+        return DeliveryFailure::misconfigured("invalid notification connector request configuration");
     }
     if error.is_request() {
         return DeliveryFailure::transient("notification request failed before response");
@@ -978,8 +835,7 @@ fn classify_http_status(status: u16) -> DeliveryFailureClass {
 
 fn retry_delay_secs(attempts: u32, policy: &NotificationRetryPolicy) -> i64 {
     let base = i64::try_from(policy.base_delay_secs.max(1)).unwrap_or(1);
-    let max =
-        i64::try_from(policy.max_delay_secs.max(policy.base_delay_secs.max(1))).unwrap_or(base);
+    let max = i64::try_from(policy.max_delay_secs.max(policy.base_delay_secs.max(1))).unwrap_or(base);
     let exponent = attempts.saturating_sub(1).min(16);
     let growth = 1_i64.checked_shl(exponent).unwrap_or(i64::MAX);
     base.saturating_mul(growth).clamp(base, max)
@@ -1068,12 +924,8 @@ fn load_notification_config(project_root: &str) -> Result<NotificationConfig> {
         return Ok(NotificationConfig::default());
     }
 
-    let content = fs::read_to_string(&pm_config_path).with_context(|| {
-        format!(
-            "failed to read daemon config at {}",
-            pm_config_path.display()
-        )
-    })?;
+    let content = fs::read_to_string(&pm_config_path)
+        .with_context(|| format!("failed to read daemon config at {}", pm_config_path.display()))?;
     if content.trim().is_empty() {
         return Ok(NotificationConfig::default());
     }
@@ -1084,9 +936,7 @@ fn load_notification_config(project_root: &str) -> Result<NotificationConfig> {
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root))
-        .join(".ao")
-        .join("pm-config.json")
+    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("pm-config.json")
 }
 
 fn load_jsonl_entries<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
@@ -1094,14 +944,10 @@ fn load_jsonl_entries<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read notification state at {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read notification state at {}", path.display()))?;
     let mut entries = Vec::new();
-    for line in content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
+    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
         if let Ok(entry) = serde_json::from_str::<T>(line) {
             entries.push(entry);
         }
@@ -1112,15 +958,12 @@ fn load_jsonl_entries<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T
 
 fn save_jsonl_entries<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("failed to create directory {}", parent.display()))?;
     }
 
     if entries.is_empty() {
         if path.exists() {
-            fs::remove_file(path).with_context(|| {
-                format!("failed to clear notification state {}", path.display())
-            })?;
+            fs::remove_file(path).with_context(|| format!("failed to clear notification state {}", path.display()))?;
         }
         return Ok(());
     }
@@ -1133,24 +976,14 @@ fn save_jsonl_entries<T: Serialize>(path: &Path, entries: &[T]) -> Result<()> {
 
     let tmp_path = path.with_file_name(format!(
         "{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("notifications"),
+        path.file_name().and_then(|name| name.to_str()).unwrap_or("notifications"),
         Uuid::new_v4()
     ));
 
-    fs::write(&tmp_path, payload).with_context(|| {
-        format!(
-            "failed to write notification temp file {}",
-            tmp_path.display()
-        )
-    })?;
-    fs::rename(&tmp_path, path).with_context(|| {
-        format!(
-            "failed to atomically rename notification file {}",
-            path.display()
-        )
-    })?;
+    fs::write(&tmp_path, payload)
+        .with_context(|| format!("failed to write notification temp file {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to atomically rename notification file {}", path.display()))?;
     Ok(())
 }
 
@@ -1169,10 +1002,7 @@ fn load_dead_letter_entries(project_root: &str) -> Result<Vec<NotificationDeadLe
     load_jsonl_entries(path.as_path())
 }
 
-fn save_dead_letter_entries(
-    project_root: &str,
-    entries: &[NotificationDeadLetterEntry],
-) -> Result<()> {
+fn save_dead_letter_entries(project_root: &str, entries: &[NotificationDeadLetterEntry]) -> Result<()> {
     let path = notification_dead_letter_path(project_root)?;
     save_jsonl_entries(path.as_path(), entries)
 }
@@ -1194,8 +1024,7 @@ fn repo_scope_root(project_root: &str) -> Result<PathBuf> {
 }
 
 fn ao_root_dir() -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory for ~/.ao"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to resolve home directory for ~/.ao"))?;
     Ok(home.join(".ao"))
 }
 
@@ -1205,11 +1034,7 @@ fn repo_scope(project_root: &str) -> String {
 
 fn canonicalize_lossy(path: &str) -> String {
     let candidate = PathBuf::from(path);
-    candidate
-        .canonicalize()
-        .unwrap_or(candidate)
-        .to_string_lossy()
-        .to_string()
+    candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }
 
 fn hex_from_digest(digest: impl AsRef<[u8]>) -> String {
@@ -1244,24 +1069,16 @@ mod tests {
             let url = format!("http://{}/notify", address);
             let join_handle = thread::spawn(move || {
                 for status_code in status_codes {
-                    let (mut stream, _) =
-                        listener.accept().expect("connection accept should succeed");
+                    let (mut stream, _) = listener.accept().expect("connection accept should succeed");
                     let mut buffer = [0_u8; 4096];
                     let _ = stream.read(&mut buffer);
-                    let response = format!(
-                        "HTTP/1.1 {} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        status_code
-                    );
-                    stream
-                        .write_all(response.as_bytes())
-                        .expect("response should be written");
+                    let response =
+                        format!("HTTP/1.1 {} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status_code);
+                    stream.write_all(response.as_bytes()).expect("response should be written");
                     let _ = stream.flush();
                 }
             });
-            Self {
-                url,
-                join_handle: Some(join_handle),
-            }
+            Self { url, join_handle: Some(join_handle) }
         }
     }
 
@@ -1308,11 +1125,8 @@ mod tests {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("pm-config parent should exist");
         }
-        fs::write(
-            path,
-            format!("{}\n", serde_json::to_string_pretty(&value).unwrap()),
-        )
-        .expect("pm-config should be written");
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&value).unwrap()))
+            .expect("pm-config should be written");
     }
 
     fn sample_event(project_root: &str, event_type: &str) -> DaemonEventRecord {
@@ -1443,11 +1257,7 @@ mod tests {
         assert_eq!(classify_http_status(429), DeliveryFailureClass::Transient);
         assert_eq!(classify_http_status(400), DeliveryFailureClass::Permanent);
 
-        let policy = NotificationRetryPolicy {
-            max_attempts: 5,
-            base_delay_secs: 2,
-            max_delay_secs: 16,
-        };
+        let policy = NotificationRetryPolicy { max_attempts: 5, base_delay_secs: 2, max_delay_secs: 16 };
         assert_eq!(retry_delay_secs(1, &policy), 2);
         assert_eq!(retry_delay_secs(2, &policy), 4);
         assert_eq!(retry_delay_secs(3, &policy), 8);
@@ -1457,16 +1267,13 @@ mod tests {
 
     #[tokio::test]
     async fn flush_budget_limits_processing_per_tick() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
         let server = TestHttpServer::start(vec![200, 200]);
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
         let _url_guard = EnvVarGuard::set("AO_NOTIFY_WEBHOOK_URL", Some(server.url.as_str()));
         let _token_guard = EnvVarGuard::set("AO_NOTIFY_BEARER_TOKEN", Some("super-secret-token"));
 
@@ -1474,150 +1281,86 @@ mod tests {
         config["notification_config"]["max_deliveries_per_tick"] = json!(1);
         write_pm_config(project_root.as_str(), config);
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         runtime
-            .enqueue_for_event(&sample_event(
-                project_root.as_str(),
-                "workflow-phase-started",
-            ))
+            .enqueue_for_event(&sample_event(project_root.as_str(), "workflow-phase-started"))
             .expect("first enqueue should succeed");
         runtime
-            .enqueue_for_event(&sample_event(
-                project_root.as_str(),
-                "workflow-phase-completed",
-            ))
+            .enqueue_for_event(&sample_event(project_root.as_str(), "workflow-phase-completed"))
             .expect("second enqueue should succeed");
 
-        let first_flush = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("first flush should succeed");
-        assert_eq!(
-            first_flush
-                .iter()
-                .filter(|event| event.event_type == "notification-delivery-sent")
-                .count(),
-            1
-        );
-        let outbox_after_first =
-            load_notification_outbox(project_root.as_str()).expect("outbox should load");
+        let first_flush = runtime.flush_due_deliveries().await.expect("first flush should succeed");
+        assert_eq!(first_flush.iter().filter(|event| event.event_type == "notification-delivery-sent").count(), 1);
+        let outbox_after_first = load_notification_outbox(project_root.as_str()).expect("outbox should load");
         assert_eq!(outbox_after_first.len(), 1);
 
-        let second_flush = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("second flush should succeed");
-        assert_eq!(
-            second_flush
-                .iter()
-                .filter(|event| event.event_type == "notification-delivery-sent")
-                .count(),
-            1
-        );
-        let outbox_after_second =
-            load_notification_outbox(project_root.as_str()).expect("outbox should load");
+        let second_flush = runtime.flush_due_deliveries().await.expect("second flush should succeed");
+        assert_eq!(second_flush.iter().filter(|event| event.event_type == "notification-delivery-sent").count(), 1);
+        let outbox_after_second = load_notification_outbox(project_root.as_str()).expect("outbox should load");
         assert!(outbox_after_second.is_empty());
     }
 
     #[tokio::test]
     async fn enqueue_retry_then_success_clears_outbox() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
         let server = TestHttpServer::start(vec![500, 200]);
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
         let _url_guard = EnvVarGuard::set("AO_NOTIFY_WEBHOOK_URL", Some(server.url.as_str()));
         let _token_guard = EnvVarGuard::set("AO_NOTIFY_BEARER_TOKEN", Some("super-secret-token"));
 
-        write_pm_config(
-            project_root.as_str(),
-            sample_config("AO_NOTIFY_WEBHOOK_URL"),
-        );
+        write_pm_config(project_root.as_str(), sample_config("AO_NOTIFY_WEBHOOK_URL"));
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         let event = sample_event(project_root.as_str(), "workflow-phase-started");
 
-        let enqueued = runtime
-            .enqueue_for_event(&event)
-            .expect("enqueue should succeed");
+        let enqueued = runtime.enqueue_for_event(&event).expect("enqueue should succeed");
         assert_eq!(enqueued.len(), 1);
 
-        let failed = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("flush should process first attempt");
-        assert!(failed
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-failed"));
+        let failed = runtime.flush_due_deliveries().await.expect("flush should process first attempt");
+        assert!(failed.iter().any(|event| event.event_type == "notification-delivery-failed"));
 
-        let mut outbox =
-            load_notification_outbox(project_root.as_str()).expect("outbox should be readable");
+        let mut outbox = load_notification_outbox(project_root.as_str()).expect("outbox should be readable");
         assert_eq!(outbox.len(), 1);
         outbox[0].next_attempt_unix_secs = Utc::now().timestamp() - 1;
-        save_notification_outbox(project_root.as_str(), &outbox)
-            .expect("outbox should be rewritten");
+        save_notification_outbox(project_root.as_str(), &outbox).expect("outbox should be rewritten");
 
-        let sent = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("second flush should succeed");
-        assert!(sent
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-sent"));
+        let sent = runtime.flush_due_deliveries().await.expect("second flush should succeed");
+        assert!(sent.iter().any(|event| event.event_type == "notification-delivery-sent"));
 
-        let outbox_after = load_notification_outbox(project_root.as_str())
-            .expect("outbox should load after success");
+        let outbox_after = load_notification_outbox(project_root.as_str()).expect("outbox should load after success");
         assert!(outbox_after.is_empty());
     }
 
     #[tokio::test]
     async fn permanent_failure_moves_delivery_to_dead_letter() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
         let server = TestHttpServer::start(vec![400]);
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
         let _url_guard = EnvVarGuard::set("AO_NOTIFY_WEBHOOK_URL", Some(server.url.as_str()));
         let _token_guard = EnvVarGuard::set("AO_NOTIFY_BEARER_TOKEN", Some("secret-token"));
 
-        write_pm_config(
-            project_root.as_str(),
-            sample_config("AO_NOTIFY_WEBHOOK_URL"),
-        );
+        write_pm_config(project_root.as_str(), sample_config("AO_NOTIFY_WEBHOOK_URL"));
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         let event = sample_event(project_root.as_str(), "workflow-phase-started");
 
-        runtime
-            .enqueue_for_event(&event)
-            .expect("enqueue should succeed");
-        let events = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("flush should process permanent failure");
+        runtime.enqueue_for_event(&event).expect("enqueue should succeed");
+        let events = runtime.flush_due_deliveries().await.expect("flush should process permanent failure");
 
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-dead-lettered"));
+        assert!(events.iter().any(|event| event.event_type == "notification-delivery-dead-lettered"));
 
         let outbox = load_notification_outbox(project_root.as_str()).expect("outbox should load");
         assert!(outbox.is_empty());
 
-        let dead_letters =
-            load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
+        let dead_letters = load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
         assert_eq!(dead_letters.len(), 1);
         assert!(dead_letters[0].last_error.contains("HTTP 400"));
         assert!(!dead_letters[0].last_error.contains("secret-token"));
@@ -1625,145 +1368,87 @@ mod tests {
 
     #[tokio::test]
     async fn missing_credentials_are_redacted_and_dead_lettered() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
         let _token_guard = EnvVarGuard::set("AO_NOTIFY_BEARER_TOKEN", Some("top-secret-value"));
         let _unset_url_guard = EnvVarGuard::set("AO_NOTIFY_WEBHOOK_URL", None);
 
-        write_pm_config(
-            project_root.as_str(),
-            sample_config("AO_NOTIFY_WEBHOOK_URL"),
-        );
+        write_pm_config(project_root.as_str(), sample_config("AO_NOTIFY_WEBHOOK_URL"));
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         runtime
-            .enqueue_for_event(&sample_event(
-                project_root.as_str(),
-                "workflow-phase-started",
-            ))
+            .enqueue_for_event(&sample_event(project_root.as_str(), "workflow-phase-started"))
             .expect("enqueue should succeed");
-        runtime
-            .flush_due_deliveries()
-            .await
-            .expect("flush should handle missing credential");
+        runtime.flush_due_deliveries().await.expect("flush should handle missing credential");
 
-        let dead_letters =
-            load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
+        let dead_letters = load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
         assert_eq!(dead_letters.len(), 1);
-        assert!(dead_letters[0]
-            .last_error
-            .contains("missing credential env var 'AO_NOTIFY_WEBHOOK_URL'"));
+        assert!(dead_letters[0].last_error.contains("missing credential env var 'AO_NOTIFY_WEBHOOK_URL'"));
         assert!(!dead_letters[0].last_error.contains("top-secret-value"));
     }
 
     #[test]
     fn enqueue_global_event_uses_runtime_project_root_and_context() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
-        write_pm_config(
-            project_root.as_str(),
-            sample_config("AO_NOTIFY_WEBHOOK_URL"),
-        );
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        write_pm_config(project_root.as_str(), sample_config("AO_NOTIFY_WEBHOOK_URL"));
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         let mut event = sample_event(project_root.as_str(), "workflow-phase-started");
         event.project_root = None;
         let canonical_project_root = canonicalize_lossy(project_root.as_str());
 
-        let enqueued = runtime
-            .enqueue_for_event(&event)
-            .expect("enqueue should succeed");
+        let enqueued = runtime.enqueue_for_event(&event).expect("enqueue should succeed");
         assert_eq!(enqueued.len(), 1);
-        assert_eq!(
-            enqueued[0].project_root.as_deref(),
-            Some(canonical_project_root.as_str())
-        );
-        assert_eq!(
-            enqueued[0].data.get("workflow_id").and_then(Value::as_str),
-            Some("WF-001")
-        );
-        assert_eq!(
-            enqueued[0].data.get("task_id").and_then(Value::as_str),
-            Some("TASK-001")
-        );
+        assert_eq!(enqueued[0].project_root.as_deref(), Some(canonical_project_root.as_str()));
+        assert_eq!(enqueued[0].data.get("workflow_id").and_then(Value::as_str), Some("WF-001"));
+        assert_eq!(enqueued[0].data.get("task_id").and_then(Value::as_str), Some("TASK-001"));
 
         let outbox = load_notification_outbox(project_root.as_str()).expect("outbox should load");
         assert_eq!(outbox.len(), 1);
-        assert_eq!(
-            outbox[0].event_project_root.as_deref(),
-            Some(canonical_project_root.as_str())
-        );
+        assert_eq!(outbox[0].event_project_root.as_deref(), Some(canonical_project_root.as_str()));
         assert_eq!(outbox[0].event_workflow_id.as_deref(), Some("WF-001"));
         assert_eq!(outbox[0].event_task_id.as_deref(), Some("TASK-001"));
     }
 
     #[tokio::test]
     async fn pre_exhausted_entries_are_dead_lettered_without_another_attempt() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _guard = test_env_lock().lock().expect("env lock should be available");
         let temp_home = TempDir::new().expect("temp home dir");
         let temp_project = TempDir::new().expect("temp project dir");
         let project_root = temp_project.path().to_string_lossy().to_string();
 
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
-        write_pm_config(
-            project_root.as_str(),
-            sample_config("AO_NOTIFY_WEBHOOK_URL"),
-        );
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp_home.path().to_string_lossy().as_ref()));
+        write_pm_config(project_root.as_str(), sample_config("AO_NOTIFY_WEBHOOK_URL"));
 
-        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str())
-            .expect("runtime should initialize");
+        let mut runtime = DaemonNotificationRuntime::new(project_root.as_str()).expect("runtime should initialize");
         runtime
-            .enqueue_for_event(&sample_event(
-                project_root.as_str(),
-                "workflow-phase-started",
-            ))
+            .enqueue_for_event(&sample_event(project_root.as_str(), "workflow-phase-started"))
             .expect("enqueue should succeed");
 
-        let mut outbox =
-            load_notification_outbox(project_root.as_str()).expect("outbox should load");
+        let mut outbox = load_notification_outbox(project_root.as_str()).expect("outbox should load");
         assert_eq!(outbox.len(), 1);
         outbox[0].attempts = 3;
         outbox[0].last_error = Some("notification endpoint returned HTTP 503".to_string());
         outbox[0].next_attempt_unix_secs = Utc::now().timestamp() - 1;
-        save_notification_outbox(project_root.as_str(), &outbox)
-            .expect("outbox should be rewritten");
+        save_notification_outbox(project_root.as_str(), &outbox).expect("outbox should be rewritten");
 
-        let lifecycle_events = runtime
-            .flush_due_deliveries()
-            .await
-            .expect("flush should handle exhausted delivery");
-        assert!(lifecycle_events
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-dead-lettered"));
-        assert!(!lifecycle_events
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-failed"));
+        let lifecycle_events = runtime.flush_due_deliveries().await.expect("flush should handle exhausted delivery");
+        assert!(lifecycle_events.iter().any(|event| event.event_type == "notification-delivery-dead-lettered"));
+        assert!(!lifecycle_events.iter().any(|event| event.event_type == "notification-delivery-failed"));
 
-        let outbox_after = load_notification_outbox(project_root.as_str())
-            .expect("outbox should load after flush");
+        let outbox_after = load_notification_outbox(project_root.as_str()).expect("outbox should load after flush");
         assert!(outbox_after.is_empty());
 
-        let dead_letters =
-            load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
+        let dead_letters = load_dead_letter_entries(project_root.as_str()).expect("dead-letter should load");
         assert_eq!(dead_letters.len(), 1);
         assert_eq!(dead_letters[0].attempts, 3);
         assert!(dead_letters[0].last_error.contains("HTTP 503"));
@@ -1771,23 +1456,13 @@ mod tests {
 
     #[test]
     fn redact_error_message_masks_configured_secret_values() {
-        let _guard = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
-        let _url_guard = EnvVarGuard::set(
-            "AO_NOTIFY_TEST_WEBHOOK_URL",
-            Some("https://hooks.example.invalid/secret-hook-token"),
-        );
-        let _token_guard = EnvVarGuard::set(
-            "AO_NOTIFY_TEST_AUTH",
-            Some("Bearer super-secret-auth-token"),
-        );
+        let _guard = test_env_lock().lock().expect("env lock should be available");
+        let _url_guard =
+            EnvVarGuard::set("AO_NOTIFY_TEST_WEBHOOK_URL", Some("https://hooks.example.invalid/secret-hook-token"));
+        let _token_guard = EnvVarGuard::set("AO_NOTIFY_TEST_AUTH", Some("Bearer super-secret-auth-token"));
 
         let mut headers_env = BTreeMap::new();
-        headers_env.insert(
-            "Authorization".to_string(),
-            "AO_NOTIFY_TEST_AUTH".to_string(),
-        );
+        headers_env.insert("Authorization".to_string(), "AO_NOTIFY_TEST_AUTH".to_string());
         let connector = NotificationConnectorConfig::Webhook(WebhookConnectorConfig {
             id: "ops-webhook".to_string(),
             enabled: true,

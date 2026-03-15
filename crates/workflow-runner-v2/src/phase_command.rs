@@ -2,11 +2,11 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
-use std::process::Stdio;
 
 use crate::payload_traversal::parse_phase_decision_from_text;
 
@@ -39,9 +39,7 @@ pub(crate) struct CommandExecutionResult {
     pub failure_summary: Option<String>,
 }
 
-pub(crate) fn build_command_template_vars(
-    context: &CommandExecutionContext<'_>,
-) -> HashMap<String, String> {
+pub(crate) fn build_command_template_vars(context: &CommandExecutionContext<'_>) -> HashMap<String, String> {
     let mut vars = HashMap::from([
         ("project_root".to_string(), context.project_root.to_string()),
         ("execution_cwd".to_string(), context.execution_cwd.to_string()),
@@ -60,17 +58,13 @@ pub(crate) fn build_command_template_vars(
     }
 
     if let Some(dispatch_input) = context.dispatch_input.filter(|value| !value.is_empty()) {
-        vars.entry("dispatch_input".to_string())
-            .or_insert_with(|| dispatch_input.to_string());
+        vars.entry("dispatch_input".to_string()).or_insert_with(|| dispatch_input.to_string());
         if context.subject_id.starts_with("schedule:") {
-            vars.entry("schedule_input".to_string())
-                .or_insert_with(|| dispatch_input.to_string());
+            vars.entry("schedule_input".to_string()).or_insert_with(|| dispatch_input.to_string());
         }
     } else if let Some(schedule_input) = context.schedule_input.filter(|value| !value.is_empty()) {
-        vars.entry("schedule_input".to_string())
-            .or_insert_with(|| schedule_input.to_string());
-        vars.entry("dispatch_input".to_string())
-            .or_insert_with(|| schedule_input.to_string());
+        vars.entry("schedule_input".to_string()).or_insert_with(|| schedule_input.to_string());
+        vars.entry("dispatch_input".to_string()).or_insert_with(|| schedule_input.to_string());
     }
 
     vars
@@ -98,21 +92,15 @@ fn resolve_command_cwd(
             if relative.is_absolute() {
                 return Err(anyhow!("command.cwd_path must be relative when cwd_mode='path'"));
             }
-            if relative
-                .components()
-                .any(|component| matches!(component, Component::ParentDir))
-            {
+            if relative.components().any(|component| matches!(component, Component::ParentDir)) {
                 return Err(anyhow!("command.cwd_path cannot contain '..' components"));
             }
             let resolved = Path::new(context.project_root).join(relative);
             let canonical = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
-            let canonical_root = std::fs::canonicalize(context.project_root)
-                .unwrap_or_else(|_| PathBuf::from(context.project_root));
+            let canonical_root =
+                std::fs::canonicalize(context.project_root).unwrap_or_else(|_| PathBuf::from(context.project_root));
             if !canonical.starts_with(&canonical_root) {
-                return Err(anyhow!(
-                    "command cwd_path escapes project root: {}",
-                    raw
-                ));
+                return Err(anyhow!("command cwd_path escapes project root: {}", raw));
             }
             Ok(resolved.display().to_string())
         }
@@ -120,12 +108,8 @@ fn resolve_command_cwd(
 }
 
 fn is_program_allowlisted(program: &str, allowlist: &[String]) -> bool {
-    let command = Path::new(program)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(program)
-        .trim()
-        .to_ascii_lowercase();
+    let command =
+        Path::new(program).file_name().and_then(|value| value.to_str()).unwrap_or(program).trim().to_ascii_lowercase();
     if command.is_empty() {
         return false;
     }
@@ -137,38 +121,27 @@ fn is_program_allowlisted(program: &str, allowlist: &[String]) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(command.as_str()))
 }
 
-fn command_phase_category(
-    command: &orchestrator_core::PhaseCommandDefinition,
-    phase_id: &str,
-) -> String {
+fn command_phase_category(command: &orchestrator_core::PhaseCommandDefinition, phase_id: &str) -> String {
     if let Some(category) = command.category.as_deref() {
         return category.to_string();
     }
 
     let normalized_phase = phase_id.to_ascii_lowercase();
     let normalized_program = command.program.to_ascii_lowercase();
-    let normalized_args: Vec<String> = command
-        .args
-        .iter()
-        .map(|v| v.to_ascii_lowercase())
-        .collect();
+    let normalized_args: Vec<String> = command.args.iter().map(|v| v.to_ascii_lowercase()).collect();
 
     if normalized_phase.contains("test")
-        || normalized_program.contains("cargo")
-            && normalized_args.iter().any(|arg| arg == "test")
+        || normalized_program.contains("cargo") && normalized_args.iter().any(|arg| arg == "test")
     {
         "test".to_string()
     } else if normalized_phase.contains("lint")
         || normalized_program.contains("clippy")
         || normalized_program.contains("rustfmt")
-        || normalized_args
-            .iter()
-            .any(|arg| arg.contains("clippy") || arg.contains("fmt"))
+        || normalized_args.iter().any(|arg| arg.contains("clippy") || arg.contains("fmt"))
     {
         "lint".to_string()
     } else if normalized_phase.contains("build")
-        || normalized_program.contains("cargo")
-            && normalized_args.iter().any(|arg| arg == "build")
+        || normalized_program.contains("cargo") && normalized_args.iter().any(|arg| arg == "build")
     {
         "build".to_string()
     } else {
@@ -198,10 +171,7 @@ fn extract_failing_tests(
     stdout: &str,
     stderr: &str,
 ) -> Vec<String> {
-    let pattern_str = command
-        .failure_pattern
-        .as_deref()
-        .unwrap_or(r"test (.+) \.\.\. FAILED");
+    let pattern_str = command.failure_pattern.as_deref().unwrap_or(r"test (.+) \.\.\. FAILED");
 
     let re = match regex::Regex::new(pattern_str) {
         Ok(re) => re,
@@ -212,10 +182,7 @@ fn extract_failing_tests(
     for text in [stdout, stderr] {
         for line in text.lines() {
             if let Some(captures) = re.captures(line.trim()) {
-                let candidate = captures
-                    .get(1)
-                    .map(|m| m.as_str().trim().to_string())
-                    .unwrap_or_default();
+                let candidate = captures.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
                 if !candidate.is_empty() && !failing.contains(&candidate) {
                     failing.push(candidate);
                 }
@@ -225,10 +192,7 @@ fn extract_failing_tests(
     failing
 }
 
-fn summarize_output_excerpt(
-    text: &str,
-    max_len: usize,
-) -> Option<String> {
+fn summarize_output_excerpt(text: &str, max_len: usize) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
@@ -328,13 +292,11 @@ pub(crate) fn build_command_result_payload(
             .to_string(),
     );
     payload["phase_id"] = Value::String(phase_id.to_string());
-    payload["verdict"] =
-        Value::String(format!("{:?}", phase_decision.verdict).to_ascii_lowercase());
+    payload["verdict"] = Value::String(format!("{:?}", phase_decision.verdict).to_ascii_lowercase());
     payload["reason"] = Value::String(phase_decision.reason.clone());
     payload["confidence"] = serde_json::json!(phase_decision.confidence);
     payload["risk"] = Value::String(format!("{:?}", phase_decision.risk).to_ascii_lowercase());
-    payload["evidence"] =
-        serde_json::to_value(&phase_decision.evidence).unwrap_or(Value::Array(vec![]));
+    payload["evidence"] = serde_json::to_value(&phase_decision.evidence).unwrap_or(Value::Array(vec![]));
     payload["exit_code"] = serde_json::json!(command_result.exit_code);
     payload["command"] = serde_json::json!({
         "program": command_result.program,
@@ -350,12 +312,7 @@ pub(crate) fn build_command_result_payload(
         payload["failure_category"] = Value::String(format!("{category}_failed"));
         let failing_tests = extract_failing_tests(command, &command_result.stdout, &command_result.stderr);
         if !failing_tests.is_empty() {
-            payload["failing_tests"] = Value::Array(
-                failing_tests
-                    .into_iter()
-                    .map(Value::String)
-                    .collect::<Vec<_>>(),
-            );
+            payload["failing_tests"] = Value::Array(failing_tests.into_iter().map(Value::String).collect::<Vec<_>>());
         }
     }
 
@@ -375,10 +332,7 @@ struct CommandStreamCapture {
     phase_decision: Option<orchestrator_core::PhaseDecision>,
 }
 
-async fn capture_command_stream<R>(
-    reader: R,
-    phase_id: &str,
-) -> Result<CommandStreamCapture>
+async fn capture_command_stream<R>(reader: R, phase_id: &str) -> Result<CommandStreamCapture>
 where
     R: AsyncRead + Unpin,
 {
@@ -395,10 +349,7 @@ where
         }
     }
 
-    Ok(CommandStreamCapture {
-        text,
-        phase_decision,
-    })
+    Ok(CommandStreamCapture { text, phase_decision })
 }
 
 pub(crate) async fn run_workflow_phase_with_command(
@@ -407,28 +358,16 @@ pub(crate) async fn run_workflow_phase_with_command(
     command: &orchestrator_core::PhaseCommandDefinition,
 ) -> Result<CommandExecutionResult> {
     if !is_program_allowlisted(&command.program, &runtime_config.tools_allowlist) {
-        return Err(anyhow!(
-            "phase '{}' command '{}' is not in tools_allowlist",
-            context.phase_id,
-            command.program
-        ));
+        return Err(anyhow!("phase '{}' command '{}' is not in tools_allowlist", context.phase_id, command.program));
     }
 
     let template_vars = build_command_template_vars(context);
-    let args = command
-        .args
-        .iter()
-        .map(|arg| orchestrator_config::expand_variables(arg, &template_vars))
-        .collect::<Vec<_>>();
+    let args =
+        command.args.iter().map(|arg| orchestrator_config::expand_variables(arg, &template_vars)).collect::<Vec<_>>();
     let env = command
         .env
         .iter()
-        .map(|(key, value)| {
-            (
-                key.clone(),
-                orchestrator_config::expand_variables(value, &template_vars),
-            )
-        })
+        .map(|(key, value)| (key.clone(), orchestrator_config::expand_variables(value, &template_vars)))
         .collect::<BTreeMap<_, _>>();
     let cwd = resolve_command_cwd(context, command, &template_vars)?;
     let started = std::time::Instant::now();
@@ -447,24 +386,12 @@ pub(crate) async fn run_workflow_phase_with_command(
     }
 
     let mut child = process.spawn()?;
-    let stdout_reader = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("failed to capture stdout for command phase"))?;
-    let stderr_reader = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
+    let stdout_reader = child.stdout.take().ok_or_else(|| anyhow!("failed to capture stdout for command phase"))?;
+    let stderr_reader = child.stderr.take().ok_or_else(|| anyhow!("failed to capture stderr for command phase"))?;
     let phase_id = context.phase_id.to_string();
     let phase_id2 = phase_id.clone();
-    let stdout_task = tokio::spawn(capture_command_stream(
-        stdout_reader,
-        Box::leak(phase_id.into_boxed_str()),
-    ));
-    let stderr_task = tokio::spawn(capture_command_stream(
-        stderr_reader,
-        Box::leak(phase_id2.into_boxed_str()),
-    ));
+    let stdout_task = tokio::spawn(capture_command_stream(stdout_reader, Box::leak(phase_id.into_boxed_str())));
+    let stderr_task = tokio::spawn(capture_command_stream(stderr_reader, Box::leak(phase_id2.into_boxed_str())));
 
     let status = if let Some(timeout_secs) = command.timeout_secs {
         match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
@@ -485,12 +412,8 @@ pub(crate) async fn run_workflow_phase_with_command(
         child.wait().await?
     };
 
-    let stdout_capture = stdout_task
-        .await
-        .map_err(|error| anyhow!("stdout capture task failed: {error}"))??;
-    let stderr_capture = stderr_task
-        .await
-        .map_err(|error| anyhow!("stderr capture task failed: {error}"))??;
+    let stdout_capture = stdout_task.await.map_err(|error| anyhow!("stdout capture task failed: {error}"))??;
+    let stderr_capture = stderr_task.await.map_err(|error| anyhow!("stderr capture task failed: {error}"))??;
 
     let exit_code = status.code().unwrap_or(-1);
     let stdout = stdout_capture.text;
@@ -531,11 +454,7 @@ pub(crate) async fn run_workflow_phase_with_command(
 
     let parsed_payload = if command.parse_json_output {
         let payload = parse_command_json_output(&stdout)?;
-        validate_command_contract(
-            &payload,
-            command.expected_result_kind.as_deref(),
-            command.expected_schema.as_ref(),
-        )?;
+        validate_command_contract(&payload, command.expected_result_kind.as_deref(), command.expected_schema.as_ref())?;
         Some(payload)
     } else {
         None
@@ -582,11 +501,7 @@ fn validate_command_contract(
             .map(str::trim)
             .ok_or_else(|| anyhow!("payload is missing required field 'kind'"))?;
         if !payload_kind.eq_ignore_ascii_case(kind) {
-            return Err(anyhow!(
-                "payload kind mismatch: expected '{}', got '{}'",
-                kind,
-                payload_kind
-            ));
+            return Err(anyhow!("payload kind mismatch: expected '{}', got '{}'", kind, payload_kind));
         }
     }
     if let Some(schema) = expected_schema {

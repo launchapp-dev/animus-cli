@@ -156,34 +156,19 @@ mod tests {
             max_tokens: None,
             response_format: Some(ResponseFormat {
                 type_: "json_schema".to_string(),
-                json_schema: Some(JsonSchemaSpec {
-                    name: "phase_output".to_string(),
-                    strict: true,
-                    schema,
-                }),
+                json_schema: Some(JsonSchemaSpec { name: "phase_output".to_string(), strict: true, schema }),
             }),
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["response_format"]["type"], "json_schema");
-        assert_eq!(
-            json["response_format"]["json_schema"]["name"],
-            "phase_output"
-        );
+        assert_eq!(json["response_format"]["json_schema"]["name"], "phase_output");
         assert_eq!(json["response_format"]["json_schema"]["strict"], true);
-        assert_eq!(
-            json["response_format"]["json_schema"]["schema"]["required"],
-            json!(["kind", "verdict"])
-        );
+        assert_eq!(json["response_format"]["json_schema"]["schema"]["required"], json!(["kind", "verdict"]));
     }
 
     #[test]
     fn chat_message_skips_none_fields() {
-        let msg = ChatMessage {
-            role: "assistant".to_string(),
-            content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        };
+        let msg = ChatMessage { role: "assistant".to_string(), content: None, tool_calls: None, tool_call_id: None };
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json.get("content").is_none());
         assert!(json.get("tool_calls").is_none());
@@ -208,10 +193,7 @@ mod tests {
         let tc = chunk.choices[0].delta.tool_calls.as_ref().unwrap();
         assert_eq!(tc[0].index, 0);
         assert_eq!(tc[0].id.as_deref(), Some("call_abc"));
-        assert_eq!(
-            tc[0].function.as_ref().unwrap().name.as_deref(),
-            Some("read_file")
-        );
+        assert_eq!(tc[0].function.as_ref().unwrap().name.as_deref(), Some("read_file"));
     }
 
     #[test]
@@ -223,10 +205,7 @@ mod tests {
             }]
         }"#;
         let chunk: StreamChunk = serde_json::from_str(raw).unwrap();
-        assert_eq!(
-            chunk.choices[0].delta.content.as_deref(),
-            Some("Hello world")
-        );
+        assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello world"));
     }
 
     #[test]

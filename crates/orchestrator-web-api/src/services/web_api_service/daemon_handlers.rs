@@ -44,33 +44,18 @@ impl WebApiService {
 
     pub async fn daemon_clear_logs(&self) -> Result<Value, WebApiError> {
         self.context.hub.daemon().clear_logs().await?;
-        self.publish_event(
-            "daemon-clear-logs",
-            json!({ "message": "daemon logs cleared" }),
-        );
+        self.publish_event("daemon-clear-logs", json!({ "message": "daemon logs cleared" }));
         Ok(json!({ "message": "daemon logs cleared" }))
     }
 
     pub async fn daemon_agents(&self) -> Result<Value, WebApiError> {
         let active_agents = self.context.hub.daemon().active_agents().await?;
-        let workflows = self
-            .context
-            .hub
-            .workflows()
-            .list()
-            .await
-            .unwrap_or_default();
+        let workflows = self.context.hub.workflows().list().await.unwrap_or_default();
         let tasks = self.context.hub.tasks().list().await.unwrap_or_default();
 
-        let task_titles: HashMap<&str, &str> = tasks
-            .iter()
-            .map(|t| (t.id.as_str(), t.title.as_str()))
-            .collect();
+        let task_titles: HashMap<&str, &str> = tasks.iter().map(|t| (t.id.as_str(), t.title.as_str())).collect();
 
-        let mut running: Vec<_> = workflows
-            .iter()
-            .filter(|w| w.status == WorkflowStatus::Running)
-            .collect();
+        let mut running: Vec<_> = workflows.iter().filter(|w| w.status == WorkflowStatus::Running).collect();
         running.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.task_id.cmp(&b.task_id)));
 
         let attributed = active_agents.min(running.len());

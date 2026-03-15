@@ -23,10 +23,7 @@ pub(crate) async fn handle_run_request<W: AsyncWrite + Unpin>(
         );
         let evt = AgentRunEvent::Error {
             run_id: req.run_id,
-            error: format!(
-                "protocol_version_mismatch: expected {}, got {}",
-                PROTOCOL_VERSION, req.protocol_version
-            ),
+            error: format!("protocol_version_mismatch: expected {}, got {}", PROTOCOL_VERSION, req.protocol_version),
         };
         write_json_line(writer, &evt).await?;
         return Ok(None);

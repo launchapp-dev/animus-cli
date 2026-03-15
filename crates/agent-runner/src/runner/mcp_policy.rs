@@ -51,9 +51,7 @@ impl Drop for TempPathCleanup {
     }
 }
 
-pub(super) fn resolve_mcp_tool_enforcement(
-    runtime_contract: Option<&serde_json::Value>,
-) -> McpToolEnforcement {
+pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json::Value>) -> McpToolEnforcement {
     let Some(contract) = runtime_contract else {
         return McpToolEnforcement {
             enabled: false,
@@ -67,10 +65,8 @@ pub(super) fn resolve_mcp_tool_enforcement(
         };
     };
 
-    let supports_mcp = contract
-        .pointer("/cli/capabilities/supports_mcp")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let supports_mcp =
+        contract.pointer("/cli/capabilities/supports_mcp").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let endpoint = contract
         .pointer("/mcp/endpoint")
         .and_then(serde_json::Value::as_str)
@@ -96,10 +92,7 @@ pub(super) fn resolve_mcp_tool_enforcement(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let stdio = stdio_command.map(|command| McpStdioConfig {
-        command,
-        args: stdio_args,
-    });
+    let stdio = stdio_command.map(|command| McpStdioConfig { command, args: stdio_args });
     let has_endpoint = endpoint.is_some();
     let has_stdio = stdio.is_some();
     let agent_id = contract
@@ -109,9 +102,7 @@ pub(super) fn resolve_mcp_tool_enforcement(
         .filter(|value| !value.is_empty())
         .unwrap_or("ao")
         .to_string();
-    let explicit_enforce = contract
-        .pointer("/mcp/enforce_only")
-        .and_then(serde_json::Value::as_bool);
+    let explicit_enforce = contract.pointer("/mcp/enforce_only").and_then(serde_json::Value::as_bool);
     let enabled = explicit_enforce.unwrap_or((has_endpoint || has_stdio) && supports_mcp);
 
     let mut allowed_prefixes = contract
@@ -158,30 +149,17 @@ pub(super) fn resolve_mcp_tool_enforcement(
                 .iter()
                 .map(|(name, entry)| AdditionalMcpServer {
                     name: name.clone(),
-                    command: entry
-                        .get("command")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    command: entry.get("command").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
                     args: entry
                         .get("args")
                         .and_then(serde_json::Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .map(ToString::to_string)
-                                .collect()
-                        })
+                        .map(|a| a.iter().filter_map(serde_json::Value::as_str).map(ToString::to_string).collect())
                         .unwrap_or_default(),
                     env: entry
                         .get("env")
                         .and_then(serde_json::Value::as_object)
                         .map(|e| {
-                            e.iter()
-                                .filter_map(|(k, v)| {
-                                    v.as_str().map(|val| (k.clone(), val.to_string()))
-                                })
-                                .collect()
+                            e.iter().filter_map(|(k, v)| v.as_str().map(|val| (k.clone(), val.to_string()))).collect()
                         })
                         .unwrap_or_default(),
                 })
@@ -204,11 +182,7 @@ pub(super) fn resolve_mcp_tool_enforcement(
 
 fn canonical_cli_name(command: &str) -> String {
     let trimmed = command.trim();
-    std::path::Path::new(trimmed)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(trimmed)
-        .to_ascii_lowercase()
+    std::path::Path::new(trimmed).file_name().and_then(|value| value.to_str()).unwrap_or(trimmed).to_ascii_lowercase()
 }
 
 fn toml_string(value: &str) -> String {
@@ -217,10 +191,7 @@ fn toml_string(value: &str) -> String {
 }
 
 fn is_safe_codex_server_name(name: &str) -> bool {
-    !name.trim().is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    !name.trim().is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn parse_codex_mcp_server_names(payload: &str) -> Vec<String> {
@@ -274,47 +245,25 @@ fn discover_codex_mcp_server_names() -> Vec<String> {
 #[derive(Debug, Clone, Copy)]
 enum McpServerTransport<'a> {
     Http(&'a str),
-    Stdio {
-        command: &'a str,
-        args: &'a [String],
-    },
+    Stdio { command: &'a str, args: &'a [String] },
 }
 
-fn resolve_mcp_server_transport<'a>(
-    enforcement: &'a McpToolEnforcement,
-) -> Result<McpServerTransport<'a>> {
+fn resolve_mcp_server_transport<'a>(enforcement: &'a McpToolEnforcement) -> Result<McpServerTransport<'a>> {
     if let Some(stdio) = enforcement.stdio.as_ref() {
-        return Ok(McpServerTransport::Stdio {
-            command: stdio.command.trim(),
-            args: &stdio.args,
-        });
+        return Ok(McpServerTransport::Stdio { command: stdio.command.trim(), args: &stdio.args });
     }
     if let Some(endpoint) = enforcement.endpoint.as_deref() {
         return Ok(McpServerTransport::Http(endpoint));
     }
 
-    bail!(
-        "MCP-only policy is enabled, but neither mcp.endpoint nor mcp.stdio.command is configured"
-    );
+    bail!("MCP-only policy is enabled, but neither mcp.endpoint nor mcp.stdio.command is configured");
 }
 
 fn sanitize_token_for_filename(raw: &str) -> String {
-    raw.chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    raw.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect()
 }
 
-fn write_temp_json_file(
-    run_id: &RunId,
-    prefix: &str,
-    value: &serde_json::Value,
-) -> Result<PathBuf> {
+fn write_temp_json_file(run_id: &RunId, prefix: &str, value: &serde_json::Value) -> Result<PathBuf> {
     let now_nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -324,8 +273,7 @@ fn write_temp_json_file(
         sanitize_token_for_filename(&run_id.0),
         std::process::id()
     ));
-    let payload =
-        serde_json::to_vec(value).context("Failed to serialize strict MCP config JSON")?;
+    let payload = serde_json::to_vec(value).context("Failed to serialize strict MCP config JSON")?;
     std::fs::write(&path, payload)
         .with_context(|| format!("Failed to write strict MCP config file {}", path.display()))?;
     Ok(path)
@@ -351,19 +299,10 @@ fn apply_claude_native_mcp_lockdown(
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
         let mut config = serde_json::Map::new();
-        config.insert(
-            "command".to_string(),
-            serde_json::Value::String(server.command.clone()),
-        );
-        config.insert(
-            "args".to_string(),
-            serde_json::to_value(&server.args).expect("server args should serialize"),
-        );
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
         if !server.env.is_empty() {
-            config.insert(
-                "env".to_string(),
-                serde_json::to_value(&server.env).expect("server env should serialize"),
-            );
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
         }
         mcp_servers.insert(server.name.clone(), serde_json::Value::Object(config));
     }
@@ -385,10 +324,7 @@ fn apply_codex_native_mcp_lockdown(
         if server_name.eq_ignore_ascii_case(agent_id) {
             continue;
         }
-        if additional_names
-            .iter()
-            .any(|n| n.eq_ignore_ascii_case(server_name))
-        {
+        if additional_names.iter().any(|n| n.eq_ignore_ascii_case(server_name)) {
             continue;
         }
         ensure_codex_config_override(args, &format!("mcp_servers.{server_name}.enabled"), "false");
@@ -399,19 +335,10 @@ fn apply_codex_native_mcp_lockdown(
         McpServerTransport::Http(endpoint) => {
             ensure_codex_config_override(args, &format!("{base}.url"), &toml_string(endpoint));
         }
-        McpServerTransport::Stdio {
-            command,
-            args: stdio_args,
-        } => {
+        McpServerTransport::Stdio { command, args: stdio_args } => {
             ensure_codex_config_override(args, &format!("{base}.command"), &toml_string(command));
-            let toml_args = format!(
-                "[{}]",
-                stdio_args
-                    .iter()
-                    .map(|arg| toml_string(arg))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            let toml_args =
+                format!("[{}]", stdio_args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
             ensure_codex_config_override(args, &format!("{base}.args"), &toml_args);
         }
     }
@@ -419,20 +346,8 @@ fn apply_codex_native_mcp_lockdown(
 
     for server in additional_servers {
         let sbase = format!("mcp_servers.{}", server.name);
-        ensure_codex_config_override(
-            args,
-            &format!("{sbase}.command"),
-            &toml_string(&server.command),
-        );
-        let toml_args = format!(
-            "[{}]",
-            server
-                .args
-                .iter()
-                .map(|arg| toml_string(arg))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        ensure_codex_config_override(args, &format!("{sbase}.command"), &toml_string(&server.command));
+        let toml_args = format!("[{}]", server.args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
         ensure_codex_config_override(args, &format!("{sbase}.args"), &toml_args);
         for (key, value) in &server.env {
             ensure_codex_config_override(args, &format!("{sbase}.env.{key}"), &toml_string(value));
@@ -474,23 +389,11 @@ fn apply_gemini_native_mcp_lockdown(
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
         let mut config = serde_json::Map::new();
-        config.insert(
-            "type".to_string(),
-            serde_json::Value::String("stdio".to_string()),
-        );
-        config.insert(
-            "command".to_string(),
-            serde_json::Value::String(server.command.clone()),
-        );
-        config.insert(
-            "args".to_string(),
-            serde_json::to_value(&server.args).expect("server args should serialize"),
-        );
+        config.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
         if !server.env.is_empty() {
-            config.insert(
-                "env".to_string(),
-                serde_json::to_value(&server.env).expect("server env should serialize"),
-            );
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
         }
         mcp_servers.insert(server.name.clone(), serde_json::Value::Object(config));
     }
@@ -505,10 +408,7 @@ fn apply_gemini_native_mcp_lockdown(
         "mcpServers": mcp_servers
     });
     let settings_path = write_temp_json_file(run_id, "gemini-mcp", &settings)?;
-    env.insert(
-        "GEMINI_CLI_SYSTEM_SETTINGS_PATH".to_string(),
-        settings_path.to_string_lossy().to_string(),
-    );
+    env.insert("GEMINI_CLI_SYSTEM_SETTINGS_PATH".to_string(), settings_path.to_string_lossy().to_string());
     temp_cleanup.track(settings_path);
     Ok(())
 }
@@ -543,20 +443,14 @@ fn apply_opencode_native_mcp_lockdown(
         command_with_args.push(server.command.clone());
         command_with_args.extend(server.args.iter().cloned());
         let mut config = serde_json::Map::new();
-        config.insert(
-            "type".to_string(),
-            serde_json::Value::String("local".to_string()),
-        );
+        config.insert("type".to_string(), serde_json::Value::String("local".to_string()));
         config.insert(
             "command".to_string(),
             serde_json::to_value(command_with_args).expect("server command should serialize"),
         );
         config.insert("enabled".to_string(), serde_json::Value::Bool(true));
         if !server.env.is_empty() {
-            config.insert(
-                "env".to_string(),
-                serde_json::to_value(&server.env).expect("server env should serialize"),
-            );
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
         }
         mcp_entries.insert(server.name.clone(), serde_json::Value::Object(config));
     }
@@ -566,19 +460,12 @@ fn apply_opencode_native_mcp_lockdown(
 
 fn apply_oai_runner_native_mcp_lockdown(args: &mut Vec<String>, transport: McpServerTransport<'_>) {
     let config = match transport {
-        McpServerTransport::Stdio {
-            command,
-            args: stdio_args,
-        } => {
+        McpServerTransport::Stdio { command, args: stdio_args } => {
             serde_json::json!([{ "command": command, "args": stdio_args }])
         }
         McpServerTransport::Http(_) => return,
     };
-    let insert_at = args
-        .iter()
-        .position(|entry| entry == "run")
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let insert_at = args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
     ensure_flag_value(args, "--mcp-config", &config.to_string(), insert_at);
 }
 
@@ -600,18 +487,10 @@ pub(super) fn apply_native_mcp_policy(
     let additional = &enforcement.additional_servers;
 
     match cli.as_str() {
-        "claude" => {
-            apply_claude_native_mcp_lockdown(&mut invocation.args, transport, agent_id, additional)
-        }
+        "claude" => apply_claude_native_mcp_lockdown(&mut invocation.args, transport, agent_id, additional),
         "codex" => {
             let configured_servers = discover_codex_mcp_server_names();
-            apply_codex_native_mcp_lockdown(
-                &mut invocation.args,
-                transport,
-                agent_id,
-                &configured_servers,
-                additional,
-            );
+            apply_codex_native_mcp_lockdown(&mut invocation.args, transport, agent_id, &configured_servers, additional);
         }
         "gemini" => apply_gemini_native_mcp_lockdown(
             &mut invocation.args,
@@ -656,18 +535,12 @@ fn is_tool_policy_permitted(tool_name: &str, enforcement: &McpToolEnforcement) -
     let allowed = if enforcement.tool_policy_allow.is_empty() {
         true
     } else {
-        enforcement
-            .tool_policy_allow
-            .iter()
-            .any(|p| tool_policy_glob_match(p, tool_name))
+        enforcement.tool_policy_allow.iter().any(|p| tool_policy_glob_match(p, tool_name))
     };
     if !allowed {
         return false;
     }
-    !enforcement
-        .tool_policy_deny
-        .iter()
-        .any(|p| tool_policy_glob_match(p, tool_name))
+    !enforcement.tool_policy_deny.iter().any(|p| tool_policy_glob_match(p, tool_name))
 }
 
 pub(super) fn is_tool_call_allowed(
@@ -686,10 +559,8 @@ pub(super) fn is_tool_call_allowed(
         return true;
     }
 
-    let is_mcp_discovery_helper = matches!(
-        normalized.as_str(),
-        "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
-    );
+    let is_mcp_discovery_helper =
+        matches!(normalized.as_str(), "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource");
 
     let target_server = parameters
         .get("server")
@@ -711,10 +582,7 @@ pub(super) fn is_tool_call_allowed(
         return true;
     }
 
-    let prefix_allowed = enforcement
-        .allowed_prefixes
-        .iter()
-        .any(|prefix| normalized.starts_with(prefix));
+    let prefix_allowed = enforcement.allowed_prefixes.iter().any(|prefix| normalized.starts_with(prefix));
     if !prefix_allowed {
         return false;
     }
@@ -734,19 +602,10 @@ mod tests {
         });
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
         assert!(enforcement.enabled);
-        assert_eq!(
-            enforcement.endpoint.as_deref(),
-            Some("http://127.0.0.1:3101/mcp/ao")
-        );
+        assert_eq!(enforcement.endpoint.as_deref(), Some("http://127.0.0.1:3101/mcp/ao"));
         assert_eq!(enforcement.agent_id, "ao");
-        assert!(enforcement
-            .allowed_prefixes
-            .iter()
-            .any(|prefix| prefix == "ao."));
-        assert!(enforcement
-            .allowed_prefixes
-            .iter()
-            .any(|prefix| prefix == "mcp__ao__"));
+        assert!(enforcement.allowed_prefixes.iter().any(|prefix| prefix == "ao."));
+        assert!(enforcement.allowed_prefixes.iter().any(|prefix| prefix == "mcp__ao__"));
     }
 
     #[test]
@@ -760,37 +619,13 @@ mod tests {
             }
         });
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &json!({}),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "phase_transition",
-            &json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &json!({}), &enforcement));
+        assert!(is_tool_call_allowed("phase_transition", &json!({}), &enforcement));
         assert!(!is_tool_call_allowed("Bash", &json!({}), &enforcement));
-        assert!(!is_tool_call_allowed(
-            "stories-search",
-            &json!({ "server": "shortcut" }),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "requirements-get",
-            &json!({ "server": "ao" }),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "list_mcp_resources",
-            &json!({}),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "list_mcp_resources",
-            &json!({ "server": "codex" }),
-            &enforcement
-        ));
+        assert!(!is_tool_call_allowed("stories-search", &json!({ "server": "shortcut" }), &enforcement));
+        assert!(is_tool_call_allowed("requirements-get", &json!({ "server": "ao" }), &enforcement));
+        assert!(is_tool_call_allowed("list_mcp_resources", &json!({}), &enforcement));
+        assert!(is_tool_call_allowed("list_mcp_resources", &json!({ "server": "codex" }), &enforcement));
     }
 
     #[test]
@@ -822,14 +657,8 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-1".to_string());
 
-        let err = apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect_err("unknown provider should fail closed");
+        let err = apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect_err("unknown provider should fail closed");
 
         assert!(err.to_string().contains("no native enforcement adapter"));
     }
@@ -855,29 +684,17 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-1b".to_string());
 
-        let err = apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect_err("missing transport should fail closed");
+        let err = apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect_err("missing transport should fail closed");
 
-        assert!(err
-            .to_string()
-            .contains("neither mcp.endpoint nor mcp.stdio.command"));
+        assert!(err.to_string().contains("neither mcp.endpoint nor mcp.stdio.command"));
     }
 
     #[test]
     fn native_mcp_policy_adds_codex_mcp_server_override() {
         let mut invocation = LaunchInvocation {
             command: "codex".to_string(),
-            args: vec![
-                "exec".to_string(),
-                "--json".to_string(),
-                "hello".to_string(),
-            ],
+            args: vec!["exec".to_string(), "--json".to_string(), "hello".to_string()],
             prompt_via_stdin: false,
         };
         let enforcement = McpToolEnforcement {
@@ -894,14 +711,8 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-2".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("codex policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("codex policy should apply");
 
         let joined = invocation.args.join(" ");
         assert!(joined.contains("mcp_servers.ao.url=\"http://127.0.0.1:3101/mcp/ao\""));
@@ -928,23 +739,14 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-claude".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("claude policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("claude policy should apply");
 
         assert!(invocation
             .args
             .windows(2)
             .any(|pair| { pair[0] == "--permission-mode" && pair[1] == "bypassPermissions" }));
-        assert!(invocation
-            .args
-            .iter()
-            .any(|arg| arg == "--strict-mcp-config"));
+        assert!(invocation.args.iter().any(|arg| arg == "--strict-mcp-config"));
         assert!(!invocation.args.iter().any(|arg| arg == "--tools"));
     }
 
@@ -958,19 +760,12 @@ mod tests {
               {"name":"with space"}
             ]
         "#;
-        assert_eq!(
-            parse_codex_mcp_server_names(payload),
-            vec!["ao".to_string(), "shortcut".to_string()]
-        );
+        assert_eq!(parse_codex_mcp_server_names(payload), vec!["ao".to_string(), "shortcut".to_string()]);
     }
 
     #[test]
     fn codex_native_lockdown_disables_non_target_servers() {
-        let mut args = vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "hello".to_string(),
-        ];
+        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
         let configured_servers = vec!["shortcut".to_string(), "ao".to_string()];
 
         apply_codex_native_mcp_lockdown(
@@ -989,11 +784,7 @@ mod tests {
 
     #[test]
     fn codex_native_lockdown_sets_stdio_transport_when_configured() {
-        let mut args = vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "hello".to_string(),
-        ];
+        let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
 
         apply_codex_native_mcp_lockdown(
             &mut args,
@@ -1012,12 +803,9 @@ mod tests {
         );
 
         let joined = args.join(" ");
-        assert!(
-            joined.contains("mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\"")
-        );
-        assert!(joined.contains(
-            "mcp_servers.ao.args=[\"--project-root\", \"/Users/samishukri/ao-cli\", \"mcp\", \"serve\"]"
-        ));
+        assert!(joined.contains("mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\""));
+        assert!(joined
+            .contains("mcp_servers.ao.args=[\"--project-root\", \"/Users/samishukri/ao-cli\", \"mcp\", \"serve\"]"));
         assert!(joined.contains("mcp_servers.ao.enabled=true"));
     }
 
@@ -1050,23 +838,12 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-3".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("gemini policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("gemini policy should apply");
 
-        let settings_path = env
-            .get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
-            .expect("gemini settings path should be set")
-            .to_string();
-        assert!(invocation
-            .args
-            .windows(2)
-            .any(|pair| pair[0] == "--allowed-mcp-server-names" && pair[1] == "ao"));
+        let settings_path =
+            env.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH").expect("gemini settings path should be set").to_string();
+        assert!(invocation.args.windows(2).any(|pair| pair[0] == "--allowed-mcp-server-names" && pair[1] == "ao"));
         let settings = std::fs::read_to_string(&settings_path).expect("read gemini settings");
         assert!(
             settings.contains("\"AO_MCP_SCHEMA_DRAFT\":\"draft07\""),
@@ -1099,24 +876,13 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-3-http".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("gemini policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("gemini policy should apply");
 
-        let settings_path = env
-            .get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
-            .expect("gemini settings path should be set")
-            .to_string();
+        let settings_path =
+            env.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH").expect("gemini settings path should be set").to_string();
         let settings = std::fs::read_to_string(&settings_path).expect("read gemini settings");
-        assert!(
-            settings.contains("\"type\":\"http\""),
-            "expected http transport in gemini settings, got: {settings}"
-        );
+        assert!(settings.contains("\"type\":\"http\""), "expected http transport in gemini settings, got: {settings}");
         assert!(
             settings.contains("\"url\":\"http://127.0.0.1:3101/mcp/ao\""),
             "expected ao endpoint in gemini settings, got: {settings}"
@@ -1131,11 +897,7 @@ mod tests {
     fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
         let mut invocation = LaunchInvocation {
             command: "opencode".to_string(),
-            args: vec![
-                "run".to_string(),
-                "--format".to_string(),
-                "json".to_string(),
-            ],
+            args: vec!["run".to_string(), "--format".to_string(), "json".to_string()],
             prompt_via_stdin: false,
         };
         let enforcement = McpToolEnforcement {
@@ -1160,38 +922,17 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-opencode".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("opencode policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("opencode policy should apply");
 
-        let config_raw = env
-            .get("OPENCODE_CONFIG_CONTENT")
-            .expect("opencode config should be provided");
-        let parsed: serde_json::Value =
-            serde_json::from_str(config_raw).expect("opencode config should be valid JSON");
+        let config_raw = env.get("OPENCODE_CONFIG_CONTENT").expect("opencode config should be provided");
+        let parsed: serde_json::Value = serde_json::from_str(config_raw).expect("opencode config should be valid JSON");
+        assert_eq!(parsed.pointer("/mcp/ao/type").and_then(serde_json::Value::as_str), Some("local"));
         assert_eq!(
-            parsed
-                .pointer("/mcp/ao/type")
-                .and_then(serde_json::Value::as_str),
-            Some("local")
-        );
-        assert_eq!(
-            parsed
-                .pointer("/mcp/ao/command/0")
-                .and_then(serde_json::Value::as_str),
+            parsed.pointer("/mcp/ao/command/0").and_then(serde_json::Value::as_str),
             Some("/Users/samishukri/ao-cli/target/debug/ao")
         );
-        assert_eq!(
-            parsed
-                .pointer("/mcp/ao/command/4")
-                .and_then(serde_json::Value::as_str),
-            Some("serve")
-        );
+        assert_eq!(parsed.pointer("/mcp/ao/command/4").and_then(serde_json::Value::as_str), Some("serve"));
         assert!(parsed.pointer("/mcp/ao/args").is_none());
     }
 
@@ -1231,20 +972,11 @@ mod tests {
         let mut cleanup = TempPathCleanup::default();
         let run_id = RunId("run-oai-runner".to_string());
 
-        apply_native_mcp_policy(
-            &mut invocation,
-            &enforcement,
-            &mut env,
-            &run_id,
-            &mut cleanup,
-        )
-        .expect("oai-runner policy should apply");
+        apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+            .expect("oai-runner policy should apply");
 
-        let mcp_idx = invocation
-            .args
-            .iter()
-            .position(|arg| arg == "--mcp-config")
-            .expect("mcp config flag should be present");
+        let mcp_idx =
+            invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
         assert_eq!(invocation.args.first().map(String::as_str), Some("run"));
         assert_eq!(mcp_idx, 1, "mcp config should follow the run subcommand");
     }
@@ -1265,81 +997,37 @@ mod tests {
     #[test]
     fn tool_policy_empty_permits_all_prefixed_tools() {
         let enforcement = enforcement_with_tool_policy(vec![], vec![]);
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "ao.daemon.start",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &serde_json::json!({}), &enforcement));
+        assert!(is_tool_call_allowed("ao.daemon.start", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
     fn tool_policy_allowlist_restricts_to_matching() {
         let enforcement = enforcement_with_tool_policy(vec!["ao.task.*"], vec![]);
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(is_tool_call_allowed(
-            "ao.task.get",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.daemon.start",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &serde_json::json!({}), &enforcement));
+        assert!(is_tool_call_allowed("ao.task.get", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.daemon.start", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
     fn tool_policy_denylist_blocks_matching() {
         let enforcement = enforcement_with_tool_policy(vec![], vec!["ao.daemon.*"]);
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.daemon.start",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.daemon.stop",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.daemon.start", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.daemon.stop", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
     fn tool_policy_deny_overrides_allow() {
         let enforcement = enforcement_with_tool_policy(vec!["ao.*"], vec!["ao.daemon.*"]);
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.daemon.start",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.daemon.start", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
     fn tool_policy_does_not_affect_phase_transition() {
         let enforcement = enforcement_with_tool_policy(vec!["ao.task.*"], vec![]);
-        assert!(is_tool_call_allowed(
-            "phase_transition",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("phase_transition", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
@@ -1370,26 +1058,11 @@ mod tests {
             }
         });
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
-        assert_eq!(
-            enforcement.tool_policy_allow,
-            vec!["ao.task.*", "ao.workflow.*"]
-        );
+        assert_eq!(enforcement.tool_policy_allow, vec!["ao.task.*", "ao.workflow.*"]);
         assert_eq!(enforcement.tool_policy_deny, vec!["ao.task.delete"]);
-        assert!(is_tool_call_allowed(
-            "ao.task.list",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.task.delete",
-            &serde_json::json!({}),
-            &enforcement
-        ));
-        assert!(!is_tool_call_allowed(
-            "ao.daemon.start",
-            &serde_json::json!({}),
-            &enforcement
-        ));
+        assert!(is_tool_call_allowed("ao.task.list", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.task.delete", &serde_json::json!({}), &enforcement));
+        assert!(!is_tool_call_allowed("ao.daemon.start", &serde_json::json!({}), &enforcement));
     }
 
     #[test]
@@ -1415,21 +1088,9 @@ mod tests {
         let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
         assert_eq!(enforcement.additional_servers.len(), 1);
         assert_eq!(enforcement.additional_servers[0].name, "my-db");
-        assert_eq!(
-            enforcement.additional_servers[0].command,
-            "/usr/local/bin/db-mcp"
-        );
-        assert_eq!(
-            enforcement.additional_servers[0].args,
-            vec!["--port", "5432"]
-        );
-        assert_eq!(
-            enforcement.additional_servers[0]
-                .env
-                .get("DB_HOST")
-                .map(String::as_str),
-            Some("localhost")
-        );
+        assert_eq!(enforcement.additional_servers[0].command, "/usr/local/bin/db-mcp");
+        assert_eq!(enforcement.additional_servers[0].args, vec!["--port", "5432"]);
+        assert_eq!(enforcement.additional_servers[0].env.get("DB_HOST").map(String::as_str), Some("localhost"));
     }
 
     #[test]
@@ -1443,30 +1104,22 @@ mod tests {
         }];
         apply_claude_native_mcp_lockdown(
             &mut args,
-            McpServerTransport::Stdio {
-                command: "/usr/local/bin/ao",
-                args: &["mcp".to_string(), "serve".to_string()],
-            },
+            McpServerTransport::Stdio { command: "/usr/local/bin/ao", args: &["mcp".to_string(), "serve".to_string()] },
             "ao",
             &additional,
         );
         let joined = args.join(" ");
         assert!(joined.contains("mcpServers"));
         let mcp_config_idx = args.iter().position(|a| a == "--mcp-config").unwrap();
-        let config_json: serde_json::Value =
-            serde_json::from_str(&args[mcp_config_idx + 1]).unwrap();
+        let config_json: serde_json::Value = serde_json::from_str(&args[mcp_config_idx + 1]).unwrap();
         assert!(config_json.pointer("/mcpServers/ao").is_some());
         assert!(config_json.pointer("/mcpServers/my-db").is_some());
         assert_eq!(
-            config_json
-                .pointer("/mcpServers/my-db/command")
-                .and_then(serde_json::Value::as_str),
+            config_json.pointer("/mcpServers/my-db/command").and_then(serde_json::Value::as_str),
             Some("/usr/local/bin/db-mcp")
         );
         assert_eq!(
-            config_json
-                .pointer("/mcpServers/my-db/env/DB_HOST")
-                .and_then(serde_json::Value::as_str),
+            config_json.pointer("/mcpServers/my-db/env/DB_HOST").and_then(serde_json::Value::as_str),
             Some("localhost")
         );
     }

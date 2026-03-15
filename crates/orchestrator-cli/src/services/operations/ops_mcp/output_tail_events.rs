@@ -17,8 +17,7 @@ pub(super) fn read_output_tail_events(
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read events log {}", events_path.display()));
+            return Err(error).with_context(|| format!("failed to read events log {}", events_path.display()));
         }
     };
 
@@ -64,16 +63,9 @@ fn output_stream_type_label(stream_type: OutputStreamType) -> &'static str {
     }
 }
 
-fn normalize_tail_event(
-    event: AgentRunEvent,
-    event_types: &[OutputTailEventType],
-) -> Option<OutputTailEventRecord> {
+fn normalize_tail_event(event: AgentRunEvent, event_types: &[OutputTailEventType]) -> Option<OutputTailEventRecord> {
     match event {
-        AgentRunEvent::OutputChunk {
-            run_id,
-            stream_type,
-            text,
-        } => {
+        AgentRunEvent::OutputChunk { run_id, stream_type, text } => {
             if !event_types.contains(&OutputTailEventType::Output) {
                 return None;
             }

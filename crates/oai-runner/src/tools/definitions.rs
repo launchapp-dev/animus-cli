@@ -147,15 +147,11 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
 const READ_ONLY_TOOLS: &[&str] = &["read_file", "list_files", "search_files"];
 
 pub fn read_only_tool_definitions() -> Vec<ToolDefinition> {
-    all_tool_definitions()
-        .into_iter()
-        .filter(|t| READ_ONLY_TOOLS.contains(&t.function.name.as_str()))
-        .collect()
+    all_tool_definitions().into_iter().filter(|t| READ_ONLY_TOOLS.contains(&t.function.name.as_str())).collect()
 }
 
 pub fn merge_tools(native: Vec<ToolDefinition>, mcp: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
-    let native_names: std::collections::HashSet<String> =
-        native.iter().map(|t| t.function.name.clone()).collect();
+    let native_names: std::collections::HashSet<String> = native.iter().map(|t| t.function.name.clone()).collect();
     let mut merged = native;
     for tool in mcp {
         if !native_names.contains(&tool.function.name) {

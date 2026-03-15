@@ -16,45 +16,15 @@ pub struct AgentRunRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentRunEvent {
-    Started {
-        run_id: RunId,
-        timestamp: Timestamp,
-    },
-    OutputChunk {
-        run_id: RunId,
-        stream_type: OutputStreamType,
-        text: String,
-    },
-    Metadata {
-        run_id: RunId,
-        cost: Option<f64>,
-        tokens: Option<TokenUsage>,
-    },
-    Error {
-        run_id: RunId,
-        error: String,
-    },
-    Finished {
-        run_id: RunId,
-        exit_code: Option<i32>,
-        duration_ms: u64,
-    },
-    ToolCall {
-        run_id: RunId,
-        tool_info: ToolCallInfo,
-    },
-    ToolResult {
-        run_id: RunId,
-        result_info: ToolResultInfo,
-    },
-    Artifact {
-        run_id: RunId,
-        artifact_info: ArtifactInfo,
-    },
-    Thinking {
-        run_id: RunId,
-        content: String,
-    },
+    Started { run_id: RunId, timestamp: Timestamp },
+    OutputChunk { run_id: RunId, stream_type: OutputStreamType, text: String },
+    Metadata { run_id: RunId, cost: Option<f64>, tokens: Option<TokenUsage> },
+    Error { run_id: RunId, error: String },
+    Finished { run_id: RunId, exit_code: Option<i32>, duration_ms: u64 },
+    ToolCall { run_id: RunId, tool_info: ToolCallInfo },
+    ToolResult { run_id: RunId, result_info: ToolResultInfo },
+    Artifact { run_id: RunId, artifact_info: ArtifactInfo },
+    Thinking { run_id: RunId, content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,10 +121,7 @@ pub struct IpcAuthRequest {
 
 impl IpcAuthRequest {
     pub fn new(token: impl Into<String>) -> Self {
-        Self {
-            kind: IpcAuthRequestKind::IpcAuth,
-            token: token.into(),
-        }
+        Self { kind: IpcAuthRequestKind::IpcAuth, token: token.into() }
     }
 }
 
@@ -195,21 +162,11 @@ pub struct IpcAuthResult {
 
 impl IpcAuthResult {
     pub fn ok() -> Self {
-        Self {
-            kind: IpcAuthResultKind::IpcAuthResult,
-            ok: true,
-            code: None,
-            message: None,
-        }
+        Self { kind: IpcAuthResultKind::IpcAuthResult, ok: true, code: None, message: None }
     }
 
     pub fn rejected(code: IpcAuthFailureCode, message: impl Into<String>) -> Self {
-        Self {
-            kind: IpcAuthResultKind::IpcAuthResult,
-            ok: false,
-            code: Some(code),
-            message: Some(message.into()),
-        }
+        Self { kind: IpcAuthResultKind::IpcAuthResult, ok: false, code: Some(code), message: Some(message.into()) }
     }
 }
 

@@ -23,25 +23,11 @@ pub(super) fn build_task_create_args(input: &TaskCreateInput) -> Vec<String> {
 }
 
 pub(super) fn build_task_get_args(id: String) -> Vec<String> {
-    vec![
-        "task".to_string(),
-        "get".to_string(),
-        "--id".to_string(),
-        id,
-    ]
+    vec!["task".to_string(), "get".to_string(), "--id".to_string(), id]
 }
 
-pub(super) fn build_task_delete_args(
-    id: String,
-    confirm: Option<String>,
-    dry_run: bool,
-) -> Vec<String> {
-    let mut args = vec![
-        "task".to_string(),
-        "delete".to_string(),
-        "--id".to_string(),
-        id,
-    ];
+pub(super) fn build_task_delete_args(id: String, confirm: Option<String>, dry_run: bool) -> Vec<String> {
+    let mut args = vec!["task".to_string(), "delete".to_string(), "--id".to_string(), id];
     if let Some(confirm) = confirm {
         args.push("--confirm".to_string());
         args.push(confirm);
@@ -53,12 +39,7 @@ pub(super) fn build_task_delete_args(
 }
 
 pub(super) fn build_task_control_args(action: &str, task_id: String) -> Vec<String> {
-    vec![
-        "task".to_string(),
-        action.to_string(),
-        "--id".to_string(),
-        task_id,
-    ]
+    vec!["task".to_string(), action.to_string(), "--id".to_string(), task_id]
 }
 
 pub(super) fn build_bulk_status_item_args(item: &BulkTaskStatusItem) -> Vec<String> {
@@ -73,12 +54,7 @@ pub(super) fn build_bulk_status_item_args(item: &BulkTaskStatusItem) -> Vec<Stri
 }
 
 pub(super) fn build_bulk_update_item_args(item: &BulkTaskUpdateItem) -> Vec<String> {
-    let mut args = vec![
-        "task".to_string(),
-        "update".to_string(),
-        "--id".to_string(),
-        item.id.clone(),
-    ];
+    let mut args = vec!["task".to_string(), "update".to_string(), "--id".to_string(), item.id.clone()];
     push_opt(&mut args, "--title", item.title.clone());
     push_opt(&mut args, "--description", item.description.clone());
     push_opt(&mut args, "--priority", item.priority.clone());
@@ -88,18 +64,12 @@ pub(super) fn build_bulk_update_item_args(item: &BulkTaskUpdateItem) -> Vec<Stri
     args
 }
 
-pub(super) fn validate_bulk_status_input(
-    tool_name: &str,
-    updates: &[BulkTaskStatusItem],
-) -> Result<(), String> {
+pub(super) fn validate_bulk_status_input(tool_name: &str, updates: &[BulkTaskStatusItem]) -> Result<(), String> {
     if updates.is_empty() {
         return Err(format!("{tool_name}: updates must not be empty"));
     }
     if updates.len() > MAX_BATCH_SIZE {
-        return Err(format!(
-            "{tool_name}: updates count {} exceeds maximum {MAX_BATCH_SIZE}",
-            updates.len()
-        ));
+        return Err(format!("{tool_name}: updates count {} exceeds maximum {MAX_BATCH_SIZE}", updates.len()));
     }
     let mut seen_ids = std::collections::HashSet::new();
     for (i, item) in updates.iter().enumerate() {
@@ -110,27 +80,18 @@ pub(super) fn validate_bulk_status_input(
             return Err(format!("{tool_name}: item[{i}].status must not be empty"));
         }
         if !seen_ids.insert(item.id.as_str()) {
-            return Err(format!(
-                "{tool_name}: duplicate id '{}' at index {i}",
-                item.id
-            ));
+            return Err(format!("{tool_name}: duplicate id '{}' at index {i}", item.id));
         }
     }
     Ok(())
 }
 
-pub(super) fn validate_bulk_update_input(
-    tool_name: &str,
-    updates: &[BulkTaskUpdateItem],
-) -> Result<(), String> {
+pub(super) fn validate_bulk_update_input(tool_name: &str, updates: &[BulkTaskUpdateItem]) -> Result<(), String> {
     if updates.is_empty() {
         return Err(format!("{tool_name}: updates must not be empty"));
     }
     if updates.len() > MAX_BATCH_SIZE {
-        return Err(format!(
-            "{tool_name}: updates count {} exceeds maximum {MAX_BATCH_SIZE}",
-            updates.len()
-        ));
+        return Err(format!("{tool_name}: updates count {} exceeds maximum {MAX_BATCH_SIZE}", updates.len()));
     }
     let mut seen_ids = std::collections::HashSet::new();
     for (i, item) in updates.iter().enumerate() {
@@ -144,16 +105,10 @@ pub(super) fn validate_bulk_update_input(
             || item.assignee.is_some()
             || item.input_json.is_some();
         if !has_update {
-            return Err(format!(
-                "{tool_name}: item[{i}] (id='{}') must include at least one update field",
-                item.id
-            ));
+            return Err(format!("{tool_name}: item[{i}] (id='{}') must include at least one update field", item.id));
         }
         if !seen_ids.insert(item.id.as_str()) {
-            return Err(format!(
-                "{tool_name}: duplicate id '{}' at index {i}",
-                item.id
-            ));
+            return Err(format!("{tool_name}: duplicate id '{}' at index {i}", item.id));
         }
     }
     Ok(())

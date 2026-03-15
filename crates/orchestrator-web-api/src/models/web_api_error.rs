@@ -13,11 +13,7 @@ pub struct WebApiError {
 
 impl WebApiError {
     pub fn new(code: impl Into<String>, message: impl Into<String>, exit_code: i32) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            exit_code,
-        }
+        Self { code: code.into(), message: message.into(), exit_code }
     }
 }
 

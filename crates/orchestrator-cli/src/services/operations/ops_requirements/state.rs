@@ -67,12 +67,8 @@ fn load_core_state_value(project_root: &str) -> Result<Value> {
         return Ok(serde_json::json!({}));
     }
     let content = fs::read_to_string(&path)?;
-    serde_json::from_str(&content).with_context(|| {
-        format!(
-            "failed to parse JSON at {}; file is likely corrupt",
-            path.display()
-        )
-    })
+    serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse JSON at {}; file is likely corrupt", path.display()))
 }
 
 fn save_core_state_value(project_root: &str, state: &Value) -> Result<()> {
@@ -84,14 +80,9 @@ fn save_core_state_value(project_root: &str, state: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn load_requirements_map_from_core_state(
-    project_root: &str,
-) -> Result<HashMap<String, RequirementItem>> {
+pub(super) fn load_requirements_map_from_core_state(project_root: &str) -> Result<HashMap<String, RequirementItem>> {
     let state = load_core_state_value(project_root)?;
-    let requirements_value = state
-        .get("requirements")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
+    let requirements_value = state.get("requirements").cloned().unwrap_or_else(|| serde_json::json!({}));
     let mut requirements: HashMap<String, RequirementItem> =
         serde_json::from_value(requirements_value).unwrap_or_default();
     if requirements.is_empty() {
@@ -108,33 +99,22 @@ pub(super) fn save_requirements_map_to_core_state(
     requirements: &HashMap<String, RequirementItem>,
 ) -> Result<()> {
     let mut state = load_core_state_value(project_root)?;
-    let state_obj = state
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("invalid core state shape"))?;
-    state_obj.insert(
-        "requirements".to_string(),
-        serde_json::to_value(requirements)?,
-    );
+    let state_obj = state.as_object_mut().ok_or_else(|| anyhow!("invalid core state shape"))?;
+    state_obj.insert("requirements".to_string(), serde_json::to_value(requirements)?);
     save_core_state_value(project_root, &state)?;
     write_requirements_docs(project_root, requirements)?;
     write_generated_requirement_docs(project_root, requirements)?;
     Ok(())
 }
 
-fn write_requirements_docs(
-    project_root: &str,
-    requirements: &HashMap<String, RequirementItem>,
-) -> Result<()> {
+fn write_requirements_docs(project_root: &str, requirements: &HashMap<String, RequirementItem>) -> Result<()> {
     let root = Path::new(project_root);
     let base = protocol::scoped_state_root(root).unwrap_or_else(|| root.join(".ao"));
     let docs_dir = base.join("docs");
     fs::create_dir_all(&docs_dir)?;
     let mut items: Vec<_> = requirements.values().cloned().collect();
     items.sort_by(|a, b| a.id.cmp(&b.id));
-    fs::write(
-        docs_dir.join("requirements.json"),
-        serde_json::to_string_pretty(&items)?,
-    )?;
+    fs::write(docs_dir.join("requirements.json"), serde_json::to_string_pretty(&items)?)?;
     Ok(())
 }
 
@@ -146,18 +126,11 @@ fn generated_requirements_dir(project_root: &str) -> PathBuf {
 
 fn load_generated_requirement(path: &Path) -> Result<RequirementItem> {
     let content = fs::read_to_string(path)?;
-    let mut payload: Value = serde_json::from_str(&content).with_context(|| {
-        format!(
-            "failed to parse generated requirement JSON at {}",
-            path.display()
-        )
-    })?;
+    let mut payload: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse generated requirement JSON at {}", path.display()))?;
 
     if let Some(object) = payload.as_object_mut() {
-        if object
-            .get("description")
-            .is_some_and(serde_json::Value::is_null)
-        {
+        if object.get("description").is_some_and(serde_json::Value::is_null) {
             object.insert("description".to_string(), Value::String(String::new()));
         }
 
@@ -172,33 +145,23 @@ fn load_generated_requirement(path: &Path) -> Result<RequirementItem> {
 
         if !object.contains_key("relative_path") {
             if let Some(id) = object.get("id").and_then(Value::as_str) {
-                object.insert(
-                    "relative_path".to_string(),
-                    Value::String(format!("generated/{id}.json")),
-                );
+                object.insert("relative_path".to_string(), Value::String(format!("generated/{id}.json")));
             }
         }
     }
 
-    serde_json::from_value(payload).with_context(|| {
-        format!(
-            "generated requirement at {} does not match expected schema",
-            path.display()
-        )
-    })
+    serde_json::from_value(payload)
+        .with_context(|| format!("generated requirement at {} does not match expected schema", path.display()))
 }
 
-fn load_requirements_map_from_generated_docs(
-    project_root: &str,
-) -> Result<HashMap<String, RequirementItem>> {
+fn load_requirements_map_from_generated_docs(project_root: &str) -> Result<HashMap<String, RequirementItem>> {
     let dir = generated_requirements_dir(project_root);
     if !dir.exists() {
         return Ok(HashMap::new());
     }
 
-    let mut entries: Vec<PathBuf> = fs::read_dir(&dir)?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut entries: Vec<PathBuf> =
+        fs::read_dir(&dir)?.map(|entry| entry.map(|entry| entry.path())).collect::<std::result::Result<Vec<_>, _>>()?;
     entries.retain(|path| path.extension().is_some_and(|ext| ext == "json"));
     entries.sort();
 
@@ -212,9 +175,7 @@ fn load_requirements_map_from_generated_docs(
 
 fn legacy_requirement_status(status: RequirementStatus) -> &'static str {
     match status {
-        RequirementStatus::Draft | RequirementStatus::Refined | RequirementStatus::Planned => {
-            "draft"
-        }
+        RequirementStatus::Draft | RequirementStatus::Refined | RequirementStatus::Planned => "draft",
         RequirementStatus::InProgress => "em-review",
         RequirementStatus::Done | RequirementStatus::Implemented => "implemented",
         RequirementStatus::PoReview => "po-review",
@@ -256,15 +217,11 @@ fn legacy_requirement_payload(requirement: &RequirementItem) -> Value {
     })
 }
 
-fn write_generated_requirement_docs(
-    project_root: &str,
-    requirements: &HashMap<String, RequirementItem>,
-) -> Result<()> {
+fn write_generated_requirement_docs(project_root: &str, requirements: &HashMap<String, RequirementItem>) -> Result<()> {
     let generated_dir = generated_requirements_dir(project_root);
     fs::create_dir_all(&generated_dir)?;
 
-    let expected_files: HashSet<String> =
-        requirements.keys().map(|id| format!("{id}.json")).collect();
+    let expected_files: HashSet<String> = requirements.keys().map(|id| format!("{id}.json")).collect();
     let entries: Vec<PathBuf> = fs::read_dir(&generated_dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -305,8 +262,7 @@ fn next_requirement_id_local(requirements: &HashMap<String, RequirementItem>) ->
 
 const REQUIREMENT_PRIORITY_EXPECTED: &str = "must|should|could|wont|won't";
 const REQUIREMENT_STATUS_EXPECTED: &str = "draft|refined|planned|in-progress|in_progress|done";
-const REQUIREMENT_CATEGORY_EXPECTED: &str =
-    "documentation|usability|runtime|integration|quality|release|security";
+const REQUIREMENT_CATEGORY_EXPECTED: &str = "documentation|usability|runtime|integration|quality|release|security";
 const REQUIREMENT_TYPE_EXPECTED: &str =
     "product|functional|non-functional|nonfunctional|non_functional|technical|other";
 
@@ -324,13 +280,7 @@ fn parse_requirement_priority(value: &str) -> Result<RequirementPriority> {
         "should" => RequirementPriority::Should,
         "could" => RequirementPriority::Could,
         "wont" | "won't" => RequirementPriority::Wont,
-        _ => {
-            return Err(invalid_requirement_value_error(
-                "priority",
-                value,
-                REQUIREMENT_PRIORITY_EXPECTED,
-            ))
-        }
+        _ => return Err(invalid_requirement_value_error("priority", value, REQUIREMENT_PRIORITY_EXPECTED)),
     };
     Ok(parsed)
 }
@@ -342,13 +292,7 @@ fn parse_requirement_type(value: &str) -> Result<RequirementType> {
         "non-functional" | "nonfunctional" | "non_functional" => RequirementType::NonFunctional,
         "technical" => RequirementType::Technical,
         "other" => RequirementType::Other,
-        _ => {
-            return Err(invalid_requirement_value_error(
-                "type",
-                value,
-                REQUIREMENT_TYPE_EXPECTED,
-            ))
-        }
+        _ => return Err(invalid_requirement_value_error("type", value, REQUIREMENT_TYPE_EXPECTED)),
     };
     Ok(parsed)
 }
@@ -356,23 +300,14 @@ fn parse_requirement_type(value: &str) -> Result<RequirementType> {
 fn parse_requirement_category(value: &str) -> Result<String> {
     let normalized = value.trim().to_ascii_lowercase();
     let parsed = match normalized.as_str() {
-        "documentation" | "usability" | "runtime" | "integration" | "quality" | "release"
-        | "security" => normalized,
-        _ => {
-            return Err(invalid_requirement_value_error(
-                "category",
-                value,
-                REQUIREMENT_CATEGORY_EXPECTED,
-            ))
-        }
+        "documentation" | "usability" | "runtime" | "integration" | "quality" | "release" | "security" => normalized,
+        _ => return Err(invalid_requirement_value_error("category", value, REQUIREMENT_CATEGORY_EXPECTED)),
     };
     Ok(parsed)
 }
 
 fn parse_requirement_status(value: &str) -> Result<RequirementStatus> {
-    value
-        .parse()
-        .map_err(|_| invalid_requirement_value_error("status", value, REQUIREMENT_STATUS_EXPECTED))
+    value.parse().map_err(|_| invalid_requirement_value_error("status", value, REQUIREMENT_STATUS_EXPECTED))
 }
 
 fn parse_requirement_priority_opt(value: Option<&str>) -> Result<Option<RequirementPriority>> {
@@ -403,10 +338,7 @@ fn parse_requirement_category_opt(value: Option<&str>) -> Result<Option<String>>
     }
 }
 
-pub(super) fn create_requirement_cli(
-    project_root: &str,
-    args: RequirementCreateArgs,
-) -> Result<RequirementItem> {
+pub(super) fn create_requirement_cli(project_root: &str, args: RequirementCreateArgs) -> Result<RequirementItem> {
     let input = parse_input_json_or(args.input_json, || {
         Ok(RequirementCreateInputCli {
             title: args.title,
@@ -457,10 +389,7 @@ pub(super) fn create_requirement_cli(
     Ok(requirement)
 }
 
-pub(super) fn update_requirement_cli(
-    project_root: &str,
-    args: RequirementUpdateArgs,
-) -> Result<RequirementItem> {
+pub(super) fn update_requirement_cli(project_root: &str, args: RequirementUpdateArgs) -> Result<RequirementItem> {
     let input = parse_input_json_or(args.input_json, || {
         Ok(RequirementUpdateInputCli {
             title: args.title,
@@ -475,11 +404,7 @@ pub(super) fn update_requirement_cli(
             priority: parse_requirement_priority_opt(args.priority.as_deref())?,
             status: parse_requirement_status_opt(args.status.as_deref())?,
             source: args.source,
-            linked_task_ids: if args.linked_task_id.is_empty() {
-                None
-            } else {
-                Some(args.linked_task_id)
-            },
+            linked_task_ids: if args.linked_task_id.is_empty() { None } else { Some(args.linked_task_id) },
         })
     })?;
 
@@ -487,9 +412,8 @@ pub(super) fn update_requirement_cli(
     let requirement_type = parse_requirement_type_opt(input.requirement_type.as_deref())?;
 
     let mut requirements = load_requirements_map_from_core_state(project_root)?;
-    let requirement = requirements
-        .get_mut(&args.id)
-        .ok_or_else(|| not_found_error(format!("requirement not found: {}", args.id)))?;
+    let requirement =
+        requirements.get_mut(&args.id).ok_or_else(|| not_found_error(format!("requirement not found: {}", args.id)))?;
 
     if let Some(title) = input.title {
         requirement.title = title;
@@ -503,11 +427,7 @@ pub(super) fn update_requirement_cli(
             requirement.acceptance_criteria = criteria;
         } else {
             for criterion in criteria {
-                if !requirement
-                    .acceptance_criteria
-                    .iter()
-                    .any(|existing| existing == &criterion)
-                {
+                if !requirement.acceptance_criteria.iter().any(|existing| existing == &criterion) {
                     requirement.acceptance_criteria.push(criterion);
                 }
             }
@@ -597,8 +517,7 @@ mod tests {
 
     #[test]
     fn parse_requirement_category_reports_canonical_help_hint() {
-        let error =
-            parse_requirement_category("platform").expect_err("invalid category should fail");
+        let error = parse_requirement_category("platform").expect_err("invalid category should fail");
         let message = error.to_string();
         assert!(message.contains("invalid requirement category"));
         assert!(message.contains(REQUIREMENT_CATEGORY_EXPECTED));
@@ -655,17 +574,12 @@ mod tests {
         )
         .expect("write generated requirement");
 
-        let requirements = load_requirements_map_from_core_state(project_root)
-            .expect("load requirements from generated docs");
-        let requirement = requirements
-            .get("REQ-007")
-            .expect("requirement should load from generated docs");
+        let requirements =
+            load_requirements_map_from_core_state(project_root).expect("load requirements from generated docs");
+        let requirement = requirements.get("REQ-007").expect("requirement should load from generated docs");
 
         assert_eq!(requirement.category.as_deref(), Some("security"));
-        assert_eq!(
-            requirement.requirement_type,
-            Some(RequirementType::Technical)
-        );
+        assert_eq!(requirement.requirement_type, Some(RequirementType::Technical));
         assert_eq!(requirement.linked_task_ids, vec!["TASK-007".to_string()]);
     }
 
@@ -699,8 +613,7 @@ mod tests {
         let mut requirements = HashMap::new();
         requirements.insert("REQ-001".to_string(), test_requirement_item("REQ-001"));
 
-        write_generated_requirement_docs(project_root, &requirements)
-            .expect("write generated requirement docs");
+        write_generated_requirement_docs(project_root, &requirements).expect("write generated requirement docs");
 
         assert!(generated_dir.join("REQ-001.json").exists());
         assert!(!generated_dir.join("REQ-999.json").exists());

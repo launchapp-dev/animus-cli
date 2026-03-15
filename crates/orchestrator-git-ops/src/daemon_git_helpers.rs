@@ -13,30 +13,17 @@ pub struct PostSuccessGitConfig {
 }
 
 pub fn resolve_task_source_branch(task: &orchestrator_core::OrchestratorTask) -> Option<String> {
-    if let Some(branch_name) = task
-        .branch_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(branch_name) = task.branch_name.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         return Some(branch_name.to_string());
     }
 
-    let worktree_path = task
-        .worktree_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+    let worktree_path = task.worktree_path.as_deref().map(str::trim).filter(|value| !value.is_empty())?;
     if !Path::new(worktree_path).exists() {
         return None;
     }
 
-    let output = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(worktree_path)
-        .args(["branch", "--show-current"])
-        .output()
-        .ok()?;
+    let output =
+        ProcessCommand::new("git").arg("-C").arg(worktree_path).args(["branch", "--show-current"]).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -58,12 +45,7 @@ pub fn git_status(cwd: &str, args: &[&str], operation: &str) -> Result<()> {
         .status()
         .with_context(|| format!("failed to run git operation '{operation}' in {}", cwd))?;
     if !status.success() {
-        anyhow::bail!(
-            "git operation '{}' failed in {}: git {}",
-            operation,
-            cwd,
-            args.join(" ")
-        );
+        anyhow::bail!("git operation '{}' failed in {}: git {}", operation, cwd, args.join(" "));
     }
     Ok(())
 }
@@ -81,12 +63,7 @@ pub(crate) fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
     "command failed without output".to_string()
 }
 
-pub(crate) fn run_external_command(
-    cwd: &str,
-    program: &str,
-    args: &[&str],
-    operation: &str,
-) -> Result<()> {
+pub(crate) fn run_external_command(cwd: &str, program: &str, args: &[&str], operation: &str) -> Result<()> {
     let output = ProcessCommand::new(program)
         .current_dir(cwd)
         .args(args)
@@ -95,12 +72,7 @@ pub(crate) fn run_external_command(
         .output()
         .with_context(|| format!("failed to run '{program}' for {operation} in {}", cwd))?;
     if !output.status.success() {
-        anyhow::bail!(
-            "{} failed in {}: {}",
-            operation,
-            cwd,
-            summarize_command_output(&output.stdout, &output.stderr)
-        );
+        anyhow::bail!("{} failed in {}: {}", operation, cwd, summarize_command_output(&output.stdout, &output.stderr));
     }
     Ok(())
 }
@@ -132,14 +104,11 @@ pub fn ensure_repo_worktree_root(project_root: &str) -> Result<PathBuf> {
     fs::create_dir_all(&repo_root)?;
     fs::create_dir_all(&root)?;
 
-    let canonical = Path::new(project_root)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(project_root));
+    let canonical = Path::new(project_root).canonicalize().unwrap_or_else(|_| PathBuf::from(project_root));
     let marker_path = repo_root.join(".project-root");
     let marker_content = format!("{}\n", canonical.to_string_lossy());
-    let should_write_marker = fs::read_to_string(&marker_path)
-        .map(|existing| existing != marker_content)
-        .unwrap_or(true);
+    let should_write_marker =
+        fs::read_to_string(&marker_path).map(|existing| existing != marker_content).unwrap_or(true);
     if should_write_marker {
         fs::write(&marker_path, marker_content)?;
     }
@@ -213,11 +182,7 @@ pub(crate) fn git_default_target_refs(project_root: &str) -> Vec<String> {
     refs
 }
 
-pub(crate) fn git_is_ancestor(
-    project_root: &str,
-    source_ref: &str,
-    target_ref: &str,
-) -> Result<Option<bool>> {
+pub(crate) fn git_is_ancestor(project_root: &str, source_ref: &str, target_ref: &str) -> Result<Option<bool>> {
     let status = ProcessCommand::new("git")
         .arg("-C")
         .arg(project_root)
@@ -225,9 +190,7 @@ pub(crate) fn git_is_ancestor(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .with_context(|| {
-            format!("failed merge-base check for {source_ref} -> {target_ref} in {project_root}")
-        })?;
+        .with_context(|| format!("failed merge-base check for {source_ref} -> {target_ref} in {project_root}"))?;
 
     Ok(match status.code() {
         Some(0) => Some(true),
@@ -246,11 +209,9 @@ pub fn is_branch_merged(project_root: &str, branch_name: &str) -> Result<Option<
     }
 
     let mut source_refs = Vec::new();
-    for reference in [
-        format!("refs/heads/{branch_name}"),
-        format!("refs/remotes/origin/{branch_name}"),
-        branch_name.to_string(),
-    ] {
+    for reference in
+        [format!("refs/heads/{branch_name}"), format!("refs/remotes/origin/{branch_name}"), branch_name.to_string()]
+    {
         if git_ref_exists(project_root, &reference) {
             source_refs.push(reference);
         }
@@ -279,4 +240,3 @@ pub fn is_branch_merged(project_root: &str, branch_name: &str) -> Result<Option<
 
     Ok(if saw_false { Some(false) } else { None })
 }
-

@@ -16,11 +16,7 @@ impl CliHarness {
         let binary_path = assert_cmd::cargo::cargo_bin!("ao").to_path_buf();
         let project_root = tempfile::tempdir().context("failed to create project root tempdir")?;
         let config_root = tempfile::tempdir().context("failed to create config root tempdir")?;
-        Ok(Self {
-            binary_path,
-            project_root,
-            config_root,
-        })
+        Ok(Self { binary_path, project_root, config_root })
     }
 
     pub(crate) fn project_root(&self) -> &Path {
@@ -50,26 +46,14 @@ impl CliHarness {
             );
         }
 
-        let payload = serde_json::from_slice::<Value>(&output.stdout).with_context(|| {
-            format!(
-                "failed to parse json output from ao command: {}",
-                args.join(" ")
-            )
-        })?;
+        let payload = serde_json::from_slice::<Value>(&output.stdout)
+            .with_context(|| format!("failed to parse json output from ao command: {}", args.join(" ")))?;
 
         if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
-            anyhow::bail!(
-                "unexpected schema for command {}: {}",
-                args.join(" "),
-                payload
-            );
+            anyhow::bail!("unexpected schema for command {}: {}", args.join(" "), payload);
         }
         if payload.get("ok").and_then(Value::as_bool) != Some(true) {
-            anyhow::bail!(
-                "command returned non-ok envelope for {}: {}",
-                args.join(" "),
-                payload
-            );
+            anyhow::bail!("command returned non-ok envelope for {}: {}", args.join(" "), payload);
         }
 
         Ok(payload)
@@ -93,26 +77,14 @@ impl CliHarness {
             );
         }
 
-        let payload = serde_json::from_slice::<Value>(&output.stderr).with_context(|| {
-            format!(
-                "failed to parse json error output from ao command: {}",
-                args.join(" ")
-            )
-        })?;
+        let payload = serde_json::from_slice::<Value>(&output.stderr)
+            .with_context(|| format!("failed to parse json error output from ao command: {}", args.join(" ")))?;
 
         if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
-            anyhow::bail!(
-                "unexpected schema for failing command {}: {}",
-                args.join(" "),
-                payload
-            );
+            anyhow::bail!("unexpected schema for failing command {}: {}", args.join(" "), payload);
         }
         if payload.get("ok").and_then(Value::as_bool) != Some(false) {
-            anyhow::bail!(
-                "expected non-ok envelope for failing command {}: {}",
-                args.join(" "),
-                payload
-            );
+            anyhow::bail!("expected non-ok envelope for failing command {}: {}", args.join(" "), payload);
         }
 
         Ok((payload, output.status.code().unwrap_or(-1)))

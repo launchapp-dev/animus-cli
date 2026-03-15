@@ -7,10 +7,7 @@ use serde::Serialize;
 use workflow_runner_v2::workflow_execute::{execute_workflow, WorkflowExecuteParams};
 
 #[derive(Parser)]
-#[command(
-    name = "ao-workflow-runner",
-    about = "Standalone workflow phase runner"
-)]
+#[command(name = "ao-workflow-runner", about = "Standalone workflow phase runner")]
 struct WorkflowRunnerCli {
     #[command(subcommand)]
     command: WorkflowRunnerCommand,
@@ -64,7 +61,6 @@ struct WorkflowExecuteArgs {
 
     #[arg(long)]
     mcp_config_json: Option<String>,
-
 }
 
 #[derive(Debug, Serialize)]
@@ -116,10 +112,8 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     };
     eprintln!("{}", serde_json::to_string(&startup).unwrap_or_default());
 
-    let phase_routing = args.phase_routing_json.as_deref()
-        .and_then(|json| serde_json::from_str(json).ok());
-    let mcp_config = args.mcp_config_json.as_deref()
-        .and_then(|json| serde_json::from_str(json).ok());
+    let phase_routing = args.phase_routing_json.as_deref().and_then(|json| serde_json::from_str(json).ok());
+    let mcp_config = args.mcp_config_json.as_deref().and_then(|json| serde_json::from_str(json).ok());
 
     let params = WorkflowExecuteParams {
         project_root: args.project_root,
@@ -129,11 +123,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         title: args.title,
         description: args.description,
         workflow_ref: args.workflow_ref.clone(),
-        input: args
-            .input_json
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()?,
+        input: args.input_json.as_deref().map(serde_json::from_str).transpose()?,
         vars: std::collections::HashMap::new(),
         model: args.model,
         tool: args.tool,
@@ -262,13 +252,7 @@ mod tests {
         let source = include_str!("main.rs");
         let marker_command = format!("{}Command", "Tokio");
         let marker_resolve = format!("{}ao_binary", "resolve_");
-        assert!(
-            source.matches(&marker_command).count() == 0,
-            "main.rs must not delegate to subprocess"
-        );
-        assert!(
-            source.matches(&marker_resolve).count() == 0,
-            "main.rs must not contain proxy logic"
-        );
+        assert!(source.matches(&marker_command).count() == 0, "main.rs must not delegate to subprocess");
+        assert!(source.matches(&marker_resolve).count() == 0, "main.rs must not contain proxy logic");
     }
 }

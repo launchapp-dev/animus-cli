@@ -10,10 +10,8 @@ use sha2::{Digest, Sha256};
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
 pub const AGENT_RUNTIME_CONFIG_FILE_NAME: &str = "agent-runtime-config.v2.json";
-const BUILTIN_AGENT_RUNTIME_CONFIG_JSON: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/config/agent-runtime-config.v2.json"
-));
+const BUILTIN_AGENT_RUNTIME_CONFIG_JSON: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/agent-runtime-config.v2.json"));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseFieldDefinition {
@@ -48,13 +46,8 @@ pub struct PhaseOutputContract {
 
 impl PhaseOutputContract {
     pub fn requires_field(&self, field: &str) -> bool {
-        self.required_fields
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(field))
-            || self
-                .fields
-                .iter()
-                .any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
+        self.required_fields.iter().any(|candidate| candidate.eq_ignore_ascii_case(field))
+            || self.fields.iter().any(|(name, definition)| definition.required && name.eq_ignore_ascii_case(field))
     }
 }
 
@@ -113,10 +106,7 @@ pub struct PhaseRetryConfig {
 
 impl Default for PhaseRetryConfig {
     fn default() -> Self {
-        Self {
-            max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS,
-            backoff: None,
-        }
+        Self { max_attempts: DEFAULT_MAX_REWORK_ATTEMPTS, backoff: None }
     }
 }
 
@@ -150,11 +140,7 @@ fn validate_phase_field_definition(path: String, field: &PhaseFieldDefinition) -
         }
     }
 
-    if field
-        .enum_values
-        .iter()
-        .any(|value| value.trim().is_empty())
-    {
+    if field.enum_values.iter().any(|value| value.trim().is_empty()) {
         return Err(anyhow!("{path}.enum must not contain empty values"));
     }
 
@@ -242,11 +228,7 @@ pub struct AgentToolPolicy {
 
 impl AgentToolPolicy {
     pub fn is_tool_permitted(&self, tool_name: &str) -> bool {
-        let allowed = if self.allow.is_empty() {
-            true
-        } else {
-            self.allow.iter().any(|p| glob_match(p, tool_name))
-        };
+        let allowed = if self.allow.is_empty() { true } else { self.allow.iter().any(|p| glob_match(p, tool_name)) };
 
         if !allowed {
             return false;
@@ -269,10 +251,7 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 fn glob_match_inner(pat: &[u8], val: &[u8]) -> bool {
     match (pat.first(), val.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => {
-            glob_match_inner(&pat[1..], val)
-                || (!val.is_empty() && glob_match_inner(pat, &val[1..]))
-        }
+        (Some(b'*'), _) => glob_match_inner(&pat[1..], val) || (!val.is_empty() && glob_match_inner(pat, &val[1..])),
         (Some(&p), Some(&v)) if p == v => glob_match_inner(&pat[1..], &val[1..]),
         _ => false,
     }
@@ -286,7 +265,6 @@ pub enum AgentMcpServerSource {
     Builtin,
     Custom,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentMcpServerConfig {
@@ -525,25 +503,15 @@ fn default_success_exit_codes() -> Vec<i32> {
 }
 
 fn lookup_case_insensitive<'a, T>(map: &'a BTreeMap<String, T>, key: &str) -> Option<&'a T> {
-    map.iter()
-        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
-        .map(|(_, value)| value)
+    map.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(key)).map(|(_, value)| value)
 }
 
 fn trim_nonempty(value: Option<&str>) -> Option<&str> {
-    value
-        .map(str::trim)
-        .filter(|candidate| !candidate.is_empty())
+    value.map(str::trim).filter(|candidate| !candidate.is_empty())
 }
 
 fn normalized_nonempty_values(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+    values.iter().map(String::as_str).map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned).collect()
 }
 
 impl AgentRuntimeConfig {
@@ -563,15 +531,11 @@ impl AgentRuntimeConfig {
     }
 
     pub fn phase_mode(&self, phase_id: &str) -> Option<PhaseExecutionMode> {
-        self.phase_execution(phase_id)
-            .map(|definition| definition.mode.clone())
+        self.phase_execution(phase_id).map(|definition| definition.mode.clone())
     }
 
     pub fn phase_agent_id(&self, phase_id: &str) -> Option<&str> {
-        trim_nonempty(
-            self.phase_execution(phase_id)
-                .and_then(|definition| definition.agent_id.as_deref()),
-        )
+        trim_nonempty(self.phase_execution(phase_id).and_then(|definition| definition.agent_id.as_deref()))
     }
 
     pub fn agent_profile(&self, agent_id: &str) -> Option<&AgentProfile> {
@@ -579,8 +543,7 @@ impl AgentRuntimeConfig {
     }
 
     pub fn phase_agent_profile(&self, phase_id: &str) -> Option<&AgentProfile> {
-        self.phase_agent_id(phase_id)
-            .and_then(|agent_id| self.agent_profile(agent_id))
+        self.phase_agent_id(phase_id).and_then(|agent_id| self.agent_profile(agent_id))
     }
 
     pub fn phase_system_prompt(&self, phase_id: &str) -> Option<&str> {
@@ -592,9 +555,7 @@ impl AgentRuntimeConfig {
         {
             return Some(prompt);
         }
-        self.phase_agent_profile(phase_id)
-            .map(|profile| profile.system_prompt.trim())
-            .filter(|value| !value.is_empty())
+        self.phase_agent_profile(phase_id).map(|profile| profile.system_prompt.trim()).filter(|value| !value.is_empty())
     }
 
     pub fn phase_tool_override(&self, phase_id: &str) -> Option<&str> {
@@ -603,12 +564,7 @@ impl AgentRuntimeConfig {
                 .and_then(|definition| definition.runtime.as_ref())
                 .and_then(|runtime| runtime.tool.as_deref()),
         )
-        .or_else(|| {
-            trim_nonempty(
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.tool.as_deref()),
-            )
-        })
+        .or_else(|| trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.tool.as_deref())))
     }
 
     pub fn phase_model_override(&self, phase_id: &str) -> Option<&str> {
@@ -617,12 +573,7 @@ impl AgentRuntimeConfig {
                 .and_then(|definition| definition.runtime.as_ref())
                 .and_then(|runtime| runtime.model.as_deref()),
         )
-        .or_else(|| {
-            trim_nonempty(
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.model.as_deref()),
-            )
-        })
+        .or_else(|| trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.model.as_deref())))
     }
 
     pub fn phase_fallback_models(&self, phase_id: &str) -> Vec<String> {
@@ -656,10 +607,7 @@ impl AgentRuntimeConfig {
                 .and_then(|runtime| runtime.reasoning_effort.as_deref()),
         )
         .or_else(|| {
-            trim_nonempty(
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.reasoning_effort.as_deref()),
-            )
+            trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.reasoning_effort.as_deref()))
         })
     }
 
@@ -667,50 +615,35 @@ impl AgentRuntimeConfig {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
             .and_then(|runtime| runtime.web_search)
-            .or_else(|| {
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.web_search)
-            })
+            .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.web_search))
     }
 
     pub fn phase_network_access(&self, phase_id: &str) -> Option<bool> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
             .and_then(|runtime| runtime.network_access)
-            .or_else(|| {
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.network_access)
-            })
+            .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.network_access))
     }
 
     pub fn phase_timeout_secs(&self, phase_id: &str) -> Option<u64> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
             .and_then(|runtime| runtime.timeout_secs)
-            .or_else(|| {
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.timeout_secs)
-            })
+            .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.timeout_secs))
     }
 
     pub fn phase_max_attempts(&self, phase_id: &str) -> Option<usize> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
             .and_then(|runtime| runtime.max_attempts)
-            .or_else(|| {
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.max_attempts)
-            })
+            .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.max_attempts))
     }
 
     pub fn phase_max_continuations(&self, phase_id: &str) -> Option<usize> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
             .and_then(|runtime| runtime.max_continuations)
-            .or_else(|| {
-                self.phase_agent_profile(phase_id)
-                    .and_then(|profile| profile.max_continuations)
-            })
+            .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.max_continuations))
     }
 
     pub fn phase_extra_args(&self, phase_id: &str) -> Vec<String> {
@@ -744,30 +677,23 @@ impl AgentRuntimeConfig {
     }
 
     pub fn phase_output_json_schema(&self, phase_id: &str) -> Option<&Value> {
-        self.phase_execution(phase_id)
-            .and_then(|definition| definition.output_json_schema.as_ref())
+        self.phase_execution(phase_id).and_then(|definition| definition.output_json_schema.as_ref())
     }
 
     pub fn phase_directive(&self, phase_id: &str) -> Option<&str> {
-        trim_nonempty(
-            self.phase_execution(phase_id)
-                .and_then(|definition| definition.directive.as_deref()),
-        )
+        trim_nonempty(self.phase_execution(phase_id).and_then(|definition| definition.directive.as_deref()))
     }
 
     pub fn phase_output_contract(&self, phase_id: &str) -> Option<&PhaseOutputContract> {
-        self.phase_execution(phase_id)
-            .and_then(|definition| definition.output_contract.as_ref())
+        self.phase_execution(phase_id).and_then(|definition| definition.output_contract.as_ref())
     }
 
     pub fn phase_decision_contract(&self, phase_id: &str) -> Option<&PhaseDecisionContract> {
-        self.phase_execution(phase_id)
-            .and_then(|def| def.decision_contract.as_ref())
+        self.phase_execution(phase_id).and_then(|def| def.decision_contract.as_ref())
     }
 
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
-        self.phase_execution(phase_id)
-            .and_then(|definition| definition.command.as_ref())
+        self.phase_execution(phase_id).and_then(|definition| definition.command.as_ref())
     }
 
     pub fn is_structured_output_phase(&self, phase_id: &str) -> bool {
@@ -776,14 +702,11 @@ impl AgentRuntimeConfig {
             return false;
         }
 
-        if self
-            .phase_execution(trimmed_phase_id)
-            .is_some_and(|definition| {
-                definition.output_contract.is_some()
-                    || definition.output_json_schema.is_some()
-                    || definition.decision_contract.is_some()
-            })
-        {
+        if self.phase_execution(trimmed_phase_id).is_some_and(|definition| {
+            definition.output_contract.is_some()
+                || definition.output_json_schema.is_some()
+                || definition.decision_contract.is_some()
+        }) {
             return true;
         }
 
@@ -802,17 +725,14 @@ impl AgentRuntimeConfig {
         ) || normalized.contains("review")
             || normalized.contains("audit")
     }
-
 }
 
 pub fn builtin_agent_runtime_config() -> AgentRuntimeConfig {
     static BUILTIN_CONFIG: OnceLock<AgentRuntimeConfig> = OnceLock::new();
     BUILTIN_CONFIG
-        .get_or_init(|| {
-            match serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON) {
-                Ok(config) if validate_agent_runtime_config(&config).is_ok() => config,
-                _ => hardcoded_builtin_agent_runtime_config(),
-            }
+        .get_or_init(|| match serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON) {
+            Ok(config) if validate_agent_runtime_config(&config).is_ok() => config,
+            _ => hardcoded_builtin_agent_runtime_config(),
         })
         .clone()
 }
@@ -832,11 +752,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
             "history.*".to_string(),
             "errors.*".to_string(),
         ],
-        deny: vec![
-            "project.remove".to_string(),
-            "daemon.stop".to_string(),
-            "requirements.delete".to_string(),
-        ],
+        deny: vec!["project.remove".to_string(), "daemon.stop".to_string(), "requirements.delete".to_string()],
     };
     let swe_capabilities = BTreeMap::from([
         ("planning".to_string(), false),
@@ -1288,8 +1204,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
 }
 
 pub fn agent_runtime_config_path(project_root: &Path) -> PathBuf {
-    let base =
-        protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
     base.join("state").join(AGENT_RUNTIME_CONFIG_FILE_NAME)
 }
 
@@ -1301,12 +1216,8 @@ pub fn load_agent_runtime_config(project_root: &Path) -> Result<AgentRuntimeConf
     Ok(load_agent_runtime_config_with_metadata(project_root)?.config)
 }
 
-pub fn load_agent_runtime_config_with_metadata(
-    project_root: &Path,
-) -> Result<LoadedAgentRuntimeConfig> {
-    if let Ok(loaded_workflow) =
-        crate::workflow_config::load_workflow_config_with_metadata(project_root)
-    {
+pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<LoadedAgentRuntimeConfig> {
+    if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root) {
         let mut config = builtin_agent_runtime_config();
         merge_workflow_runtime_overlay(&mut config, &loaded_workflow.config);
         validate_agent_runtime_config(&config)?;
@@ -1323,9 +1234,7 @@ pub fn load_agent_runtime_config_with_metadata(
         });
     }
 
-    Err(anyhow!(
-        "agent runtime config is missing. Define runtime in .ao/workflows.yaml or .ao/workflows/*.yaml"
-    ))
+    Err(anyhow!("agent runtime config is missing. Define runtime in .ao/workflows.yaml or .ao/workflows/*.yaml"))
 }
 
 pub fn load_agent_runtime_config_or_default(project_root: &Path) -> AgentRuntimeConfig {
@@ -1335,16 +1244,9 @@ pub fn load_agent_runtime_config_or_default(project_root: &Path) -> AgentRuntime
     }
 }
 
-fn merge_workflow_runtime_overlay(
-    base: &mut AgentRuntimeConfig,
-    workflow: &crate::workflow_config::WorkflowConfig,
-) {
+fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crate::workflow_config::WorkflowConfig) {
     for tool in &workflow.tools_allowlist {
-        if !tool.trim().is_empty()
-            && !base
-                .tools_allowlist
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(tool))
+        if !tool.trim().is_empty() && !base.tools_allowlist.iter().any(|candidate| candidate.eq_ignore_ascii_case(tool))
         {
             base.tools_allowlist.push(tool.clone());
         }
@@ -1361,21 +1263,18 @@ fn merge_workflow_runtime_overlay(
         base.phases.insert(phase_id.clone(), definition.clone());
     }
     for (tool_id, definition) in &workflow.tools {
-        let entry = base
-            .cli_tools
-            .entry(tool_id.clone())
-            .or_insert_with(|| CliToolConfig {
-                executable: None,
-                supports_file_editing: None,
-                supports_streaming: None,
-                supports_tool_use: None,
-                supports_vision: None,
-                supports_long_context: None,
-                max_context_tokens: None,
-                supports_mcp: None,
-                read_only_flag: None,
-                response_schema_flag: None,
-            });
+        let entry = base.cli_tools.entry(tool_id.clone()).or_insert_with(|| CliToolConfig {
+            executable: None,
+            supports_file_editing: None,
+            supports_streaming: None,
+            supports_tool_use: None,
+            supports_vision: None,
+            supports_long_context: None,
+            max_context_tokens: None,
+            supports_mcp: None,
+            read_only_flag: None,
+            response_schema_flag: None,
+        });
         entry.executable = Some(definition.executable.clone());
         entry.supports_mcp = Some(definition.supports_mcp);
         entry.supports_file_editing = Some(definition.supports_write);
@@ -1513,34 +1412,21 @@ fn validate_phase_definition(
 
     if let Some(directive) = definition.directive.as_deref() {
         if directive.trim().is_empty() {
-            return Err(anyhow!(
-                "phases['{}'].directive must not be empty when set",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].directive must not be empty when set", phase_id));
         }
     }
 
     if let Some(schema) = definition.output_json_schema.as_ref() {
         if !schema.is_object() {
-            return Err(anyhow!(
-                "phases['{}'].output_json_schema must be a JSON object",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].output_json_schema must be a JSON object", phase_id));
         }
     }
 
     if let Some(contract) = definition.output_contract.as_ref() {
         if contract.kind.trim().is_empty() {
-            return Err(anyhow!(
-                "phases['{}'].output_contract.kind must not be empty",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].output_contract.kind must not be empty", phase_id));
         }
-        if contract
-            .required_fields
-            .iter()
-            .any(|field| field.trim().is_empty())
-        {
+        if contract.required_fields.iter().any(|field| field.trim().is_empty()) {
             return Err(anyhow!(
                 "phases['{}'].output_contract.required_fields must not contain empty values",
                 phase_id
@@ -1548,10 +1434,7 @@ fn validate_phase_definition(
         }
         for (field_name, field) in &contract.fields {
             validate_phase_field_definition(
-                format!(
-                    "phases['{}'].output_contract.fields['{}']",
-                    phase_id, field_name
-                ),
+                format!("phases['{}'].output_contract.fields['{}']", phase_id, field_name),
                 field,
             )?;
         }
@@ -1559,10 +1442,7 @@ fn validate_phase_definition(
 
     if let Some(contract) = definition.decision_contract.as_ref() {
         if !(0.0..=1.0).contains(&contract.min_confidence) {
-            return Err(anyhow!(
-                "phases['{}'].decision_contract.min_confidence must be between 0.0 and 1.0",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].decision_contract.min_confidence must be between 0.0 and 1.0", phase_id));
         }
         if let Some(schema) = contract.extra_json_schema.as_ref() {
             if !schema.is_object() {
@@ -1574,10 +1454,7 @@ fn validate_phase_definition(
         }
         for (field_name, field) in &contract.fields {
             validate_phase_field_definition(
-                format!(
-                    "phases['{}'].decision_contract.fields['{}']",
-                    phase_id, field_name
-                ),
+                format!("phases['{}'].decision_contract.fields['{}']", phase_id, field_name),
                 field,
             )?;
         }
@@ -1586,61 +1463,36 @@ fn validate_phase_definition(
     match definition.mode {
         PhaseExecutionMode::Agent => {
             let Some(agent_id) = trim_nonempty(definition.agent_id.as_deref()) else {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'agent' requires non-empty agent_id",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'agent' requires non-empty agent_id", phase_id));
             };
 
             if lookup_case_insensitive(&config.agents, agent_id).is_none() {
-                return Err(anyhow!(
-                    "phases['{}'] references unknown agent '{}'",
-                    phase_id,
-                    agent_id
-                ));
+                return Err(anyhow!("phases['{}'] references unknown agent '{}'", phase_id, agent_id));
             }
 
             if definition.command.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'agent' must not include command block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'agent' must not include command block", phase_id));
             }
 
             if definition.manual.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'agent' must not include manual block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'agent' must not include manual block", phase_id));
             }
         }
         PhaseExecutionMode::Command => {
             let Some(command) = definition.command.as_ref() else {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'command' requires command block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'command' requires command block", phase_id));
             };
 
             if command.program.trim().is_empty() {
-                return Err(anyhow!(
-                    "phases['{}'].command.program must not be empty",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'].command.program must not be empty", phase_id));
             }
 
             if command.args.iter().any(|value| value.trim().is_empty()) {
-                return Err(anyhow!(
-                    "phases['{}'].command.args must not contain empty values",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'].command.args must not contain empty values", phase_id));
             }
 
             if command.env.iter().any(|(key, _)| key.trim().is_empty()) {
-                return Err(anyhow!(
-                    "phases['{}'].command.env must not contain empty keys",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'].command.env must not contain empty keys", phase_id));
             }
 
             if command.success_exit_codes.is_empty() {
@@ -1651,137 +1503,70 @@ fn validate_phase_definition(
             }
 
             if matches!(command.cwd_mode, CommandCwdMode::Path)
-                && command
-                    .cwd_path
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .is_none()
+                && command.cwd_path.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none()
             {
-                return Err(anyhow!(
-                    "phases['{}'].command.cwd_path must be set for cwd_mode='path'",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'].command.cwd_path must be set for cwd_mode='path'", phase_id));
             }
 
             if definition.agent_id.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'command' must not include agent_id",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'command' must not include agent_id", phase_id));
             }
 
             if definition.manual.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'command' must not include manual block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'command' must not include manual block", phase_id));
             }
         }
         PhaseExecutionMode::Manual => {
             let Some(manual) = definition.manual.as_ref() else {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'manual' requires manual block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'manual' requires manual block", phase_id));
             };
 
             if manual.instructions.trim().is_empty() {
-                return Err(anyhow!(
-                    "phases['{}'].manual.instructions must not be empty",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'].manual.instructions must not be empty", phase_id));
             }
 
             if let Some(timeout_secs) = manual.timeout_secs {
                 if timeout_secs == 0 {
-                    return Err(anyhow!(
-                        "phases['{}'].manual.timeout_secs must be greater than 0",
-                        phase_id
-                    ));
+                    return Err(anyhow!("phases['{}'].manual.timeout_secs must be greater than 0", phase_id));
                 }
             }
 
             if definition.agent_id.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'manual' must not include agent_id",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'manual' must not include agent_id", phase_id));
             }
 
             if definition.command.is_some() {
-                return Err(anyhow!(
-                    "phases['{}'] mode 'manual' must not include command block",
-                    phase_id
-                ));
+                return Err(anyhow!("phases['{}'] mode 'manual' must not include command block", phase_id));
             }
         }
     }
 
     if let Some(runtime) = definition.runtime.as_ref() {
-        if runtime
-            .tool
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "phases['{}'].runtime.tool must not be empty",
-                phase_id
-            ));
+        if runtime.tool.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.tool must not be empty", phase_id));
         }
 
-        if runtime
-            .model
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "phases['{}'].runtime.model must not be empty",
-                phase_id
-            ));
+        if runtime.model.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.model must not be empty", phase_id));
         }
 
-        if runtime
-            .fallback_models
-            .iter()
-            .any(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "phases['{}'].runtime.fallback_models must not contain empty values",
-                phase_id
-            ));
+        if runtime.fallback_models.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.fallback_models must not contain empty values", phase_id));
         }
 
         if runtime.max_attempts == Some(0) {
-            return Err(anyhow!(
-                "phases['{}'].runtime.max_attempts must be greater than 0",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].runtime.max_attempts must be greater than 0", phase_id));
         }
 
         if runtime.timeout_secs == Some(0) {
-            return Err(anyhow!(
-                "phases['{}'].runtime.timeout_secs must be greater than 0 when set",
-                phase_id
-            ));
+            return Err(anyhow!("phases['{}'].runtime.timeout_secs must be greater than 0 when set", phase_id));
         }
 
-        if runtime
-            .extra_args
-            .iter()
-            .any(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "phases['{}'].runtime.extra_args must not contain empty values",
-                phase_id
-            ));
+        if runtime.extra_args.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.extra_args must not contain empty values", phase_id));
         }
 
-        if runtime
-            .codex_config_overrides
-            .iter()
-            .any(|value| !is_valid_codex_config_override(value.trim()))
-        {
+        if runtime.codex_config_overrides.iter().any(|value| !is_valid_codex_config_override(value.trim())) {
             return Err(anyhow!(
                 "phases['{}'].runtime.codex_config_overrides values must use key=value syntax",
                 phase_id
@@ -1801,30 +1586,15 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
     }
 
     if config.schema.trim() != AGENT_RUNTIME_CONFIG_SCHEMA_ID {
-        return Err(anyhow!(
-            "schema must be '{}' (got '{}')",
-            AGENT_RUNTIME_CONFIG_SCHEMA_ID,
-            config.schema
-        ));
+        return Err(anyhow!("schema must be '{}' (got '{}')", AGENT_RUNTIME_CONFIG_SCHEMA_ID, config.schema));
     }
 
     if config.version != AGENT_RUNTIME_CONFIG_VERSION {
-        return Err(anyhow!(
-            "version must be {} (got {})",
-            AGENT_RUNTIME_CONFIG_VERSION,
-            config.version
-        ));
+        return Err(anyhow!("version must be {} (got {})", AGENT_RUNTIME_CONFIG_VERSION, config.version));
     }
 
-    if config.tools_allowlist.is_empty()
-        || config
-            .tools_allowlist
-            .iter()
-            .all(|tool| tool.trim().is_empty())
-    {
-        return Err(anyhow!(
-            "tools_allowlist must include at least one non-empty command"
-        ));
+    if config.tools_allowlist.is_empty() || config.tools_allowlist.iter().all(|tool| tool.trim().is_empty()) {
+        return Err(anyhow!("tools_allowlist must include at least one non-empty command"));
     }
 
     if config.agents.is_empty() {
@@ -1837,123 +1607,56 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         }
 
         if profile.system_prompt.trim().is_empty() {
-            return Err(anyhow!(
-                "agents['{}'].system_prompt must not be empty",
-                agent_id
-            ));
+            return Err(anyhow!("agents['{}'].system_prompt must not be empty", agent_id));
         }
 
-        if profile
-            .tool
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
+        if profile.tool.as_deref().is_some_and(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].tool must not be empty", agent_id));
         }
 
-        if profile
-            .model
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
+        if profile.model.as_deref().is_some_and(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].model must not be empty", agent_id));
         }
 
-        if profile
-            .fallback_models
-            .iter()
-            .any(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "agents['{}'].fallback_models must not contain empty values",
-                agent_id
-            ));
+        if profile.fallback_models.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].fallback_models must not contain empty values", agent_id));
         }
 
         if profile.max_attempts == Some(0) {
-            return Err(anyhow!(
-                "agents['{}'].max_attempts must be greater than 0",
-                agent_id
-            ));
+            return Err(anyhow!("agents['{}'].max_attempts must be greater than 0", agent_id));
         }
 
         if profile.timeout_secs == Some(0) {
-            return Err(anyhow!(
-                "agents['{}'].timeout_secs must be greater than 0 when set",
-                agent_id
-            ));
+            return Err(anyhow!("agents['{}'].timeout_secs must be greater than 0 when set", agent_id));
         }
 
-        if profile
-            .extra_args
-            .iter()
-            .any(|value| value.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "agents['{}'].extra_args must not contain empty values",
-                agent_id
-            ));
+        if profile.extra_args.iter().any(|value| value.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].extra_args must not contain empty values", agent_id));
         }
 
-        if profile
-            .codex_config_overrides
-            .iter()
-            .any(|value| !is_valid_codex_config_override(value.trim()))
-        {
-            return Err(anyhow!(
-                "agents['{}'].codex_config_overrides values must use key=value syntax",
-                agent_id
-            ));
+        if profile.codex_config_overrides.iter().any(|value| !is_valid_codex_config_override(value.trim())) {
+            return Err(anyhow!("agents['{}'].codex_config_overrides values must use key=value syntax", agent_id));
         }
 
-        if profile
-            .role
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
+        if profile.role.as_deref().is_some_and(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].role must not be empty", agent_id));
         }
 
-        if profile
-            .mcp_servers
-            .iter()
-            .any(|server| server.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "agents['{}'].mcp_servers must not contain empty values",
-                agent_id
-            ));
+        if profile.mcp_servers.iter().any(|server| server.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].mcp_servers must not contain empty values", agent_id));
         }
 
-        if profile
-            .tool_policy
-            .allow
-            .iter()
-            .chain(profile.tool_policy.deny.iter())
-            .any(|value| value.trim().is_empty())
+        if profile.tool_policy.allow.iter().chain(profile.tool_policy.deny.iter()).any(|value| value.trim().is_empty())
         {
-            return Err(anyhow!(
-                "agents['{}'].tool_policy must not contain empty patterns",
-                agent_id
-            ));
+            return Err(anyhow!("agents['{}'].tool_policy must not contain empty patterns", agent_id));
         }
 
         if profile.skills.iter().any(|value| value.trim().is_empty()) {
-            return Err(anyhow!(
-                "agents['{}'].skills must not contain empty values",
-                agent_id
-            ));
+            return Err(anyhow!("agents['{}'].skills must not contain empty values", agent_id));
         }
 
-        if profile
-            .capabilities
-            .keys()
-            .any(|capability| capability.trim().is_empty())
-        {
-            return Err(anyhow!(
-                "agents['{}'].capabilities must not contain empty capability keys",
-                agent_id
-            ));
+        if profile.capabilities.keys().any(|capability| capability.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].capabilities must not contain empty capability keys", agent_id));
         }
     }
 
@@ -2001,14 +1704,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let mut workflow = crate::workflow_config::builtin_workflow_config();
         let builtin = builtin_agent_runtime_config();
-        let mut triager = builtin
-            .agent_profile("triager")
-            .expect("builtin triager profile should exist")
-            .clone();
+        let mut triager = builtin.agent_profile("triager").expect("builtin triager profile should exist").clone();
         triager.mcp_servers.clear();
-        workflow
-            .agent_profiles
-            .insert("triager".to_string(), triager);
+        workflow.agent_profiles.insert("triager".to_string(), triager);
         workflow.phase_definitions.insert(
             "triage".to_string(),
             PhaseExecutionDefinition {
@@ -2045,13 +1743,10 @@ mod tests {
                 base_args: vec![],
             },
         );
-        crate::workflow_config::write_workflow_config(temp.path(), &workflow)
-            .expect("write workflow config");
+        crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 
         let resolved = load_agent_runtime_config_or_default(temp.path());
-        let triage = resolved
-            .phase_decision_contract("triage")
-            .expect("triage contract");
+        let triage = resolved.phase_decision_contract("triage").expect("triage contract");
         assert!(!triage.allow_missing_decision);
     }
 
@@ -2068,12 +1763,9 @@ mod tests {
     #[test]
     fn builtin_phase_prompts_resolve_to_expected_personas() {
         let config = builtin_agent_runtime_config();
-        for (phase_id, agent_id) in [
-            ("requirements", "po"),
-            ("implementation", "swe"),
-            ("code-review", "swe"),
-            ("testing", "swe"),
-        ] {
+        for (phase_id, agent_id) in
+            [("requirements", "po"), ("implementation", "swe"), ("code-review", "swe"), ("testing", "swe")]
+        {
             let expected_prompt = config
                 .agent_profile(agent_id)
                 .expect("phase agent profile should exist")
@@ -2081,10 +1773,7 @@ mod tests {
                 .trim()
                 .to_string();
             assert_eq!(config.phase_agent_id(phase_id), Some(agent_id));
-            assert_eq!(
-                config.phase_system_prompt(phase_id),
-                Some(expected_prompt.as_str())
-            );
+            assert_eq!(config.phase_system_prompt(phase_id), Some(expected_prompt.as_str()));
         }
     }
 
@@ -2093,39 +1782,27 @@ mod tests {
         let config = builtin_agent_runtime_config();
 
         assert_eq!(
-            config
-                .phase_decision_contract("triage")
-                .map(|contract| contract.allow_missing_decision),
+            config.phase_decision_contract("triage").map(|contract| contract.allow_missing_decision),
             Some(false)
         );
         assert_eq!(
-            config
-                .phase_decision_contract("refine-requirements")
-                .map(|contract| contract.allow_missing_decision),
+            config.phase_decision_contract("refine-requirements").map(|contract| contract.allow_missing_decision),
             Some(false)
         );
         assert_eq!(
-            config
-                .phase_decision_contract("requirements")
-                .map(|contract| contract.required_evidence.clone()),
+            config.phase_decision_contract("requirements").map(|contract| contract.required_evidence.clone()),
             Some(Vec::new())
         );
         assert_eq!(
-            config
-                .phase_decision_contract("implementation")
-                .map(|contract| contract.required_evidence.clone()),
+            config.phase_decision_contract("implementation").map(|contract| contract.required_evidence.clone()),
             Some(vec![crate::types::PhaseEvidenceKind::FilesModified])
         );
         assert_eq!(
-            config
-                .phase_decision_contract("code-review")
-                .map(|contract| contract.required_evidence.clone()),
+            config.phase_decision_contract("code-review").map(|contract| contract.required_evidence.clone()),
             Some(vec![crate::types::PhaseEvidenceKind::CodeReviewClean])
         );
         assert_eq!(
-            config
-                .phase_decision_contract("testing")
-                .map(|contract| contract.required_evidence.clone()),
+            config.phase_decision_contract("testing").map(|contract| contract.required_evidence.clone()),
             Some(vec![crate::types::PhaseEvidenceKind::TestsPassed])
         );
     }
@@ -2134,9 +1811,7 @@ mod tests {
     fn builtin_defaults_include_em_po_and_swe_profiles() {
         let config = builtin_agent_runtime_config();
         for agent_id in ["em", "po", "swe"] {
-            let profile = config
-                .agent_profile(agent_id)
-                .expect("builtin profile should exist");
+            let profile = config.agent_profile(agent_id).expect("builtin profile should exist");
             assert!(!profile.description.trim().is_empty());
             assert!(!profile.system_prompt.trim().is_empty());
             assert!(profile.role.as_deref().is_some_and(|role| !role.is_empty()));
@@ -2150,9 +1825,7 @@ mod tests {
         let config = builtin_agent_runtime_config();
         let em = config.agent_profile("em").expect("em profile should exist");
         let po = config.agent_profile("po").expect("po profile should exist");
-        let swe = config
-            .agent_profile("swe")
-            .expect("swe profile should exist");
+        let swe = config.agent_profile("swe").expect("swe profile should exist");
 
         assert_eq!(em.capabilities.get("queue_management"), Some(&true));
         assert_eq!(em.capabilities.get("scheduling"), Some(&true));
@@ -2174,17 +1847,13 @@ mod tests {
 
     #[test]
     fn builtin_json_and_fallback_match_persona_phase_defaults() {
-        let from_json =
-            serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
-                .expect("builtin json should deserialize");
+        let from_json = serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
+            .expect("builtin json should deserialize");
         validate_agent_runtime_config(&from_json).expect("builtin json should validate");
         let fallback = hardcoded_builtin_agent_runtime_config();
 
         for phase_id in ["requirements", "implementation", "code-review", "testing"] {
-            assert_eq!(
-                from_json.phase_agent_id(phase_id),
-                fallback.phase_agent_id(phase_id)
-            );
+            assert_eq!(from_json.phase_agent_id(phase_id), fallback.phase_agent_id(phase_id));
             assert_eq!(
                 from_json.phase_decision_contract(phase_id).map(|contract| (
                     contract.required_evidence.clone(),
@@ -2204,12 +1873,8 @@ mod tests {
         }
 
         for agent_id in ["em", "po", "swe"] {
-            let json_profile = from_json
-                .agent_profile(agent_id)
-                .expect("json profile should exist");
-            let fallback_profile = fallback
-                .agent_profile(agent_id)
-                .expect("fallback profile should exist");
+            let json_profile = from_json.agent_profile(agent_id).expect("json profile should exist");
+            let fallback_profile = fallback.agent_profile(agent_id).expect("fallback profile should exist");
             assert_eq!(json_profile.role, fallback_profile.role);
             assert_eq!(json_profile.mcp_servers, fallback_profile.mcp_servers);
             assert_eq!(json_profile.tool_policy, fallback_profile.tool_policy);
@@ -2246,33 +1911,18 @@ mod tests {
         let config = builtin_agent_runtime_config();
 
         assert_eq!(config.phase_agent_id("triage"), Some("triager"));
-        assert_eq!(
-            config.phase_agent_id("refine-requirements"),
-            Some("requirements-refiner")
-        );
-        assert_eq!(
-            config.phase_agent_id("requirement-task-generation"),
-            Some("requirements-planner")
-        );
-        assert_eq!(
-            config.phase_agent_id("requirement-workflow-bootstrap"),
-            Some("requirements-planner")
-        );
+        assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));
+        assert_eq!(config.phase_agent_id("requirement-task-generation"), Some("requirements-planner"));
+        assert_eq!(config.phase_agent_id("requirement-workflow-bootstrap"), Some("requirements-planner"));
         assert_eq!(config.phase_agent_id("po-review"), Some("po-reviewer"));
-        assert_eq!(
-            config.phase_mode("unit-test"),
-            Some(PhaseExecutionMode::Command)
-        );
+        assert_eq!(config.phase_mode("unit-test"), Some(PhaseExecutionMode::Command));
         assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
     }
 
     #[test]
     fn structured_output_phase_rejects_empty_phase_even_with_structured_default() {
         let mut config = builtin_agent_runtime_config();
-        let default_phase = config
-            .phases
-            .get_mut("default")
-            .expect("builtin config includes default phase");
+        let default_phase = config.phases.get_mut("default").expect("builtin config includes default phase");
         default_phase.output_contract = Some(PhaseOutputContract {
             kind: "phase_result".to_string(),
             required_fields: Vec::new(),
@@ -2283,10 +1933,7 @@ mod tests {
         assert!(!config.is_structured_output_phase("   "));
     }
 
-    fn make_minimal_config_with_phase(
-        phase_id: &str,
-        definition: PhaseExecutionDefinition,
-    ) -> AgentRuntimeConfig {
+    fn make_minimal_config_with_phase(phase_id: &str, definition: PhaseExecutionDefinition) -> AgentRuntimeConfig {
         let mut config = builtin_agent_runtime_config();
         config.phases.insert(phase_id.to_string(), definition);
         config
@@ -2535,9 +2182,7 @@ mod tests {
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("success_exit_codes must include at least one code"));
+        assert!(err.to_string().contains("success_exit_codes must include at least one code"));
     }
 
     #[test]
@@ -2691,10 +2336,7 @@ mod tests {
             skills: Vec::new(),
             command: Some(PhaseCommandDefinition {
                 program: "bash".to_string(),
-                args: vec![
-                    "-c".to_string(),
-                    "echo '{\"kind\":\"test_result\",\"passed\":true}'".to_string(),
-                ],
+                args: vec!["-c".to_string(), "echo '{\"kind\":\"test_result\",\"passed\":true}'".to_string()],
                 env: BTreeMap::new(),
                 cwd_mode: CommandCwdMode::TaskRoot,
                 cwd_path: None,
@@ -2765,11 +2407,7 @@ mod tests {
                     "builtin phase '{}' should be command mode",
                     phase_id
                 );
-                assert!(
-                    definition.command.is_some(),
-                    "builtin phase '{}' should have a command block",
-                    phase_id
-                );
+                assert!(definition.command.is_some(), "builtin phase '{}' should have a command block", phase_id);
             } else {
                 assert_eq!(
                     definition.mode,
@@ -2777,11 +2415,7 @@ mod tests {
                     "builtin phase '{}' should be agent mode",
                     phase_id
                 );
-                assert!(
-                    definition.command.is_none(),
-                    "builtin phase '{}' should have no command block",
-                    phase_id
-                );
+                assert!(definition.command.is_none(), "builtin phase '{}' should have no command block", phase_id);
             }
         }
     }
@@ -2826,9 +2460,7 @@ mod tests {
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("args must not contain empty values"));
+        assert!(err.to_string().contains("args must not contain empty values"));
     }
 
     #[test]
@@ -2933,10 +2565,7 @@ mod tests {
     fn agent_mcp_server_config_roundtrips() {
         let config = AgentMcpServerConfig {
             source: AgentMcpServerSource::Custom,
-            tool_policy: AgentToolPolicy {
-                allow: vec!["read.*".to_string()],
-                deny: vec!["write.*".to_string()],
-            },
+            tool_policy: AgentToolPolicy { allow: vec!["read.*".to_string()], deny: vec!["write.*".to_string()] },
             env: BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]),
         };
         let json = serde_json::to_string(&config).expect("serialize");
@@ -2956,10 +2585,7 @@ mod tests {
     #[test]
     fn agent_capabilities_flattens_bool_map() {
         let caps = AgentCapabilities {
-            flags: BTreeMap::from([
-                ("planning".to_string(), true),
-                ("implementation".to_string(), false),
-            ]),
+            flags: BTreeMap::from([("planning".to_string(), true), ("implementation".to_string(), false)]),
         };
         let json = serde_json::to_string(&caps).expect("serialize");
         let value: Value = serde_json::from_str(&json).expect("parse value");
@@ -2994,16 +2620,12 @@ mod tests {
             "ao".to_string(),
             AgentMcpServerConfig {
                 source: AgentMcpServerSource::Builtin,
-                tool_policy: AgentToolPolicy {
-                    allow: vec!["task.*".to_string()],
-                    deny: vec![],
-                },
+                tool_policy: AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec![] },
                 env: BTreeMap::new(),
             },
         )]));
-        profile.structured_capabilities = Some(AgentCapabilities {
-            flags: BTreeMap::from([("planning".to_string(), true)]),
-        });
+        profile.structured_capabilities =
+            Some(AgentCapabilities { flags: BTreeMap::from([("planning".to_string(), true)]) });
         profile.project_overrides = Some(BTreeMap::from([(
             "my-project".to_string(),
             AgentProjectOverrides {
@@ -3052,10 +2674,7 @@ mod tests {
 
     #[test]
     fn tool_policy_allowlist_only() {
-        let policy = AgentToolPolicy {
-            allow: vec!["task.*".to_string(), "workflow.run".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string(), "workflow.run".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("task.list"));
         assert!(policy.is_tool_permitted("task.create"));
         assert!(policy.is_tool_permitted("task.get"));
@@ -3067,10 +2686,8 @@ mod tests {
 
     #[test]
     fn tool_policy_denylist_only() {
-        let policy = AgentToolPolicy {
-            allow: vec![],
-            deny: vec!["daemon.*".to_string(), "project.remove".to_string()],
-        };
+        let policy =
+            AgentToolPolicy { allow: vec![], deny: vec!["daemon.*".to_string(), "project.remove".to_string()] };
         assert!(policy.is_tool_permitted("task.list"));
         assert!(policy.is_tool_permitted("workflow.run"));
         assert!(!policy.is_tool_permitted("daemon.stop"));
@@ -3081,10 +2698,7 @@ mod tests {
 
     #[test]
     fn tool_policy_combined_allow_and_deny() {
-        let policy = AgentToolPolicy {
-            allow: vec!["task.*".to_string()],
-            deny: vec!["task.delete".to_string()],
-        };
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec!["task.delete".to_string()] };
         assert!(policy.is_tool_permitted("task.list"));
         assert!(policy.is_tool_permitted("task.create"));
         assert!(!policy.is_tool_permitted("task.delete"));
@@ -3093,10 +2707,7 @@ mod tests {
 
     #[test]
     fn tool_policy_glob_wildcard_matches_across_dots() {
-        let policy = AgentToolPolicy {
-            allow: vec!["ao.*".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["ao.*".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("ao.task.list"));
         assert!(policy.is_tool_permitted("ao.workflow.run"));
         assert!(policy.is_tool_permitted("ao.x"));
@@ -3105,10 +2716,7 @@ mod tests {
 
     #[test]
     fn tool_policy_exact_match() {
-        let policy = AgentToolPolicy {
-            allow: vec!["task.list".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["task.list".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("task.list"));
         assert!(!policy.is_tool_permitted("task.create"));
         assert!(!policy.is_tool_permitted("task.list.extra"));
@@ -3116,10 +2724,7 @@ mod tests {
 
     #[test]
     fn tool_policy_wildcard_only_pattern() {
-        let policy = AgentToolPolicy {
-            allow: vec!["*".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["*".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("anything"));
         assert!(policy.is_tool_permitted("a.b.c"));
         assert!(policy.is_tool_permitted(""));
@@ -3127,25 +2732,16 @@ mod tests {
 
     #[test]
     fn tool_policy_empty_tool_name() {
-        let policy = AgentToolPolicy {
-            allow: vec!["task.*".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec![] };
         assert!(!policy.is_tool_permitted(""));
 
-        let deny_policy = AgentToolPolicy {
-            allow: vec![],
-            deny: vec!["*".to_string()],
-        };
+        let deny_policy = AgentToolPolicy { allow: vec![], deny: vec!["*".to_string()] };
         assert!(!deny_policy.is_tool_permitted(""));
     }
 
     #[test]
     fn tool_policy_multiple_wildcards() {
-        let policy = AgentToolPolicy {
-            allow: vec!["a.*.c".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["a.*.c".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("a.b.c"));
         assert!(policy.is_tool_permitted("a.x.y.c"));
         assert!(!policy.is_tool_permitted("a.b.d"));
@@ -3153,10 +2749,7 @@ mod tests {
 
     #[test]
     fn tool_policy_prefix_wildcard() {
-        let policy = AgentToolPolicy {
-            allow: vec!["task.get*".to_string()],
-            deny: vec![],
-        };
+        let policy = AgentToolPolicy { allow: vec!["task.get*".to_string()], deny: vec![] };
         assert!(policy.is_tool_permitted("task.get"));
         assert!(policy.is_tool_permitted("task.get_by_id"));
         assert!(!policy.is_tool_permitted("task.list"));
@@ -3186,10 +2779,7 @@ mod tests {
     #[test]
     fn phase_system_prompt_override_takes_precedence_over_agent_profile() {
         let mut config = builtin_agent_runtime_config();
-        config.agents.insert(
-            "test-agent".to_string(),
-            make_agent_profile_with_system_prompt("Agent profile prompt"),
-        );
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
             PhaseExecutionDefinition {
@@ -3209,19 +2799,13 @@ mod tests {
                 default_tool: None,
             },
         );
-        assert_eq!(
-            config.phase_system_prompt("custom-phase"),
-            Some("Phase-level prompt override")
-        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Phase-level prompt override"));
     }
 
     #[test]
     fn phase_system_prompt_falls_back_to_agent_profile() {
         let mut config = builtin_agent_runtime_config();
-        config.agents.insert(
-            "test-agent".to_string(),
-            make_agent_profile_with_system_prompt("Agent profile prompt"),
-        );
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
             PhaseExecutionDefinition {
@@ -3241,19 +2825,13 @@ mod tests {
                 default_tool: None,
             },
         );
-        assert_eq!(
-            config.phase_system_prompt("custom-phase"),
-            Some("Agent profile prompt")
-        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
     }
 
     #[test]
     fn phase_system_prompt_ignores_empty_override() {
         let mut config = builtin_agent_runtime_config();
-        config.agents.insert(
-            "test-agent".to_string(),
-            make_agent_profile_with_system_prompt("Agent profile prompt"),
-        );
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
             PhaseExecutionDefinition {
@@ -3273,10 +2851,7 @@ mod tests {
                 default_tool: None,
             },
         );
-        assert_eq!(
-            config.phase_system_prompt("custom-phase"),
-            Some("Agent profile prompt")
-        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
     }
 
     #[test]
@@ -3289,10 +2864,7 @@ mod tests {
         }"#,
         )
         .expect("deserialize with system_prompt");
-        assert_eq!(
-            with_prompt.system_prompt.as_deref(),
-            Some("Custom prompt from JSON")
-        );
+        assert_eq!(with_prompt.system_prompt.as_deref(), Some("Custom prompt from JSON"));
 
         let without_prompt: PhaseExecutionDefinition = serde_json::from_str(
             r#"{
@@ -3325,10 +2897,8 @@ mod tests {
         let json = serde_json::to_string(&definition).expect("serialize");
         assert!(!json.contains("system_prompt"));
 
-        let with_prompt = PhaseExecutionDefinition {
-            system_prompt: Some("My custom prompt".to_string()),
-            ..definition
-        };
+        let with_prompt =
+            PhaseExecutionDefinition { system_prompt: Some("My custom prompt".to_string()), ..definition };
         let json = serde_json::to_string(&with_prompt).expect("serialize");
         assert!(json.contains("system_prompt"));
         assert!(json.contains("My custom prompt"));

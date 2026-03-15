@@ -1,7 +1,4 @@
-use crate::state_machines::{
-    builtin_compiled_state_machines, CompiledWorkflowMachine,
-    TransitionError,
-};
+use crate::state_machines::{builtin_compiled_state_machines, CompiledWorkflowMachine, TransitionError};
 use crate::types::{WorkflowMachineEvent, WorkflowMachineState};
 
 #[derive(Debug, Clone)]
@@ -23,27 +20,17 @@ impl WorkflowStateMachine {
         Self::with_definition(initial, compiled.workflow)
     }
 
-    pub fn with_definition(
-        initial: WorkflowMachineState,
-        definition: CompiledWorkflowMachine,
-    ) -> Self {
-        Self {
-            current: initial,
-            definition,
-        }
+    pub fn with_definition(initial: WorkflowMachineState, definition: CompiledWorkflowMachine) -> Self {
+        Self { current: initial, definition }
     }
 
     pub fn state(&self) -> WorkflowMachineState {
         self.current
     }
 
-    pub fn apply(
-        &mut self,
-        event: WorkflowMachineEvent,
-    ) -> Result<WorkflowMachineState, TransitionError> {
+    pub fn apply(&mut self, event: WorkflowMachineEvent) -> Result<WorkflowMachineState, TransitionError> {
         let outcome = self.definition.apply(self.current, event, |_| true)?;
         self.current = outcome.to;
         Ok(self.current)
     }
-
 }

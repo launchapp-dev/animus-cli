@@ -6,14 +6,10 @@ use crate::PhaseExecutionDefinition;
 
 use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
 use super::loading::load_workflow_config;
-use super::resolution::{
-    resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards,
-};
+use super::resolution::{resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards};
 use super::types::*;
 use super::validation::{validate_workflow_and_runtime_configs, validate_workflow_config};
-use super::yaml_compiler::{
-    compile_and_write_yaml_workflows, compile_yaml_workflow_files, merge_yaml_into_config,
-};
+use super::yaml_compiler::{compile_and_write_yaml_workflows, compile_yaml_workflow_files, merge_yaml_into_config};
 use super::yaml_parser::parse_yaml_workflow_config;
 
 #[test]
@@ -25,11 +21,7 @@ fn builtin_workflow_config_is_valid() {
 #[test]
 fn builtin_workflow_config_includes_planning_workflow_refs() {
     let config = builtin_workflow_config();
-    let workflow_ids = config
-        .workflows
-        .iter()
-        .map(|workflow| workflow.id.as_str())
-        .collect::<Vec<_>>();
+    let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
     assert!(workflow_ids.contains(&"builtin/vision-draft"));
     assert!(workflow_ids.contains(&"builtin/vision-refine"));
@@ -61,8 +53,7 @@ fn checkpoint_retention_requires_positive_keep_last_per_phase() {
     config.checkpoint_retention.keep_last_per_phase = 0;
     let err = validate_workflow_config(&config).expect_err("invalid retention should fail");
     assert!(
-        err.to_string()
-            .contains("checkpoint_retention.keep_last_per_phase"),
+        err.to_string().contains("checkpoint_retention.keep_last_per_phase"),
         "validation error should mention checkpoint retention"
     );
 }
@@ -70,11 +61,7 @@ fn checkpoint_retention_requires_positive_keep_last_per_phase() {
 #[test]
 fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
 
     let mut on_verdict = HashMap::new();
     on_verdict.insert(
@@ -93,8 +80,7 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
         skip_if: Vec::new(),
     });
 
-    let err = validate_workflow_config(&config)
-        .expect_err("on_verdict with nonexistent target should fail validation");
+    let err = validate_workflow_config(&config).expect_err("on_verdict with nonexistent target should fail validation");
     let message = err.to_string();
     assert!(
         message.contains("targets unknown phase 'nonexistent-phase'"),
@@ -106,11 +92,7 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
 #[test]
 fn validation_rejects_zero_max_rework_attempts() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
 
     standard_pipeline.phases[1] = WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
         id: "implementation".to_string(),
@@ -119,8 +101,7 @@ fn validation_rejects_zero_max_rework_attempts() {
         skip_if: Vec::new(),
     });
 
-    let err = validate_workflow_config(&config)
-        .expect_err("zero max_rework_attempts should fail validation");
+    let err = validate_workflow_config(&config).expect_err("zero max_rework_attempts should fail validation");
     let message = err.to_string();
     assert!(
         message.contains("max_rework_attempts must be greater than 0"),
@@ -183,8 +164,7 @@ fn resolve_workflow_rework_attempts_uses_defaults() {
 #[test]
 fn serde_deserializes_simple_string_phase() {
     let json = r#""requirements""#;
-    let entry: WorkflowPhaseEntry =
-        serde_json::from_str(json).expect("deserialize simple string");
+    let entry: WorkflowPhaseEntry = serde_json::from_str(json).expect("deserialize simple string");
     assert_eq!(entry.phase_id(), "requirements");
     assert!(entry.on_verdict().is_none());
 }
@@ -206,9 +186,7 @@ fn serde_deserializes_mixed_pipeline_phases() {
     assert_eq!(workflow.phases[0].phase_id(), "requirements");
     assert!(workflow.phases[0].on_verdict().is_none());
     assert_eq!(workflow.phases[1].phase_id(), "implementation");
-    let verdicts = workflow.phases[1]
-        .on_verdict()
-        .expect("should have verdicts");
+    let verdicts = workflow.phases[1].on_verdict().expect("should have verdicts");
     assert_eq!(verdicts["rework"].target, "requirements");
     assert_eq!(workflow.phases[2].phase_id(), "testing");
     assert!(workflow.phases[2].on_verdict().is_none());
@@ -249,8 +227,7 @@ fn pipeline_definition_deserializes_mixed_phase_entries() {
             "implementation"
         ]
     }"#;
-    let workflow: WorkflowDefinition =
-        serde_json::from_str(json).expect("parse mixed workflow");
+    let workflow: WorkflowDefinition = serde_json::from_str(json).expect("parse mixed workflow");
     assert_eq!(workflow.phases.len(), 3);
     assert_eq!(workflow.phases[0].phase_id(), "requirements");
     assert!(workflow.phases[0].skip_if().is_empty());
@@ -262,11 +239,7 @@ fn pipeline_definition_deserializes_mixed_phase_entries() {
 #[test]
 fn resolve_workflow_skip_guards_extracts_guards_from_config() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
     standard_pipeline.phases = vec![
         "requirements".to_string().into(),
         WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
@@ -280,10 +253,7 @@ fn resolve_workflow_skip_guards_extracts_guards_from_config() {
 
     let guards = resolve_workflow_skip_guards(&config, Some("standard"));
     assert_eq!(guards.len(), 1);
-    assert_eq!(
-        guards.get("testing").unwrap(),
-        &vec!["task_type == 'docs'".to_string()]
-    );
+    assert_eq!(guards.get("testing").unwrap(), &vec!["task_type == 'docs'".to_string()]);
 }
 
 #[test]
@@ -300,11 +270,7 @@ workflows:
       - testing
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse simple YAML");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
     assert_eq!(standard.name, "Standard Pipeline");
     assert_eq!(standard.phases.len(), 4);
     assert_eq!(standard.phases[0].phase_id(), "requirements");
@@ -328,11 +294,7 @@ workflows:
       - code-review
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with skip_if");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
     assert_eq!(standard.phases.len(), 4);
     assert_eq!(standard.phases[2].phase_id(), "testing");
     assert_eq!(standard.phases[2].skip_if(), &["task_type == 'docs'"]);
@@ -354,22 +316,11 @@ workflows:
       - testing
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with on_verdict");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
     assert_eq!(standard.phases[2].phase_id(), "code-review");
-    let verdicts = standard.phases[2]
-        .on_verdict()
-        .expect("should have on_verdict");
+    let verdicts = standard.phases[2].on_verdict().expect("should have on_verdict");
     assert_eq!(verdicts["rework"].target, "implementation");
-    assert_eq!(
-        standard.phases[2]
-            .max_rework_attempts()
-            .expect("has attempts"),
-        3
-    );
+    assert_eq!(standard.phases[2].max_rework_attempts().expect("has attempts"), 3);
 }
 
 #[test]
@@ -387,19 +338,9 @@ workflows:
               target: implementation
       - implementation
 "#;
-    let config = parse_yaml_workflow_config(yaml)
-        .expect("should parse YAML with custom max_rework_attempts");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
-    assert_eq!(
-        standard.phases[1]
-            .max_rework_attempts()
-            .expect("has attempts"),
-        1
-    );
+    let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with custom max_rework_attempts");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
+    assert_eq!(standard.phases[1].max_rework_attempts().expect("has attempts"), 1);
 }
 
 #[test]
@@ -420,11 +361,7 @@ workflows:
               target: implementation
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse mixed phases");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
     assert_eq!(standard.phases.len(), 4);
     assert_eq!(standard.phases[0].phase_id(), "requirements");
     assert!(standard.phases[0].on_verdict().is_none());
@@ -432,9 +369,7 @@ workflows:
     assert_eq!(standard.phases[2].phase_id(), "testing");
     assert_eq!(standard.phases[2].skip_if(), &["task_type == 'docs'"]);
     assert_eq!(standard.phases[3].phase_id(), "code-review");
-    let verdicts = standard.phases[3]
-        .on_verdict()
-        .expect("should have on_verdict");
+    let verdicts = standard.phases[3].on_verdict().expect("should have on_verdict");
     assert_eq!(verdicts["rework"].target, "implementation");
 }
 
@@ -457,19 +392,9 @@ workflows:
         cleanup_worktree: false
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with post_success");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("workflow_ref");
-    let post_success = standard
-        .post_success
-        .as_ref()
-        .expect("post_success should be present");
-    let merge = post_success
-        .merge
-        .as_ref()
-        .expect("merge config should be present");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("workflow_ref");
+    let post_success = standard.post_success.as_ref().expect("post_success should be present");
+    let merge = post_success.merge.as_ref().expect("merge config should be present");
     assert_eq!(merge.strategy, MergeStrategy::Rebase);
     assert_eq!(merge.target_branch, "release");
     assert!(merge.create_pr);
@@ -492,14 +417,9 @@ workflows:
         strategy: invalid
         target_branch: main
 "#;
-    let err = parse_yaml_workflow_config(yaml)
-        .expect_err("invalid merge strategy should fail parsing");
+    let err = parse_yaml_workflow_config(yaml).expect_err("invalid merge strategy should fail parsing");
     let message = err.to_string();
-    assert!(
-        message.contains("strategy must be one of"),
-        "error should mention supported strategies: {}",
-        message
-    );
+    assert!(message.contains("strategy must be one of"), "error should mention supported strategies: {}", message);
 }
 
 #[test]
@@ -516,17 +436,10 @@ workflows:
 "#;
     let yaml_config = parse_yaml_workflow_config(yaml).expect("parse yaml");
     let merged = merge_yaml_into_config(base.clone(), yaml_config);
-    let standard = merged
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = merged.workflows.iter().find(|p| p.id == "standard").expect("standard workflow");
     assert_eq!(standard.name, "Overridden Standard");
     assert_eq!(standard.phases.len(), 3);
-    assert!(
-        merged.workflows.iter().any(|p| p.id == "ui-ux-standard"),
-        "non-overridden workflow should be preserved"
-    );
+    assert!(merged.workflows.iter().any(|p| p.id == "ui-ux-standard"), "non-overridden workflow should be preserved");
 }
 
 #[test]
@@ -560,11 +473,7 @@ fn yaml_invalid_syntax_returns_error() {
     let result = parse_yaml_workflow_config(yaml);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("failed to parse YAML"),
-        "error should mention YAML parsing: {}",
-        err
-    );
+    assert!(err.contains("failed to parse YAML"), "error should mention YAML parsing: {}", err);
 }
 
 #[test]
@@ -577,11 +486,7 @@ workflows:
       - testing
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("parse");
-    let workflow = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "quick-fix")
-        .expect("workflow_ref");
+    let workflow = config.workflows.iter().find(|p| p.id == "quick-fix").expect("workflow_ref");
     assert_eq!(workflow.name, "quick-fix");
 }
 
@@ -591,11 +496,8 @@ fn yaml_compile_reads_from_directory() {
     let state_dir = temp.path().join(".ao").join("state");
     fs::create_dir_all(&state_dir).expect("create state dir");
     let builtin = builtin_workflow_config();
-    crate::domain_state::write_json_pretty(
-        &state_dir.join(WORKFLOW_CONFIG_FILE_NAME),
-        &builtin,
-    )
-    .expect("write base config");
+    crate::domain_state::write_json_pretty(&state_dir.join(WORKFLOW_CONFIG_FILE_NAME), &builtin)
+        .expect("write base config");
 
     let workflows_dir = temp.path().join(".ao").join("workflows");
     fs::create_dir_all(&workflows_dir).expect("create workflows dir");
@@ -616,11 +518,7 @@ workflows:
 
     let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
     let config = result.expect("should have config");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("standard workflow");
     assert_eq!(standard.name, "YAML Standard");
 }
 
@@ -646,11 +544,7 @@ workflows:
 
     let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
     let config = result.expect("should have config");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("standard workflow");
     assert_eq!(standard.name, "Single File Standard");
 }
 
@@ -660,11 +554,8 @@ fn yaml_compile_and_write_validates_and_writes() {
     let state_dir = temp.path().join(".ao").join("state");
     fs::create_dir_all(&state_dir).expect("create state dir");
     let builtin = builtin_workflow_config();
-    crate::domain_state::write_json_pretty(
-        &state_dir.join(WORKFLOW_CONFIG_FILE_NAME),
-        &builtin,
-    )
-    .expect("write base config");
+    crate::domain_state::write_json_pretty(&state_dir.join(WORKFLOW_CONFIG_FILE_NAME), &builtin)
+        .expect("write base config");
 
     let workflows_dir = temp.path().join(".ao").join("workflows");
     fs::create_dir_all(&workflows_dir).expect("create workflows dir");
@@ -683,17 +574,12 @@ workflows:
     )
     .expect("write yaml");
 
-    let result = compile_and_write_yaml_workflows(temp.path())
-        .expect("compile and write should succeed");
+    let result = compile_and_write_yaml_workflows(temp.path()).expect("compile and write should succeed");
     let compile_result = result.expect("should have result");
     assert_eq!(compile_result.source_files.len(), 1);
 
     let reloaded = load_workflow_config(temp.path()).expect("reload config");
-    let standard = reloaded
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = reloaded.workflows.iter().find(|p| p.id == "standard").expect("standard workflow");
     assert_eq!(standard.name, "Compiled Standard");
 }
 
@@ -713,19 +599,14 @@ fn expand_basic_sub_pipeline() {
     let workflows = vec![
         make_pipeline(
             "review-cycle",
-            vec![
-                WorkflowPhaseEntry::Simple("code-review".into()),
-                WorkflowPhaseEntry::Simple("testing".into()),
-            ],
+            vec![WorkflowPhaseEntry::Simple("code-review".into()), WorkflowPhaseEntry::Simple("testing".into())],
         ),
         make_pipeline(
             "standard",
             vec![
                 WorkflowPhaseEntry::Simple("requirements".into()),
                 WorkflowPhaseEntry::Simple("implementation".into()),
-                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: "review-cycle".into(),
-                }),
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() }),
                 WorkflowPhaseEntry::Simple("merge".into()),
             ],
         ),
@@ -733,31 +614,17 @@ fn expand_basic_sub_pipeline() {
 
     let expanded = expand_workflow_phases(&workflows, "standard").expect("should expand");
     let ids: Vec<&str> = expanded.iter().map(|e| e.phase_id()).collect();
-    assert_eq!(
-        ids,
-        vec![
-            "requirements",
-            "implementation",
-            "code-review",
-            "testing",
-            "merge"
-        ]
-    );
+    assert_eq!(ids, vec!["requirements", "implementation", "code-review", "testing", "merge"]);
 }
 
 #[test]
 fn expand_nested_sub_pipelines() {
     let workflows = vec![
-        make_pipeline(
-            "lint",
-            vec![WorkflowPhaseEntry::Simple("code-review".into())],
-        ),
+        make_pipeline("lint", vec![WorkflowPhaseEntry::Simple("code-review".into())]),
         make_pipeline(
             "review-cycle",
             vec![
-                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: "lint".into(),
-                }),
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "lint".into() }),
                 WorkflowPhaseEntry::Simple("testing".into()),
             ],
         ),
@@ -765,9 +632,7 @@ fn expand_nested_sub_pipelines() {
             "standard",
             vec![
                 WorkflowPhaseEntry::Simple("requirements".into()),
-                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: "review-cycle".into(),
-                }),
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() }),
             ],
         ),
     ];
@@ -780,18 +645,8 @@ fn expand_nested_sub_pipelines() {
 #[test]
 fn expand_detects_circular_reference() {
     let workflows = vec![
-        make_pipeline(
-            "a",
-            vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                workflow_ref: "b".into(),
-            })],
-        ),
-        make_pipeline(
-            "b",
-            vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                workflow_ref: "a".into(),
-            })],
-        ),
+        make_pipeline("a", vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "b".into() })]),
+        make_pipeline("b", vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "a".into() })]),
     ];
 
     let err = expand_workflow_phases(&workflows, "a").expect_err("should detect cycle");
@@ -806,13 +661,10 @@ fn expand_detects_circular_reference() {
 fn expand_detects_self_reference() {
     let workflows = vec![make_pipeline(
         "self-ref",
-        vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-            workflow_ref: "self-ref".into(),
-        })],
+        vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "self-ref".into() })],
     )];
 
-    let err =
-        expand_workflow_phases(&workflows, "self-ref").expect_err("should detect self-ref");
+    let err = expand_workflow_phases(&workflows, "self-ref").expect_err("should detect self-ref");
     assert!(
         err.to_string().contains("circular sub-workflow reference"),
         "error should mention circular reference: {}",
@@ -824,16 +676,12 @@ fn expand_detects_self_reference() {
 fn expand_errors_on_missing_pipeline_reference() {
     let workflows = vec![make_pipeline(
         "standard",
-        vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-            workflow_ref: "nonexistent".into(),
-        })],
+        vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "nonexistent".into() })],
     )];
 
-    let err = expand_workflow_phases(&workflows, "standard")
-        .expect_err("should error on missing ref");
+    let err = expand_workflow_phases(&workflows, "standard").expect_err("should error on missing ref");
     assert!(
-        err.to_string()
-            .contains("sub-workflow 'nonexistent' not found"),
+        err.to_string().contains("sub-workflow 'nonexistent' not found"),
         "error should mention missing workflow_ref: {}",
         err
     );
@@ -866,9 +714,7 @@ fn expand_preserves_rich_phase_config() {
             "standard",
             vec![
                 WorkflowPhaseEntry::Simple("implementation".into()),
-                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: "review".into(),
-                }),
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review".into() }),
             ],
         ),
     ];
@@ -884,17 +730,14 @@ fn expand_preserves_rich_phase_config() {
 #[test]
 fn serde_deserializes_sub_pipeline_ref() {
     let json = r#"{"workflow_ref": "review-cycle"}"#;
-    let entry: WorkflowPhaseEntry =
-        serde_json::from_str(json).expect("deserialize sub-workflow");
+    let entry: WorkflowPhaseEntry = serde_json::from_str(json).expect("deserialize sub-workflow");
     assert!(entry.is_sub_workflow());
     assert_eq!(entry.phase_id(), "review-cycle");
 }
 
 #[test]
 fn serde_round_trips_sub_pipeline_entry() {
-    let entry = WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-        workflow_ref: "review-cycle".into(),
-    });
+    let entry = WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() });
     let json = serde_json::to_string(&entry).expect("serialize");
     let deserialized: WorkflowPhaseEntry = serde_json::from_str(&json).expect("deserialize");
     assert!(deserialized.is_sub_workflow());
@@ -942,11 +785,7 @@ workflows:
       - merge
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with sub-workflow");
-    let standard = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "standard")
-        .expect("should have standard workflow");
+    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("should have standard workflow");
     assert_eq!(standard.phases.len(), 4);
     assert!(standard.phases[2].is_sub_workflow());
     assert_eq!(standard.phases[2].phase_id(), "review-cycle");
@@ -959,52 +798,32 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         id: "review-cycle".into(),
         name: "Review Cycle".into(),
         description: String::new(),
-        phases: vec![
-            WorkflowPhaseEntry::Simple("code-review".into()),
-            WorkflowPhaseEntry::Simple("testing".into()),
-        ],
+        phases: vec![WorkflowPhaseEntry::Simple("code-review".into()), WorkflowPhaseEntry::Simple("testing".into())],
         post_success: None,
         variables: Vec::new(),
     });
 
-    let standard = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
     standard.phases = vec![
         WorkflowPhaseEntry::Simple("requirements".into()),
         WorkflowPhaseEntry::Simple("implementation".into()),
-        WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-            workflow_ref: "review-cycle".into(),
-        }),
+        WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() }),
     ];
 
-    let phases =
-        resolve_workflow_phase_plan(&config, Some("standard")).expect("should resolve");
-    assert_eq!(
-        phases,
-        vec!["requirements", "implementation", "code-review", "testing"]
-    );
+    let phases = resolve_workflow_phase_plan(&config, Some("standard")).expect("should resolve");
+    assert_eq!(phases, vec!["requirements", "implementation", "code-review", "testing"]);
 }
 
 #[test]
 fn validate_rejects_missing_sub_pipeline_reference() {
     let mut config = builtin_workflow_config();
-    let standard = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
     standard.phases = vec![
         WorkflowPhaseEntry::Simple("requirements".into()),
-        WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-            workflow_ref: "nonexistent".into(),
-        }),
+        WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "nonexistent".into() }),
     ];
 
-    let err =
-        validate_workflow_config(&config).expect_err("should reject missing sub-workflow ref");
+    let err = validate_workflow_config(&config).expect_err("should reject missing sub-workflow ref");
     let message = err.to_string();
     assert!(
         message.contains("references unknown sub-workflow 'nonexistent'"),
@@ -1016,20 +835,12 @@ fn validate_rejects_missing_sub_pipeline_reference() {
 #[test]
 fn validate_rejects_empty_post_success_target_branch() {
     let mut config = builtin_workflow_config();
-    let standard = config
-        .workflows
-        .iter_mut()
-        .find(|p| p.id == "standard")
-        .expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
     standard.post_success = Some(PostSuccessConfig {
-        merge: Some(MergeConfig {
-            target_branch: "".to_string(),
-            ..MergeConfig::default()
-        }),
+        merge: Some(MergeConfig { target_branch: "".to_string(), ..MergeConfig::default() }),
     });
 
-    let err = validate_workflow_config(&config)
-        .expect_err("empty post_success target branch should be rejected");
+    let err = validate_workflow_config(&config).expect_err("empty post_success target branch should be rejected");
     let message = err.to_string();
     assert!(
         message.contains("post_success.merge.target_branch must not be empty"),
@@ -1046,9 +857,7 @@ fn validate_rejects_circular_sub_pipeline() {
             id: "standard".into(),
             name: "Standard".into(),
             description: String::new(),
-            phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                workflow_ref: "review".into(),
-            })],
+            phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review".into() })],
             post_success: None,
             variables: Vec::new(),
         },
@@ -1056,36 +865,24 @@ fn validate_rejects_circular_sub_pipeline() {
             id: "review".into(),
             name: "Review".into(),
             description: String::new(),
-            phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                workflow_ref: "standard".into(),
-            })],
+            phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "standard".into() })],
             post_success: None,
             variables: Vec::new(),
         },
     ];
 
-    let err =
-        validate_workflow_config(&config).expect_err("should reject circular sub-workflow");
+    let err = validate_workflow_config(&config).expect_err("should reject circular sub-workflow");
     let message = err.to_string();
-    assert!(
-        message.contains("sub-workflow expansion failed"),
-        "error should mention expansion failure: {}",
-        message
-    );
+    assert!(message.contains("sub-workflow expansion failed"), "error should mention expansion failure: {}", message);
 }
 
 #[test]
 fn expand_pipeline_not_found_at_top_level() {
-    let workflows = vec![make_pipeline(
-        "standard",
-        vec![WorkflowPhaseEntry::Simple("requirements".into())],
-    )];
+    let workflows = vec![make_pipeline("standard", vec![WorkflowPhaseEntry::Simple("requirements".into())])];
 
-    let err = expand_workflow_phases(&workflows, "nonexistent")
-        .expect_err("should error on missing workflow");
+    let err = expand_workflow_phases(&workflows, "nonexistent").expect_err("should error on missing workflow");
     assert!(
-        err.to_string()
-            .contains("sub-workflow 'nonexistent' not found"),
+        err.to_string().contains("sub-workflow 'nonexistent' not found"),
         "error should mention missing workflow_ref: {}",
         err
     );
@@ -1111,8 +908,7 @@ workflows:
       - build
       - testing
 "#;
-    let config =
-        parse_yaml_workflow_config(yaml).expect("should parse YAML with command phase");
+    let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with command phase");
     assert!(config.phase_definitions.contains_key("build"));
     let build = &config.phase_definitions["build"];
     assert_eq!(build.mode, PhaseExecutionMode::Command);
@@ -1149,10 +945,7 @@ workflows:
     let approval = &config.phase_definitions["approval"];
     assert_eq!(approval.mode, PhaseExecutionMode::Manual);
     let manual = approval.manual.as_ref().expect("should have manual");
-    assert_eq!(
-        manual.instructions,
-        "Review and approve the deployment plan"
-    );
+    assert_eq!(manual.instructions, "Review and approve the deployment plan");
     assert!(manual.approval_note_required);
     assert_eq!(manual.timeout_secs, Some(3600));
 }
@@ -1178,14 +971,10 @@ workflows:
       - implementation
       - testing
 "#;
-    let config =
-        parse_yaml_workflow_config(yaml).expect("should parse YAML with agent profile");
+    let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with agent profile");
     assert!(config.agent_profiles.contains_key("researcher"));
     let researcher = &config.agent_profiles["researcher"];
-    assert_eq!(
-        researcher.system_prompt,
-        "You are a research agent focused on code analysis"
-    );
+    assert_eq!(researcher.system_prompt, "You are a research agent focused on code analysis");
     assert_eq!(researcher.model.as_deref(), Some("gemini-3.1-pro-preview"));
     assert_eq!(researcher.web_search, Some(true));
     assert_eq!(researcher.skills, vec!["deep-search"]);
@@ -1290,37 +1079,21 @@ workflows:
       - implementation
       - testing
 "#;
-    let config =
-        parse_yaml_workflow_config(yaml).expect("should parse unified config sections");
-    let server = config
-        .mcp_servers
-        .get("mcp-go")
-        .expect("mcp server should be parsed");
+    let config = parse_yaml_workflow_config(yaml).expect("should parse unified config sections");
+    let server = config.mcp_servers.get("mcp-go").expect("mcp server should be parsed");
     assert_eq!(server.command, "node");
     assert_eq!(server.args, vec!["server.js"]);
     assert_eq!(server.transport.as_deref(), Some("stdio"));
     assert_eq!(server.tools, vec!["search", "shell"]);
-    let tool = config
-        .tools
-        .get("cli-gpt")
-        .expect("tool definition should be parsed");
+    let tool = config.tools.get("cli-gpt").expect("tool definition should be parsed");
     assert_eq!(tool.executable, "gpt-cli");
     assert!(tool.supports_mcp);
     assert_eq!(tool.context_window, Some(64000));
     assert_eq!(tool.base_args, vec!["--json"]);
-    let integrations = config
-        .integrations
-        .as_ref()
-        .expect("integrations should be parsed");
-    let task_integration = integrations
-        .tasks
-        .as_ref()
-        .expect("task integration should be parsed");
+    let integrations = config.integrations.as_ref().expect("integrations should be parsed");
+    let task_integration = integrations.tasks.as_ref().expect("task integration should be parsed");
     assert_eq!(task_integration.provider, "github");
-    let git_integration = integrations
-        .git
-        .as_ref()
-        .expect("git integration should be parsed");
+    let git_integration = integrations.git.as_ref().expect("git integration should be parsed");
     assert_eq!(git_integration.provider, "github");
     assert!(git_integration.auto_pr);
     assert!(!git_integration.auto_merge);
@@ -1328,15 +1101,9 @@ workflows:
     assert_eq!(config.schedules.len(), 1);
     assert_eq!(config.schedules[0].id, "nightly");
     assert_eq!(config.schedules[0].cron, "0 2 * * *");
-    assert_eq!(
-        config.schedules[0].workflow_ref.as_deref(),
-        Some("standard")
-    );
+    assert_eq!(config.schedules[0].workflow_ref.as_deref(), Some("standard"));
     assert!(config.schedules[0].enabled);
-    let daemon = config
-        .daemon
-        .as_ref()
-        .expect("daemon config should be parsed");
+    let daemon = config.daemon.as_ref().expect("daemon config should be parsed");
     assert_eq!(daemon.interval_secs, Some(300));
     assert_eq!(daemon.pool_size, Some(2));
     assert_eq!(daemon.active_hours.as_deref(), Some("00:00-06:00"));
@@ -1395,28 +1162,13 @@ integrations:
     let base = parse_yaml_workflow_config(base_yaml).expect("parse base");
     let overlay = parse_yaml_workflow_config(overlay_yaml).expect("parse overlay");
     let merged = merge_yaml_into_config(base, overlay);
-    let server = merged
-        .mcp_servers
-        .get("mcp-go")
-        .expect("mcp server should be merged");
+    let server = merged.mcp_servers.get("mcp-go").expect("mcp server should be merged");
     assert_eq!(server.command, "bun");
     assert_eq!(merged.schedules.len(), 2);
-    let nightly = merged
-        .schedules
-        .iter()
-        .find(|schedule| schedule.id == "nightly")
-        .expect("nightly should be merged");
+    let nightly = merged.schedules.iter().find(|schedule| schedule.id == "nightly").expect("nightly should be merged");
     assert_eq!(nightly.cron, "0 3 * * *");
     assert!(merged.integrations.is_some());
-    assert_eq!(
-        merged
-            .integrations
-            .unwrap()
-            .git
-            .as_ref()
-            .and_then(|git| git.base_branch.as_deref()),
-        Some("main")
-    );
+    assert_eq!(merged.integrations.unwrap().git.as_ref().and_then(|git| git.base_branch.as_deref()), Some("main"));
 }
 
 #[test]
@@ -1438,10 +1190,7 @@ workflows:
       - testing
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse MCP servers");
-    let server = config
-        .mcp_servers
-        .get("ao")
-        .expect("MCP server should be parsed");
+    let server = config.mcp_servers.get("ao").expect("MCP server should be parsed");
     assert_eq!(server.command, "node");
     assert_eq!(server.args, vec!["server.js"]);
     assert_eq!(server.tools, vec!["search"]);
@@ -1500,13 +1249,10 @@ workflows:
       - testing
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse");
-    let err =
-        validate_workflow_config(&config).expect_err("should reject missing MCP reference");
+    let err = validate_workflow_config(&config).expect_err("should reject missing MCP reference");
     let message = err.to_string();
     assert!(
-        message.contains(
-            "agent_profiles['researcher'].mcp_servers references unknown MCP server 'missing'"
-        ),
+        message.contains("agent_profiles['researcher'].mcp_servers references unknown MCP server 'missing'"),
         "error should mention unknown MCP server reference: {}",
         message
     );
@@ -1527,18 +1273,11 @@ workflows:
     phases:
       - requirements
 "#;
-    let config =
-        parse_yaml_workflow_config(yaml).expect("agent phases should parse from workflow YAML");
-    let research = config
-        .phase_definitions
-        .get("research")
-        .expect("research phase should be defined");
+    let config = parse_yaml_workflow_config(yaml).expect("agent phases should parse from workflow YAML");
+    let research = config.phase_definitions.get("research").expect("research phase should be defined");
     assert_eq!(research.mode, PhaseExecutionMode::Agent);
     assert_eq!(research.agent_id.as_deref(), Some("researcher"));
-    assert_eq!(
-        research.directive.as_deref(),
-        Some("Gather implementation evidence")
-    );
+    assert_eq!(research.directive.as_deref(), Some("Gather implementation evidence"));
 }
 
 #[test]
@@ -1554,14 +1293,9 @@ workflows:
     phases:
       - requirements
 "#;
-    let err = parse_yaml_workflow_config(yaml)
-        .expect_err("should reject command mode without command block");
+    let err = parse_yaml_workflow_config(yaml).expect_err("should reject command mode without command block");
     let message = format!("{:#}", err);
-    assert!(
-        message.contains("requires a command block"),
-        "error should mention missing command block: {}",
-        message
-    );
+    assert!(message.contains("requires a command block"), "error should mention missing command block: {}", message);
 }
 
 #[test]
@@ -1577,14 +1311,9 @@ workflows:
     phases:
       - requirements
 "#;
-    let err = parse_yaml_workflow_config(yaml)
-        .expect_err("should reject manual mode without manual block");
+    let err = parse_yaml_workflow_config(yaml).expect_err("should reject manual mode without manual block");
     let message = format!("{:#}", err);
-    assert!(
-        message.contains("requires a manual block"),
-        "error should mention missing manual block: {}",
-        message
-    );
+    assert!(message.contains("requires a manual block"), "error should mention missing manual block: {}", message);
 }
 
 #[test]
@@ -1673,11 +1402,7 @@ tools_allowlist:
     assert!(merged.tools_allowlist.contains(&"cargo".to_string()));
     assert!(merged.tools_allowlist.contains(&"npm".to_string()));
     assert!(merged.tools_allowlist.contains(&"python".to_string()));
-    let cargo_count = merged
-        .tools_allowlist
-        .iter()
-        .filter(|t| *t == "cargo")
-        .count();
+    let cargo_count = merged.tools_allowlist.iter().filter(|t| *t == "cargo").count();
     assert_eq!(cargo_count, 1, "cargo should appear only once after merge");
 }
 
@@ -1703,11 +1428,7 @@ workflows:
     let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
     let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
     let result = validate_workflow_and_runtime_configs(&config, &runtime);
-    assert!(
-        result.is_ok(),
-        "cross-validation should pass for workflow-defined phase: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "cross-validation should pass for workflow-defined phase: {:?}", result.err());
 }
 
 #[test]
@@ -1751,14 +1472,9 @@ fn validate_rejects_command_program_not_in_allowlist() {
             default_tool: None,
         },
     );
-    let err =
-        validate_workflow_config(&config).expect_err("should reject program not in allowlist");
+    let err = validate_workflow_config(&config).expect_err("should reject program not in allowlist");
     let message = err.to_string();
-    assert!(
-        message.contains("not in tools_allowlist"),
-        "error should mention allowlist: {}",
-        message
-    );
+    assert!(message.contains("not in tools_allowlist"), "error should mention allowlist: {}", message);
 }
 
 #[test]
@@ -1793,8 +1509,7 @@ fn validate_rejects_invalid_unified_sections() {
             env: BTreeMap::from([("".to_string(), "value".to_string())]),
         },
     );
-    let err =
-        validate_workflow_config(&config).expect_err("invalid unified config should fail");
+    let err = validate_workflow_config(&config).expect_err("invalid unified config should fail");
     let message = err.to_string();
     assert!(
         message.contains("schedules['nightly'] must define workflow_ref"),
@@ -1839,8 +1554,8 @@ fn validate_rejects_schedule_with_command() {
         input: None,
         enabled: true,
     });
-    let err = validate_workflow_config(&config)
-        .expect_err("schedules defining both workflow and command should be rejected");
+    let err =
+        validate_workflow_config(&config).expect_err("schedules defining both workflow and command should be rejected");
     let message = err.to_string();
     assert!(
         message.contains("command is no longer supported; use workflow_ref"),
@@ -1860,8 +1575,7 @@ fn validate_rejects_invalid_cron_expression() {
         input: None,
         enabled: true,
     });
-    let err = validate_workflow_config(&config)
-        .expect_err("schedules with malformed cron should fail validation");
+    let err = validate_workflow_config(&config).expect_err("schedules with malformed cron should fail validation");
     let message = err.to_string();
     assert!(
         message.contains("schedules['bad-cron'].cron is not valid"),
@@ -1974,10 +1688,7 @@ workflows:
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse");
     let phase = &config.phase_definitions["custom-build"];
-    assert_eq!(
-        phase.directive.as_deref(),
-        Some("Build with custom settings")
-    );
+    assert_eq!(phase.directive.as_deref(), Some("Build with custom settings"));
     let cmd = phase.command.as_ref().expect("command");
     assert_eq!(cmd.program, "make");
     assert_eq!(cmd.args, vec!["all", "-j4"]);
@@ -2010,8 +1721,7 @@ fn existing_configs_without_new_fields_deserialize() {
             "phases": ["requirements"]
         }]
     });
-    let config: WorkflowConfig =
-        serde_json::from_value(json).expect("should deserialize without new fields");
+    let config: WorkflowConfig = serde_json::from_value(json).expect("should deserialize without new fields");
     assert!(config.phase_definitions.is_empty());
     assert!(config.agent_profiles.is_empty());
     assert!(config.tools_allowlist.is_empty());
@@ -2027,38 +1737,14 @@ fn new_fields_skip_serializing_when_empty() {
     let config = builtin_workflow_config_base();
     let json = serde_json::to_value(&config).expect("serialize");
     let obj = json.as_object().expect("should be object");
-    assert!(
-        !obj.contains_key("phase_definitions"),
-        "empty phase_definitions should not be serialized"
-    );
-    assert!(
-        !obj.contains_key("agent_profiles"),
-        "empty agent_profiles should not be serialized"
-    );
-    assert!(
-        !obj.contains_key("tools_allowlist"),
-        "empty tools_allowlist should not be serialized"
-    );
-    assert!(
-        obj.contains_key("mcp_servers"),
-        "builtin mcp_servers should be serialized when present"
-    );
-    assert!(
-        !obj.contains_key("tools"),
-        "empty tools should not be serialized"
-    );
-    assert!(
-        !obj.contains_key("schedules"),
-        "empty schedules should not be serialized"
-    );
-    assert!(
-        !obj.contains_key("integrations"),
-        "empty integrations should not be serialized"
-    );
-    assert!(
-        !obj.contains_key("daemon"),
-        "empty daemon should not be serialized"
-    );
+    assert!(!obj.contains_key("phase_definitions"), "empty phase_definitions should not be serialized");
+    assert!(!obj.contains_key("agent_profiles"), "empty agent_profiles should not be serialized");
+    assert!(!obj.contains_key("tools_allowlist"), "empty tools_allowlist should not be serialized");
+    assert!(obj.contains_key("mcp_servers"), "builtin mcp_servers should be serialized when present");
+    assert!(!obj.contains_key("tools"), "empty tools should not be serialized");
+    assert!(!obj.contains_key("schedules"), "empty schedules should not be serialized");
+    assert!(!obj.contains_key("integrations"), "empty integrations should not be serialized");
+    assert!(!obj.contains_key("daemon"), "empty daemon should not be serialized");
 }
 
 #[test]
@@ -2077,17 +1763,10 @@ workflows:
       - implementation
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
-    let workflow = config
-        .workflows
-        .iter()
-        .find(|p| p.id == "docs")
-        .expect("docs workflow");
+    let workflow = config.workflows.iter().find(|p| p.id == "docs").expect("docs workflow");
     assert_eq!(workflow.variables.len(), 2);
     assert_eq!(workflow.variables[0].name, "AUDIENCE");
-    assert_eq!(
-        workflow.variables[0].description.as_deref(),
-        Some("Target audience")
-    );
+    assert_eq!(workflow.variables[0].description.as_deref(), Some("Target audience"));
     assert!(workflow.variables[0].required);
     assert!(workflow.variables[0].default.is_none());
     assert_eq!(workflow.variables[1].name, "FORMAT");
@@ -2127,37 +1806,21 @@ fn pipeline_variables_empty_when_omitted() {
 
 #[test]
 fn resolve_variables_required_without_default_errors() {
-    let definitions = vec![WorkflowVariable {
-        name: "REQUIRED_VAR".to_string(),
-        description: None,
-        required: true,
-        default: None,
-    }];
+    let definitions =
+        vec![WorkflowVariable { name: "REQUIRED_VAR".to_string(), description: None, required: true, default: None }];
     let cli_vars = HashMap::new();
-    let err = resolve_workflow_variables(&definitions, &cli_vars)
-        .expect_err("should error on missing required var");
+    let err = resolve_workflow_variables(&definitions, &cli_vars).expect_err("should error on missing required var");
     assert!(err.to_string().contains("REQUIRED_VAR"));
 }
 
 #[test]
 fn resolve_variables_required_multiple_missing() {
     let definitions = vec![
-        WorkflowVariable {
-            name: "VAR_B".to_string(),
-            description: None,
-            required: true,
-            default: None,
-        },
-        WorkflowVariable {
-            name: "VAR_A".to_string(),
-            description: None,
-            required: true,
-            default: None,
-        },
+        WorkflowVariable { name: "VAR_B".to_string(), description: None, required: true, default: None },
+        WorkflowVariable { name: "VAR_A".to_string(), description: None, required: true, default: None },
     ];
     let cli_vars = HashMap::new();
-    let err = resolve_workflow_variables(&definitions, &cli_vars)
-        .expect_err("should error on missing required vars");
+    let err = resolve_workflow_variables(&definitions, &cli_vars).expect_err("should error on missing required vars");
     let msg = err.to_string();
     assert!(msg.contains("VAR_A"));
     assert!(msg.contains("VAR_B"));
@@ -2192,12 +1855,8 @@ fn resolve_variables_cli_overrides_default() {
 
 #[test]
 fn resolve_variables_optional_without_default_omitted() {
-    let definitions = vec![WorkflowVariable {
-        name: "OPTIONAL".to_string(),
-        description: None,
-        required: false,
-        default: None,
-    }];
+    let definitions =
+        vec![WorkflowVariable { name: "OPTIONAL".to_string(), description: None, required: false, default: None }];
     let cli_vars = HashMap::new();
     let resolved = resolve_workflow_variables(&definitions, &cli_vars).expect("should resolve");
     assert!(!resolved.contains_key("OPTIONAL"));
@@ -2205,12 +1864,8 @@ fn resolve_variables_optional_without_default_omitted() {
 
 #[test]
 fn resolve_variables_unknown_cli_vars_ignored() {
-    let definitions = vec![WorkflowVariable {
-        name: "KNOWN".to_string(),
-        description: None,
-        required: true,
-        default: None,
-    }];
+    let definitions =
+        vec![WorkflowVariable { name: "KNOWN".to_string(), description: None, required: true, default: None }];
     let mut cli_vars = HashMap::new();
     cli_vars.insert("KNOWN".to_string(), "value".to_string());
     cli_vars.insert("UNKNOWN".to_string(), "extra".to_string());
@@ -2256,32 +1911,18 @@ fn pipeline_variables_not_serialized_when_empty() {
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
-    assert!(
-        !obj.contains_key("variables"),
-        "empty variables should not be serialized"
-    );
+    assert!(!obj.contains_key("variables"), "empty variables should not be serialized");
 }
 
 #[test]
 fn repo_custom_yaml_parses_requirement_task_generation_workflows() {
-    let yaml = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../.ao/workflows/custom.yaml"
-    ));
+    let yaml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.ao/workflows/custom.yaml"));
 
     let config = parse_yaml_workflow_config(yaml).expect("custom workflow yaml should parse");
-    let workflow_ids = config
-        .workflows
-        .iter()
-        .map(|workflow| workflow.id.as_str())
-        .collect::<Vec<_>>();
+    let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
     assert!(workflow_ids.contains(&"requirement-task-generation"));
     assert!(workflow_ids.contains(&"requirement-task-generation-run"));
-    assert!(config
-        .phase_catalog
-        .contains_key("requirement-task-generation"));
-    assert!(config
-        .phase_catalog
-        .contains_key("requirement-workflow-bootstrap"));
+    assert!(config.phase_catalog.contains_key("requirement-task-generation"));
+    assert!(config.phase_catalog.contains_key("requirement-workflow-bootstrap"));
 }

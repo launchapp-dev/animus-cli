@@ -11,11 +11,7 @@ use crate::services::tui::task_snapshot::STATUS_CYCLE;
 pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
     let root = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(5),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(5)])
         .split(frame.area());
 
     let selected = app
@@ -31,11 +27,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-        ])
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(40), Constraint::Percentage(30)])
         .split(root[1]);
 
     let models_focused = app.focus == FocusPane::Models;
@@ -44,72 +36,39 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
         .iter()
         .enumerate()
         .map(|(index, profile)| {
-            let marker = if index == app.selected_profile_idx {
-                ">"
-            } else {
-                " "
-            };
-            let detail = profile
-                .details
-                .as_deref()
-                .map(|value| format!(" ({value})"))
-                .unwrap_or_default();
+            let marker = if index == app.selected_profile_idx { ">" } else { " " };
+            let detail = profile.details.as_deref().map(|value| format!(" ({value})")).unwrap_or_default();
             ListItem::new(format!("{marker} {}{detail}", profile.label()))
         })
         .collect();
-    let models_title = if models_focused {
-        "Models [FOCUS] (j/k)"
-    } else {
-        "Models (Tab to focus)"
-    };
+    let models_title = if models_focused { "Models [FOCUS] (j/k)" } else { "Models (Tab to focus)" };
     let model_list = List::new(model_items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(models_title)
-            .border_style(if models_focused {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default()
-            }),
+        Block::default().borders(Borders::ALL).title(models_title).border_style(if models_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        }),
     );
     frame.render_widget(model_list, body[0]);
 
-    let output_lines = app
-        .history_lines(120)
-        .into_iter()
-        .map(ListItem::new)
-        .collect::<Vec<_>>();
-    let output_list =
-        List::new(output_lines).block(Block::default().borders(Borders::ALL).title("Agent Output"));
+    let output_lines = app.history_lines(120).into_iter().map(ListItem::new).collect::<Vec<_>>();
+    let output_list = List::new(output_lines).block(Block::default().borders(Borders::ALL).title("Agent Output"));
     frame.render_widget(output_list, body[1]);
 
     let tasks_focused = app.focus == FocusPane::Tasks;
-    let task_items: Vec<ListItem<'_>> = app
-        .tasks
-        .iter()
-        .map(|task| ListItem::new(task.label()))
-        .collect();
+    let task_items: Vec<ListItem<'_>> = app.tasks.iter().map(|task| ListItem::new(task.label())).collect();
     let tasks_title = if tasks_focused {
         "Tasks [FOCUS] (j/k s=status a=assign c=create d=delete Enter=detail)"
     } else {
         "Tasks (Tab to focus)"
     };
     let task_list = List::new(task_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(tasks_title)
-                .border_style(if tasks_focused {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                }),
-        )
-        .highlight_style(
+        .block(Block::default().borders(Borders::ALL).title(tasks_title).border_style(if tasks_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
             Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
+        }))
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .highlight_symbol("» ");
 
     let mut task_list_state = ListState::default();
@@ -142,12 +101,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &AppState) {
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    }
+    Rect { x, y, width: width.min(area.width), height: height.min(area.height) }
 }
 
 fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
@@ -158,11 +112,7 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
             if let Some(task) = app.selected_task() {
                 let area = centered_rect(70, 14, frame.area());
                 frame.render_widget(Clear, area);
-                let assignee_display = if task.assignee_label.is_empty() {
-                    "unassigned"
-                } else {
-                    &task.assignee_label
-                };
+                let assignee_display = if task.assignee_label.is_empty() { "unassigned" } else { &task.assignee_label };
                 let text = format!(
                     "ID:       {}\nStatus:   {}\nAssignee: {}\n\n{}",
                     task.id,
@@ -186,8 +136,7 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                     height: 1,
                 };
                 frame.render_widget(
-                    Paragraph::new(" Esc/Enter/q = close ")
-                        .style(Style::default().fg(Color::DarkGray)),
+                    Paragraph::new(" Esc/Enter/q = close ").style(Style::default().fg(Color::DarkGray)),
                     hint_area,
                 );
             }
@@ -204,11 +153,8 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                     .map(|(i, s)| {
                         let lbl = s.to_string();
                         if i == *selected {
-                            ListItem::new(format!("» {lbl}")).style(
-                                Style::default()
-                                    .fg(Color::Yellow)
-                                    .add_modifier(Modifier::BOLD),
-                            )
+                            ListItem::new(format!("» {lbl}"))
+                                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
                         } else {
                             ListItem::new(format!("  {lbl}"))
                         }
@@ -228,8 +174,7 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                     height: 1,
                 };
                 frame.render_widget(
-                    Paragraph::new(" j/k=nav  Enter=apply  Esc=cancel ")
-                        .style(Style::default().fg(Color::DarkGray)),
+                    Paragraph::new(" j/k=nav  Enter=apply  Esc=cancel ").style(Style::default().fg(Color::DarkGray)),
                     hint_area,
                 );
             }
@@ -255,48 +200,22 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                     height: 1,
                 };
                 frame.render_widget(
-                    Paragraph::new(" Enter=confirm  Esc=cancel ")
-                        .style(Style::default().fg(Color::DarkGray)),
+                    Paragraph::new(" Enter=confirm  Esc=cancel ").style(Style::default().fg(Color::DarkGray)),
                     hint_area,
                 );
             }
         }
 
-        ModalState::CreateTask {
-            title_input,
-            description_input,
-            focused_field,
-        } => {
+        ModalState::CreateTask { title_input, description_input, focused_field } => {
             let area = centered_rect(60, 7, frame.area());
             frame.render_widget(Clear, area);
-            let title_cursor = if *focused_field == CreateTaskField::Title {
-                "_"
-            } else {
-                ""
-            };
-            let desc_cursor = if *focused_field == CreateTaskField::Description {
-                "_"
-            } else {
-                ""
-            };
-            let title_focus_marker = if *focused_field == CreateTaskField::Title {
-                " [*]"
-            } else {
-                ""
-            };
-            let desc_focus_marker = if *focused_field == CreateTaskField::Description {
-                " [*]"
-            } else {
-                ""
-            };
+            let title_cursor = if *focused_field == CreateTaskField::Title { "_" } else { "" };
+            let desc_cursor = if *focused_field == CreateTaskField::Description { "_" } else { "" };
+            let title_focus_marker = if *focused_field == CreateTaskField::Title { " [*]" } else { "" };
+            let desc_focus_marker = if *focused_field == CreateTaskField::Description { " [*]" } else { "" };
             let modal = Paragraph::new(format!(
                 "Title{}:       {}{}\nDescription{}: {}{}",
-                title_focus_marker,
-                title_input,
-                title_cursor,
-                desc_focus_marker,
-                description_input,
-                desc_cursor,
+                title_focus_marker, title_input, title_cursor, desc_focus_marker, description_input, desc_cursor,
             ))
             .block(
                 Block::default()
@@ -324,21 +243,9 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                 let area = centered_rect(50, 5, frame.area());
                 frame.render_widget(Clear, area);
                 let (text, border_color) = if *confirm {
-                    (
-                        format!(
-                            "Delete task {}?\nPress y/Enter to confirm, n/q to cancel",
-                            task.id
-                        ),
-                        Color::Red,
-                    )
+                    (format!("Delete task {}?\nPress y/Enter to confirm, n/q to cancel", task.id), Color::Red)
                 } else {
-                    (
-                        format!(
-                            "Delete task {}?\nPress y/Enter to confirm, n/q to cancel",
-                            task.id
-                        ),
-                        Color::Yellow,
-                    )
+                    (format!("Delete task {}?\nPress y/Enter to confirm, n/q to cancel", task.id), Color::Yellow)
                 };
                 let modal = Paragraph::new(text)
                     .block(
@@ -356,8 +263,7 @@ fn render_modal(frame: &mut Frame<'_>, app: &AppState) {
                     height: 1,
                 };
                 frame.render_widget(
-                    Paragraph::new(" y/Enter=confirm  n/q=cancel ")
-                        .style(Style::default().fg(Color::DarkGray)),
+                    Paragraph::new(" y/Enter=confirm  n/q=cancel ").style(Style::default().fg(Color::DarkGray)),
                     hint_area,
                 );
             }

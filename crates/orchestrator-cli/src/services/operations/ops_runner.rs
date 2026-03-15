@@ -42,9 +42,7 @@ async fn query_runner_status_direct(project_root: &str) -> Option<RunnerStatusRe
     let config_dir = runner_config_dir(Path::new(project_root));
     let stream = connect_runner(&config_dir).await.ok()?;
     let (read_half, mut write_half) = tokio::io::split(stream);
-    write_json_line(&mut write_half, &RunnerStatusRequest::default())
-        .await
-        .ok()?;
+    write_json_line(&mut write_half, &RunnerStatusRequest::default()).await.ok()?;
     let mut lines = BufReader::new(read_half).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim();
@@ -83,18 +81,17 @@ pub(crate) async fn handle_runner(
                 let orphans: Vec<_> = tracker
                     .processes
                     .into_iter()
-                    .filter_map(|(run_id, pid)| {
-                        if process_exists(pid) {
-                            Some(RunnerOrphanCli { run_id, pid })
-                        } else {
-                            None
-                        }
-                    })
+                    .filter_map(
+                        |(run_id, pid)| {
+                            if process_exists(pid) {
+                                Some(RunnerOrphanCli { run_id, pid })
+                            } else {
+                                None
+                            }
+                        },
+                    )
                     .collect();
-                let detection = RunnerOrphanDetectionCli {
-                    count: orphans.len(),
-                    orphans,
-                };
+                let detection = RunnerOrphanDetectionCli { count: orphans.len(), orphans };
                 print_value(detection, json)
             }
             RunnerOrphanCommand::Cleanup(args) => {
@@ -121,18 +118,11 @@ pub(crate) async fn handle_runner(
             if path.exists() {
                 let content = fs::read_to_string(path)?;
                 for line in content.lines() {
-                    let Ok(record) =
-                        serde_json::from_str::<crate::services::runtime::DaemonEventRecord>(line)
-                    else {
+                    let Ok(record) = serde_json::from_str::<crate::services::runtime::DaemonEventRecord>(line) else {
                         continue;
                     };
                     if record.event_type == "status" {
-                        match record
-                            .data
-                            .get("status")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("")
-                        {
+                        match record.data.get("status").and_then(|value| value.as_str()).unwrap_or("") {
                             "running" => starts = starts.saturating_add(1),
                             "stopped" => stops = stops.saturating_add(1),
                             "crashed" => crashes = crashes.saturating_add(1),

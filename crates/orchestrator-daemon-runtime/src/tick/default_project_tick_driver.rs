@@ -3,16 +3,15 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    project_schedule_dispatch_attempt, services::ServiceHub, DaemonStatus, DaemonTickMetrics,
-    FileServiceHub, OrchestratorTask,
+    project_schedule_dispatch_attempt, services::ServiceHub, DaemonStatus, DaemonTickMetrics, FileServiceHub,
+    OrchestratorTask,
 };
 use serde_json::Value;
 
 use crate::{
-    CompletedProcess, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart,
-    DispatchWorkflowStartSummary, ProcessManager, ProjectTickHooks, ProjectTickSnapshot,
-    ProjectTickSummary, ProjectTickSummaryInput, ScheduleDispatch, TaskStateChangeEvent,
-    TickSummaryBuilder,
+    CompletedProcess, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart, DispatchWorkflowStartSummary,
+    ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
+    ScheduleDispatch, TaskStateChangeEvent, TickSummaryBuilder,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -30,12 +29,7 @@ pub trait DefaultProjectTickServices {
         }
         let daemon_health = daemon.health().await.ok();
 
-        Ok(ProjectTickSnapshot {
-            requirements_before,
-            tasks_before,
-            started_daemon,
-            daemon_health,
-        })
+        Ok(ProjectTickSnapshot { requirements_before, tasks_before, started_daemon, daemon_health })
     }
 
     async fn reconcile_completed_processes(
@@ -45,11 +39,7 @@ pub trait DefaultProjectTickServices {
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<(usize, usize)>;
 
-    async fn reconcile_manual_timeouts(
-        &mut self,
-        _hub: Arc<dyn ServiceHub>,
-        _root: &str,
-    ) -> Result<usize> {
+    async fn reconcile_manual_timeouts(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
         Ok(0)
     }
 
@@ -73,11 +63,8 @@ pub trait DefaultProjectTickServices {
         input: ProjectTickSummaryInput,
     ) -> Result<ProjectTickSummary> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        let task_state_changes = collect_task_state_changes(
-            &input.tasks_before,
-            &hub.tasks().list().await?,
-            &input.ready_started_workflows,
-        );
+        let task_state_changes =
+            collect_task_state_changes(&input.tasks_before, &hub.tasks().list().await?, &input.ready_started_workflows);
         let metrics = DaemonTickMetrics::collect(hub, args.stale_threshold_hours).await?;
         let mut summary = TickSummaryBuilder::build(args, input, metrics)?;
         summary.task_state_changes = task_state_changes;
@@ -102,19 +89,12 @@ fn collect_task_state_changes(
     tasks_after: &[OrchestratorTask],
     started_workflows: &[DispatchWorkflowStart],
 ) -> Vec<TaskStateChangeEvent> {
-    let before_by_id: std::collections::HashMap<&str, &OrchestratorTask> = tasks_before
+    let before_by_id: std::collections::HashMap<&str, &OrchestratorTask> =
+        tasks_before.iter().map(|task| (task.id.as_str(), task)).collect();
+    let selection_by_task_id: std::collections::HashMap<&str, crate::DispatchSelectionSource> = started_workflows
         .iter()
-        .map(|task| (task.id.as_str(), task))
+        .filter_map(|started| started.task_id().map(|task_id| (task_id, started.selection_source)))
         .collect();
-    let selection_by_task_id: std::collections::HashMap<&str, crate::DispatchSelectionSource> =
-        started_workflows
-            .iter()
-            .filter_map(|started| {
-                started
-                    .task_id()
-                    .map(|task_id| (task_id, started.selection_source))
-            })
-            .collect();
 
     tasks_after
         .iter()
@@ -144,10 +124,7 @@ pub fn default_slim_project_tick_driver<'a, S>(
 where
     S: DefaultProjectTickServices,
 {
-    DefaultSlimProjectTickHooks {
-        services,
-        process_manager,
-    }
+    DefaultSlimProjectTickHooks { services, process_manager }
 }
 
 pub struct DefaultSlimProjectTickHooks<'a, S> {
@@ -167,36 +144,27 @@ where
     S: DefaultProjectTickServices,
 {
     fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>) {
-        let outcomes =
-            ScheduleDispatch::process_due_schedules(root, now, |schedule_id, dispatch| match self
-                .process_manager
-                .spawn_workflow_runner(dispatch, root)
-            {
+        let outcomes = ScheduleDispatch::process_due_schedules(root, now, |schedule_id, dispatch| {
+            match self.process_manager.spawn_workflow_runner(dispatch, root) {
                 Ok(()) => {
-                    self.services
-                        .dispatch_notice(DispatchNotice::ScheduleDispatched {
-                            schedule_id: schedule_id.to_string(),
-                            dispatch: dispatch.clone(),
-                        });
+                    self.services.dispatch_notice(DispatchNotice::ScheduleDispatched {
+                        schedule_id: schedule_id.to_string(),
+                        dispatch: dispatch.clone(),
+                    });
                     Ok(())
                 }
                 Err(error) => {
-                    self.services
-                        .dispatch_notice(DispatchNotice::ScheduleDispatchFailed {
-                            schedule_id: schedule_id.to_string(),
-                            dispatch: dispatch.clone(),
-                            error: error.to_string(),
-                        });
+                    self.services.dispatch_notice(DispatchNotice::ScheduleDispatchFailed {
+                        schedule_id: schedule_id.to_string(),
+                        dispatch: dispatch.clone(),
+                        error: error.to_string(),
+                    });
                     Err(error)
                 }
-            });
+            }
+        });
         for outcome in outcomes {
-            self.services.record_schedule_dispatch_attempt(
-                root,
-                &outcome.schedule_id,
-                now,
-                &outcome.status,
-            );
+            self.services.record_schedule_dispatch_attempt(root, &outcome.schedule_id, now, &outcome.status);
         }
     }
 
@@ -207,9 +175,7 @@ where
     async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)> {
         let completed_processes = self.process_manager.check_running().await;
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        self.services
-            .reconcile_completed_processes(hub, root, completed_processes)
-            .await
+        self.services.reconcile_completed_processes(hub, root, completed_processes).await
     }
 
     async fn reconcile_manual_timeouts(&mut self, root: &str) -> Result<usize> {
@@ -217,15 +183,9 @@ where
         self.services.reconcile_manual_timeouts(hub, root).await
     }
 
-    async fn dispatch_ready_tasks(
-        &mut self,
-        root: &str,
-        limit: usize,
-    ) -> Result<DispatchWorkflowStartSummary> {
+    async fn dispatch_ready_tasks(&mut self, root: &str, limit: usize) -> Result<DispatchWorkflowStartSummary> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        self.services
-            .dispatch_ready_tasks(hub, root, limit, Some(self.process_manager))
-            .await
+        self.services.dispatch_ready_tasks(hub, root, limit, Some(self.process_manager)).await
     }
 
     async fn collect_health(&mut self, root: &str) -> Result<Value> {

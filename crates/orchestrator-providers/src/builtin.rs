@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use protocol::orchestrator::{
-    DependencyType, OrchestratorTask, RequirementItem, RequirementsDraftInput,
-    RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, TaskCreateInput, TaskFilter, TaskStatistics, TaskStatus,
-    TaskUpdateInput, WorkflowSubject,
+    DependencyType, OrchestratorTask, RequirementItem, RequirementsDraftInput, RequirementsDraftResult,
+    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, TaskCreateInput, TaskFilter,
+    TaskStatistics, TaskStatus, TaskUpdateInput, WorkflowSubject,
 };
 
 use crate::{
-    PlanningServiceApi, ProjectAdapter, RequirementsProvider, SubjectContext, SubjectResolver,
-    TaskProvider, TaskServiceApi,
+    PlanningServiceApi, ProjectAdapter, RequirementsProvider, SubjectContext, SubjectResolver, TaskProvider,
+    TaskServiceApi,
 };
 
 #[derive(Clone)]
@@ -78,24 +77,12 @@ where
         self.hub.assign(id, assignee).await
     }
 
-    async fn set_status(
-        &self,
-        id: &str,
-        status: TaskStatus,
-        validate: bool,
-    ) -> Result<OrchestratorTask> {
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask> {
         self.hub.set_status(id, status, validate).await
     }
 
-    async fn add_checklist_item(
-        &self,
-        id: &str,
-        description: String,
-        updated_by: String,
-    ) -> Result<OrchestratorTask> {
-        self.hub
-            .add_checklist_item(id, description, updated_by)
-            .await
+    async fn add_checklist_item(&self, id: &str, description: String, updated_by: String) -> Result<OrchestratorTask> {
+        self.hub.add_checklist_item(id, description, updated_by).await
     }
 
     async fn update_checklist_item(
@@ -105,9 +92,7 @@ where
         completed: bool,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        self.hub
-            .update_checklist_item(id, item_id, completed, updated_by)
-            .await
+        self.hub.update_checklist_item(id, item_id, completed, updated_by).await
     }
 
     async fn add_dependency(
@@ -117,20 +102,11 @@ where
         dependency_type: DependencyType,
         updated_by: String,
     ) -> Result<OrchestratorTask> {
-        self.hub
-            .add_dependency(id, dependency_id, dependency_type, updated_by)
-            .await
+        self.hub.add_dependency(id, dependency_id, dependency_type, updated_by).await
     }
 
-    async fn remove_dependency(
-        &self,
-        id: &str,
-        dependency_id: &str,
-        updated_by: String,
-    ) -> Result<OrchestratorTask> {
-        self.hub
-            .remove_dependency(id, dependency_id, updated_by)
-            .await
+    async fn remove_dependency(&self, id: &str, dependency_id: &str, updated_by: String) -> Result<OrchestratorTask> {
+        self.hub.remove_dependency(id, dependency_id, updated_by).await
     }
 }
 
@@ -153,10 +129,7 @@ impl<T> RequirementsProvider for BuiltinRequirementsProvider<T>
 where
     T: PlanningServiceApi,
 {
-    async fn draft_requirements(
-        &self,
-        input: RequirementsDraftInput,
-    ) -> Result<RequirementsDraftResult> {
+    async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         self.hub.draft_requirements(input).await
     }
 
@@ -168,10 +141,7 @@ where
         self.hub.get_requirement(id).await
     }
 
-    async fn refine_requirements(
-        &self,
-        input: RequirementsRefineInput,
-    ) -> Result<Vec<RequirementItem>> {
+    async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>> {
         self.hub.refine_requirements(input).await
     }
 
@@ -183,10 +153,7 @@ where
         self.hub.delete_requirement(id).await
     }
 
-    async fn execute_requirements(
-        &self,
-        input: RequirementsExecutionInput,
-    ) -> Result<RequirementsExecutionResult> {
+    async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult> {
         self.hub.execute_requirements(input).await
     }
 }
@@ -258,11 +225,7 @@ impl<T> ProjectAdapter for BuiltinProjectAdapter<T>
 where
     T: TaskServiceApi + Send + Sync,
 {
-    async fn ensure_execution_cwd(
-        &self,
-        project_root: &str,
-        task: Option<&OrchestratorTask>,
-    ) -> Result<String> {
+    async fn ensure_execution_cwd(&self, project_root: &str, task: Option<&OrchestratorTask>) -> Result<String> {
         let Some(task) = task else {
             return Ok(project_root.to_string());
         };
@@ -279,11 +242,7 @@ where
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| default_task_branch_name(&task.id));
 
-        if let Some(existing_path_raw) = task
-            .worktree_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        if let Some(existing_path_raw) = task.worktree_path.as_deref().map(str::trim).filter(|value| !value.is_empty())
         {
             let existing_path = PathBuf::from(existing_path_raw);
             if existing_path.exists() {
@@ -331,12 +290,7 @@ where
             ProcessCommand::new("git")
                 .arg("-C")
                 .arg(project_root)
-                .args([
-                    "worktree",
-                    "add",
-                    worktree_path_str.as_str(),
-                    branch_name.as_str(),
-                ])
+                .args(["worktree", "add", worktree_path_str.as_str(), branch_name.as_str()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -352,14 +306,7 @@ where
             ProcessCommand::new("git")
                 .arg("-C")
                 .arg(project_root)
-                .args([
-                    "worktree",
-                    "add",
-                    "-b",
-                    branch_name.as_str(),
-                    worktree_path_str.as_str(),
-                    base_ref.as_str(),
-                ])
+                .args(["worktree", "add", "-b", branch_name.as_str(), worktree_path_str.as_str(), base_ref.as_str()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -419,14 +366,11 @@ fn ensure_repo_worktree_root(project_root: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(&repo_root)?;
     std::fs::create_dir_all(&root)?;
 
-    let canonical = Path::new(project_root)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(project_root));
+    let canonical = Path::new(project_root).canonicalize().unwrap_or_else(|_| PathBuf::from(project_root));
     let marker_path = repo_root.join(".project-root");
     let marker_content = format!("{}\n", canonical.to_string_lossy());
-    let should_write_marker = std::fs::read_to_string(&marker_path)
-        .map(|existing| existing != marker_content)
-        .unwrap_or(true);
+    let should_write_marker =
+        std::fs::read_to_string(&marker_path).map(|existing| existing != marker_content).unwrap_or(true);
     if should_write_marker {
         std::fs::write(&marker_path, marker_content)?;
     }
@@ -443,10 +387,7 @@ fn ensure_repo_worktree_root(project_root: &str) -> Result<PathBuf> {
 }
 
 fn default_task_worktree_path(project_root: &str, task_id: &str) -> Result<PathBuf> {
-    Ok(repo_worktrees_root(project_root)?.join(format!(
-        "task-{}",
-        protocol::sanitize_identifier(task_id, "task")
-    )))
+    Ok(repo_worktrees_root(project_root)?.join(format!("task-{}", protocol::sanitize_identifier(task_id, "task"))))
 }
 
 fn path_is_within_root(path: &Path, root: &Path) -> bool {
@@ -472,13 +413,9 @@ fn git_ref_exists(project_root: &str, reference: &str) -> bool {
 }
 
 fn preferred_worktree_base_ref(project_root: &str) -> String {
-    for reference in [
-        "refs/remotes/origin/main",
-        "refs/heads/main",
-        "refs/remotes/origin/master",
-        "refs/heads/master",
-        "HEAD",
-    ] {
+    for reference in
+        ["refs/remotes/origin/main", "refs/heads/main", "refs/remotes/origin/master", "refs/heads/master", "HEAD"]
+    {
         if git_ref_exists(project_root, reference) {
             return reference.to_string();
         }

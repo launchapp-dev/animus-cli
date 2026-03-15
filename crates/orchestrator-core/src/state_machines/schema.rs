@@ -69,9 +69,7 @@ pub struct RequirementLifecyclePolicy {
 
 impl Default for RequirementLifecyclePolicy {
     fn default() -> Self {
-        Self {
-            max_rework_rounds: default_requirement_max_rework_rounds(),
-        }
+        Self { max_rework_rounds: default_requirement_max_rework_rounds() }
     }
 }
 
@@ -109,22 +107,10 @@ fn default_requirement_max_rework_rounds() -> usize {
 
 fn default_requirement_comment_templates() -> BTreeMap<String, String> {
     BTreeMap::from([
-        (
-            "refine".to_string(),
-            "Requirement refined and prepared for PO/EM review pipeline.".to_string(),
-        ),
-        (
-            "po_approved".to_string(),
-            "PO review approved requirement scope and outcome alignment.".to_string(),
-        ),
-        (
-            "em_approved".to_string(),
-            "EM review approved implementation readiness and quality gates.".to_string(),
-        ),
-        (
-            "approved".to_string(),
-            "Requirement approved for task materialization and workflow execution.".to_string(),
-        ),
+        ("refine".to_string(), "Requirement refined and prepared for PO/EM review pipeline.".to_string()),
+        ("po_approved".to_string(), "PO review approved requirement scope and outcome alignment.".to_string()),
+        ("em_approved".to_string(), "EM review approved implementation readiness and quality gates.".to_string()),
+        ("approved".to_string(), "Requirement approved for task materialization and workflow execution.".to_string()),
     ])
 }
 
@@ -407,16 +393,10 @@ pub fn builtin_state_machines_document() -> StateMachinesDocument {
                     action: None,
                 },
             ],
-            guards: vec![RegistryEntry {
-                id: "rework_budget_available".to_string(),
-            }],
+            guards: vec![RegistryEntry { id: "rework_budget_available".to_string() }],
             actions: vec![
-                RegistryEntry {
-                    id: "append_decision_record".to_string(),
-                },
-                RegistryEntry {
-                    id: "set_workflow_status_from_state".to_string(),
-                },
+                RegistryEntry { id: "append_decision_record".to_string() },
+                RegistryEntry { id: "set_workflow_status_from_state".to_string() },
             ],
         },
         requirements_lifecycle: RequirementLifecycleDefinition {
@@ -500,22 +480,12 @@ pub fn builtin_state_machines_document() -> StateMachinesDocument {
                     action: Some("add_rework_comment".to_string()),
                 },
             ],
-            guards: vec![RegistryEntry {
-                id: "rework_budget_available".to_string(),
-            }],
+            guards: vec![RegistryEntry { id: "rework_budget_available".to_string() }],
             actions: vec![
-                RegistryEntry {
-                    id: "add_refine_comment".to_string(),
-                },
-                RegistryEntry {
-                    id: "add_po_approval_comment".to_string(),
-                },
-                RegistryEntry {
-                    id: "add_em_approval_comment".to_string(),
-                },
-                RegistryEntry {
-                    id: "add_rework_comment".to_string(),
-                },
+                RegistryEntry { id: "add_refine_comment".to_string() },
+                RegistryEntry { id: "add_po_approval_comment".to_string() },
+                RegistryEntry { id: "add_em_approval_comment".to_string() },
+                RegistryEntry { id: "add_rework_comment".to_string() },
             ],
             comment_templates: default_requirement_comment_templates(),
         },

@@ -31,23 +31,17 @@ impl Config {
 
         #[cfg(target_os = "macos")]
         {
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("com.launchpad.agent-orchestrator")
+            dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("com.launchpad.agent-orchestrator")
         }
 
         #[cfg(target_os = "windows")]
         {
-            return dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("com.launchpad.agent-orchestrator");
+            return dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("com.launchpad.agent-orchestrator");
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("agent-orchestrator")
+            dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("agent-orchestrator")
         }
     }
 
@@ -56,9 +50,8 @@ impl Config {
     }
 
     pub fn load_from_dir(config_dir: &Path) -> Result<Self> {
-        fs::create_dir_all(config_dir).with_context(|| {
-            format!("Failed to create config directory {}", config_dir.display())
-        })?;
+        fs::create_dir_all(config_dir)
+            .with_context(|| format!("Failed to create config directory {}", config_dir.display()))?;
         Self::load_or_initialize(&config_dir.join("config.json"))
     }
 
@@ -80,9 +73,7 @@ impl Config {
     }
 
     fn config_path(project_root: &str) -> Result<PathBuf> {
-        let project_path = PathBuf::from(project_root)
-            .canonicalize()
-            .context("Invalid project root")?;
+        let project_path = PathBuf::from(project_root).canonicalize().context("Invalid project root")?;
         Ok(project_path.join(".ao").join("config.json"))
     }
 
@@ -96,10 +87,7 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
 
-        let default_config = Self {
-            agent_runner_token: None,
-            mcp_servers: BTreeMap::new(),
-        };
+        let default_config = Self { agent_runner_token: None, mcp_servers: BTreeMap::new() };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
         Ok(default_config)
@@ -108,11 +96,7 @@ impl Config {
     pub fn ensure_token_exists(config_dir: &Path) -> Result<()> {
         let config_path = config_dir.join("config.json");
         let mut config = Self::load_from_dir(config_dir)?;
-        if config
-            .agent_runner_token
-            .as_deref()
-            .is_none_or(|t| t.trim().is_empty())
-        {
+        if config.agent_runner_token.as_deref().is_none_or(|t| t.trim().is_empty()) {
             config.agent_runner_token = Some(Uuid::new_v4().to_string());
             let json = serde_json::to_string_pretty(&config)?;
             fs::write(&config_path, json)
@@ -122,10 +106,7 @@ impl Config {
     }
 
     pub fn get_token(&self) -> Result<String> {
-        normalize_token(
-            "agent_runner_token",
-            self.agent_runner_token.clone().unwrap_or_default(),
-        )
+        normalize_token("agent_runner_token", self.agent_runner_token.clone().unwrap_or_default())
     }
 }
 
@@ -163,11 +144,7 @@ pub fn daemon_events_log_path() -> PathBuf {
 /// and MCP-prefixed variants.
 pub fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
     let normalized = agent_id.trim().to_ascii_lowercase();
-    let mut prefixes = vec![
-        "ao.".to_string(),
-        "mcp__ao__".to_string(),
-        "mcp.ao.".to_string(),
-    ];
+    let mut prefixes = vec!["ao.".to_string(), "mcp__ao__".to_string(), "mcp.ao.".to_string()];
 
     if !normalized.is_empty() {
         prefixes.push(format!("{normalized}."));
@@ -235,10 +212,7 @@ mod tests {
         let entry = &config.mcp_servers["my-db"];
         assert_eq!(entry.command, "/usr/local/bin/db-mcp");
         assert_eq!(entry.args, vec!["--port", "5432"]);
-        assert_eq!(
-            entry.env.get("DB_HOST").map(String::as_str),
-            Some("localhost")
-        );
+        assert_eq!(entry.env.get("DB_HOST").map(String::as_str), Some("localhost"));
         assert_eq!(entry.assign_to, vec!["swe"]);
 
         let serialized = serde_json::to_string(&config).unwrap();
@@ -248,10 +222,7 @@ mod tests {
 
     #[test]
     fn config_serialization_omits_empty_mcp_servers() {
-        let config = Config {
-            agent_runner_token: None,
-            mcp_servers: BTreeMap::new(),
-        };
+        let config = Config { agent_runner_token: None, mcp_servers: BTreeMap::new() };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));
     }

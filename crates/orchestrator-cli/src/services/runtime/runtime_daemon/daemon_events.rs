@@ -20,12 +20,7 @@ fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {
     }
 
     let content = std::fs::read_to_string(path)?;
-    Ok(content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    Ok(content.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
 }
 
 fn read_nonempty_lines_since(path: &Path, offset: &mut u64) -> Result<Vec<String>> {
@@ -46,12 +41,7 @@ fn read_nonempty_lines_since(path: &Path, offset: &mut u64) -> Result<Vec<String
     file.read_to_string(&mut buffer)?;
     *offset = len;
 
-    Ok(buffer
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    Ok(buffer.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
 }
 
 #[cfg(test)]
@@ -92,23 +82,15 @@ mod tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("daemon events parent should be created");
         }
-        let content = lines
-            .iter()
-            .map(|line| format!("{line}\n"))
-            .collect::<String>();
+        let content = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
         std::fs::write(path, content).expect("daemon events log should be written");
     }
 
     #[test]
     fn read_daemon_event_records_returns_ordered_tail_and_skips_invalid_lines() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
         let root_a = TempDir::new().expect("project A");
@@ -120,13 +102,10 @@ mod tests {
         write_events_log(
             &path,
             &[
-                serde_json::to_string(&sample_event(1, "queue", Some(root_a_path.as_str())))
-                    .expect("event json"),
+                serde_json::to_string(&sample_event(1, "queue", Some(root_a_path.as_str()))).expect("event json"),
                 "{not-json".to_string(),
-                serde_json::to_string(&sample_event(2, "workflow", Some(root_b_path.as_str())))
-                    .expect("event json"),
-                serde_json::to_string(&sample_event(3, "log", Some(root_a_path.as_str())))
-                    .expect("event json"),
+                serde_json::to_string(&sample_event(2, "workflow", Some(root_b_path.as_str()))).expect("event json"),
+                serde_json::to_string(&sample_event(3, "log", Some(root_a_path.as_str()))).expect("event json"),
             ],
         );
 
@@ -140,14 +119,9 @@ mod tests {
 
     #[test]
     fn read_daemon_event_records_filters_by_project_root() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
         let root_a = TempDir::new().expect("project A");
@@ -159,47 +133,34 @@ mod tests {
         write_events_log(
             &path,
             &[
-                serde_json::to_string(&sample_event(1, "queue", Some(root_a_path.as_str())))
-                    .expect("event json"),
-                serde_json::to_string(&sample_event(2, "queue", Some(root_b_path.as_str())))
-                    .expect("event json"),
-                serde_json::to_string(&sample_event(3, "workflow", Some(root_a_path.as_str())))
-                    .expect("event json"),
+                serde_json::to_string(&sample_event(1, "queue", Some(root_a_path.as_str()))).expect("event json"),
+                serde_json::to_string(&sample_event(2, "queue", Some(root_b_path.as_str()))).expect("event json"),
+                serde_json::to_string(&sample_event(3, "workflow", Some(root_a_path.as_str()))).expect("event json"),
             ],
         );
 
-        let events = read_daemon_event_records(Some(10), Some(root_a_path.as_str()))
-            .expect("records should be readable");
+        let events =
+            read_daemon_event_records(Some(10), Some(root_a_path.as_str())).expect("records should be readable");
         assert_eq!(events.len(), 2);
-        assert!(events
-            .iter()
-            .all(|event| event.project_root.as_deref() == Some(root_a_path.as_str())));
+        assert!(events.iter().all(|event| event.project_root.as_deref() == Some(root_a_path.as_str())));
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[1].seq, 3);
 
         let padded_filter = format!("  {root_a_path}  ");
-        let padded = read_daemon_event_records(Some(10), Some(padded_filter.as_str()))
-            .expect("records should be readable");
+        let padded =
+            read_daemon_event_records(Some(10), Some(padded_filter.as_str())).expect("records should be readable");
         assert_eq!(padded.len(), 2);
-        assert!(padded
-            .iter()
-            .all(|event| event.project_root.as_deref() == Some(root_a_path.as_str())));
+        assert!(padded.iter().all(|event| event.project_root.as_deref() == Some(root_a_path.as_str())));
 
-        let empty = read_daemon_event_records(Some(10), Some("/does/not/exist"))
-            .expect("records should be readable");
+        let empty = read_daemon_event_records(Some(10), Some("/does/not/exist")).expect("records should be readable");
         assert!(empty.is_empty());
     }
 
     #[test]
     fn poll_daemon_events_returns_metadata_and_count() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let config_root = TempDir::new().expect("config temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
         let root = TempDir::new().expect("project");
@@ -207,14 +168,10 @@ mod tests {
         let path = daemon_events_log_path();
         write_events_log(
             &path,
-            &[
-                serde_json::to_string(&sample_event(7, "queue", Some(root_path.as_str())))
-                    .expect("event json"),
-            ],
+            &[serde_json::to_string(&sample_event(7, "queue", Some(root_path.as_str()))).expect("event json")],
         );
 
-        let response =
-            poll_daemon_events(Some(10), Some(root_path.as_str())).expect("poll should succeed");
+        let response = poll_daemon_events(Some(10), Some(root_path.as_str())).expect("poll should succeed");
         assert_eq!(response.schema, "ao.daemon.events.poll.v1");
         assert_eq!(response.count, 1);
         assert_eq!(response.events.len(), 1);
@@ -247,9 +204,7 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
                     lines = lines.split_off(lines.len() - limit);
                 }
             }
-            offset = std::fs::metadata(&path)
-                .map(|metadata| metadata.len())
-                .unwrap_or(0);
+            offset = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
             lines
         } else {
             read_nonempty_lines_since(&path, &mut offset)?
@@ -259,11 +214,7 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
             if json {
                 println!("{line}");
             } else if let Ok(record) = serde_json::from_str::<DaemonEventRecord>(line) {
-                let project = record
-                    .project_root
-                    .as_deref()
-                    .map(|value| format!(" [{value}]"))
-                    .unwrap_or_default();
+                let project = record.project_root.as_deref().map(|value| format!(" [{value}]")).unwrap_or_default();
                 println!("{}{} {}", record.event_type, project, record.timestamp);
             } else {
                 println!("{line}");

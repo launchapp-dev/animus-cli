@@ -13,8 +13,7 @@ const DISPATCH_QUEUE_STATE_FILE: &str = "dispatch-queue.json";
 const DISPATCH_QUEUE_LOCK_FILE: &str = "dispatch-queue.lock";
 
 fn acquire_queue_lock(project_root: &str) -> Result<File> {
-    let lock_path = dispatch_queue_state_path(project_root)?
-        .with_file_name(DISPATCH_QUEUE_LOCK_FILE);
+    let lock_path = dispatch_queue_state_path(project_root)?.with_file_name(DISPATCH_QUEUE_LOCK_FILE);
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -27,9 +26,7 @@ fn acquire_queue_lock(project_root: &str) -> Result<File> {
 pub fn dispatch_queue_state_path(project_root: &str) -> Result<PathBuf> {
     let runtime_root = protocol::scoped_state_root(std::path::Path::new(project_root))
         .ok_or_else(|| anyhow!("failed to resolve scoped state root for {project_root}"))?;
-    Ok(runtime_root
-        .join("scheduler")
-        .join(DISPATCH_QUEUE_STATE_FILE))
+    Ok(runtime_root.join("scheduler").join(DISPATCH_QUEUE_STATE_FILE))
 }
 
 pub fn load_dispatch_queue_state(project_root: &str) -> Result<Option<DispatchQueueState>> {
@@ -38,12 +35,8 @@ pub fn load_dispatch_queue_state(project_root: &str) -> Result<Option<DispatchQu
         return Ok(None);
     }
 
-    let content = fs::read_to_string(&path).with_context(|| {
-        format!(
-            "failed to read dispatch queue state file at {}",
-            path.display()
-        )
-    })?;
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read dispatch queue state file at {}", path.display()))?;
     if content.trim().is_empty() {
         return Ok(Some(DispatchQueueState::default()));
     }
@@ -54,12 +47,7 @@ pub fn load_dispatch_queue_state(project_root: &str) -> Result<Option<DispatchQu
             serde_json::from_str::<Vec<DispatchQueueEntry>>(&content)
                 .map(|entries| Some(DispatchQueueState { entries }))
         })
-        .with_context(|| {
-            format!(
-                "failed to parse dispatch queue state file at {}",
-                path.display()
-            )
-        })
+        .with_context(|| format!("failed to parse dispatch queue state file at {}", path.display()))
 }
 
 pub fn save_dispatch_queue_state(project_root: &str, state: &DispatchQueueState) -> Result<()> {
@@ -78,9 +66,7 @@ pub fn save_dispatch_queue_state(project_root: &str, state: &DispatchQueueState)
     let payload = serde_json::to_string_pretty(state)?;
     let tmp_path = path.with_file_name(format!(
         "{}.{}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(DISPATCH_QUEUE_STATE_FILE),
+        path.file_name().and_then(|value| value.to_str()).unwrap_or(DISPATCH_QUEUE_STATE_FILE),
         Uuid::new_v4()
     ));
     fs::write(&tmp_path, payload)?;
@@ -106,11 +92,7 @@ pub fn mark_dispatch_queue_entry_assigned(
         if entry.subject_id() != dispatch.subject_id() {
             continue;
         }
-        if entry
-            .dispatch
-            .as_ref()
-            .is_some_and(|existing| existing.workflow_ref != dispatch.workflow_ref)
-        {
+        if entry.dispatch.as_ref().is_some_and(|existing| existing.workflow_ref != dispatch.workflow_ref) {
             continue;
         }
         if entry.dispatch.is_none() && entry.task_id() != dispatch.task_id() {
@@ -152,20 +134,12 @@ fn remove_terminal_dispatch_queue_entry(
             return true;
         }
         if let Some(workflow_ref) = workflow_ref {
-            if entry
-                .dispatch
-                .as_ref()
-                .is_some_and(|dispatch| dispatch.workflow_ref != workflow_ref)
-            {
+            if entry.dispatch.as_ref().is_some_and(|dispatch| dispatch.workflow_ref != workflow_ref) {
                 return true;
             }
         }
         if let Some(workflow_id) = workflow_id {
-            if entry
-                .workflow_id
-                .as_deref()
-                .is_some_and(|entry_workflow_id| entry_workflow_id != workflow_id)
-            {
+            if entry.workflow_id.as_deref().is_some_and(|entry_workflow_id| entry_workflow_id != workflow_id) {
                 return true;
             }
         }
@@ -184,9 +158,7 @@ pub fn remove_terminal_dispatch_queue_entry_non_fatal(
     workflow_ref: Option<&str>,
     workflow_id: Option<&str>,
 ) {
-    if let Err(error) =
-        remove_terminal_dispatch_queue_entry(project_root, subject_id, workflow_ref, workflow_id)
-    {
+    if let Err(error) = remove_terminal_dispatch_queue_entry(project_root, subject_id, workflow_ref, workflow_id) {
         eprintln!(
             "{}: failed to remove terminal dispatch queue entry for subject {}: {}",
             protocol::ACTOR_DAEMON,

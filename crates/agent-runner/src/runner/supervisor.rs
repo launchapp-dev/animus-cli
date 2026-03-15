@@ -4,9 +4,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use super::process::spawn_cli_process;
-use super::session_process::{
-    require_native_session_backend, spawn_session_process, use_native_session_backend,
-};
+use super::session_process::{require_native_session_backend, spawn_session_process, use_native_session_backend};
 use crate::sandbox::{env_sanitizer, workspace_guard};
 
 pub struct Supervisor;
@@ -26,10 +24,7 @@ impl Supervisor {
         let start_time = Instant::now();
         let request_timeout_secs = req.timeout_secs;
 
-        let started_evt = AgentRunEvent::Started {
-            run_id: run_id.clone(),
-            timestamp: Timestamp::now(),
-        };
+        let started_evt = AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() };
         let _ = event_tx.send(started_evt).await;
 
         let context: serde_json::Value = req.context.clone();
@@ -41,9 +36,7 @@ impl Supervisor {
         let prompt = context.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
         let cwd = context.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
         let project_root = context.get("project_root").and_then(|v| v.as_str());
-        let timeout_secs = req
-            .timeout_secs
-            .or_else(|| context.get("timeout_secs").and_then(|v| v.as_u64()));
+        let timeout_secs = req.timeout_secs.or_else(|| context.get("timeout_secs").and_then(|v| v.as_u64()));
         let model = req.model.0.as_str();
         let runtime_contract = context.get("runtime_contract");
 
@@ -90,10 +83,7 @@ impl Supervisor {
         if let Some(_root) = project_root {
             let settings_path = std::path::Path::new(cwd).join(".claude/settings.local.json");
             if settings_path.exists() {
-                env.insert(
-                    "CLAUDE_CODE_SETTINGS_PATH".to_string(),
-                    settings_path.to_string_lossy().to_string(),
-                );
+                env.insert("CLAUDE_CODE_SETTINGS_PATH".to_string(), settings_path.to_string_lossy().to_string());
                 info!(
                     run_id = %run_id.0.as_str(),
                     settings_path = %settings_path.display(),
@@ -106,9 +96,7 @@ impl Supervisor {
             .pointer("/runtime_contract/cli/capabilities/supports_mcp")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let mcp_endpoint = context
-            .pointer("/runtime_contract/mcp/endpoint")
-            .and_then(|v| v.as_str());
+        let mcp_endpoint = context.pointer("/runtime_contract/mcp/endpoint").and_then(|v| v.as_str());
 
         if supports_mcp {
             if let Some(endpoint) = mcp_endpoint {
@@ -136,10 +124,7 @@ impl Supervisor {
 
         if let Err(error) = require_native_session_backend(tool, runtime_contract) {
             let error_message = format!("Process execution failed: {}", error);
-            let error_evt = AgentRunEvent::Error {
-                run_id: run_id.clone(),
-                error: error_message.clone(),
-            };
+            let error_evt = AgentRunEvent::Error { run_id: run_id.clone(), error: error_message.clone() };
             let _ = event_tx.send(error_evt).await;
             error!(
                 run_id = %run_id.0.as_str(),
@@ -191,11 +176,8 @@ impl Supervisor {
         match execution_result {
             Ok(exit_code) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                let finished_evt = AgentRunEvent::Finished {
-                    run_id: run_id.clone(),
-                    exit_code: Some(exit_code),
-                    duration_ms,
-                };
+                let finished_evt =
+                    AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(exit_code), duration_ms };
                 let _ = event_tx.send(finished_evt).await;
                 info!(
                     run_id = %run_id.0.as_str(),
@@ -206,10 +188,8 @@ impl Supervisor {
                 status_from_exit_code(exit_code)
             }
             Err(e) => {
-                let error_evt = AgentRunEvent::Error {
-                    run_id: run_id.clone(),
-                    error: format!("Process execution failed: {}", e),
-                };
+                let error_evt =
+                    AgentRunEvent::Error { run_id: run_id.clone(), error: format!("Process execution failed: {}", e) };
                 let _ = event_tx.send(error_evt).await;
                 error!(run_id = %run_id.0.as_str(), error = %e, "Agent failed");
                 AgentStatus::Failed

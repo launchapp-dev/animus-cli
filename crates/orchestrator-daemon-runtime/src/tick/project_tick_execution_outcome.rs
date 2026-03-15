@@ -2,8 +2,7 @@ use workflow_runner_v2::PhaseExecutionEvent;
 
 use crate::DispatchWorkflowStartSummary;
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ProjectTickExecutionOutcome {
     pub cleaned_stale_workflows: usize,
     pub resumed_workflows: usize,
@@ -15,4 +14,3 @@ pub struct ProjectTickExecutionOutcome {
     pub failed_workflow_phases: usize,
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
 }
-

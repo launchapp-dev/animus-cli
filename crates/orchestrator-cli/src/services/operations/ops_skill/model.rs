@@ -63,10 +63,7 @@ pub(super) struct SkillRegistryStateV1 {
 impl SkillRegistryStateV1 {
     pub(super) fn normalize(&mut self) {
         self.registries.sort_by(|a, b| {
-            a.priority
-                .cmp(&b.priority)
-                .then_with(|| a.id.cmp(&b.id))
-                .then_with(|| a.available.cmp(&b.available))
+            a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)).then_with(|| a.available.cmp(&b.available))
         });
         self.registries.dedup_by(|a, b| a.id == b.id);
 
@@ -80,10 +77,7 @@ impl SkillRegistryStateV1 {
                 .then_with(|| a.artifact.cmp(&b.artifact))
         });
         self.catalog.dedup_by(|a, b| {
-            a.name == b.name
-                && a.version == b.version
-                && a.source == b.source
-                && a.registry == b.registry
+            a.name == b.name && a.version == b.version && a.source == b.source && a.registry == b.registry
         });
 
         self.installed.sort_by(|a, b| {
@@ -93,8 +87,7 @@ impl SkillRegistryStateV1 {
                 .then_with(|| a.registry.cmp(&b.registry))
                 .then_with(|| a.version.cmp(&b.version))
         });
-        self.installed
-            .dedup_by(|a, b| a.name == b.name && a.source == b.source);
+        self.installed.dedup_by(|a, b| a.name == b.name && a.source == b.source);
 
         self.defaults.sort_by(|a, b| a.name.cmp(&b.name));
         self.defaults.dedup_by(|a, b| a.name == b.name);
@@ -128,7 +121,6 @@ impl SkillLockStateV1 {
                 .then_with(|| a.integrity.cmp(&b.integrity))
                 .then_with(|| a.artifact.cmp(&b.artifact))
         });
-        self.entries
-            .dedup_by(|a, b| a.name == b.name && a.source == b.source);
+        self.entries.dedup_by(|a, b| a.name == b.name && a.source == b.source);
     }
 }

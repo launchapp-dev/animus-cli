@@ -2,9 +2,7 @@ use crate::cli_types::HistoryCommand;
 use crate::{not_found_error, print_value};
 use anyhow::Result;
 use chrono::Utc;
-use orchestrator_core::{
-    load_history_store, save_history_store, HistoryExecutionRecord, ServiceHub,
-};
+use orchestrator_core::{load_history_store, save_history_store, HistoryExecutionRecord, ServiceHub};
 use std::sync::Arc;
 
 async fn collect_execution_records(
@@ -14,10 +12,7 @@ async fn collect_execution_records(
     let mut combined = load_history_store(project_root)?.entries;
     let workflows = hub.workflows().list().await.unwrap_or_default();
     for workflow in workflows {
-        if combined
-            .iter()
-            .any(|entry| entry.execution_id == workflow.id)
-        {
+        if combined.iter().any(|entry| entry.execution_id == workflow.id) {
             continue;
         }
         combined.push(HistoryExecutionRecord {
@@ -72,15 +67,14 @@ pub(crate) async fn handle_history(
                 records.retain(|record| record.task_id.as_deref() == Some(task_id.as_str()));
             }
             if let Some(workflow_id) = args.workflow_id {
-                records
-                    .retain(|record| record.workflow_id.as_deref() == Some(workflow_id.as_str()));
+                records.retain(|record| record.workflow_id.as_deref() == Some(workflow_id.as_str()));
             }
             if let Some(status) = args.status {
                 records.retain(|record| record.status.eq_ignore_ascii_case(status.as_str()));
             }
             if let Some(started_after) = args.started_after {
-                let after = chrono::DateTime::parse_from_rfc3339(&started_after)
-                    .map(|value| value.with_timezone(&Utc))?;
+                let after =
+                    chrono::DateTime::parse_from_rfc3339(&started_after).map(|value| value.with_timezone(&Utc))?;
                 records.retain(|record| {
                     record
                         .started_at
@@ -91,8 +85,8 @@ pub(crate) async fn handle_history(
                 });
             }
             if let Some(started_before) = args.started_before {
-                let before = chrono::DateTime::parse_from_rfc3339(&started_before)
-                    .map(|value| value.with_timezone(&Utc))?;
+                let before =
+                    chrono::DateTime::parse_from_rfc3339(&started_before).map(|value| value.with_timezone(&Utc))?;
                 records.retain(|record| {
                     record
                         .started_at

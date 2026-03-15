@@ -19,16 +19,14 @@ pub(super) fn read_max_seq_for_project(project_root: &str) -> Result<u64, WebApi
     Ok(records.iter().map(|record| record.seq).max().unwrap_or(0))
 }
 
-pub(super) fn read_events_for_project(
-    project_root: &str,
-) -> Result<Vec<DaemonEventRecord>, WebApiError> {
+pub(super) fn read_events_for_project(project_root: &str) -> Result<Vec<DaemonEventRecord>, WebApiError> {
     let path = daemon_events_log_path();
     if !path.exists() {
         return Ok(Vec::new());
     }
 
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read daemon events: {}", path.display()))?;
+    let content =
+        std::fs::read_to_string(&path).with_context(|| format!("failed to read daemon events: {}", path.display()))?;
 
     let mut parsed_records = Vec::new();
 
@@ -68,12 +66,7 @@ pub(super) fn read_events_for_project(
             record.event_type = "unknown".to_string();
         }
 
-        if record
-            .project_root
-            .as_ref()
-            .map(|root| root == project_root)
-            .unwrap_or(true)
-        {
+        if record.project_root.as_ref().map(|root| root == project_root).unwrap_or(true) {
             parsed_records.push(record);
         }
     }
@@ -83,43 +76,18 @@ pub(super) fn read_events_for_project(
 }
 
 pub(super) fn value_to_event_record(value: Value, fallback_seq: u64) -> DaemonEventRecord {
-    let schema = value
-        .get("schema")
-        .and_then(Value::as_str)
-        .unwrap_or(EVENT_SCHEMA)
-        .to_string();
-    let id = value
-        .get("id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let seq = value
-        .get("seq")
-        .and_then(Value::as_u64)
-        .unwrap_or(fallback_seq);
+    let schema = value.get("schema").and_then(Value::as_str).unwrap_or(EVENT_SCHEMA).to_string();
+    let id =
+        value.get("id").and_then(Value::as_str).map(ToOwned::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string());
+    let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(fallback_seq);
     let timestamp = value
         .get("timestamp")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| Utc::now().to_rfc3339());
-    let event_type = value
-        .get("event_type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let project_root = value
-        .get("project_root")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let event_type = value.get("event_type").and_then(Value::as_str).unwrap_or("unknown").to_string();
+    let project_root = value.get("project_root").and_then(Value::as_str).map(ToOwned::to_owned);
     let data = value.get("data").cloned().unwrap_or_else(|| json!({}));
 
-    DaemonEventRecord {
-        schema,
-        id,
-        seq,
-        timestamp,
-        event_type,
-        project_root,
-        data,
-    }
+    DaemonEventRecord { schema, id, seq, timestamp, event_type, project_root, data }
 }

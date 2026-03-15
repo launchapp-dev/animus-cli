@@ -46,10 +46,7 @@ fn workflow_transition_matrix_matches_legacy_behavior() {
                 Err(_) => state,
             };
             let expected = legacy_transition(state, event);
-            assert_eq!(
-                actual, expected,
-                "transition mismatch: state={state:?}, event={event:?}"
-            );
+            assert_eq!(actual, expected, "transition mismatch: state={state:?}, event={event:?}");
         }
     }
 }
@@ -57,16 +54,11 @@ fn workflow_transition_matrix_matches_legacy_behavior() {
 #[test]
 fn workflow_failed_state_can_resume_for_retry() {
     let mut machine = WorkflowStateMachine::new(WorkflowMachineState::Failed);
-    let state = machine
-        .apply(WorkflowMachineEvent::ResumeRequested)
-        .expect("test: Failed -> ResumeRequested");
+    let state = machine.apply(WorkflowMachineEvent::ResumeRequested).expect("test: Failed -> ResumeRequested");
     assert_eq!(state, WorkflowMachineState::EvaluateTransition);
 }
 
-fn legacy_transition(
-    state: WorkflowMachineState,
-    event: WorkflowMachineEvent,
-) -> WorkflowMachineState {
+fn legacy_transition(state: WorkflowMachineState, event: WorkflowMachineEvent) -> WorkflowMachineState {
     match state {
         WorkflowMachineState::Idle => match event {
             WorkflowMachineEvent::Start => WorkflowMachineState::EvaluateTransition,

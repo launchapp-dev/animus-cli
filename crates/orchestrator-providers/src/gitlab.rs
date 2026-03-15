@@ -5,9 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::{
-    BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo,
-};
+use crate::{BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo};
 
 #[cfg(feature = "gitlab")]
 #[derive(Debug, Clone)]
@@ -28,11 +26,7 @@ pub struct GitLabGitProvider {
 #[cfg(feature = "gitlab")]
 impl GitLabGitProvider {
     pub fn new(config: GitLabConfig, client: Client, project_root: impl Into<PathBuf>) -> Self {
-        Self {
-            config,
-            client,
-            project_root: project_root.into(),
-        }
+        Self { config, client, project_root: project_root.into() }
     }
 
     fn api_base(&self) -> String {
@@ -48,28 +42,17 @@ impl GitLabGitProvider {
     }
 
     fn auth_token(&self) -> Result<String> {
-        env::var(&self.config.token_env).with_context(|| {
-            format!(
-                "GitLab token environment variable is missing: {}",
-                self.config.token_env
-            )
-        })
+        env::var(&self.config.token_env)
+            .with_context(|| format!("GitLab token environment variable is missing: {}", self.config.token_env))
     }
 
-    async fn ensure_success(
-        &self,
-        response: reqwest::Response,
-        action: &str,
-    ) -> Result<reqwest::Response> {
+    async fn ensure_success(&self, response: reqwest::Response, action: &str) -> Result<reqwest::Response> {
         if response.status().is_success() {
             return Ok(response);
         }
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<unable to read response body>".to_string());
+        let body = response.text().await.unwrap_or_else(|_| "<unable to read response body>".to_string());
         Err(anyhow!("GitLab {action} failed ({status}): {body}"))
     }
 
@@ -79,20 +62,13 @@ impl GitLabGitProvider {
             .client
             .get(self.api_url("merge_requests"))
             .header("Private-Token", token)
-            .query(&[
-                ("state", "opened"),
-                ("source_branch", head_branch),
-                ("per_page", "100"),
-            ])
+            .query(&[("state", "opened"), ("source_branch", head_branch), ("per_page", "100")])
             .send()
             .await
             .context("failed to fetch merge requests from GitLab")?;
         let response = self.ensure_success(response, "fetch merge request").await?;
 
-        let requests: Vec<Value> = response
-            .json()
-            .await
-            .context("failed to parse GitLab merge request list")?;
+        let requests: Vec<Value> = response.json().await.context("failed to parse GitLab merge request list")?;
         let maybe_iid = requests.into_iter().find_map(|request| {
             if request.get("source_branch").and_then(Value::as_str) != Some(head_branch) {
                 return None;
@@ -104,16 +80,11 @@ impl GitLabGitProvider {
     }
 
     fn as_string(value: &Value) -> Option<String> {
-        value
-            .as_str()
-            .map(ToString::to_string)
-            .or_else(|| value.as_u64().map(|value| value.to_string()))
+        value.as_str().map(ToString::to_string).or_else(|| value.as_u64().map(|value| value.to_string()))
     }
 
     fn as_u64(value: &Value) -> Option<u64> {
-        value
-            .as_u64()
-            .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
+        value.as_u64().or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
     }
 }
 
@@ -128,9 +99,7 @@ impl GitProvider for GitLabGitProvider {
         base_ref: Option<&str>,
     ) -> Result<WorktreeInfo> {
         let builtin = BuiltinGitProvider::new(project_root);
-        builtin
-            .create_worktree(project_root, worktree_path, branch_name, base_ref)
-            .await
+        builtin.create_worktree(project_root, worktree_path, branch_name, base_ref).await
     }
 
     async fn remove_worktree(&self, project_root: &str, worktree_path: &str) -> Result<()> {
@@ -144,11 +113,7 @@ impl GitProvider for GitLabGitProvider {
         builtin.push_branch(cwd, remote, branch).await
     }
 
-    async fn is_branch_merged(
-        &self,
-        project_root: &str,
-        branch_name: &str,
-    ) -> Result<Option<bool>> {
+    async fn is_branch_merged(&self, project_root: &str, branch_name: &str) -> Result<Option<bool>> {
         let builtin = BuiltinGitProvider::new(project_root);
         builtin.is_branch_merged(project_root, branch_name).await
     }
@@ -162,18 +127,12 @@ impl GitProvider for GitLabGitProvider {
     ) -> Result<MergeResult> {
         let _ = (target_branch, no_fast_forward);
         let builtin = BuiltinGitProvider::new(cwd);
-        builtin
-            .merge_branch(cwd, source_branch, target_branch, no_fast_forward)
-            .await
+        builtin.merge_branch(cwd, source_branch, target_branch, no_fast_forward).await
     }
 
     async fn create_pull_request(&self, input: CreatePrInput) -> Result<PullRequestInfo> {
         let token = self.auth_token()?;
-        let title = if input.draft {
-            format!("Draft: {}", input.title)
-        } else {
-            input.title
-        };
+        let title = if input.draft { format!("Draft: {}", input.title) } else { input.title };
         let response = self
             .client
             .post(self.api_url("merge_requests"))
@@ -187,21 +146,13 @@ impl GitProvider for GitLabGitProvider {
             .send()
             .await
             .context("failed to create GitLab merge request")?;
-        let response = self
-            .ensure_success(response, "create merge request")
-            .await?;
-        let payload: Value = response
-            .json()
-            .await
-            .context("failed to parse GitLab merge request response")?;
+        let response = self.ensure_success(response, "create merge request").await?;
+        let payload: Value = response.json().await.context("failed to parse GitLab merge request response")?;
 
         Ok(PullRequestInfo {
             id: payload.get("id").and_then(Self::as_string),
             number: payload.get("iid").and_then(Self::as_u64),
-            url: payload
-                .get("web_url")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            url: payload.get("web_url").and_then(Value::as_str).map(ToString::to_string),
         })
     }
 

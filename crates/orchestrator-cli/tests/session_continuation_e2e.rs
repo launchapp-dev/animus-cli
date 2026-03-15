@@ -25,10 +25,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 fn is_enabled() -> bool {
-    std::env::var("AO_E2E_SESSION_CONTINUATION")
-        .ok()
-        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    std::env::var("AO_E2E_SESSION_CONTINUATION").ok().map(|v| matches!(v.trim(), "1" | "true" | "yes")).unwrap_or(false)
 }
 
 fn ao_binary() -> PathBuf {
@@ -39,31 +36,18 @@ fn project_root() -> String {
     std::env::var("AO_E2E_PROJECT_ROOT")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .expect("current dir")
-                .to_string_lossy()
-                .to_string()
-        })
+        .unwrap_or_else(|| std::env::current_dir().expect("current dir").to_string_lossy().to_string())
 }
 
 fn e2e_tools() -> Vec<String> {
     std::env::var("AO_E2E_TOOLS")
         .ok()
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_else(|| vec!["claude".to_string()])
 }
 
 fn timeout_secs() -> String {
-    std::env::var("AO_E2E_TIMEOUT")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "120".to_string())
+    std::env::var("AO_E2E_TIMEOUT").ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| "120".to_string())
 }
 
 fn default_model_for_tool(tool: &str) -> &'static str {
@@ -77,13 +61,7 @@ fn default_model_for_tool(tool: &str) -> &'static str {
     }
 }
 
-fn build_launch_args(
-    tool: &str,
-    model: &str,
-    prompt: &str,
-    session_id: Option<&str>,
-    reused: bool,
-) -> Value {
+fn build_launch_args(tool: &str, model: &str, prompt: &str, session_id: Option<&str>, reused: bool) -> Value {
     let args = match tool {
         "claude" => {
             let mut args = vec![
@@ -242,10 +220,7 @@ fn run_agent(
         };
 
         let data = envelope.get("data");
-        let kind = data
-            .and_then(|d| d.get("kind"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let kind = data.and_then(|d| d.get("kind")).and_then(Value::as_str).unwrap_or("");
 
         match kind {
             "output_chunk" => {
@@ -255,21 +230,13 @@ fn run_agent(
                 }
             }
             "finished" => {
-                exit_code = data
-                    .and_then(|d| d.get("exit_code"))
-                    .and_then(Value::as_i64)
-                    .map(|v| v as i32);
+                exit_code = data.and_then(|d| d.get("exit_code")).and_then(Value::as_i64).map(|v| v as i32);
             }
             _ => {}
         }
     }
 
-    Ok(AgentRunResult {
-        exit_code,
-        agent_text,
-        raw_stderr,
-        success,
-    })
+    Ok(AgentRunResult { exit_code, agent_text, raw_stderr, success })
 }
 
 fn extract_text_from_agent_output(agent_text: &str, tool: &str) -> String {
@@ -307,40 +274,20 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
     let model = default_model_for_tool(tool);
     let timeout = timeout_secs();
 
-    eprintln!(
-        "[e2e] tool={} model={} session_id={} timeout={}s",
-        tool, model, session_id, timeout
-    );
+    eprintln!("[e2e] tool={} model={} session_id={} timeout={}s", tool, model, session_id, timeout);
 
     let first_prompt = "Reply with exactly: PINEAPPLE_SESSION_MARKER_42. Nothing else.";
 
     eprintln!("[e2e] tool={} — running first agent invocation", tool);
-    let r1 = run_agent(
-        tool,
-        model,
-        first_prompt,
-        Some(&session_id),
-        false,
-        &timeout,
-    )?;
+    let r1 = run_agent(tool, model, first_prompt, Some(&session_id), false, &timeout)?;
 
-    eprintln!(
-        "[e2e] tool={} — first run success={} exit_code={:?}",
-        tool, r1.success, r1.exit_code
-    );
+    eprintln!("[e2e] tool={} — first run success={} exit_code={:?}", tool, r1.success, r1.exit_code);
 
     if !r1.success {
-        eprintln!(
-            "[e2e]   stderr: {}",
-            r1.raw_stderr.chars().take(500).collect::<String>()
-        );
+        eprintln!("[e2e]   stderr: {}", r1.raw_stderr.chars().take(500).collect::<String>());
     }
 
-    assert!(
-        r1.success,
-        "[e2e] tool={} first agent run failed:\nstderr: {}",
-        tool, r1.raw_stderr
-    );
+    assert!(r1.success, "[e2e] tool={} first agent run failed:\nstderr: {}", tool, r1.raw_stderr);
 
     let text1 = extract_text_from_agent_output(&r1.agent_text, tool);
     let marker_in_extracted = text1.contains("PINEAPPLE_SESSION_MARKER_42");
@@ -350,49 +297,24 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
         "[e2e] tool={} — first run contains marker: {} (extracted={}, raw={})",
         tool, has_marker, marker_in_extracted, marker_in_raw
     );
-    eprintln!(
-        "[e2e] tool={} — extracted text (first 300): {}",
-        tool,
-        text1.chars().take(300).collect::<String>()
-    );
+    eprintln!("[e2e] tool={} — extracted text (first 300): {}", tool, text1.chars().take(300).collect::<String>());
     if !marker_in_extracted && marker_in_raw {
         eprintln!(
             "[e2e] WARNING: tool={} — marker found in raw agent_text but NOT in extracted text. \
              JSON extraction is incomplete for this tool's output format.",
             tool
         );
-        eprintln!(
-            "[e2e]   raw agent_text (first 500): {}",
-            r1.agent_text.chars().take(500).collect::<String>()
-        );
+        eprintln!("[e2e]   raw agent_text (first 500): {}", r1.agent_text.chars().take(500).collect::<String>());
     }
 
-    let second_prompt =
-        "What exact phrase did I ask you to reply with in my previous message? Repeat it exactly.";
+    let second_prompt = "What exact phrase did I ask you to reply with in my previous message? Repeat it exactly.";
 
-    eprintln!(
-        "[e2e] tool={} — running second agent invocation (session resume)",
-        tool
-    );
-    let r2 = run_agent(
-        tool,
-        model,
-        second_prompt,
-        Some(&session_id),
-        true,
-        &timeout,
-    )?;
+    eprintln!("[e2e] tool={} — running second agent invocation (session resume)", tool);
+    let r2 = run_agent(tool, model, second_prompt, Some(&session_id), true, &timeout)?;
 
-    eprintln!(
-        "[e2e] tool={} — second run success={} exit_code={:?}",
-        tool, r2.success, r2.exit_code
-    );
+    eprintln!("[e2e] tool={} — second run success={} exit_code={:?}", tool, r2.success, r2.exit_code);
 
-    assert!(
-        r2.success,
-        "[e2e] tool={} second agent run failed:\nstderr: {}",
-        tool, r2.raw_stderr
-    );
+    assert!(r2.success, "[e2e] tool={} second agent run failed:\nstderr: {}", tool, r2.raw_stderr);
 
     let text2 = extract_text_from_agent_output(&r2.agent_text, tool);
     let text2_lower = text2.to_ascii_lowercase();
@@ -402,11 +324,7 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
     let recalled_in_raw = raw2_lower.contains("pineapple");
     let session_recalled = recalled_in_extracted || recalled_in_raw;
 
-    eprintln!(
-        "[e2e] tool={} — extracted text (second 300): {}",
-        tool,
-        text2.chars().take(300).collect::<String>()
-    );
+    eprintln!("[e2e] tool={} — extracted text (second 300): {}", tool, text2.chars().take(300).collect::<String>());
     eprintln!(
         "[e2e] tool={} — second run recalled session: {} (extracted={}, raw={})",
         tool, session_recalled, recalled_in_extracted, recalled_in_raw
@@ -418,17 +336,11 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
              JSON extraction is incomplete for this tool's output format.",
             tool
         );
-        eprintln!(
-            "[e2e]   raw agent_text (first 500): {}",
-            r2.agent_text.chars().take(500).collect::<String>()
-        );
+        eprintln!("[e2e]   raw agent_text (first 500): {}", r2.agent_text.chars().take(500).collect::<String>());
     }
 
     if !session_recalled {
-        eprintln!(
-            "[e2e]   full raw agent_text:\n{}",
-            r2.agent_text.chars().take(2000).collect::<String>()
-        );
+        eprintln!("[e2e]   full raw agent_text:\n{}", r2.agent_text.chars().take(2000).collect::<String>());
     }
 
     assert!(
@@ -439,19 +351,14 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
         r2.agent_text.chars().take(1000).collect::<String>()
     );
 
-    eprintln!(
-        "[e2e] tool={} — PASSED (session continuation verified)",
-        tool
-    );
+    eprintln!("[e2e] tool={} — PASSED (session continuation verified)", tool);
     Ok(())
 }
 
 #[test]
 fn e2e_session_continuation_agent_run() {
     if !is_enabled() {
-        eprintln!(
-            "skipping session continuation e2e (set AO_E2E_SESSION_CONTINUATION=1 to enable)"
-        );
+        eprintln!("skipping session continuation e2e (set AO_E2E_SESSION_CONTINUATION=1 to enable)");
         return;
     }
 
@@ -471,16 +378,7 @@ fn e2e_session_continuation_agent_run() {
     }
 
     if !failures.is_empty() {
-        let summary = failures
-            .iter()
-            .map(|(tool, err)| format!("  {}: {}", tool, err))
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!(
-            "[e2e] {} of {} tools failed:\n{}",
-            failures.len(),
-            tools.len(),
-            summary
-        );
+        let summary = failures.iter().map(|(tool, err)| format!("  {}: {}", tool, err)).collect::<Vec<_>>().join("\n");
+        panic!("[e2e] {} of {} tools failed:\n{}", failures.len(), tools.len(), summary);
     }
 }

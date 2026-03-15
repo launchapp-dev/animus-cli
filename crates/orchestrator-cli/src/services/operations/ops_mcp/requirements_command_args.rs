@@ -1,12 +1,7 @@
 use super::{push_opt, RequirementCreateInput, RequirementRefineInput, RequirementUpdateInput};
 
 pub(super) fn build_requirements_get_args(id: String) -> Vec<String> {
-    vec![
-        "requirements".to_string(),
-        "get".to_string(),
-        "--id".to_string(),
-        id,
-    ]
+    vec!["requirements".to_string(), "get".to_string(), "--id".to_string(), id]
 }
 
 pub(super) fn build_requirements_create_args(input: &RequirementCreateInput) -> Vec<String> {
@@ -31,12 +26,7 @@ pub(super) fn build_requirements_create_args(input: &RequirementCreateInput) -> 
 }
 
 pub(super) fn build_requirements_update_args(input: &RequirementUpdateInput) -> Vec<String> {
-    let mut args = vec![
-        "requirements".to_string(),
-        "update".to_string(),
-        "--id".to_string(),
-        input.id.clone(),
-    ];
+    let mut args = vec!["requirements".to_string(), "update".to_string(), "--id".to_string(), input.id.clone()];
     push_opt(&mut args, "--title", input.title.clone());
     push_opt(&mut args, "--description", input.description.clone());
     push_opt(&mut args, "--priority", input.priority.clone());
@@ -60,12 +50,7 @@ pub(super) fn build_requirements_update_args(input: &RequirementUpdateInput) -> 
 }
 
 pub(super) fn build_requirements_delete_args(id: String) -> Vec<String> {
-    vec![
-        "requirements".to_string(),
-        "delete".to_string(),
-        "--id".to_string(),
-        id,
-    ]
+    vec!["requirements".to_string(), "delete".to_string(), "--id".to_string(), id]
 }
 
 pub(super) fn build_requirements_refine_args(input: &RequirementRefineInput) -> Vec<String> {

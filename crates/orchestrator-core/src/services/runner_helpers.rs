@@ -5,23 +5,15 @@ use std::hash::{Hash, Hasher};
 
 const RUNNER_IPC_TIMEOUT: Duration = Duration::from_millis(900);
 
-
-
-
 pub(super) fn runner_config_dir(project_root: &Path) -> PathBuf {
-    let config_dir = project_runtime_root(project_root)
-        .unwrap_or_else(|| project_root.join(".ao"))
-        .join("runner");
+    let config_dir = project_runtime_root(project_root).unwrap_or_else(|| project_root.join(".ao")).join("runner");
 
     normalize_runner_config_dir(config_dir)
 }
 
 fn project_runtime_root(project_root: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    Some(
-        home.join(".ao")
-            .join(protocol::repository_scope_for_path(project_root)),
-    )
+    Some(home.join(".ao").join(protocol::repository_scope_for_path(project_root)))
 }
 
 fn normalize_runner_config_dir(config_dir: PathBuf) -> PathBuf {
@@ -48,14 +40,9 @@ fn shorten_runner_config_dir_if_needed(config_dir: PathBuf) -> PathBuf {
     config_dir.to_string_lossy().hash(&mut hasher);
     let digest = hasher.finish();
 
-    let shortened = std::env::temp_dir()
-        .join("ao-runner")
-        .join(format!("{digest:016x}"));
+    let shortened = std::env::temp_dir().join("ao-runner").join(format!("{digest:016x}"));
     let _ = std::fs::create_dir_all(&shortened);
-    let _ = std::fs::write(
-        shortened.join("origin-path.txt"),
-        config_dir.to_string_lossy().as_bytes(),
-    );
+    let _ = std::fs::write(shortened.join("origin-path.txt"), config_dir.to_string_lossy().as_bytes());
     shortened
 }
 
@@ -115,10 +102,7 @@ pub(super) fn is_runner_process_alive(pid: u32) -> bool {
         return false;
     }
 
-    if let Ok(output) = Command::new("ps")
-        .args(["-o", "state=", "-p", &pid.to_string()])
-        .output()
-    {
+    if let Ok(output) = Command::new("ps").args(["-o", "state=", "-p", &pid.to_string()]).output() {
         let state = String::from_utf8_lossy(&output.stdout);
         if state.trim().starts_with('Z') {
             return false;
@@ -189,44 +173,31 @@ pub(super) fn clear_stale_runner_artifacts(config_dir: &Path) {
 #[cfg(unix)]
 pub(super) async fn is_agent_runner_ready(config_dir: &Path) -> bool {
     let socket_path = runner_socket_path(config_dir);
-    let Ok(Ok(mut stream)) = tokio::time::timeout(
-        Duration::from_millis(750),
-        tokio::net::UnixStream::connect(&socket_path),
-    )
-    .await
+    let Ok(Ok(mut stream)) =
+        tokio::time::timeout(Duration::from_millis(750), tokio::net::UnixStream::connect(&socket_path)).await
     else {
         return false;
     };
 
-    authenticate_runner_stream(&mut stream, config_dir)
-        .await
-        .is_some()
+    authenticate_runner_stream(&mut stream, config_dir).await.is_some()
 }
 
 #[cfg(not(unix))]
 pub(super) async fn is_agent_runner_ready(config_dir: &Path) -> bool {
-    let Ok(Ok(mut stream)) = tokio::time::timeout(
-        Duration::from_millis(750),
-        tokio::net::TcpStream::connect("127.0.0.1:9001"),
-    )
-    .await
+    let Ok(Ok(mut stream)) =
+        tokio::time::timeout(Duration::from_millis(750), tokio::net::TcpStream::connect("127.0.0.1:9001")).await
     else {
         return false;
     };
 
-    authenticate_runner_stream(&mut stream, config_dir)
-        .await
-        .is_some()
+    authenticate_runner_stream(&mut stream, config_dir).await.is_some()
 }
 
 async fn authenticate_runner_stream<S>(stream: &mut S, config_dir: &Path) -> Option<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let token = protocol::Config::load_from_dir(config_dir)
-        .ok()?
-        .get_token()
-        .ok()?;
+    let token = protocol::Config::load_from_dir(config_dir).ok()?.get_token().ok()?;
     let request = serde_json::to_string(&IpcAuthRequest::new(token)).ok()?;
     stream.write_all(request.as_bytes()).await.ok()?;
     stream.write_all(b"\n").await.ok()?;
@@ -252,13 +223,10 @@ where
 #[cfg(unix)]
 pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatusResponse> {
     let socket_path = runner_socket_path(config_dir);
-    let mut stream = tokio::time::timeout(
-        Duration::from_millis(750),
-        tokio::net::UnixStream::connect(&socket_path),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let mut stream = tokio::time::timeout(Duration::from_millis(750), tokio::net::UnixStream::connect(&socket_path))
+        .await
+        .ok()?
+        .ok()?;
 
     authenticate_runner_stream(&mut stream, config_dir).await?;
 
@@ -269,10 +237,7 @@ pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatu
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
+    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line)).await.ok()?.ok()?;
     if read_len == 0 {
         return None;
     }
@@ -282,13 +247,10 @@ pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatu
 
 #[cfg(not(unix))]
 pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatusResponse> {
-    let mut stream = tokio::time::timeout(
-        Duration::from_millis(750),
-        tokio::net::TcpStream::connect("127.0.0.1:9001"),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let mut stream = tokio::time::timeout(Duration::from_millis(750), tokio::net::TcpStream::connect("127.0.0.1:9001"))
+        .await
+        .ok()?
+        .ok()?;
 
     authenticate_runner_stream(&mut stream, config_dir).await?;
 
@@ -299,10 +261,7 @@ pub(super) async fn query_runner_status(config_dir: &Path) -> Option<RunnerStatu
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line))
-        .await
-        .ok()?
-        .ok()?;
+    let read_len = tokio::time::timeout(RUNNER_IPC_TIMEOUT, reader.read_line(&mut line)).await.ok()?.ok()?;
     if read_len == 0 {
         return None;
     }
@@ -321,18 +280,10 @@ fn runner_binary_build_id(binary: &Path) -> Option<String> {
     let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) else {
         return Some(format!("{}-{}", metadata.len(), fallback));
     };
-    Some(format!(
-        "{}.{}-{}",
-        duration.as_secs(),
-        duration.subsec_nanos(),
-        metadata.len()
-    ))
+    Some(format!("{}.{}-{}", duration.as_secs(), duration.subsec_nanos(), metadata.len()))
 }
 
-fn runner_status_is_compatible(
-    status: &RunnerStatusResponse,
-    expected_build_id: Option<&str>,
-) -> bool {
+fn runner_status_is_compatible(status: &RunnerStatusResponse, expected_build_id: Option<&str>) -> bool {
     if status.protocol_version != protocol::PROTOCOL_VERSION {
         return false;
     }
@@ -373,13 +324,9 @@ pub(super) fn find_agent_runner_binary() -> Result<PathBuf> {
         for build_dir in ["debug", "release"] {
             let candidates = [
                 cwd.join(format!("target/{build_dir}/{binary_name}")),
-                cwd.join(format!(
-                    "crates/agent-runner/target/{build_dir}/{binary_name}"
-                )),
+                cwd.join(format!("crates/agent-runner/target/{build_dir}/{binary_name}")),
                 cwd.join(format!("agent-runner/target/{build_dir}/{binary_name}")),
-                cwd.join(format!(
-                    "../crates/agent-runner/target/{build_dir}/{binary_name}"
-                )),
+                cwd.join(format!("../crates/agent-runner/target/{build_dir}/{binary_name}")),
                 cwd.join(format!("../agent-runner/target/{build_dir}/{binary_name}")),
                 cwd.join(format!("../target/{build_dir}/{binary_name}")),
             ];
@@ -395,19 +342,15 @@ pub(super) fn find_agent_runner_binary() -> Result<PathBuf> {
         return Ok(path);
     }
 
-    Err(anyhow!(
-        "Could not find agent-runner binary. Build it with `cargo build -p agent-runner`."
-    ))
+    Err(anyhow!("Could not find agent-runner binary. Build it with `cargo build -p agent-runner`."))
 }
 
 pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<Option<u32>> {
-
     let config_dir = runner_config_dir(project_root);
     let binary = find_agent_runner_binary()?;
     let expected_build_id = runner_binary_build_id(&binary);
     std::fs::create_dir_all(&config_dir).ok();
-    protocol::Config::ensure_token_exists(&config_dir)
-        .context("failed to provision IPC auth token")?;
+    protocol::Config::ensure_token_exists(&config_dir).context("failed to provision IPC auth token")?;
     clear_stale_runner_artifacts(&config_dir);
 
     if is_agent_runner_ready(&config_dir).await {
@@ -436,9 +379,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
                 }
             }
         } else {
-            return Err(anyhow!(
-                "agent-runner authentication succeeded but status probe returned no response"
-            ));
+            return Err(anyhow!("agent-runner authentication succeeded but status probe returned no response"));
         }
     }
 
@@ -471,9 +412,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
         }
     }
 
-    let child = command
-        .spawn()
-        .with_context(|| format!("Failed to spawn agent-runner at {}", binary.display()))?;
+    let child = command.spawn().with_context(|| format!("Failed to spawn agent-runner at {}", binary.display()))?;
     let spawned_pid = child.id();
     drop(child);
 
@@ -497,9 +436,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
         }
     }
 
-    Err(anyhow!(
-        "agent-runner failed health check after start (pid {spawned_pid})"
-    ))
+    Err(anyhow!("agent-runner failed health check after start (pid {spawned_pid})"))
 }
 
 pub(super) async fn stop_agent_runner_process(project_root: &Path) -> Result<bool> {
@@ -567,9 +504,7 @@ async fn stop_agent_runner_process_at_config_dir(config_dir: &Path) -> Result<bo
         }
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .status();
+            let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).status();
         }
     }
 
@@ -674,9 +609,7 @@ mod tests {
         create_stale_unix_socket(&socket_path);
         assert!(socket_path.exists());
 
-        let stopped = stop_agent_runner_process_at_config_dir(&config_dir)
-            .await
-            .expect("stop runner");
+        let stopped = stop_agent_runner_process_at_config_dir(&config_dir).await.expect("stop runner");
         assert!(!stopped);
         assert!(!socket_path.exists());
     }
@@ -689,9 +622,7 @@ mod tests {
         std::fs::write(&lock_path, "0|unix://unused").expect("write stale lock");
         assert!(lock_path.exists());
 
-        let stopped = stop_agent_runner_process_at_config_dir(&config_dir)
-            .await
-            .expect("stop runner");
+        let stopped = stop_agent_runner_process_at_config_dir(&config_dir).await.expect("stop runner");
         assert!(!stopped);
         assert!(!lock_path.exists());
     }
@@ -703,9 +634,7 @@ mod tests {
         std::fs::write(&lock_path, "malformed-lock-content").expect("write malformed lock");
         assert!(lock_path.exists());
 
-        let stopped = stop_agent_runner_process_at_config_dir(&config_dir)
-            .await
-            .expect("stop runner");
+        let stopped = stop_agent_runner_process_at_config_dir(&config_dir).await.expect("stop runner");
         assert!(!stopped);
         assert!(!lock_path.exists());
     }
@@ -767,14 +696,8 @@ mod tests {
             let stopped = stop_result.expect("stop runner");
             assert!(stopped, "cycle {cycle} should report a terminated runner");
             assert!(!lock_path.exists(), "cycle {cycle} should clean lock file");
-            assert!(
-                !socket_path.exists(),
-                "cycle {cycle} should clean socket file"
-            );
-            assert!(
-                !is_runner_process_alive(pid),
-                "cycle {cycle} should not leave the spawned process alive"
-            );
+            assert!(!socket_path.exists(), "cycle {cycle} should clean socket file");
+            assert!(!is_runner_process_alive(pid), "cycle {cycle} should not leave the spawned process alive");
         }
     }
 
@@ -800,9 +723,7 @@ mod tests {
         } else if let Ok(path) = find_agent_runner_binary() {
             path
         } else {
-            eprintln!(
-                "SKIP: agent-runner binary not found, build with cargo build -p agent-runner"
-            );
+            eprintln!("SKIP: agent-runner binary not found, build with cargo build -p agent-runner");
             return;
         };
 
@@ -815,12 +736,8 @@ mod tests {
         let config_path = runner_config_dir.join("config.json");
         std::fs::write(&config_path, "{}").expect("write empty config");
 
-        let config_before = protocol::Config::load_from_dir(&runner_config_dir)
-            .expect("load config before startup");
-        assert!(
-            config_before.agent_runner_token.is_none(),
-            "token should be absent before startup"
-        );
+        let config_before = protocol::Config::load_from_dir(&runner_config_dir).expect("load config before startup");
+        assert!(config_before.agent_runner_token.is_none(), "token should be absent before startup");
 
         let project_root = temp_project.path().to_path_buf();
 
@@ -856,33 +773,16 @@ mod tests {
             std::env::remove_var("AGENT_RUNNER_TOKEN");
         }
 
-        let pid = startup_result
-            .expect("runner startup should succeed")
-            .expect("runner startup should return a PID");
-        assert!(
-            is_runner_process_alive(pid),
-            "runner process should be alive"
-        );
+        let pid = startup_result.expect("runner startup should succeed").expect("runner startup should return a PID");
+        assert!(is_runner_process_alive(pid), "runner process should be alive");
 
-        let config_after =
-            protocol::Config::load_from_dir(&runner_config_dir).expect("load config after startup");
-        let token = config_after
-            .agent_runner_token
-            .clone()
-            .expect("token should be generated after startup");
+        let config_after = protocol::Config::load_from_dir(&runner_config_dir).expect("load config after startup");
+        let token = config_after.agent_runner_token.clone().expect("token should be generated after startup");
         assert!(!token.is_empty(), "generated token should not be empty");
-        assert!(
-            uuid::Uuid::parse_str(&token).is_ok(),
-            "generated token should be a valid UUID"
-        );
+        assert!(uuid::Uuid::parse_str(&token).is_ok(), "generated token should be a valid UUID");
 
-        let status = query_runner_status(&runner_config_dir)
-            .await
-            .expect("runner status query should succeed");
-        assert_eq!(
-            status.active_agents, 0,
-            "runner should have no active agents initially"
-        );
+        let status = query_runner_status(&runner_config_dir).await.expect("runner status query should succeed");
+        assert_eq!(status.active_agents, 0, "runner should have no active agents initially");
 
         let original_runner_config_dir2 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
         let original_skip_runner2 = std::env::var("AO_SKIP_RUNNER_START").ok();
@@ -918,20 +818,14 @@ mod tests {
 
         second_startup_result.expect("second startup should succeed");
 
-        let config_after_second = protocol::Config::load_from_dir(&runner_config_dir)
-            .expect("load config after second startup");
-        assert_eq!(
-            config_after_second.agent_runner_token,
-            Some(token),
-            "token should be preserved on second startup"
-        );
+        let config_after_second =
+            protocol::Config::load_from_dir(&runner_config_dir).expect("load config after second startup");
+        assert_eq!(config_after_second.agent_runner_token, Some(token), "token should be preserved on second startup");
 
         let original_runner_config_dir3 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
         std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
 
-        let stopped = stop_agent_runner_process(&project_root)
-            .await
-            .expect("stop runner should succeed");
+        let stopped = stop_agent_runner_process(&project_root).await.expect("stop runner should succeed");
 
         if let Some(val) = original_runner_config_dir3 {
             std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
@@ -941,9 +835,6 @@ mod tests {
 
         assert!(stopped, "runner should be stopped");
 
-        assert!(
-            !is_runner_process_alive(pid),
-            "runner process should not be alive after stop"
-        );
+        assert!(!is_runner_process_alive(pid), "runner process should not be alive after stop");
     }
 }

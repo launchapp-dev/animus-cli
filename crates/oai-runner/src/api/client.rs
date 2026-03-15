@@ -17,11 +17,7 @@ impl ApiClient {
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("failed to build HTTP client");
-        Self {
-            http,
-            api_base,
-            api_key,
-        }
+        Self { http, api_base, api_key }
     }
 
     pub async fn stream_chat(
@@ -44,8 +40,7 @@ impl ApiClient {
                     let err_str = e.to_string();
                     // Retry on 429 (rate limit) or 5xx server errors
                     // Check for " 5" to match " 500", " 502", etc. in error messages
-                    let should_retry =
-                        err_str.contains("429") || (err_str.contains(" 5") && attempt < 2);
+                    let should_retry = err_str.contains("429") || (err_str.contains(" 5") && attempt < 2);
                     if should_retry {
                         last_err = Some(e);
                         continue;
@@ -76,12 +71,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            bail!(
-                "API returned {} {}: {}",
-                status.as_u16(),
-                status.as_str(),
-                body
-            );
+            bail!("API returned {} {}: {}", status.as_u16(), status.as_str(), body);
         }
 
         let mut content = String::new();
@@ -113,16 +103,8 @@ impl ApiClient {
                     std::io::stdout().flush().ok();
                     let msg = ChatMessage {
                         role: "assistant".to_string(),
-                        content: if content.is_empty() {
-                            None
-                        } else {
-                            Some(content)
-                        },
-                        tool_calls: if tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(tool_calls)
-                        },
+                        content: if content.is_empty() { None } else { Some(content) },
+                        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                         tool_call_id: None,
                     };
                     return Ok((msg, usage));
@@ -151,10 +133,7 @@ impl ApiClient {
                                 tool_calls.push(ToolCall {
                                     id: String::new(),
                                     type_: "function".to_string(),
-                                    function: FunctionCall {
-                                        name: String::new(),
-                                        arguments: String::new(),
-                                    },
+                                    function: FunctionCall { name: String::new(), arguments: String::new() },
                                 });
                             }
 
@@ -178,16 +157,8 @@ impl ApiClient {
         std::io::stdout().flush().ok();
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: if content.is_empty() {
-                None
-            } else {
-                Some(content)
-            },
-            tool_calls: if tool_calls.is_empty() {
-                None
-            } else {
-                Some(tool_calls)
-            },
+            content: if content.is_empty() { None } else { Some(content) },
+            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
             tool_call_id: None,
         };
         Ok((msg, usage))

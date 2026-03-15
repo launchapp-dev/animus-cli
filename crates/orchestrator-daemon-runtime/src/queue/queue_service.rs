@@ -4,8 +4,8 @@ use protocol::SubjectDispatch;
 use serde::Serialize;
 
 use crate::{
-    load_dispatch_queue_state, save_dispatch_queue_state, DispatchQueueEntry,
-    DispatchQueueEntryStatus, DispatchQueueState,
+    load_dispatch_queue_state, save_dispatch_queue_state, DispatchQueueEntry, DispatchQueueEntryStatus,
+    DispatchQueueState,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,10 +53,7 @@ pub fn queue_stats(project_root: &str) -> Result<QueueStats> {
     Ok(queue_snapshot(project_root)?.stats)
 }
 
-pub fn enqueue_subject_dispatch(
-    project_root: &str,
-    dispatch: SubjectDispatch,
-) -> Result<QueueEnqueueResult> {
+pub fn enqueue_subject_dispatch(project_root: &str, dispatch: SubjectDispatch) -> Result<QueueEnqueueResult> {
     let mut state = load_dispatch_queue_state(project_root)?.unwrap_or_default();
     let subject_id = dispatch.subject_id().to_string();
 
@@ -72,20 +69,12 @@ pub fn enqueue_subject_dispatch(
                 }
             }
     }) {
-        return Ok(QueueEnqueueResult {
-            enqueued: false,
-            subject_id,
-        });
+        return Ok(QueueEnqueueResult { enqueued: false, subject_id });
     }
 
-    state
-        .entries
-        .push(DispatchQueueEntry::from_dispatch(dispatch));
+    state.entries.push(DispatchQueueEntry::from_dispatch(dispatch));
     save_dispatch_queue_state(project_root, &state)?;
-    Ok(QueueEnqueueResult {
-        enqueued: true,
-        subject_id,
-    })
+    Ok(QueueEnqueueResult { enqueued: true, subject_id })
 }
 
 pub fn hold_subject(project_root: &str, subject_id: &str) -> Result<bool> {
@@ -137,11 +126,7 @@ pub fn reorder_subjects(project_root: &str, subject_ids: Vec<String>) -> Result<
         return Ok(false);
     };
 
-    let original_order = state
-        .entries
-        .iter()
-        .map(|entry| entry.subject_id().to_string())
-        .collect::<Vec<_>>();
+    let original_order = state.entries.iter().map(|entry| entry.subject_id().to_string()).collect::<Vec<_>>();
     let mut reordered = Vec::new();
     let mut consumed = vec![false; state.entries.len()];
 
@@ -161,10 +146,7 @@ pub fn reorder_subjects(project_root: &str, subject_ids: Vec<String>) -> Result<
         }
     }
 
-    let reordered_order = reordered
-        .iter()
-        .map(|entry| entry.subject_id().to_string())
-        .collect::<Vec<_>>();
+    let reordered_order = reordered.iter().map(|entry| entry.subject_id().to_string()).collect::<Vec<_>>();
     if reordered_order == original_order {
         return Ok(false);
     }
@@ -191,21 +173,9 @@ fn snapshot_from_state(state: &DispatchQueueState) -> QueueSnapshot {
 
     let stats = QueueStats {
         total: state.entries.len(),
-        pending: state
-            .entries
-            .iter()
-            .filter(|entry| entry.status == DispatchQueueEntryStatus::Pending)
-            .count(),
-        assigned: state
-            .entries
-            .iter()
-            .filter(|entry| entry.status == DispatchQueueEntryStatus::Assigned)
-            .count(),
-        held: state
-            .entries
-            .iter()
-            .filter(|entry| entry.status == DispatchQueueEntryStatus::Held)
-            .count(),
+        pending: state.entries.iter().filter(|entry| entry.status == DispatchQueueEntryStatus::Pending).count(),
+        assigned: state.entries.iter().filter(|entry| entry.status == DispatchQueueEntryStatus::Assigned).count(),
+        held: state.entries.iter().filter(|entry| entry.status == DispatchQueueEntryStatus::Held).count(),
     };
 
     QueueSnapshot { entries, stats }
@@ -243,23 +213,14 @@ mod tests {
     fn hold_release_and_reorder_use_subject_ids() {
         let temp = tempfile::tempdir().expect("tempdir");
         let project_root = temp.path().to_string_lossy().to_string();
-        enqueue_subject_dispatch(
-            &project_root,
-            SubjectDispatch::for_task("TASK-1", "standard"),
-        )
-        .expect("enqueue first");
-        enqueue_subject_dispatch(
-            &project_root,
-            SubjectDispatch::for_task("TASK-2", "standard"),
-        )
-        .expect("enqueue second");
+        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-1", "standard"))
+            .expect("enqueue first");
+        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-2", "standard"))
+            .expect("enqueue second");
 
         assert!(hold_subject(&project_root, "TASK-2").expect("hold"));
         assert!(release_subject(&project_root, "TASK-2").expect("release"));
-        assert!(
-            reorder_subjects(&project_root, vec!["TASK-2".into(), "TASK-1".into()])
-                .expect("reorder")
-        );
+        assert!(reorder_subjects(&project_root, vec!["TASK-2".into(), "TASK-1".into()]).expect("reorder"));
 
         let snapshot = queue_snapshot(&project_root).expect("snapshot");
         assert_eq!(snapshot.entries[0].subject_id, "TASK-2");
@@ -284,10 +245,7 @@ mod tests {
         assert_eq!(snapshot.entries[0].subject_id, "REQ-39");
         assert!(snapshot.entries[0].task_id.is_none());
         assert_eq!(
-            snapshot.entries[0]
-                .dispatch
-                .as_ref()
-                .map(|dispatch| dispatch.workflow_ref.as_str()),
+            snapshot.entries[0].dispatch.as_ref().map(|dispatch| dispatch.workflow_ref.as_str()),
             Some("planning")
         );
     }
@@ -296,18 +254,11 @@ mod tests {
     fn reorder_subjects_keeps_all_entries_for_same_subject() {
         let temp = tempfile::tempdir().expect("tempdir");
         let project_root = temp.path().to_string_lossy().to_string();
-        enqueue_subject_dispatch(
-            &project_root,
-            SubjectDispatch::for_task("TASK-1", "standard"),
-        )
-        .expect("enqueue standard");
-        enqueue_subject_dispatch(
-            &project_root,
-            SubjectDispatch::for_task("TASK-2", "standard"),
-        )
-        .expect("enqueue second");
-        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-1", "ops"))
-            .expect("enqueue ops");
+        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-1", "standard"))
+            .expect("enqueue standard");
+        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-2", "standard"))
+            .expect("enqueue second");
+        enqueue_subject_dispatch(&project_root, SubjectDispatch::for_task("TASK-1", "ops")).expect("enqueue ops");
 
         assert!(reorder_subjects(&project_root, vec!["TASK-1".into()]).expect("reorder"));
 
@@ -315,20 +266,11 @@ mod tests {
         assert_eq!(snapshot.stats.total, 3);
         assert_eq!(snapshot.entries[0].subject_id, "TASK-1");
         assert_eq!(
-            snapshot.entries[0]
-                .dispatch
-                .as_ref()
-                .map(|dispatch| dispatch.workflow_ref.as_str()),
+            snapshot.entries[0].dispatch.as_ref().map(|dispatch| dispatch.workflow_ref.as_str()),
             Some("standard")
         );
         assert_eq!(snapshot.entries[1].subject_id, "TASK-1");
-        assert_eq!(
-            snapshot.entries[1]
-                .dispatch
-                .as_ref()
-                .map(|dispatch| dispatch.workflow_ref.as_str()),
-            Some("ops")
-        );
+        assert_eq!(snapshot.entries[1].dispatch.as_ref().map(|dispatch| dispatch.workflow_ref.as_str()), Some("ops"));
         assert_eq!(snapshot.entries[2].subject_id, "TASK-2");
     }
 }

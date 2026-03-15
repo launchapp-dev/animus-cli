@@ -1,9 +1,6 @@
 use protocol::{McpRuntimeConfig, PhaseRoutingConfig, SubjectDispatch};
 
-pub fn build_runner_command_from_dispatch(
-    dispatch: &SubjectDispatch,
-    project_root: &str,
-) -> std::process::Command {
+pub fn build_runner_command_from_dispatch(dispatch: &SubjectDispatch, project_root: &str) -> std::process::Command {
     build_runner_command(dispatch, project_root, None, None)
 }
 
@@ -33,10 +30,7 @@ pub fn build_runner_command(
         cmd.arg("--input-json").arg(input.to_string());
     }
 
-    cmd.arg("--workflow-ref")
-        .arg(&dispatch.workflow_ref)
-        .arg("--project-root")
-        .arg(project_root);
+    cmd.arg("--workflow-ref").arg(&dispatch.workflow_ref).arg("--project-root").arg(project_root);
 
     if let Some(routing) = phase_routing {
         if let Ok(json) = serde_json::to_string(routing) {
@@ -70,10 +64,7 @@ mod tests {
         );
         let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
         let program = command.get_program().to_string_lossy().into_owned();
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
 
         assert_eq!(program, "ao-workflow-runner");
         assert_eq!(

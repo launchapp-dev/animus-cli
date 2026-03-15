@@ -10,14 +10,9 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 fn temp_config_dir(label: &str) -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "protocol-config-{label}-{}-{nanos}",
-        std::process::id()
-    ));
+    let nanos =
+        SystemTime::now().duration_since(UNIX_EPOCH).expect("system time should be after unix epoch").as_nanos();
+    let dir = std::env::temp_dir().join(format!("protocol-config-{label}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp config dir");
     dir
 }
@@ -51,10 +46,7 @@ fn test_agent_run_event_serialization() {
 
 #[test]
 fn test_agent_control_request() {
-    let req = AgentControlRequest {
-        run_id: RunId("run-456".into()),
-        action: AgentControlAction::Pause,
-    };
+    let req = AgentControlRequest { run_id: RunId("run-456".into()), action: AgentControlAction::Pause };
 
     let json = serde_json::to_string(&req).unwrap();
     let parsed: AgentControlRequest = serde_json::from_str(&json).unwrap();
@@ -88,8 +80,7 @@ fn test_agent_status_query_response_status_roundtrip() {
     });
 
     let json = serde_json::to_string(&response).expect("serialize status query response");
-    let parsed: AgentStatusQueryResponse =
-        serde_json::from_str(&json).expect("deserialize status query response");
+    let parsed: AgentStatusQueryResponse = serde_json::from_str(&json).expect("deserialize status query response");
 
     match parsed {
         AgentStatusQueryResponse::Status(status) => {
@@ -111,8 +102,7 @@ fn test_agent_status_query_response_not_found_roundtrip() {
     });
 
     let json = serde_json::to_string(&response).expect("serialize error query response");
-    let parsed: AgentStatusQueryResponse =
-        serde_json::from_str(&json).expect("deserialize error query response");
+    let parsed: AgentStatusQueryResponse = serde_json::from_str(&json).expect("deserialize error query response");
 
     match parsed {
         AgentStatusQueryResponse::Error(error) => {
@@ -140,10 +130,7 @@ fn test_model_availability_enum() {
 fn test_project_model_config() {
     let config = ProjectModelConfig {
         project_id: ProjectId("proj-123".into()),
-        allowed_models: vec![
-            ModelId("claude-sonnet-4".into()),
-            ModelId("gpt-4-turbo".into()),
-        ],
+        allowed_models: vec![ModelId("claude-sonnet-4".into()), ModelId("gpt-4-turbo".into())],
         phase_defaults: WorkflowPhaseModelDefaults {
             design: Some(ModelId("gemini-3-pro".into())),
             development: Some(ModelId("claude-sonnet-4".into())),
@@ -162,13 +149,8 @@ fn test_project_model_config() {
 
 #[test]
 fn test_runner_status_request_rejects_unexpected_fields() {
-    let parsed = serde_json::from_str::<RunnerStatusRequest>(
-        r#"{"run_id":"run-cli-control","action":"terminate"}"#,
-    );
-    assert!(
-        parsed.is_err(),
-        "runner status request must reject control-shaped payloads"
-    );
+    let parsed = serde_json::from_str::<RunnerStatusRequest>(r#"{"run_id":"run-cli-control","action":"terminate"}"#);
+    assert!(parsed.is_err(), "runner status request must reject control-shaped payloads");
 }
 
 #[test]
@@ -181,8 +163,7 @@ fn test_runner_status_response_roundtrip_includes_protocol_metadata() {
     };
 
     let json = serde_json::to_string(&response).expect("serialize runner status");
-    let parsed: RunnerStatusResponse =
-        serde_json::from_str(&json).expect("deserialize runner status");
+    let parsed: RunnerStatusResponse = serde_json::from_str(&json).expect("deserialize runner status");
 
     assert_eq!(parsed.active_agents, 2);
     assert_eq!(parsed.protocol_version, PROTOCOL_VERSION);
@@ -212,23 +193,15 @@ fn test_ipc_auth_request_roundtrip() {
 
 #[test]
 fn test_ipc_auth_request_rejects_unknown_fields() {
-    let parsed = serde_json::from_str::<IpcAuthRequest>(
-        r#"{"kind":"ipc_auth","token":"secret","extra":"value"}"#,
-    );
-    assert!(
-        parsed.is_err(),
-        "auth request must reject unknown fields to keep handshake strict"
-    );
+    let parsed = serde_json::from_str::<IpcAuthRequest>(r#"{"kind":"ipc_auth","token":"secret","extra":"value"}"#);
+    assert!(parsed.is_err(), "auth request must reject unknown fields to keep handshake strict");
 }
 
 #[test]
 fn test_ipc_auth_result_failure_roundtrip() {
     let result = IpcAuthResult::rejected(IpcAuthFailureCode::InvalidToken, "unauthorized");
     let json = serde_json::to_string(&result).expect("serialize auth failure");
-    assert_eq!(
-        json,
-        r#"{"kind":"ipc_auth_result","ok":false,"code":"invalid_token","message":"unauthorized"}"#
-    );
+    assert_eq!(json, r#"{"kind":"ipc_auth_result","ok":false,"code":"invalid_token","message":"unauthorized"}"#);
 
     let parsed: IpcAuthResult = serde_json::from_str(&json).expect("deserialize auth failure");
     assert!(!parsed.ok);
@@ -238,10 +211,7 @@ fn test_ipc_auth_result_failure_roundtrip() {
 
 #[test]
 fn test_config_get_token_returns_config_value() {
-    let config = Config {
-        agent_runner_token: Some("config-token".to_string()),
-        mcp_servers: BTreeMap::new(),
-    };
+    let config = Config { agent_runner_token: Some("config-token".to_string()), mcp_servers: BTreeMap::new() };
 
     let token = config.get_token().expect("config token should resolve");
     assert_eq!(token, "config-token");
@@ -249,34 +219,18 @@ fn test_config_get_token_returns_config_value() {
 
 #[test]
 fn test_config_get_token_rejects_blank_config_value() {
-    let config = Config {
-        agent_runner_token: Some("   ".to_string()),
-        mcp_servers: BTreeMap::new(),
-    };
+    let config = Config { agent_runner_token: Some("   ".to_string()), mcp_servers: BTreeMap::new() };
 
-    let error = config
-        .get_token()
-        .expect_err("blank config token should fail closed");
-    assert!(
-        error.to_string().contains("agent_runner_token"),
-        "error should mention config token source"
-    );
+    let error = config.get_token().expect_err("blank config token should fail closed");
+    assert!(error.to_string().contains("agent_runner_token"), "error should mention config token source");
 }
 
 #[test]
 fn test_config_get_token_rejects_missing_token() {
-    let config = Config {
-        agent_runner_token: None,
-        mcp_servers: BTreeMap::new(),
-    };
+    let config = Config { agent_runner_token: None, mcp_servers: BTreeMap::new() };
 
-    let error = config
-        .get_token()
-        .expect_err("missing token should fail closed");
-    assert!(
-        error.to_string().contains("agent_runner_token"),
-        "error should mention missing config token"
-    );
+    let error = config.get_token().expect_err("missing token should fail closed");
+    assert!(error.to_string().contains("agent_runner_token"), "error should mention missing config token");
 }
 
 #[test]
@@ -287,10 +241,7 @@ fn test_config_load_from_dir_creates_default_config_file() {
 
     let loaded = Config::load_from_dir(&config_dir).expect("load scoped config");
     assert!(loaded.agent_runner_token.is_none());
-    assert!(
-        config_path.exists(),
-        "loading from a fresh directory should create config.json"
-    );
+    assert!(config_path.exists(), "loading from a fresh directory should create config.json");
 
     let _ = std::fs::remove_dir_all(config_dir);
 }
@@ -324,10 +275,7 @@ fn test_ensure_token_exists_generates_token_when_missing() {
     let loaded = Config::load_from_dir(&config_dir).expect("reload config");
     let token = loaded.agent_runner_token.expect("token should be set");
     assert!(!token.is_empty(), "token should not be empty");
-    assert!(
-        uuid::Uuid::parse_str(&token).is_ok(),
-        "token should be a valid UUID"
-    );
+    assert!(uuid::Uuid::parse_str(&token).is_ok(), "token should be a valid UUID");
 
     let _ = std::fs::remove_dir_all(config_dir);
 }
@@ -341,11 +289,7 @@ fn test_ensure_token_exists_preserves_existing_token() {
     Config::ensure_token_exists(&config_dir).expect("ensure_token_exists should succeed");
 
     let loaded = Config::load_from_dir(&config_dir).expect("reload config");
-    assert_eq!(
-        loaded.agent_runner_token.as_deref(),
-        Some("keep-me"),
-        "existing token should be preserved"
-    );
+    assert_eq!(loaded.agent_runner_token.as_deref(), Some("keep-me"), "existing token should be preserved");
 
     let _ = std::fs::remove_dir_all(config_dir);
 }

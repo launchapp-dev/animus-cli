@@ -9,9 +9,8 @@ use orchestrator_core::services::ServiceHub;
 use crate::{print_value, ReviewCommand};
 
 use super::state::{
-    compute_entity_review_status, load_reviews, parse_review_decision, parse_review_entity_type,
-    parse_reviewer_role, save_reviews, ReviewDecisionCli, ReviewEntityTypeCli, ReviewRecordCli,
-    ReviewerRoleCli,
+    compute_entity_review_status, load_reviews, parse_review_decision, parse_review_entity_type, parse_reviewer_role,
+    save_reviews, ReviewDecisionCli, ReviewEntityTypeCli, ReviewRecordCli, ReviewerRoleCli,
 };
 
 pub(crate) async fn handle_review(
@@ -27,9 +26,7 @@ pub(crate) async fn handle_review(
             let decisions: Vec<_> = store
                 .reviews
                 .into_iter()
-                .filter(|review| {
-                    review.entity_type == entity_type && review.entity_id == args.entity_id
-                })
+                .filter(|review| review.entity_type == entity_type && review.entity_id == args.entity_id)
                 .collect();
             print_value(decisions, json)
         }
@@ -42,9 +39,7 @@ pub(crate) async fn handle_review(
                 reviewer_role: parse_reviewer_role(&args.reviewer_role)?,
                 decision: parse_review_decision(&args.decision)?,
                 source: args.source.unwrap_or_else(|| "manual".to_string()),
-                rationale: args
-                    .rationale
-                    .unwrap_or_else(|| "no rationale provided".to_string()),
+                rationale: args.rationale.unwrap_or_else(|| "no rationale provided".to_string()),
                 content_hash: args.content_hash,
                 created_at: Utc::now().to_rfc3339(),
             };
@@ -54,20 +49,17 @@ pub(crate) async fn handle_review(
         }
         ReviewCommand::TaskStatus(args) => {
             let store = load_reviews(project_root)?;
-            let status =
-                compute_entity_review_status(&store, ReviewEntityTypeCli::Task, &args.task_id);
+            let status = compute_entity_review_status(&store, ReviewEntityTypeCli::Task, &args.task_id);
             print_value(status, json)
         }
         ReviewCommand::RequirementStatus(args) => {
             let store = load_reviews(project_root)?;
-            let status =
-                compute_entity_review_status(&store, ReviewEntityTypeCli::Requirement, &args.id);
+            let status = compute_entity_review_status(&store, ReviewEntityTypeCli::Requirement, &args.id);
             print_value(status, json)
         }
         ReviewCommand::Handoff(args) => {
-            let target_role =
-                orchestrator_core::HandoffTargetRole::try_from(args.target_role.as_str())
-                    .map_err(|error| anyhow::anyhow!("invalid target role: {}", error))?;
+            let target_role = orchestrator_core::HandoffTargetRole::try_from(args.target_role.as_str())
+                .map_err(|error| anyhow::anyhow!("invalid target role: {}", error))?;
             let handoff = hub
                 .review()
                 .request_handoff(orchestrator_core::AgentHandoffRequestInput {
@@ -87,9 +79,7 @@ pub(crate) async fn handle_review(
         }
         ReviewCommand::DualApprove(args) => {
             let mut store = load_reviews(project_root)?;
-            let rationale = args
-                .rationale
-                .unwrap_or_else(|| "Manual dual signoff requested".to_string());
+            let rationale = args.rationale.unwrap_or_else(|| "Manual dual signoff requested".to_string());
             let entity_id = args.task_id;
             let mut push_if_missing = |role: ReviewerRoleCli, label: &str| {
                 let already_approved = store.reviews.iter().rev().find(|review| {
@@ -97,10 +87,7 @@ pub(crate) async fn handle_review(
                         && review.entity_id == entity_id
                         && review.reviewer_role == role
                 });
-                if already_approved
-                    .map(|review| review.decision == ReviewDecisionCli::Approve)
-                    .unwrap_or(false)
-                {
+                if already_approved.map(|review| review.decision == ReviewDecisionCli::Approve).unwrap_or(false) {
                     return;
                 }
                 store.reviews.push(ReviewRecordCli {
@@ -118,8 +105,7 @@ pub(crate) async fn handle_review(
             push_if_missing(ReviewerRoleCli::Po, "PO");
             push_if_missing(ReviewerRoleCli::Em, "EM");
             save_reviews(project_root, &store)?;
-            let status =
-                compute_entity_review_status(&store, ReviewEntityTypeCli::Task, &entity_id);
+            let status = compute_entity_review_status(&store, ReviewEntityTypeCli::Task, &entity_id);
             print_value(status, json)
         }
     }

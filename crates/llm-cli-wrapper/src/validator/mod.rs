@@ -21,17 +21,11 @@ pub struct ValidationResult {
 
 impl ValidationResult {
     pub fn success() -> Self {
-        Self {
-            passed: true,
-            failures: Vec::new(),
-        }
+        Self { passed: true, failures: Vec::new() }
     }
 
     pub fn failure(failures: Vec<String>) -> Self {
-        Self {
-            passed: false,
-            failures,
-        }
+        Self { passed: false, failures }
     }
 }
 
@@ -51,10 +45,7 @@ impl CliValidator {
             match rule {
                 ValidationRule::ExitCodeEquals(expected) => {
                     if output.exit_code != Some(*expected) {
-                        failures.push(format!(
-                            "Expected exit code {} but got {:?}",
-                            expected, output.exit_code
-                        ));
+                        failures.push(format!("Expected exit code {} but got {:?}", expected, output.exit_code));
                     }
                 }
                 ValidationRule::OutputContains(expected) => {
@@ -85,10 +76,7 @@ impl CliValidator {
                 }
                 ValidationRule::DurationLessThan(max_ms) => {
                     if output.duration_ms > *max_ms {
-                        failures.push(format!(
-                            "Duration {}ms exceeds limit of {}ms",
-                            output.duration_ms, max_ms
-                        ));
+                        failures.push(format!("Duration {}ms exceeds limit of {}ms", output.duration_ms, max_ms));
                     }
                 }
             }

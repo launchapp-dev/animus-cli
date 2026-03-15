@@ -39,10 +39,7 @@ pub struct ClassifiedError {
 
 impl ClassifiedError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-        }
+        Self { kind, message: message.into() }
     }
 
     pub const fn kind(&self) -> ErrorKind {
@@ -101,13 +98,7 @@ const INVALID_INPUT_PATTERNS: &[&str] = &[
 ];
 const NOT_FOUND_PATTERNS: &[&str] = &["not found", "no such file or directory", "does not exist"];
 const CONFLICT_PATTERNS: &[&str] = &["already", "conflict"];
-const UNAVAILABLE_PATTERNS: &[&str] = &[
-    "timed out",
-    "timeout",
-    "connection",
-    "unavailable",
-    "failed to connect",
-];
+const UNAVAILABLE_PATTERNS: &[&str] = &["timed out", "timeout", "connection", "unavailable", "failed to connect"];
 
 pub fn classify_error_message(message: &str) -> (&'static str, i32) {
     let normalized = message.to_ascii_lowercase();
@@ -137,22 +128,13 @@ mod tests {
 
     #[test]
     fn classify_error_message_marks_invalid_inputs() {
-        assert_eq!(
-            classify_error_message("required arguments were not provided: --id"),
-            ("invalid_input", 2)
-        );
+        assert_eq!(classify_error_message("required arguments were not provided: --id"), ("invalid_input", 2));
     }
 
     #[test]
     fn classify_error_message_marks_not_found_paths() {
-        assert_eq!(
-            classify_error_message("No such file or directory (os error 2)"),
-            ("not_found", 3)
-        );
-        assert_eq!(
-            classify_error_message("task does not exist"),
-            ("not_found", 3)
-        );
+        assert_eq!(classify_error_message("No such file or directory (os error 2)"), ("not_found", 3));
+        assert_eq!(classify_error_message("task does not exist"), ("not_found", 3));
     }
 
     #[test]
@@ -160,14 +142,8 @@ mod tests {
         let cases = [
             ("unknown argument '--bogus' found", ("invalid_input", 2)),
             ("unrecognized option '--bogus'", ("invalid_input", 2)),
-            (
-                "CONFIRMATION_REQUIRED: rerun command with --confirm TASK-1",
-                ("invalid_input", 2),
-            ),
-            (
-                "priority must be one of critical|high|medium|low",
-                ("invalid_input", 2),
-            ),
+            ("CONFIRMATION_REQUIRED: rerun command with --confirm TASK-1", ("invalid_input", 2)),
+            ("priority must be one of critical|high|medium|low", ("invalid_input", 2)),
             ("resource already exists", ("conflict", 4)),
             ("failed to connect to daemon", ("unavailable", 5)),
         ];
@@ -179,37 +155,22 @@ mod tests {
 
     #[test]
     fn classify_error_message_marks_conflicts() {
-        assert_eq!(
-            classify_error_message("resource already exists"),
-            ("conflict", 4)
-        );
+        assert_eq!(classify_error_message("resource already exists"), ("conflict", 4));
     }
 
     #[test]
     fn classify_error_message_marks_unavailable_paths() {
-        assert_eq!(
-            classify_error_message("timeout while waiting for daemon"),
-            ("unavailable", 5)
-        );
+        assert_eq!(classify_error_message("timeout while waiting for daemon"), ("unavailable", 5));
     }
 
     #[test]
     fn classify_error_message_keeps_precedence_order() {
-        assert_eq!(
-            classify_error_message("invalid and not found"),
-            ("invalid_input", 2)
-        );
-        assert_eq!(
-            classify_error_message("task not found in unavailable registry"),
-            ("not_found", 3)
-        );
+        assert_eq!(classify_error_message("invalid and not found"), ("invalid_input", 2));
+        assert_eq!(classify_error_message("task not found in unavailable registry"), ("not_found", 3));
     }
 
     #[test]
     fn classify_error_message_defaults_to_internal() {
-        assert_eq!(
-            classify_error_message("unexpected panic in scheduler loop"),
-            ("internal", 1)
-        );
+        assert_eq!(classify_error_message("unexpected panic in scheduler loop"), ("internal", 1));
     }
 }

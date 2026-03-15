@@ -7,17 +7,10 @@ impl AoMcpServer {
         description = "List workflow phase definitions. Purpose: View configured phases available for workflows. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.phases.get for details on a specific phase, or ao.workflow.definitions.list to see how workflows are composed.",
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
-    async fn ao_workflow_phases_list(
-        &self,
-        params: Parameters<ProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_phases_list(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.workflow.phases.list",
-            vec![
-                "workflow".to_string(),
-                "phases".to_string(),
-                "list".to_string(),
-            ],
+            vec!["workflow".to_string(), "phases".to_string(), "list".to_string()],
             params.0.project_root,
         )
         .await
@@ -33,15 +26,9 @@ impl AoMcpServer {
         params: Parameters<WorkflowPhaseGetInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec![
-            "workflow".to_string(),
-            "phases".to_string(),
-            "get".to_string(),
-            "--phase".to_string(),
-            input.phase,
-        ];
-        self.run_tool("ao.workflow.phases.get", args, input.project_root)
-            .await
+        let args =
+            vec!["workflow".to_string(), "phases".to_string(), "get".to_string(), "--phase".to_string(), input.phase];
+        self.run_tool("ao.workflow.phases.get", args, input.project_root).await
     }
 
     #[tool(
@@ -55,11 +42,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.workflow.definitions.list",
-            vec![
-                "workflow".to_string(),
-                "definitions".to_string(),
-                "list".to_string(),
-            ],
+            vec!["workflow".to_string(), "definitions".to_string(), "list".to_string()],
             params.0.project_root,
         )
         .await
@@ -70,17 +53,10 @@ impl AoMcpServer {
         description = "Read effective workflow config. Purpose: View the resolved workflow configuration including phases, workflows, and settings. Prerequisites: None. Example: {}. Sequencing: Use ao.workflow.config.validate to check for issues, or ao.workflow.phases.list for phase details.",
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
-    async fn ao_workflow_config_get(
-        &self,
-        params: Parameters<ProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_config_get(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.workflow.config.get",
-            vec![
-                "workflow".to_string(),
-                "config".to_string(),
-                "get".to_string(),
-            ],
+            vec!["workflow".to_string(), "config".to_string(), "get".to_string()],
             params.0.project_root,
         )
         .await
@@ -97,11 +73,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.workflow.config.validate",
-            vec![
-                "workflow".to_string(),
-                "config".to_string(),
-                "validate".to_string(),
-            ],
+            vec!["workflow".to_string(), "config".to_string(), "validate".to_string()],
             params.0.project_root,
         )
         .await
