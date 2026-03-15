@@ -45,10 +45,10 @@ pub fn task_requires_research(task: &orchestrator_core::OrchestratorTask) -> boo
 }
 
 pub fn workflow_has_completed_research(workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {
-    workflow.phases.iter().any(|phase| {
-        phase.phase_id == "research"
-            && phase.status == orchestrator_core::WorkflowPhaseStatus::Success
-    })
+    workflow
+        .phases
+        .iter()
+        .any(|phase| phase.phase_id == "research" && phase.status == orchestrator_core::WorkflowPhaseStatus::Success)
 }
 
 pub fn workflow_has_active_research(workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {
@@ -62,4 +62,3 @@ pub fn workflow_has_active_research(workflow: &orchestrator_core::OrchestratorWo
             )
     })
 }
-

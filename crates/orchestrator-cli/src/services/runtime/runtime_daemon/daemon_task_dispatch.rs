@@ -1,15 +1,13 @@
 use super::*;
 #[cfg(test)]
 use crate::services::runtime::workflow_mutation_surface::daemon_workflow_assignment;
-pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
-use orchestrator_daemon_runtime::{
-    execute_dispatch_plan_via_runner, load_dispatch_queue_state, DispatchNoticeSink,
-    DispatchQueueEntryStatus, DispatchSelectionSource, PlannedDispatchStart,
-};
 #[cfg(test)]
-pub use orchestrator_daemon_runtime::{
-    dispatch_queue_state_path, save_dispatch_queue_state, DispatchQueueEntry,
+pub use orchestrator_daemon_runtime::{dispatch_queue_state_path, save_dispatch_queue_state, DispatchQueueEntry};
+use orchestrator_daemon_runtime::{
+    execute_dispatch_plan_via_runner, load_dispatch_queue_state, DispatchNoticeSink, DispatchQueueEntryStatus,
+    DispatchSelectionSource, PlannedDispatchStart,
 };
+pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
 
 #[cfg(test)]
 pub fn daemon_agent_assignee_for_workflow_start(
@@ -29,11 +27,7 @@ pub fn dispatch_queued_entries_via_runner(
     let queue_state = match load_dispatch_queue_state(root) {
         Ok(state) => state,
         Err(error) => {
-            eprintln!(
-                "{}: failed to load dispatch queue state: {}",
-                protocol::ACTOR_DAEMON,
-                error
-            );
+            eprintln!("{}: failed to load dispatch queue state: {}", protocol::ACTOR_DAEMON, error);
             return Ok(DispatchWorkflowStartSummary::default());
         }
     };
@@ -64,13 +58,7 @@ pub fn dispatch_queued_entries_via_runner(
     }
 
     let mut notice_sink = CliDispatchNoticeSink;
-    Ok(execute_dispatch_plan_via_runner(
-        root,
-        process_manager,
-        &planned_starts,
-        limit,
-        &mut notice_sink,
-    ))
+    Ok(execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, limit, &mut notice_sink))
 }
 
 struct CliDispatchNoticeSink;

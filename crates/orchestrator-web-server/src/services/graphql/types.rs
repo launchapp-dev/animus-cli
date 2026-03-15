@@ -645,45 +645,25 @@ impl GqlTask {
         self.0
             .checklist
             .iter()
-            .map(|c| GqlChecklist {
-                id: c.id.clone(),
-                description: c.description.clone(),
-                completed: c.completed,
-            })
+            .map(|c| GqlChecklist { id: c.id.clone(), description: c.description.clone(), completed: c.completed })
             .collect()
     }
     async fn dependencies(&self) -> Vec<GqlDependency> {
         self.0
             .dependencies
             .iter()
-            .map(|d| GqlDependency {
-                task_id: d.task_id.clone(),
-                dependency_type: d.dependency_type.clone(),
-            })
+            .map(|d| GqlDependency { task_id: d.task_id.clone(), dependency_type: d.dependency_type.clone() })
             .collect()
     }
-    async fn requirements(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<GqlRequirement>> {
+    async fn requirements(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<GqlRequirement>> {
         if self.0.linked_requirements.is_empty() {
             return Ok(vec![]);
         }
         let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
         let all_val = api.requirements_list().await?;
-        let all_reqs: Vec<RawRequirement> =
-            serde_json::from_value(all_val).unwrap_or_default();
-        let linked: std::collections::HashSet<&str> = self
-            .0
-            .linked_requirements
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
-        Ok(all_reqs
-            .into_iter()
-            .filter(|r| linked.contains(r.id.as_str()))
-            .map(GqlRequirement)
-            .collect())
+        let all_reqs: Vec<RawRequirement> = serde_json::from_value(all_val).unwrap_or_default();
+        let linked: std::collections::HashSet<&str> = self.0.linked_requirements.iter().map(|s| s.as_str()).collect();
+        Ok(all_reqs.into_iter().filter(|r| linked.contains(r.id.as_str())).map(GqlRequirement).collect())
     }
 }
 
@@ -715,10 +695,7 @@ impl GqlRequirement {
         &self.0.status
     }
     async fn requirement_type(&self) -> Option<GqlRequirementType> {
-        self.0
-            .requirement_type
-            .as_deref()
-            .map(GqlRequirementType::from_str_val)
+        self.0.requirement_type.as_deref().map(GqlRequirementType::from_str_val)
     }
     async fn tags(&self) -> &[String] {
         &self.0.tags
@@ -772,15 +749,11 @@ impl GqlWorkflow {
             })
             .collect()
     }
-    async fn decisions(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<GqlDecision>> {
+    async fn decisions(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<GqlDecision>> {
         let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
         match api.workflows_decisions(&self.0.id).await {
             Ok(val) => {
-                let decisions: Vec<RawDecision> =
-                    serde_json::from_value(val).unwrap_or_default();
+                let decisions: Vec<RawDecision> = serde_json::from_value(val).unwrap_or_default();
                 Ok(decisions
                     .into_iter()
                     .map(|d| GqlDecision {
@@ -816,10 +789,7 @@ impl GqlProject {
         self.0.get("path").and_then(|v| v.as_str()).map(String::from)
     }
     async fn description(&self) -> Option<String> {
-        self.0
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("description").and_then(|v| v.as_str()).map(String::from)
     }
     #[graphql(name = "type")]
     async fn project_type(&self) -> Option<String> {
@@ -829,26 +799,16 @@ impl GqlProject {
         self.0
             .get("tech_stack")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default()
     }
     async fn archived(&self) -> bool {
-        self.0
-            .get("archived")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        self.0.get("archived").and_then(|v| v.as_bool()).unwrap_or(false)
     }
     async fn metadata(&self) -> Option<String> {
         self.0.get("metadata").map(|v| v.to_string())
     }
-    async fn tasks(
-        &self,
-        _ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<GqlTask>> {
+    async fn tasks(&self, _ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<GqlTask>> {
         let path = match self.0.get("path").and_then(|v| v.as_str()) {
             Some(p) => p,
             None => return Ok(vec![]),
@@ -862,10 +822,7 @@ impl GqlProject {
         let raw: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
         Ok(raw.into_iter().map(GqlTask).collect())
     }
-    async fn workflows(
-        &self,
-        _ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<GqlWorkflow>> {
+    async fn workflows(&self, _ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<GqlWorkflow>> {
         let path = match self.0.get("path").and_then(|v| v.as_str()) {
             Some(p) => p,
             None => return Ok(vec![]),
@@ -879,10 +836,7 @@ impl GqlProject {
         let raw: Vec<RawWorkflow> = serde_json::from_value(val).unwrap_or_default();
         Ok(raw.into_iter().map(GqlWorkflow).collect())
     }
-    async fn requirements(
-        &self,
-        _ctx: &async_graphql::Context<'_>,
-    ) -> async_graphql::Result<Vec<GqlRequirement>> {
+    async fn requirements(&self, _ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Vec<GqlRequirement>> {
         let path = match self.0.get("path").and_then(|v| v.as_str()) {
             Some(p) => p,
             None => return Ok(vec![]),
@@ -908,48 +862,30 @@ impl GqlVision {
         self.0.get("title").and_then(|v| v.as_str()).map(String::from)
     }
     async fn summary(&self) -> Option<String> {
-        self.0
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("summary").and_then(|v| v.as_str()).map(String::from)
     }
     async fn goals(&self) -> Vec<String> {
         self.0
             .get("goals")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default()
     }
     async fn target_audience(&self) -> Option<String> {
-        self.0
-            .get("target_audience")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("target_audience").and_then(|v| v.as_str()).map(String::from)
     }
     async fn success_criteria(&self) -> Vec<String> {
         self.0
             .get("success_criteria")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default()
     }
     async fn constraints(&self) -> Vec<String> {
         self.0
             .get("constraints")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default()
     }
     async fn raw(&self) -> String {
@@ -964,41 +900,22 @@ impl GqlVision {
 #[Object]
 impl GqlQueueEntry {
     async fn task_id(&self) -> String {
-        self.0
-            .get("task_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
+        self.0.get("task_id").and_then(|v| v.as_str()).unwrap_or("").to_string()
     }
     async fn title(&self) -> Option<String> {
-        self.0
-            .get("task")
-            .and_then(|t| t.get("title"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("task").and_then(|t| t.get("title")).and_then(|v| v.as_str()).map(String::from)
     }
     async fn priority(&self) -> Option<GqlPriority> {
-        self.0
-            .get("task")
-            .and_then(|t| t.get("priority"))
-            .and_then(|v| v.as_str())
-            .map(GqlPriority::from_str_val)
+        self.0.get("task").and_then(|t| t.get("priority")).and_then(|v| v.as_str()).map(GqlPriority::from_str_val)
     }
     async fn status(&self) -> Option<GqlTaskStatus> {
-        self.0
-            .get("task")
-            .and_then(|t| t.get("status"))
-            .and_then(|v| v.as_str())
-            .map(GqlTaskStatus::from_str_val)
+        self.0.get("task").and_then(|t| t.get("status")).and_then(|v| v.as_str()).map(GqlTaskStatus::from_str_val)
     }
     async fn wait_time(&self) -> Option<f64> {
         self.0.get("wait_time").and_then(|v| v.as_f64())
     }
     async fn position(&self) -> Option<i32> {
-        self.0
-            .get("position")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32)
+        self.0.get("position").and_then(|v| v.as_i64()).map(|v| v as i32)
     }
 }
 
@@ -1009,22 +926,13 @@ impl GqlQueueEntry {
 #[Object]
 impl GqlQueueStats {
     async fn depth(&self) -> i32 {
-        self.0
-            .get("depth")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32
+        self.0.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32
     }
     async fn ready_count(&self) -> i32 {
-        self.0
-            .get("pending")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32
+        self.0.get("pending").and_then(|v| v.as_i64()).unwrap_or(0) as i32
     }
     async fn held_count(&self) -> i32 {
-        self.0
-            .get("held")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32
+        self.0.get("held").and_then(|v| v.as_i64()).unwrap_or(0) as i32
     }
     async fn avg_wait(&self) -> Option<f64> {
         self.0.get("avg_wait_time_secs").and_then(|v| v.as_f64())
@@ -1041,10 +949,7 @@ impl GqlQueueStats {
 #[Object]
 impl GqlTaskStats {
     async fn total(&self) -> i32 {
-        self.0
-            .get("total")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32
+        self.0.get("total").and_then(|v| v.as_i64()).unwrap_or(0) as i32
     }
     async fn by_status(&self) -> Option<String> {
         self.0.get("by_status").map(|v| v.to_string())
@@ -1067,10 +972,7 @@ impl GqlTaskStats {
 #[Object]
 impl GqlDaemonStatus {
     async fn healthy(&self) -> bool {
-        self.0
-            .get("healthy")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        self.0.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false)
     }
     async fn status(&self) -> GqlDaemonStatusValue {
         self.0
@@ -1080,33 +982,18 @@ impl GqlDaemonStatus {
             .unwrap_or(GqlDaemonStatusValue::Stopped)
     }
     async fn status_raw(&self) -> Option<String> {
-        self.0
-            .get("status")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("status").and_then(|v| v.as_str()).map(String::from)
     }
     async fn runner_connected(&self) -> bool {
-        self.0
-            .get("runner_connected")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+        self.0.get("runner_connected").and_then(|v| v.as_bool()).unwrap_or(false)
     }
     async fn active_agents(&self) -> i32 {
-        self.0
-            .get("active_agents")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32
+        self.0.get("active_agents").and_then(|v| v.as_i64()).unwrap_or(0) as i32
     }
     async fn max_agents(&self) -> Option<i32> {
-        self.0
-            .get("pool_size")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32)
+        self.0.get("pool_size").and_then(|v| v.as_i64()).map(|v| v as i32)
     }
     async fn project_root(&self) -> Option<String> {
-        self.0
-            .get("project_root")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        self.0.get("project_root").and_then(|v| v.as_str()).map(String::from)
     }
 }

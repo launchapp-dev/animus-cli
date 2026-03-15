@@ -23,19 +23,11 @@ impl CliTester {
     }
 
     /// Test all CLIs in the registry with the given test suite
-    pub async fn test_all_clis(
-        &self,
-        registry: &CliRegistry,
-        suite: &TestSuite,
-    ) -> Result<Vec<TestResult>> {
+    pub async fn test_all_clis(&self, registry: &CliRegistry, suite: &TestSuite) -> Result<Vec<TestResult>> {
         let mut results = Vec::new();
 
         for cli in registry.all() {
-            info!(
-                "Testing {} with suite '{}'",
-                cli.metadata().cli_type.display_name(),
-                suite.name
-            );
+            info!("Testing {} with suite '{}'", cli.metadata().cli_type.display_name(), suite.name);
 
             for test_case in &suite.test_cases {
                 let result = self.run_test(cli.clone(), test_case).await;
@@ -47,11 +39,7 @@ impl CliTester {
     }
 
     /// Test a specific CLI with a test suite
-    pub async fn test_cli(
-        &self,
-        cli: Arc<dyn CliInterface>,
-        suite: &TestSuite,
-    ) -> Result<Vec<TestResult>> {
+    pub async fn test_cli(&self, cli: Arc<dyn CliInterface>, suite: &TestSuite) -> Result<Vec<TestResult>> {
         let mut results = Vec::new();
 
         for test_case in &suite.test_cases {
@@ -86,10 +74,7 @@ impl CliTester {
 
                 // Check exit code
                 if test.should_succeed && !output.is_success() {
-                    failures.push(format!(
-                        "Expected success but got exit code: {:?}",
-                        output.exit_code
-                    ));
+                    failures.push(format!("Expected success but got exit code: {:?}", output.exit_code));
                 }
 
                 // Check expected output (case-insensitive)
@@ -98,23 +83,15 @@ impl CliTester {
                     let stderr_lower = output.stderr.to_lowercase();
                     let expected_lower = expected.to_lowercase();
 
-                    if !stdout_lower.contains(&expected_lower)
-                        && !stderr_lower.contains(&expected_lower)
-                    {
-                        failures.push(format!(
-                            "Expected output to contain '{}' but it didn't",
-                            expected
-                        ));
+                    if !stdout_lower.contains(&expected_lower) && !stderr_lower.contains(&expected_lower) {
+                        failures.push(format!("Expected output to contain '{}' but it didn't", expected));
                     }
                 }
 
                 // Check expected files
                 for expected_file in &test.expected_files {
                     if !expected_file.exists() {
-                        failures.push(format!(
-                            "Expected file {:?} to exist but it doesn't",
-                            expected_file
-                        ));
+                        failures.push(format!("Expected file {:?} to exist but it doesn't", expected_file));
                     }
                 }
 
@@ -140,11 +117,7 @@ impl CliTester {
 
         // Check if available
         if !cli.is_available().await {
-            return Ok(TestResult::error(
-                "health_check".to_string(),
-                cli_type,
-                "CLI is not available".to_string(),
-            ));
+            return Ok(TestResult::error("health_check".to_string(), cli_type, "CLI is not available".to_string()));
         }
 
         // Check auth

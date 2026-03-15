@@ -55,11 +55,7 @@ impl DoctorReport {
         let cwd_ok = std::env::current_dir().is_ok();
         checks.push(build_check(
             "cwd_resolvable",
-            if cwd_ok {
-                DoctorCheckStatus::Ok
-            } else {
-                DoctorCheckStatus::Fail
-            },
+            if cwd_ok { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Fail },
             if cwd_ok {
                 "current working directory is available".to_string()
             } else {
@@ -75,18 +71,11 @@ impl DoctorReport {
         let project_root_is_dir = project_root.is_dir();
         checks.push(build_check(
             "project_root_exists",
-            if project_root_is_dir {
-                DoctorCheckStatus::Ok
-            } else {
-                DoctorCheckStatus::Fail
-            },
+            if project_root_is_dir { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Fail },
             if project_root_is_dir {
                 format!("project root exists at {}", project_root.display())
             } else if project_root_exists {
-                format!(
-                    "project root is not a directory at {}",
-                    project_root.display()
-                )
+                format!("project root is not a directory at {}", project_root.display())
             } else {
                 format!("project root does not exist at {}", project_root.display())
             },
@@ -122,9 +111,7 @@ impl DoctorReport {
             },
             !matches!(ao_dir_state, DirectoryState::NotDirectory),
             match ao_dir_state {
-                DirectoryState::NotDirectory => {
-                    "replace non-directory .ao path with an AO state directory"
-                }
+                DirectoryState::NotDirectory => "replace non-directory .ao path with an AO state directory",
                 _ => "create baseline AO state/config files",
             },
             match ao_dir_state {
@@ -134,35 +121,20 @@ impl DoctorReport {
         ));
 
         let core_state_path = ao_dir.join("core-state.json");
-        checks.push(build_ao_file_check(
-            "core_state_present",
-            &core_state_path,
-            ao_dir_state,
-        ));
+        checks.push(build_ao_file_check("core_state_present", &core_state_path, ao_dir_state));
 
         let config_path = ao_dir.join("config.json");
-        checks.push(build_ao_file_check(
-            "config_json_present",
-            &config_path,
-            ao_dir_state,
-        ));
+        checks.push(build_ao_file_check("config_json_present", &config_path, ao_dir_state));
 
         let resume_config_path = ao_dir.join("resume-config.json");
-        checks.push(build_ao_file_check(
-            "resume_config_present",
-            &resume_config_path,
-            ao_dir_state,
-        ));
+        checks.push(build_ao_file_check("resume_config_present", &resume_config_path, ao_dir_state));
 
         let daemon_config_path = daemon_project_config_path(project_root);
         let daemon_check = if ao_dir_state == DirectoryState::NotDirectory {
             build_check(
                 "daemon_config_valid_json",
                 DoctorCheckStatus::Fail,
-                format!(
-                    "AO state path is not a directory at {}; cannot read daemon config",
-                    ao_dir.display()
-                ),
+                format!("AO state path is not a directory at {}; cannot read daemon config", ao_dir.display()),
                 "manual_ao_directory_repair",
                 false,
                 "replace non-directory .ao path with an AO state directory",
@@ -172,10 +144,7 @@ impl DoctorReport {
             build_check(
                 "daemon_config_valid_json",
                 DoctorCheckStatus::Warn,
-                format!(
-                    "daemon config not found at {}; defaults will be used",
-                    daemon_config_path.display()
-                ),
+                format!("daemon config not found at {}; defaults will be used", daemon_config_path.display()),
                 "create_default_daemon_config",
                 true,
                 "create daemon config with default values",
@@ -196,10 +165,7 @@ impl DoctorReport {
                     Ok(_) => build_check(
                         "daemon_config_valid_json",
                         DoctorCheckStatus::Fail,
-                        format!(
-                            "daemon config at {} must be a JSON object",
-                            daemon_config_path.display()
-                        ),
+                        format!("daemon config at {} must be a JSON object", daemon_config_path.display()),
                         "manual_pm_config_repair",
                         false,
                         "repair malformed daemon config JSON",
@@ -208,11 +174,7 @@ impl DoctorReport {
                     Err(error) => build_check(
                         "daemon_config_valid_json",
                         DoctorCheckStatus::Fail,
-                        format!(
-                            "daemon config parse error at {}: {}",
-                            daemon_config_path.display(),
-                            error
-                        ),
+                        format!("daemon config parse error at {}: {}", daemon_config_path.display(), error),
                         "manual_pm_config_repair",
                         false,
                         "repair malformed daemon config JSON",
@@ -222,11 +184,7 @@ impl DoctorReport {
                 Err(error) => build_check(
                     "daemon_config_valid_json",
                     DoctorCheckStatus::Fail,
-                    format!(
-                        "failed to read daemon config at {}: {}",
-                        daemon_config_path.display(),
-                        error
-                    ),
+                    format!("failed to read daemon config at {}: {}", daemon_config_path.display(), error),
                     "manual_pm_config_repair",
                     false,
                     "repair unreadable daemon config file permissions",
@@ -239,14 +197,9 @@ impl DoctorReport {
         let detected_clis = detect_llm_clis();
         checks.push(build_check(
             "llm_cli_availability",
+            if detected_clis.is_empty() { DoctorCheckStatus::Warn } else { DoctorCheckStatus::Ok },
             if detected_clis.is_empty() {
-                DoctorCheckStatus::Warn
-            } else {
-                DoctorCheckStatus::Ok
-            },
-            if detected_clis.is_empty() {
-                "no supported LLM CLI detected on PATH (checked codex, claude, gemini, opencode)"
-                    .to_string()
+                "no supported LLM CLI detected on PATH (checked codex, claude, gemini, opencode)".to_string()
             } else {
                 format!("detected CLI tools: {}", detected_clis.join(", "))
             },
@@ -261,18 +214,11 @@ impl DoctorReport {
         #[cfg(unix)]
         checks.push(build_check(
             "runner_socket_available",
-            if runner_socket_path.exists() {
-                DoctorCheckStatus::Ok
-            } else {
-                DoctorCheckStatus::Warn
-            },
+            if runner_socket_path.exists() { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Warn },
             if runner_socket_path.exists() {
                 format!("runner socket detected at {}", runner_socket_path.display())
             } else {
-                format!(
-                    "runner socket not found at {}",
-                    runner_socket_path.display()
-                )
+                format!("runner socket not found at {}", runner_socket_path.display())
             },
             "start_runner",
             true,
@@ -319,16 +265,10 @@ fn build_check(
 }
 
 fn derive_result(checks: &[DoctorCheck]) -> DoctorCheckResult {
-    if checks
-        .iter()
-        .any(|check| check.status == DoctorCheckStatus::Fail)
-    {
+    if checks.iter().any(|check| check.status == DoctorCheckStatus::Fail) {
         return DoctorCheckResult::Unhealthy;
     }
-    if checks
-        .iter()
-        .any(|check| check.status == DoctorCheckStatus::Warn)
-    {
+    if checks.iter().any(|check| check.status == DoctorCheckStatus::Warn) {
         return DoctorCheckResult::Degraded;
     }
     DoctorCheckResult::Healthy
@@ -351,11 +291,7 @@ fn directory_state(path: &Path) -> DirectoryState {
     DirectoryState::NotDirectory
 }
 
-fn build_ao_file_check(
-    check_id: &str,
-    expected_path: &Path,
-    ao_dir_state: DirectoryState,
-) -> DoctorCheck {
+fn build_ao_file_check(check_id: &str, expected_path: &Path, ao_dir_state: DirectoryState) -> DoctorCheck {
     if ao_dir_state == DirectoryState::NotDirectory {
         return build_check(
             check_id,
@@ -374,11 +310,7 @@ fn build_ao_file_check(
 
     build_check(
         check_id,
-        if expected_path.exists() {
-            DoctorCheckStatus::Ok
-        } else {
-            DoctorCheckStatus::Warn
-        },
+        if expected_path.exists() { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Warn },
         format!("expected {}", expected_path.display()),
         "bootstrap_project_state",
         true,
@@ -464,11 +396,11 @@ mod tests {
         assert!(report
             .checks
             .iter()
-            .any(|check| check.id == "ao_directory_present"
-                && check.status == DoctorCheckStatus::Warn));
-        assert!(report.checks.iter().any(
-            |check| check.id == "core_state_present" && check.status == DoctorCheckStatus::Warn
-        ));
+            .any(|check| check.id == "ao_directory_present" && check.status == DoctorCheckStatus::Warn));
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.id == "core_state_present" && check.status == DoctorCheckStatus::Warn));
     }
 
     #[test]
@@ -522,11 +454,7 @@ mod tests {
             "resume_config_present",
             "daemon_config_valid_json",
         ] {
-            let check = report
-                .checks
-                .iter()
-                .find(|check| check.id == id)
-                .expect("check should exist");
+            let check = report.checks.iter().find(|check| check.id == id).expect("check should exist");
             assert_eq!(check.status, DoctorCheckStatus::Fail, "{id} should fail");
             assert_eq!(check.remediation.id, "manual_ao_directory_repair");
             assert!(!check.remediation.available);
@@ -541,10 +469,8 @@ mod tests {
         std::fs::create_dir_all(&ao_dir).expect("ao dir should be created");
         std::fs::write(ao_dir.join("core-state.json"), "{}").expect("core state should be written");
         std::fs::write(ao_dir.join("config.json"), "{}").expect("config should be written");
-        std::fs::write(ao_dir.join("resume-config.json"), "{}")
-            .expect("resume config should be written");
-        std::fs::write(ao_dir.join("pm-config.json"), "{}")
-            .expect("daemon config should be written");
+        std::fs::write(ao_dir.join("resume-config.json"), "{}").expect("resume config should be written");
+        std::fs::write(ao_dir.join("pm-config.json"), "{}").expect("daemon config should be written");
 
         let report = DoctorReport::run_for_project(temp.path());
         for id in [
@@ -554,16 +480,8 @@ mod tests {
             "resume_config_present",
             "daemon_config_valid_json",
         ] {
-            let check = report
-                .checks
-                .iter()
-                .find(|check| check.id == id)
-                .expect("check should exist");
-            assert_eq!(
-                check.status,
-                DoctorCheckStatus::Ok,
-                "check `{id}` should be ok"
-            );
+            let check = report.checks.iter().find(|check| check.id == id).expect("check should exist");
+            assert_eq!(check.status, DoctorCheckStatus::Ok, "check `{id}` should be ok");
         }
     }
 
@@ -576,24 +494,14 @@ mod tests {
         let file_path = temp.path().join("candidate");
         fs::write(&file_path, "echo test").expect("file should be created");
 
-        let mut perms = fs::metadata(&file_path)
-            .expect("file metadata should be read")
-            .permissions();
+        let mut perms = fs::metadata(&file_path).expect("file metadata should be read").permissions();
         perms.set_mode(0o644);
         fs::set_permissions(&file_path, perms).expect("permissions should be updated");
-        assert!(
-            !path_is_executable(&file_path),
-            "file without execute bit should not be executable"
-        );
+        assert!(!path_is_executable(&file_path), "file without execute bit should not be executable");
 
-        let mut perms = fs::metadata(&file_path)
-            .expect("file metadata should be read")
-            .permissions();
+        let mut perms = fs::metadata(&file_path).expect("file metadata should be read").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&file_path, perms).expect("permissions should be updated");
-        assert!(
-            path_is_executable(&file_path),
-            "file with execute bit should be executable"
-        );
+        assert!(path_is_executable(&file_path), "file with execute bit should be executable");
     }
 }

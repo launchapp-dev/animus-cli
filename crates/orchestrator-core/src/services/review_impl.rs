@@ -64,10 +64,7 @@ fn handoff_max_depth() -> usize {
 }
 
 fn workflow_runtime_config_path(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join("state")
-        .join("workflow-config.json")
+    project_root.join(".ao").join("state").join("workflow-config.json")
 }
 
 fn load_workflow_runtime_config(project_root: &Path) -> WorkflowRuntimeConfigLite {
@@ -103,10 +100,7 @@ fn resolve_handoff_settings_from_runtime_config(
         .map(|(_, settings)| settings.clone())
 }
 
-fn resolve_handoff_execution_target(
-    project_root: &Path,
-    role: HandoffTargetRole,
-) -> (String, String) {
+fn resolve_handoff_execution_target(project_root: &Path, role: HandoffTargetRole) -> (String, String) {
     let phase_key = format!("handoff-{}", role.as_str());
     let runtime_settings = resolve_handoff_settings_from_runtime_config(project_root, &phase_key);
 
@@ -189,25 +183,10 @@ fn hash_intent(role: HandoffTargetRole, question: &str) -> String {
 }
 
 fn sanitize_segment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    value.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect()
 }
 
-fn record_handoff(
-    project_root: &Path,
-    run_id: &str,
-    question: &str,
-    context: &Value,
-    result: &AgentHandoffResult,
-) {
+fn record_handoff(project_root: &Path, run_id: &str, question: &str, context: &Value, result: &AgentHandoffResult) {
     let project_root_str = project_root.to_string_lossy().to_string();
     let mut store = match load_handoffs(&project_root_str) {
         Ok(store) => store,
@@ -232,12 +211,7 @@ fn record_handoff(
     let _ = save_handoffs(&project_root_str, &store);
 }
 
-async fn ask_target(
-    project_root: &Path,
-    target: HandoffTargetRole,
-    question: &str,
-    context: &Value,
-) -> Result<String> {
+async fn ask_target(project_root: &Path, target: HandoffTargetRole, question: &str, context: &Value) -> Result<String> {
     let (tool, model) = resolve_handoff_execution_target(project_root, target);
     let prompt = format!(
         "You are {} supporting another agent in Agent Orchestrator.\n\
@@ -290,12 +264,7 @@ Context (JSON):\n{}\n",
         .with_context(|| format!("failed to launch handoff tool '{tool}'"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "handoff CLI '{}' exited with status {}: {}",
-            tool,
-            output.status,
-            stderr.trim()
-        ));
+        return Err(anyhow!("handoff CLI '{}' exited with status {}: {}", tool, output.status, stderr.trim()));
     }
 
     let response = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -306,15 +275,9 @@ Context (JSON):\n{}\n",
     }
 }
 
-async fn request_handoff_impl(
-    project_root: &Path,
-    request: AgentHandoffRequestInput,
-) -> AgentHandoffResult {
+async fn request_handoff_impl(project_root: &Path, request: AgentHandoffRequestInput) -> AgentHandoffResult {
     let started_at = Instant::now();
-    let handoff_id = request
-        .handoff_id
-        .clone()
-        .unwrap_or_else(|| format!("handoff-{}", Uuid::new_v4()));
+    let handoff_id = request.handoff_id.clone().unwrap_or_else(|| format!("handoff-{}", Uuid::new_v4()));
     let run_id = request.run_id.clone();
     let target_role = request.target_role;
     let question = request.question.clone();
@@ -342,22 +305,15 @@ async fn request_handoff_impl(
         .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| run_id.clone());
-    let workflow_id = resolve_workflow_id_for_run(project_root, &run_id)
-        .unwrap_or_else(|| "unknown-workflow".to_string());
+    let workflow_id =
+        resolve_workflow_id_for_run(project_root, &run_id).unwrap_or_else(|| "unknown-workflow".to_string());
     let transcript = transcript_path(project_root, &workflow_id, &root_run_id);
 
     let history = load_history(&transcript).unwrap_or_default();
-    let depth = history
-        .iter()
-        .filter(|entry| entry.event == "completed" || entry.event == "failed")
-        .count();
+    let depth = history.iter().filter(|entry| entry.event == "completed" || entry.event == "failed").count();
 
     if depth >= handoff_max_depth() {
-        let error = format!(
-            "Handoff depth exceeded (depth={}, max_depth={})",
-            depth,
-            handoff_max_depth()
-        );
+        let error = format!("Handoff depth exceeded (depth={}, max_depth={})", depth, handoff_max_depth());
         let result = AgentHandoffResult {
             handoff_id: handoff_id.clone(),
             run_id: run_id.clone(),
@@ -384,29 +340,17 @@ async fn request_handoff_impl(
                 payload: Some(json!({ "error": error })),
             },
         );
-        record_handoff(
-            project_root,
-            &request.run_id,
-            &request.question,
-            &request.context,
-            &result,
-        );
+        record_handoff(project_root, &request.run_id, &request.question, &request.context, &result);
         return result;
     }
 
     let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
     for entry in &history {
-        seen_pairs.insert((
-            entry.target_role.as_str().to_string(),
-            entry.intent_hash.clone(),
-        ));
+        seen_pairs.insert((entry.target_role.as_str().to_string(), entry.intent_hash.clone()));
     }
     let loop_key = (target_role.as_str().to_string(), intent_hash.clone());
     if seen_pairs.contains(&loop_key) {
-        let error = format!(
-            "Handoff cycle detected for role={} intent_hash={}",
-            loop_key.0, loop_key.1
-        );
+        let error = format!("Handoff cycle detected for role={} intent_hash={}", loop_key.0, loop_key.1);
         let result = AgentHandoffResult {
             handoff_id: handoff_id.clone(),
             run_id: run_id.clone(),
@@ -433,13 +377,7 @@ async fn request_handoff_impl(
                 payload: Some(json!({ "error": error })),
             },
         );
-        record_handoff(
-            project_root,
-            &request.run_id,
-            &request.question,
-            &request.context,
-            &result,
-        );
+        record_handoff(project_root, &request.run_id, &request.question, &request.context, &result);
         return result;
     }
 
@@ -521,13 +459,7 @@ async fn request_handoff_impl(
         }
     };
 
-    record_handoff(
-        project_root,
-        &request.run_id,
-        &request.question,
-        &request.context,
-        &result,
-    );
+    record_handoff(project_root, &request.run_id, &request.question, &request.context, &result);
     result
 }
 
@@ -563,10 +495,7 @@ mod tests {
         };
         let result = request_handoff_impl(temp.path(), request).await;
         assert_eq!(result.status, AgentHandoffStatus::Failed);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("run_id is required"));
+        assert!(result.error.unwrap_or_default().contains("run_id is required"));
         assert_eq!(result.depth, 0);
     }
 }

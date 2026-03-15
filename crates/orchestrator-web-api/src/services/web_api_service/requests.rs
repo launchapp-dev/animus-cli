@@ -99,11 +99,7 @@ pub(super) struct RequirementsDraftRequest {
 
 impl Default for RequirementsDraftRequest {
     fn default() -> Self {
-        Self {
-            include_codebase_scan: true,
-            append_only: true,
-            max_requirements: None,
-        }
+        Self { include_codebase_scan: true, append_only: true, max_requirements: None }
     }
 }
 

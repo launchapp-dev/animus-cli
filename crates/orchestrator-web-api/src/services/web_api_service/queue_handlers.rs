@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use orchestrator_daemon_runtime::{
-    hold_subject, queue_snapshot, release_subject, reorder_subjects, DispatchQueueEntryStatus,
-    QueueEntrySnapshot, QueueSnapshot,
+    hold_subject, queue_snapshot, release_subject, reorder_subjects, DispatchQueueEntryStatus, QueueEntrySnapshot,
+    QueueSnapshot,
 };
 use protocol::orchestrator::OrchestratorTask;
 
@@ -17,11 +17,7 @@ fn throughput_last_hour(snapshot: &QueueSnapshot, now: DateTime<Utc>) -> usize {
         .iter()
         .filter_map(|entry| entry.assigned_at.as_deref())
         .filter_map(|assigned_at| DateTime::parse_from_rfc3339(assigned_at).ok())
-        .filter(|assigned_at| {
-            now.signed_duration_since(assigned_at.with_timezone(&Utc))
-                .num_hours()
-                < 1
-        })
+        .filter(|assigned_at| now.signed_duration_since(assigned_at.with_timezone(&Utc)).num_hours() < 1)
         .count()
 }
 
@@ -36,10 +32,7 @@ fn avg_wait_time_secs(snapshot: &QueueSnapshot, now: DateTime<Utc>) -> i64 {
         let Some(dispatch) = &entry.dispatch else {
             continue;
         };
-        total_wait_secs += now
-            .signed_duration_since(dispatch.requested_at)
-            .num_seconds()
-            .max(0);
+        total_wait_secs += now.signed_duration_since(dispatch.requested_at).num_seconds().max(0);
         wait_count += 1;
     }
 
@@ -56,19 +49,10 @@ fn queue_entry_json(
     position: usize,
     now: DateTime<Utc>,
 ) -> serde_json::Value {
-    let task = entry
-        .task_id
-        .as_deref()
-        .and_then(|task_id| task_lookup.get(task_id));
+    let task = entry.task_id.as_deref().and_then(|task_id| task_lookup.get(task_id));
 
-    let wait_time = entry
-        .dispatch
-        .as_ref()
-        .map(|d| {
-            now.signed_duration_since(d.requested_at)
-                .num_seconds()
-                .max(0) as f64
-        });
+    let wait_time =
+        entry.dispatch.as_ref().map(|d| now.signed_duration_since(d.requested_at).num_seconds().max(0) as f64);
 
     serde_json::json!({
         "subject_id": entry.subject_id,
@@ -93,15 +77,12 @@ fn queue_entry_json(
 impl WebApiService {
     pub async fn queue_list(&self) -> Result<serde_json::Value, WebApiError> {
         let project_root = &self.context.project_root;
-        let snapshot = queue_snapshot(project_root).map_err(|e| {
-            WebApiError::new("internal_error", format!("failed to load queue: {}", e), 1)
-        })?;
+        let snapshot = queue_snapshot(project_root)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to load queue: {}", e), 1))?;
 
         let tasks = self.context.hub.tasks().list().await.unwrap_or_default();
-        let task_lookup = tasks
-            .iter()
-            .map(|task| (task.id.as_str(), task))
-            .collect::<std::collections::HashMap<_, _>>();
+        let task_lookup =
+            tasks.iter().map(|task| (task.id.as_str(), task)).collect::<std::collections::HashMap<_, _>>();
 
         let now = Utc::now();
         let entries = snapshot
@@ -124,9 +105,8 @@ impl WebApiService {
 
     pub async fn queue_stats(&self) -> Result<serde_json::Value, WebApiError> {
         let project_root = &self.context.project_root;
-        let snapshot = queue_snapshot(project_root).map_err(|e| {
-            WebApiError::new("internal_error", format!("failed to load queue: {}", e), 1)
-        })?;
+        let snapshot = queue_snapshot(project_root)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to load queue: {}", e), 1))?;
         let now = Utc::now();
 
         Ok(serde_json::json!({
@@ -139,48 +119,29 @@ impl WebApiService {
         }))
     }
 
-    pub async fn queue_reorder(
-        &self,
-        body: serde_json::Value,
-    ) -> Result<serde_json::Value, WebApiError> {
+    pub async fn queue_reorder(&self, body: serde_json::Value) -> Result<serde_json::Value, WebApiError> {
         let request: QueueReorderRequest = parse_json_body(body)?;
         let project_root = &self.context.project_root;
 
-        let updated = reorder_subjects(project_root, request.subject_ids).map_err(|e| {
-            WebApiError::new(
-                "internal_error",
-                format!("failed to reorder queue: {}", e),
-                1,
-            )
-        })?;
+        let updated = reorder_subjects(project_root, request.subject_ids)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to reorder queue: {}", e), 1))?;
 
         if updated {
-            self.publish_event(
-                "queue-reorder",
-                serde_json::json!({ "message": "queue reordered" }),
-            );
+            self.publish_event("queue-reorder", serde_json::json!({ "message": "queue reordered" }));
         }
 
         Ok(serde_json::json!({ "reordered": updated }))
     }
 
-    pub async fn queue_hold(
-        &self,
-        task_id: &str,
-        body: serde_json::Value,
-    ) -> Result<serde_json::Value, WebApiError> {
+    pub async fn queue_hold(&self, task_id: &str, body: serde_json::Value) -> Result<serde_json::Value, WebApiError> {
         let _request: QueueHoldRequest = parse_json_body(body).unwrap_or(QueueHoldRequest {});
         let project_root = &self.context.project_root;
 
-        let updated = hold_subject(project_root, task_id).map_err(|e| {
-            WebApiError::new("internal_error", format!("failed to hold task: {}", e), 1)
-        })?;
+        let updated = hold_subject(project_root, task_id)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to hold task: {}", e), 1))?;
 
         if updated {
-            self.publish_event(
-                "queue-hold",
-                serde_json::json!({ "task_id": task_id, "held": true }),
-            );
+            self.publish_event("queue-hold", serde_json::json!({ "task_id": task_id, "held": true }));
         }
 
         Ok(serde_json::json!({ "held": updated, "task_id": task_id }))
@@ -191,17 +152,11 @@ impl WebApiService {
         task_id: &str,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, WebApiError> {
-        let request: QueueReleaseRequest =
-            parse_json_body(body).unwrap_or(QueueReleaseRequest { reason: None });
+        let request: QueueReleaseRequest = parse_json_body(body).unwrap_or(QueueReleaseRequest { reason: None });
         let project_root = &self.context.project_root;
 
-        let updated = release_subject(project_root, task_id).map_err(|e| {
-            WebApiError::new(
-                "internal_error",
-                format!("failed to release task: {}", e),
-                1,
-            )
-        })?;
+        let updated = release_subject(project_root, task_id)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to release task: {}", e), 1))?;
 
         if updated {
             let mut payload = serde_json::json!({ "task_id": task_id, "released": true });
@@ -247,20 +202,11 @@ mod tests {
                     dispatch: None,
                     status: DispatchQueueEntryStatus::Assigned,
                     workflow_id: None,
-                    assigned_at: Some(
-                        Utc.with_ymd_and_hms(2026, 3, 7, 20, 30, 0)
-                            .unwrap()
-                            .to_rfc3339(),
-                    ),
+                    assigned_at: Some(Utc.with_ymd_and_hms(2026, 3, 7, 20, 30, 0).unwrap().to_rfc3339()),
                     held_at: None,
                 },
             ],
-            stats: orchestrator_daemon_runtime::QueueStats {
-                total: 2,
-                pending: 0,
-                assigned: 2,
-                held: 0,
-            },
+            stats: orchestrator_daemon_runtime::QueueStats { total: 2, pending: 0, assigned: 2, held: 0 },
         };
 
         assert_eq!(throughput_last_hour(&snapshot, now), 1);
@@ -284,12 +230,7 @@ mod tests {
                 assigned_at: None,
                 held_at: None,
             }],
-            stats: orchestrator_daemon_runtime::QueueStats {
-                total: 1,
-                pending: 1,
-                assigned: 0,
-                held: 0,
-            },
+            stats: orchestrator_daemon_runtime::QueueStats { total: 1, pending: 1, assigned: 0, held: 0 },
         };
 
         assert_eq!(avg_wait_time_secs(&snapshot, now), 600);

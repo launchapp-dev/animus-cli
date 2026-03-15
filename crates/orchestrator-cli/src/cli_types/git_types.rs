@@ -77,37 +77,15 @@ pub(crate) struct GitCommitArgs {
 pub(crate) struct GitPushArgs {
     #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(
-        long,
-        value_name = "REMOTE",
-        default_value = "origin",
-        help = "Git remote name."
-    )]
+    #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
-    #[arg(
-        long,
-        value_name = "BRANCH",
-        default_value = "main",
-        help = "Branch to push."
-    )]
+    #[arg(long, value_name = "BRANCH", default_value = "main", help = "Branch to push.")]
     pub(crate) branch: String,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Force push (destructive and requires --confirmation-id)."
-    )]
+    #[arg(long, default_value_t = false, help = "Force push (destructive and requires --confirmation-id).")]
     pub(crate) force: bool,
-    #[arg(
-        long,
-        value_name = "ID",
-        help = "Approved confirmation id required for destructive git operations."
-    )]
+    #[arg(long, value_name = "ID", help = "Approved confirmation id required for destructive git operations.")]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview command payload without changing repository state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview command payload without changing repository state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -115,19 +93,9 @@ pub(crate) struct GitPushArgs {
 pub(crate) struct GitPullArgs {
     #[arg(long, value_name = "REPO", help = "Repository name or path.")]
     pub(crate) repo: String,
-    #[arg(
-        long,
-        value_name = "REMOTE",
-        default_value = "origin",
-        help = "Git remote name."
-    )]
+    #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
-    #[arg(
-        long,
-        value_name = "BRANCH",
-        default_value = "main",
-        help = "Branch to pull."
-    )]
+    #[arg(long, value_name = "BRANCH", default_value = "main", help = "Branch to pull.")]
     pub(crate) branch: String,
 }
 
@@ -161,17 +129,9 @@ pub(crate) struct GitWorktreeCreateArgs {
     pub(crate) worktree_name: String,
     #[arg(long, value_name = "PATH", help = "Filesystem path for the worktree.")]
     pub(crate) worktree_path: String,
-    #[arg(
-        long,
-        value_name = "BRANCH",
-        help = "Branch to check out in the worktree."
-    )]
+    #[arg(long, value_name = "BRANCH", help = "Branch to check out in the worktree.")]
     pub(crate) branch: String,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Create the branch when it does not already exist."
-    )]
+    #[arg(long, default_value_t = false, help = "Create the branch when it does not already exist.")]
     pub(crate) create_branch: bool,
 }
 
@@ -189,23 +149,11 @@ pub(crate) struct GitWorktreeRemoveArgs {
     pub(crate) repo: String,
     #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Force removal if the worktree is dirty."
-    )]
+    #[arg(long, default_value_t = false, help = "Force removal if the worktree is dirty.")]
     pub(crate) force: bool,
-    #[arg(
-        long,
-        value_name = "ID",
-        help = "Approved confirmation id required before removing a worktree."
-    )]
+    #[arg(long, value_name = "ID", help = "Approved confirmation id required before removing a worktree.")]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview command payload without changing repository state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview command payload without changing repository state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -226,17 +174,9 @@ pub(crate) struct GitWorktreePruneArgs {
         help = "Git remote name used with --delete-remote-branch."
     )]
     pub(crate) remote: String,
-    #[arg(
-        long,
-        value_name = "ID",
-        help = "Approved confirmation id required before pruning worktrees."
-    )]
+    #[arg(long, value_name = "ID", help = "Approved confirmation id required before pruning worktrees.")]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview prune actions without changing repository state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview prune actions without changing repository state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -246,12 +186,7 @@ pub(crate) struct GitWorktreePullArgs {
     pub(crate) repo: String,
     #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(
-        long,
-        value_name = "REMOTE",
-        default_value = "origin",
-        help = "Git remote name."
-    )]
+    #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
 }
 
@@ -261,30 +196,13 @@ pub(crate) struct GitWorktreePushArgs {
     pub(crate) repo: String,
     #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(
-        long,
-        value_name = "REMOTE",
-        default_value = "origin",
-        help = "Git remote name."
-    )]
+    #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Force push (destructive and requires --confirmation-id)."
-    )]
+    #[arg(long, default_value_t = false, help = "Force push (destructive and requires --confirmation-id).")]
     pub(crate) force: bool,
-    #[arg(
-        long,
-        value_name = "ID",
-        help = "Approved confirmation id required for destructive git operations."
-    )]
+    #[arg(long, value_name = "ID", help = "Approved confirmation id required for destructive git operations.")]
     pub(crate) confirmation_id: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview command payload without changing repository state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview command payload without changing repository state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -294,12 +212,7 @@ pub(crate) struct GitWorktreeSyncArgs {
     pub(crate) repo: String,
     #[arg(long, value_name = "NAME", help = "Worktree name.")]
     pub(crate) worktree_name: String,
-    #[arg(
-        long,
-        value_name = "REMOTE",
-        default_value = "origin",
-        help = "Git remote name."
-    )]
+    #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
 }
 
@@ -315,11 +228,7 @@ pub(crate) enum GitConfirmCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct GitConfirmRequestArgs {
-    #[arg(
-        long,
-        value_name = "TYPE",
-        help = "Operation type, for example force_push or remove_worktree."
-    )]
+    #[arg(long, value_name = "TYPE", help = "Operation type, for example force_push or remove_worktree.")]
     pub(crate) operation_type: String,
     #[arg(long, value_name = "REPO", help = "Repository name.")]
     pub(crate) repo_name: String,

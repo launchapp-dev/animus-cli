@@ -10,19 +10,17 @@ use super::ops_common::project_state_dir;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
-    services::ServiceHub, workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager,
-    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
-    STANDARD_WORKFLOW_REF,
+    dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
+    workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, print_value,
-    WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand,
-    WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand,
-    WorkflowExecuteArgs, WorkflowPromptCommand, WorkflowStateMachineCommand,
+    dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, print_value, WorkflowAgentRuntimeCommand,
+    WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowExecuteArgs,
+    WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -56,22 +54,16 @@ async fn resolve_workflow_run_dispatch(
             ))
             .map(|dispatch| dispatch.with_vars(vars))
         }
-        (None, None, Some(t)) => Ok(
-            protocol::SubjectDispatch::for_custom(
-                t,
-                description.unwrap_or_default(),
-                workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
-                None,
-                "manual-cli-run",
-            )
-            .with_vars(vars),
-        ),
-        (None, None, None) => Err(anyhow!(
-            "one of --task-id, --requirement-id, or --title must be provided"
-        )),
-        _ => Err(anyhow!(
-            "--task-id, --requirement-id, and --title are mutually exclusive"
-        )),
+        (None, None, Some(t)) => Ok(protocol::SubjectDispatch::for_custom(
+            t,
+            description.unwrap_or_default(),
+            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+            None,
+            "manual-cli-run",
+        )
+        .with_vars(vars)),
+        (None, None, None) => Err(anyhow!("one of --task-id, --requirement-id, or --title must be provided")),
+        _ => Err(anyhow!("--task-id, --requirement-id, and --title are mutually exclusive")),
     }
 }
 
@@ -80,13 +72,7 @@ async fn resolve_workflow_run_dispatch_from_input(
     project_root: &str,
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch> {
-    let WorkflowRunInput {
-        subject,
-        workflow_ref,
-        input,
-        vars,
-        ..
-    } = input;
+    let WorkflowRunInput { subject, workflow_ref, input, vars, .. } = input;
     match subject {
         WorkflowSubject::Task { id } => {
             let task = hub.tasks().get(&id).await?;
@@ -109,16 +95,14 @@ async fn resolve_workflow_run_dispatch_from_input(
             .with_input(input))
             .map(|dispatch| dispatch.with_vars(vars))
         }
-        WorkflowSubject::Custom { title, description } => {
-            Ok(protocol::SubjectDispatch::for_custom(
-                title,
-                description,
-                workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
-                input,
-                "manual-cli-run",
-            ))
-            .map(|dispatch| dispatch.with_vars(vars))
-        }
+        WorkflowSubject::Custom { title, description } => Ok(protocol::SubjectDispatch::for_custom(
+            title,
+            description,
+            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+            input,
+            "manual-cli-run",
+        ))
+        .map(|dispatch| dispatch.with_vars(vars)),
     }
 }
 
@@ -157,10 +141,7 @@ fn upgrade_legacy_workflow_run_input(raw: &str) -> Result<Option<WorkflowRunInpu
         return Ok(None);
     }
 
-    let workflow_ref = object
-        .get("workflow_ref")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let workflow_ref = object.get("workflow_ref").and_then(Value::as_str).map(ToOwned::to_owned);
     let input = match object.get("input") {
         Some(value) => Some(value.clone()),
         None => match object.get("input_json") {
@@ -175,16 +156,10 @@ fn upgrade_legacy_workflow_run_input(raw: &str) -> Result<Option<WorkflowRunInpu
 
     let run_input = match (task_id, requirement_id, title) {
         (Some(task_id), None, None) => WorkflowRunInput::for_task(task_id, workflow_ref),
-        (None, Some(requirement_id), None) => {
-            WorkflowRunInput::for_requirement(requirement_id, workflow_ref)
-        }
+        (None, Some(requirement_id), None) => WorkflowRunInput::for_requirement(requirement_id, workflow_ref),
         (None, None, Some(title)) => WorkflowRunInput::for_custom(
             title,
-            object
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            object.get("description").and_then(Value::as_str).unwrap_or_default().to_string(),
             workflow_ref,
         ),
         (None, None, None) => return Ok(None),
@@ -201,14 +176,11 @@ fn upgrade_legacy_workflow_run_input(raw: &str) -> Result<Option<WorkflowRunInpu
 fn parse_workflow_vars(raw_vars: &[String]) -> Result<std::collections::HashMap<String, String>> {
     let mut vars = std::collections::HashMap::new();
     for raw in raw_vars {
-        let (key, value) = raw
-            .split_once('=')
-            .ok_or_else(|| anyhow!("invalid --var value '{raw}'; expected KEY=VALUE"))?;
+        let (key, value) =
+            raw.split_once('=').ok_or_else(|| anyhow!("invalid --var value '{raw}'; expected KEY=VALUE"))?;
         let key = key.trim();
         if key.is_empty() {
-            return Err(anyhow!(
-                "invalid --var value '{raw}'; variable name must not be empty"
-            ));
+            return Err(anyhow!("invalid --var value '{raw}'; variable name must not be empty"));
         }
         if vars.contains_key(key) {
             return Err(anyhow!("duplicate --var key '{}'", key));
@@ -231,15 +203,13 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
 
-    if let Some(input) = upgrade_legacy_workflow_run_input(raw).with_context(|| {
-        "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"
-    })? {
+    if let Some(input) = upgrade_legacy_workflow_run_input(raw)
+        .with_context(|| "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema")?
+    {
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
 
-    Err(anyhow!(
-        "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"
-    ))
+    Err(anyhow!("invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"))
 }
 
 pub(crate) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String> {
@@ -249,11 +219,7 @@ pub(crate) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<Str
     workflow_config
         .workflows
         .iter()
-        .any(|workflow| {
-            workflow
-                .id
-                .eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
-        })
+        .any(|workflow| workflow.id.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF))
         .then(|| REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string())
         .ok_or_else(|| {
             anyhow!(
@@ -281,10 +247,7 @@ fn emit_daemon_event(project_root: &str, event_type: &str, data: Value) -> Resul
     let mut line = serde_json::to_string(&event)?;
     line.push('\n');
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(())
 }
@@ -302,21 +265,14 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Get(args) => print_value(workflows.get(&args.id).await?, json),
         WorkflowCommand::Decisions(args) => print_value(workflows.decisions(&args.id).await?, json),
         WorkflowCommand::Checkpoints { command } => match command {
-            WorkflowCheckpointCommand::List(args) => {
-                print_value(workflows.list_checkpoints(&args.id).await?, json)
+            WorkflowCheckpointCommand::List(args) => print_value(workflows.list_checkpoints(&args.id).await?, json),
+            WorkflowCheckpointCommand::Get(args) => {
+                print_value(workflows.get_checkpoint(&args.id, args.checkpoint).await?, json)
             }
-            WorkflowCheckpointCommand::Get(args) => print_value(
-                workflows.get_checkpoint(&args.id, args.checkpoint).await?,
-                json,
-            ),
             WorkflowCheckpointCommand::Prune(args) => {
                 let manager = orchestrator_core::WorkflowStateManager::new(project_root);
-                let pruned = manager.prune_checkpoints(
-                    &args.id,
-                    args.keep_last_per_phase,
-                    args.max_age_hours,
-                    args.dry_run,
-                )?;
+                let pruned =
+                    manager.prune_checkpoints(&args.id, args.keep_last_per_phase, args.max_age_hours, args.dry_run)?;
                 print_value(pruned, json)
             }
         },
@@ -341,14 +297,7 @@ pub(crate) async fn handle_workflow(
                 Ok(())
             } else {
                 let dispatch = match args.input_json {
-                    Some(raw) => {
-                        resolve_workflow_run_dispatch_from_raw_input(
-                            hub.clone(),
-                            project_root,
-                            &raw,
-                        )
-                        .await?
-                    }
+                    Some(raw) => resolve_workflow_run_dispatch_from_raw_input(hub.clone(), project_root, &raw).await?,
                     None => {
                         let vars = parse_workflow_vars(&args.vars)?;
                         resolve_workflow_run_dispatch(
@@ -376,15 +325,10 @@ pub(crate) async fn handle_workflow(
             let outcome = dispatch_workflow_event(
                 hub.clone(),
                 project_root,
-                WorkflowEvent::Resume {
-                    workflow_id: args.id.clone(),
-                    feedback: None,
-                },
+                WorkflowEvent::Resume { workflow_id: args.id.clone(), feedback: None },
             )
             .await?;
-            let workflow = outcome
-                .workflow
-                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
             print_value(workflow, json)
         }
         WorkflowCommand::ResumeStatus(args) => {
@@ -411,31 +355,19 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.pause",
                         vec!["pause workflow execution".to_string()],
-                        &format!(
-                            "rerun 'ao workflow pause --id {} --confirm {}' to apply",
-                            workflow_id, workflow_id
-                        ),
+                        &format!("rerun 'ao workflow pause --id {} --confirm {}' to apply", workflow_id, workflow_id),
                     ),
                     json,
                 );
             }
-            ensure_destructive_confirmation(
-                args.confirm.as_deref(),
-                &args.id,
-                "workflow pause",
-                "--id",
-            )?;
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow pause", "--id")?;
             let outcome = dispatch_workflow_event(
                 hub.clone(),
                 project_root,
-                WorkflowEvent::Pause {
-                    workflow_id: args.id.clone(),
-                },
+                WorkflowEvent::Pause { workflow_id: args.id.clone() },
             )
             .await?;
-            let workflow = outcome
-                .workflow
-                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
             print_value(workflow, json)
         }
         WorkflowCommand::Cancel(args) => {
@@ -448,80 +380,44 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.cancel",
                         vec!["cancel workflow execution".to_string()],
-                        &format!(
-                            "rerun 'ao workflow cancel --id {} --confirm {}' to apply",
-                            workflow_id, workflow_id
-                        ),
+                        &format!("rerun 'ao workflow cancel --id {} --confirm {}' to apply", workflow_id, workflow_id),
                     ),
                     json,
                 );
             }
-            ensure_destructive_confirmation(
-                args.confirm.as_deref(),
-                &args.id,
-                "workflow cancel",
-                "--id",
-            )?;
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow cancel", "--id")?;
             let outcome = dispatch_workflow_event(
                 hub.clone(),
                 project_root,
-                WorkflowEvent::Cancel {
-                    workflow_id: args.id.clone(),
-                },
+                WorkflowEvent::Cancel { workflow_id: args.id.clone() },
             )
             .await?;
-            let workflow = outcome
-                .workflow
-                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
             print_value(workflow, json)
         }
         WorkflowCommand::Phase { command } => match command {
             WorkflowPhaseCommand::Approve(args) => print_value(
-                phases::approve_manual_phase(
-                    hub.clone(),
-                    project_root,
-                    &args.id,
-                    &args.phase,
-                    &args.note,
-                )
-                .await?,
+                phases::approve_manual_phase(hub.clone(), project_root, &args.id, &args.phase, &args.note).await?,
                 json,
             ),
             WorkflowPhaseCommand::Reject(args) => print_value(
-                phases::reject_manual_phase(
-                    hub.clone(),
-                    project_root,
-                    &args.id,
-                    &args.phase,
-                    &args.note,
-                )
-                .await?,
+                phases::reject_manual_phase(hub.clone(), project_root, &args.id, &args.phase, &args.note).await?,
                 json,
             ),
         },
         WorkflowCommand::Phases { command } => match command {
-            WorkflowPhasesCommand::List => {
-                print_value(phases::list_phase_payload(project_root)?, json)
-            }
-            WorkflowPhasesCommand::Get(args) => {
-                print_value(phases::phase_payload(project_root, &args.phase)?, json)
-            }
+            WorkflowPhasesCommand::List => print_value(phases::list_phase_payload(project_root)?, json),
+            WorkflowPhasesCommand::Get(args) => print_value(phases::phase_payload(project_root, &args.phase)?, json),
             WorkflowPhasesCommand::Upsert(args) => {
                 let definition: orchestrator_core::PhaseExecutionDefinition =
                     serde_json::from_str(&args.input_json).with_context(|| {
                         "invalid --input-json payload for workflow phases upsert; run 'ao workflow phases upsert --help' for schema"
                     })?;
-                print_value(
-                    phases::upsert_phase_definition(project_root, &args.phase, definition)?,
-                    json,
-                )
+                print_value(phases::upsert_phase_definition(project_root, &args.phase, definition)?, json)
             }
             WorkflowPhasesCommand::Remove(args) => {
                 if args.dry_run {
-                    return print_value(
-                        phases::preview_phase_removal(project_root, &args.phase)?,
-                        json,
-                    );
+                    return print_value(phases::preview_phase_removal(project_root, &args.phase)?, json);
                 }
                 ensure_destructive_confirmation(
                     args.confirm.as_deref(),
@@ -529,10 +425,7 @@ pub(crate) async fn handle_workflow(
                     "workflow phases remove",
                     "--phase",
                 )?;
-                print_value(
-                    phases::remove_phase_definition(project_root, &args.phase)?,
-                    json,
-                )
+                print_value(phases::remove_phase_definition(project_root, &args.phase)?, json)
             }
         },
         WorkflowCommand::Definitions { command } => match command {
@@ -549,39 +442,29 @@ pub(crate) async fn handle_workflow(
             }
         },
         WorkflowCommand::Config { command } => match command {
-            WorkflowConfigCommand::Get => {
-                print_value(config::get_workflow_config_payload(project_root), json)
-            }
+            WorkflowConfigCommand::Get => print_value(config::get_workflow_config_payload(project_root), json),
             WorkflowConfigCommand::Validate => {
                 print_value(config::validate_workflow_config_payload(project_root), json)
             }
-            WorkflowConfigCommand::Compile => {
-                print_value(config::compile_yaml_workflows_payload(project_root)?, json)
-            }
+            WorkflowConfigCommand::Compile => print_value(config::compile_yaml_workflows_payload(project_root)?, json),
         },
         WorkflowCommand::StateMachine { command } => match command {
-            WorkflowStateMachineCommand::Get => {
-                print_value(config::get_state_machine_payload(project_root)?, json)
-            }
+            WorkflowStateMachineCommand::Get => print_value(config::get_state_machine_payload(project_root)?, json),
             WorkflowStateMachineCommand::Validate => {
                 print_value(config::validate_state_machine_payload(project_root), json)
             }
-            WorkflowStateMachineCommand::Set(args) => print_value(
-                config::set_state_machine_payload(project_root, &args.input_json)?,
-                json,
-            ),
+            WorkflowStateMachineCommand::Set(args) => {
+                print_value(config::set_state_machine_payload(project_root, &args.input_json)?, json)
+            }
         },
         WorkflowCommand::AgentRuntime { command } => match command {
-            WorkflowAgentRuntimeCommand::Get => {
-                print_value(config::get_agent_runtime_payload(project_root), json)
-            }
+            WorkflowAgentRuntimeCommand::Get => print_value(config::get_agent_runtime_payload(project_root), json),
             WorkflowAgentRuntimeCommand::Validate => {
                 print_value(config::validate_agent_runtime_payload(project_root), json)
             }
-            WorkflowAgentRuntimeCommand::Set(args) => print_value(
-                config::set_agent_runtime_payload(project_root, &args.input_json)?,
-                json,
-            ),
+            WorkflowAgentRuntimeCommand::Set(args) => {
+                print_value(config::set_agent_runtime_payload(project_root, &args.input_json)?, json)
+            }
         },
         WorkflowCommand::UpdateDefinition(args) => {
             let workflow = parse_input_json_or(args.input_json, || {
@@ -589,11 +472,7 @@ pub(crate) async fn handle_workflow(
                     id: args.id,
                     name: args.name,
                     description: args.description.unwrap_or_default(),
-                    phases: args
-                        .phases
-                        .into_iter()
-                        .map(orchestrator_core::WorkflowPhaseEntry::Simple)
-                        .collect(),
+                    phases: args.phases.into_iter().map(orchestrator_core::WorkflowPhaseEntry::Simple).collect(),
                     post_success: None,
                     variables: Vec::new(),
                 })
@@ -607,23 +486,20 @@ pub(crate) async fn handle_workflow(
 mod requirement_workflow_tests {
     use super::*;
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
-        write_workflow_config, WorkflowDefinition,
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        WorkflowDefinition,
     };
 
     #[test]
     fn resolve_requirement_workflow_ref_errors_when_workflow_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
             .expect_err("missing requirement workflow should error");
         assert!(
-            error
-                .to_string()
-                .contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
+            error.to_string().contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
             "error should mention missing requirement workflow"
         );
     }
@@ -641,8 +517,7 @@ mod requirement_workflow_tests {
             variables: Vec::new(),
         });
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
             .expect("requirement workflow should resolve");
@@ -653,15 +528,12 @@ mod requirement_workflow_tests {
     fn apply_requirement_workflow_default_errors_when_requirement_workflow_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
             .expect_err("missing requirement workflow should fail closed");
         assert!(
-            error
-                .to_string()
-                .contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
+            error.to_string().contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
             "error should mention missing requirement workflow"
         );
     }
@@ -672,16 +544,15 @@ mod tests {
     use super::config::*;
     use super::*;
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
-        write_workflow_config, InMemoryServiceHub, Priority, RequirementItem, RequirementLinks,
-        RequirementPriority, RequirementStatus, TaskCreateInput, TaskType, WorkflowDefinition,
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        InMemoryServiceHub, Priority, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
+        TaskCreateInput, TaskType, WorkflowDefinition,
     };
     use std::sync::Arc;
 
     #[test]
     fn set_state_machine_payload_reports_actionable_json_error() {
-        let error = set_state_machine_payload("/tmp/unused", "{invalid")
-            .expect_err("invalid payload should fail");
+        let error = set_state_machine_payload("/tmp/unused", "{invalid").expect_err("invalid payload should fail");
         let message = error.to_string();
         assert!(message.contains("invalid --input-json payload"));
         assert!(message.contains("workflow state-machine set --help"));
@@ -689,8 +560,7 @@ mod tests {
 
     #[test]
     fn set_agent_runtime_payload_reports_actionable_json_error() {
-        let error = set_agent_runtime_payload("/tmp/unused", "{invalid")
-            .expect_err("invalid payload should fail");
+        let error = set_agent_runtime_payload("/tmp/unused", "{invalid").expect_err("invalid payload should fail");
         let message = error.to_string();
         assert!(message.contains("invalid --input-json payload"));
         assert!(message.contains("workflow agent-runtime set --help"));
@@ -728,10 +598,7 @@ mod tests {
         .expect("dispatch should resolve");
 
         assert_eq!(dispatch.subject_id(), task.id);
-        assert_eq!(
-            dispatch.workflow_ref,
-            orchestrator_core::workflow_ref_for_task(&task)
-        );
+        assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
 
@@ -748,8 +615,7 @@ mod tests {
             variables: Vec::new(),
         });
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
         let now = chrono::Utc::now();
@@ -791,10 +657,7 @@ mod tests {
         .expect("dispatch should resolve");
 
         assert_eq!(dispatch.subject_id(), "REQ-39");
-        assert_eq!(
-            dispatch.workflow_ref,
-            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
-        );
+        assert_eq!(dispatch.workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
 
@@ -825,10 +688,7 @@ mod tests {
         .expect("legacy input should resolve");
 
         assert_eq!(dispatch.subject_id(), task.id);
-        assert_eq!(
-            dispatch.workflow_ref,
-            orchestrator_core::workflow_ref_for_task(&task)
-        );
+        assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
     }
 
     #[tokio::test]
@@ -852,8 +712,7 @@ mod tests {
         let dispatch = resolve_workflow_run_dispatch_from_input(
             hub,
             "/tmp/unused",
-            WorkflowRunInput::for_task(task.id, None)
-                .with_input(Some(serde_json::json!({"scope":"req-39"}))),
+            WorkflowRunInput::for_task(task.id, None).with_input(Some(serde_json::json!({"scope":"req-39"}))),
         )
         .await
         .expect("dispatch should resolve");
@@ -868,23 +727,13 @@ mod tests {
         let dispatch = resolve_workflow_run_dispatch_from_input(
             hub,
             "/tmp/unused",
-            WorkflowRunInput::for_custom(
-                "prompt preview".to_string(),
-                "inspect vars".to_string(),
-                None,
-            )
-            .with_vars(std::collections::HashMap::from([(
-                "release_name".to_string(),
-                "Mercury".to_string(),
-            )])),
+            WorkflowRunInput::for_custom("prompt preview".to_string(), "inspect vars".to_string(), None)
+                .with_vars(std::collections::HashMap::from([("release_name".to_string(), "Mercury".to_string())])),
         )
         .await
         .expect("dispatch should resolve");
 
-        assert_eq!(
-            dispatch.vars.get("release_name").map(String::as_str),
-            Some("Mercury")
-        );
+        assert_eq!(dispatch.vars.get("release_name").map(String::as_str), Some("Mercury"));
     }
 
     #[tokio::test]
@@ -905,10 +754,7 @@ mod tests {
             .await
             .expect("task should be created");
 
-        let raw = format!(
-            "{{\"task_id\":\"{}\",\"input_json\":\"{{\\\"k\\\":\\\"v\\\"}}\"}}",
-            task.id
-        );
+        let raw = format!("{{\"task_id\":\"{}\",\"input_json\":\"{{\\\"k\\\":\\\"v\\\"}}\"}}", task.id);
         let dispatch = resolve_workflow_run_dispatch_from_raw_input(hub, "/tmp/unused", &raw)
             .await
             .expect("legacy raw payload should resolve");
@@ -919,15 +765,11 @@ mod tests {
 
     #[test]
     fn parse_workflow_vars_rejects_invalid_pairs_and_duplicates() {
-        let invalid = parse_workflow_vars(&["missing-separator".to_string()])
-            .expect_err("missing '=' should fail");
+        let invalid = parse_workflow_vars(&["missing-separator".to_string()]).expect_err("missing '=' should fail");
         assert!(invalid.to_string().contains("expected KEY=VALUE"));
 
-        let duplicate = parse_workflow_vars(&[
-            "release_name=Mercury".to_string(),
-            "release_name=Gemini".to_string(),
-        ])
-        .expect_err("duplicate keys should fail");
+        let duplicate = parse_workflow_vars(&["release_name=Mercury".to_string(), "release_name=Gemini".to_string()])
+            .expect_err("duplicate keys should fail");
         assert!(duplicate.to_string().contains("duplicate --var key"));
     }
 }

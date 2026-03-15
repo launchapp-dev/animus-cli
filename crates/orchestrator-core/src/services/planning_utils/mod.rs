@@ -32,31 +32,19 @@ pub(super) fn build_vision_markdown(
     let users = if target_users.is_empty() {
         "- TBD".to_string()
     } else {
-        target_users
-            .iter()
-            .map(|value| format!("- {}", value.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        target_users.iter().map(|value| format!("- {}", value.trim())).collect::<Vec<_>>().join("\n")
     };
 
     let goals = if goals.is_empty() {
         "- Define measurable user outcomes.".to_string()
     } else {
-        goals
-            .iter()
-            .map(|value| format!("- {}", value.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        goals.iter().map(|value| format!("- {}", value.trim())).collect::<Vec<_>>().join("\n")
     };
 
     let constraints = if constraints.is_empty() {
         "- No explicit constraints captured yet.".to_string()
     } else {
-        constraints
-            .iter()
-            .map(|value| format!("- {}", value.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        constraints.iter().map(|value| format!("- {}", value.trim())).collect::<Vec<_>>().join("\n")
     };
 
     let problem = if problem_statement.trim().is_empty() {
@@ -115,13 +103,7 @@ fn parse_json_file(path: &Path) -> Option<serde_json::Value> {
 pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
     let mut insight = CodebaseInsight::default();
 
-    for path in [
-        "src",
-        "crates/agent-runner",
-        "crates/llm-cli-wrapper",
-        "crates",
-        "tests",
-    ] {
+    for path in ["src", "crates/agent-runner", "crates/llm-cli-wrapper", "crates", "tests"] {
         if project_root.join(path).exists() {
             insight.notable_paths.push(path.to_string());
         }
@@ -135,10 +117,7 @@ pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
             if let Some(values) = pkg.get("dependencies").and_then(|value| value.as_object()) {
                 deps.extend(values.clone());
             }
-            if let Some(values) = pkg
-                .get("devDependencies")
-                .and_then(|value| value.as_object())
-            {
+            if let Some(values) = pkg.get("devDependencies").and_then(|value| value.as_object()) {
                 deps.extend(values.clone());
             }
 
@@ -160,9 +139,7 @@ pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
     }
 
     let mut stack_set = std::collections::BTreeSet::new();
-    insight
-        .detected_stacks
-        .retain(|stack| stack_set.insert(stack.clone()));
+    insight.detected_stacks.retain(|stack| stack_set.insert(stack.clone()));
 
     let mut file_count = 0usize;
     let mut stack = vec![project_root.to_path_buf()];
@@ -178,10 +155,7 @@ pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            let file_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
+            let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
 
             if path.is_dir() {
                 if file_name == ".git"
@@ -207,8 +181,7 @@ pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
 }
 
 fn planning_docs_dir(project_root: &Path) -> PathBuf {
-    let base =
-        protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
     base.join("docs")
 }
 
@@ -225,10 +198,7 @@ pub(super) fn write_planning_artifacts(
     std::fs::create_dir_all(&docs_dir)?;
 
     if let Some(vision) = vision {
-        std::fs::write(
-            vision_doc_path(project_root),
-            format!("{}\n", vision.markdown.trim()),
-        )?;
+        std::fs::write(vision_doc_path(project_root), format!("{}\n", vision.markdown.trim()))?;
     }
 
     Ok(())

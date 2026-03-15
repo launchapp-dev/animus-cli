@@ -5,11 +5,7 @@ pub(super) fn list_projects(state: &CoreState) -> Vec<OrchestratorProject> {
 }
 
 pub(super) fn get_project(state: &CoreState, id: &str) -> Result<OrchestratorProject> {
-    state
-        .projects
-        .get(id)
-        .cloned()
-        .ok_or_else(|| not_found(format!("project not found: {id}")))
+    state.projects.get(id).cloned().ok_or_else(|| not_found(format!("project not found: {id}")))
 }
 
 pub(super) fn active_project(state: &CoreState) -> Option<OrchestratorProject> {
@@ -90,10 +86,7 @@ pub(super) fn rename_project(
     new_name: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<OrchestratorProject> {
-    let project = state
-        .projects
-        .get_mut(id)
-        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
+    let project = state.projects.get_mut(id).ok_or_else(|| not_found(format!("project not found: {id}")))?;
     project.name = new_name.to_string();
     project.updated_at = now;
     Ok(project.clone())
@@ -104,20 +97,14 @@ pub(super) fn archive_project(
     id: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<OrchestratorProject> {
-    let project = state
-        .projects
-        .get_mut(id)
-        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
+    let project = state.projects.get_mut(id).ok_or_else(|| not_found(format!("project not found: {id}")))?;
     project.archived = true;
     project.updated_at = now;
     Ok(project.clone())
 }
 
 pub(super) fn remove_project(state: &mut CoreState, id: &str) -> Result<()> {
-    state
-        .projects
-        .remove(id)
-        .ok_or_else(|| not_found(format!("project not found: {id}")))?;
+    state.projects.remove(id).ok_or_else(|| not_found(format!("project not found: {id}")))?;
     if state.active_project_id.as_deref() == Some(id) {
         state.active_project_id = None;
     }

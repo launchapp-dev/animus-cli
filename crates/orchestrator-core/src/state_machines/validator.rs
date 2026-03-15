@@ -3,33 +3,26 @@ use std::collections::HashSet;
 use anyhow::{anyhow, Result};
 
 use super::schema::{
-    RegistryEntry, RequirementLifecycleDefinition, StateMachinesDocument,
-    WorkflowMachineDefinition, STATE_MACHINES_SCHEMA_ID, STATE_MACHINES_VERSION,
+    RegistryEntry, RequirementLifecycleDefinition, StateMachinesDocument, WorkflowMachineDefinition,
+    STATE_MACHINES_SCHEMA_ID, STATE_MACHINES_VERSION,
 };
 
 pub fn validate_state_machines_document(document: &StateMachinesDocument) -> Result<()> {
     let mut errors = Vec::new();
 
     if document.schema.trim() != STATE_MACHINES_SCHEMA_ID {
-        errors.push(format!(
-            "schema must be '{}' (got '{}')",
-            STATE_MACHINES_SCHEMA_ID, document.schema
-        ));
+        errors.push(format!("schema must be '{}' (got '{}')", STATE_MACHINES_SCHEMA_ID, document.schema));
     }
 
     if document.version != STATE_MACHINES_VERSION {
-        errors.push(format!(
-            "version must be {} (got {})",
-            STATE_MACHINES_VERSION, document.version
-        ));
+        errors.push(format!("version must be {} (got {})", STATE_MACHINES_VERSION, document.version));
     }
 
     if let Err(error) = validate_workflow_machine_definition(&document.workflow) {
         errors.push(format!("workflow: {error}"));
     }
 
-    if let Err(error) = validate_requirement_lifecycle_definition(&document.requirements_lifecycle)
-    {
+    if let Err(error) = validate_requirement_lifecycle_definition(&document.requirements_lifecycle) {
         errors.push(format!("requirements_lifecycle: {error}"));
     }
 
@@ -81,9 +74,7 @@ fn validate_workflow_machine_definition(definition: &WorkflowMachineDefinition) 
     }
 }
 
-fn validate_requirement_lifecycle_definition(
-    definition: &RequirementLifecycleDefinition,
-) -> Result<()> {
+fn validate_requirement_lifecycle_definition(definition: &RequirementLifecycleDefinition) -> Result<()> {
     let mut errors = Vec::new();
 
     if definition.transitions.is_empty() {
@@ -128,11 +119,7 @@ fn validate_requirement_lifecycle_definition(
     }
 }
 
-fn registry_ids(
-    entries: &[RegistryEntry],
-    label: &str,
-    errors: &mut Vec<String>,
-) -> HashSet<String> {
+fn registry_ids(entries: &[RegistryEntry], label: &str, errors: &mut Vec<String>) -> HashSet<String> {
     let mut seen = HashSet::new();
     for entry in entries {
         let id = entry.id.trim();
@@ -165,11 +152,6 @@ mod tests {
         let mut document = builtin_state_machines_document();
         document.workflow.transitions[0].guard = Some("missing_guard".to_string());
         let error = validate_state_machines_document(&document).expect_err("should fail");
-        assert!(
-            error
-                .to_string()
-                .contains("references unknown guard 'missing_guard'"),
-            "unexpected error: {error}"
-        );
+        assert!(error.to_string().contains("references unknown guard 'missing_guard'"), "unexpected error: {error}");
     }
 }

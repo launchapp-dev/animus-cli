@@ -21,12 +21,7 @@ use crate::services::tui::run_agent::run_agent_session;
 use crate::services::tui::task_snapshot::{TaskSnapshot, STATUS_CYCLE};
 use crate::TuiArgs;
 
-pub(crate) async fn handle_tui(
-    args: TuiArgs,
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(crate) async fn handle_tui(args: TuiArgs, hub: Arc<dyn ServiceHub>, project_root: &str, json: bool) -> Result<()> {
     if json {
         return Err(anyhow!("`ao tui` does not support --json output"));
     }
@@ -36,9 +31,7 @@ pub(crate) async fn handle_tui(
     let headless = args.headless;
     let headless_prompt = args.prompt;
 
-    let bridge = AoCliMcpBridge::start(project_root)
-        .await
-        .context("failed to start AO CLI MCP bridge")?;
+    let bridge = AoCliMcpBridge::start(project_root).await.context("failed to start AO CLI MCP bridge")?;
     if headless {
         let result = run_headless_mode(
             project_root,
@@ -99,12 +92,7 @@ async fn run_headless_mode(
         .or_else(|| profiles.first().cloned())
         .ok_or_else(|| anyhow!("no model profile could be selected"))?;
     if !profile.is_available() {
-        return Err(anyhow!(
-            "selected profile {} [{}] is {}",
-            profile.tool,
-            profile.model_id,
-            profile.availability
-        ));
+        return Err(anyhow!("selected profile {} [{}] is {}", profile.tool, profile.model_id, profile.availability));
     }
 
     let (event_tx, mut event_rx) = unbounded_channel();
@@ -113,10 +101,7 @@ async fn run_headless_mode(
     let model = profile.model_id.clone();
     let endpoint = mcp_endpoint.to_string();
 
-    eprintln!(
-        "headless run: tool={} model={} mcp_endpoint={}",
-        tool, model, endpoint
-    );
+    eprintln!("headless run: tool={} model={} mcp_endpoint={}", tool, model, endpoint);
 
     tokio::spawn(async move {
         let result = run_agent_session(
@@ -132,10 +117,7 @@ async fn run_headless_mode(
         )
         .await;
         if let Err(error) = result {
-            let _ = event_tx.send(AppEvent::AgentFinished {
-                summary: error.to_string(),
-                success: false,
-            });
+            let _ = event_tx.send(AppEvent::AgentFinished { summary: error.to_string(), success: false });
         }
     });
 
@@ -246,21 +228,13 @@ async fn handle_key_normal(
         KeyCode::Char('s') if app.focus == FocusPane::Tasks => {
             if let Some(task) = app.selected_task() {
                 let current_status = task.status;
-                let current_pos = STATUS_CYCLE
-                    .iter()
-                    .position(|s| *s == current_status)
-                    .unwrap_or(0);
-                app.modal = ModalState::StatusPicker {
-                    selected: current_pos,
-                };
+                let current_pos = STATUS_CYCLE.iter().position(|s| *s == current_status).unwrap_or(0);
+                app.modal = ModalState::StatusPicker { selected: current_pos };
             }
         }
         KeyCode::Char('a') if app.focus == FocusPane::Tasks => {
             if app.selected_task().is_some() {
-                let current = app
-                    .selected_task()
-                    .map(|t| t.assignee_label.clone())
-                    .unwrap_or_default();
+                let current = app.selected_task().map(|t| t.assignee_label.clone()).unwrap_or_default();
                 app.modal = ModalState::AssignInput { input: current };
             }
         }
@@ -302,22 +276,13 @@ async fn handle_key_normal(
     Ok(false)
 }
 
-async fn handle_key_status_picker(
-    app: &mut AppState,
-    hub: &Arc<dyn ServiceHub>,
-    key_code: KeyCode,
-    selected: usize,
-) {
+async fn handle_key_status_picker(app: &mut AppState, hub: &Arc<dyn ServiceHub>, key_code: KeyCode, selected: usize) {
     match key_code {
         KeyCode::Esc => {
             app.modal = ModalState::None;
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            let new_sel = if selected > 0 {
-                selected - 1
-            } else {
-                STATUS_CYCLE.len() - 1
-            };
+            let new_sel = if selected > 0 { selected - 1 } else { STATUS_CYCLE.len() - 1 };
             app.modal = ModalState::StatusPicker { selected: new_sel };
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -335,11 +300,8 @@ async fn handle_key_status_picker(
                     match task_svc.set_status(&task.id, new_status, true).await {
                         Ok(_) => match task_svc.list_prioritized().await {
                             Ok(tasks) => {
-                                let snapshots: Vec<TaskSnapshot> = tasks
-                                    .into_iter()
-                                    .take(24)
-                                    .map(TaskSnapshot::from_task)
-                                    .collect();
+                                let snapshots: Vec<TaskSnapshot> =
+                                    tasks.into_iter().take(24).map(TaskSnapshot::from_task).collect();
                                 let _ = tx.send(AppEvent::TasksRefreshed(snapshots));
                             }
                             Err(e) => {
@@ -389,11 +351,8 @@ async fn handle_key_assign_input(app: &mut AppState, hub: &Arc<dyn ServiceHub>, 
                     match task_svc.assign(&task.id, assignee_str).await {
                         Ok(_) => match task_svc.list_prioritized().await {
                             Ok(tasks) => {
-                                let snapshots: Vec<TaskSnapshot> = tasks
-                                    .into_iter()
-                                    .take(24)
-                                    .map(TaskSnapshot::from_task)
-                                    .collect();
+                                let snapshots: Vec<TaskSnapshot> =
+                                    tasks.into_iter().take(24).map(TaskSnapshot::from_task).collect();
                                 let _ = tx.send(AppEvent::TasksRefreshed(snapshots));
                             }
                             Err(e) => {
@@ -422,15 +381,9 @@ async fn handle_key_assign_input(app: &mut AppState, hub: &Arc<dyn ServiceHub>, 
 
 async fn handle_key_create_task(app: &mut AppState, hub: &Arc<dyn ServiceHub>, key_code: KeyCode) {
     let (title_input, description_input, focused_field) = match &app.modal {
-        ModalState::CreateTask {
-            title_input,
-            description_input,
-            focused_field,
-        } => (
-            title_input.clone(),
-            description_input.clone(),
-            focused_field.clone(),
-        ),
+        ModalState::CreateTask { title_input, description_input, focused_field } => {
+            (title_input.clone(), description_input.clone(), focused_field.clone())
+        }
         _ => return,
     };
 
@@ -443,11 +396,7 @@ async fn handle_key_create_task(app: &mut AppState, hub: &Arc<dyn ServiceHub>, k
                 CreateTaskField::Title => CreateTaskField::Description,
                 CreateTaskField::Description => CreateTaskField::Title,
             };
-            app.modal = ModalState::CreateTask {
-                title_input,
-                description_input,
-                focused_field: next_field,
-            };
+            app.modal = ModalState::CreateTask { title_input, description_input, focused_field: next_field };
         }
         KeyCode::Backspace => match focused_field {
             CreateTaskField::Title => {
@@ -494,11 +443,8 @@ async fn handle_key_create_task(app: &mut AppState, hub: &Arc<dyn ServiceHub>, k
                 match task_svc.create(input).await {
                     Ok(_) => match task_svc.list_prioritized().await {
                         Ok(tasks) => {
-                            let snapshots: Vec<TaskSnapshot> = tasks
-                                .into_iter()
-                                .take(24)
-                                .map(TaskSnapshot::from_task)
-                                .collect();
+                            let snapshots: Vec<TaskSnapshot> =
+                                tasks.into_iter().take(24).map(TaskSnapshot::from_task).collect();
                             let _ = tx.send(AppEvent::TasksRefreshed(snapshots));
                         }
                         Err(e) => {
@@ -558,11 +504,8 @@ async fn handle_key_delete_task(app: &mut AppState, hub: &Arc<dyn ServiceHub>, k
                     match task_svc.delete(&task.id).await {
                         Ok(_) => match task_svc.list_prioritized().await {
                             Ok(tasks) => {
-                                let snapshots: Vec<TaskSnapshot> = tasks
-                                    .into_iter()
-                                    .take(24)
-                                    .map(TaskSnapshot::from_task)
-                                    .collect();
+                                let snapshots: Vec<TaskSnapshot> =
+                                    tasks.into_iter().take(24).map(TaskSnapshot::from_task).collect();
                                 let _ = tx.send(AppEvent::TasksRefreshed(snapshots));
                             }
                             Err(e) => {
@@ -620,11 +563,7 @@ fn launch_selected_run(app: &mut AppState, project_root: &str) {
         "running {} [{}] with MCP lock ({})",
         tool,
         model,
-        if print_mode {
-            "print mode"
-        } else {
-            "summary mode"
-        }
+        if print_mode { "print mode" } else { "summary mode" }
     );
     app.push_history(format!("run started for {tool} [{model}]"));
 
@@ -642,25 +581,14 @@ fn launch_selected_run(app: &mut AppState, project_root: &str) {
         )
         .await;
         if let Err(error) = result {
-            let _ = event_tx.send(AppEvent::AgentFinished {
-                summary: error.to_string(),
-                success: false,
-            });
+            let _ = event_tx.send(AppEvent::AgentFinished { summary: error.to_string(), success: false });
         }
     });
 }
 
 async fn load_task_snapshots(hub: &Arc<dyn ServiceHub>) -> Result<Vec<TaskSnapshot>> {
-    let tasks = hub
-        .tasks()
-        .list_prioritized()
-        .await
-        .context("failed to load prioritized tasks for TUI")?;
-    Ok(tasks
-        .into_iter()
-        .take(24)
-        .map(TaskSnapshot::from_task)
-        .collect())
+    let tasks = hub.tasks().list_prioritized().await.context("failed to load prioritized tasks for TUI")?;
+    Ok(tasks.into_iter().take(24).map(TaskSnapshot::from_task).collect())
 }
 
 fn initialize_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
@@ -673,9 +601,6 @@ fn initialize_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> 
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
     disable_raw_mode().context("failed to disable terminal raw mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .context("failed to leave alternate screen")?;
-    terminal
-        .show_cursor()
-        .context("failed to show terminal cursor")
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("failed to leave alternate screen")?;
+    terminal.show_cursor().context("failed to show terminal cursor")
 }

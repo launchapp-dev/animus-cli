@@ -18,7 +18,9 @@ pub(crate) async fn handle_workflow_execute(
         args.workflow_ref = Some(super::resolve_requirement_workflow_ref(project_root)?);
     }
     if args.workflow_id.is_some() && !args.vars.is_empty() {
-        anyhow::bail!("--var cannot be used with --workflow-id; persisted workflow vars are authoritative for existing workflows");
+        anyhow::bail!(
+            "--var cannot be used with --workflow-id; persisted workflow vars are authoritative for existing workflows"
+        );
     }
     let vars = super::parse_workflow_vars(&args.vars)?;
 
@@ -28,26 +30,17 @@ pub(crate) async fn handle_workflow_execute(
     let json_for_cb = json;
     let task_id_for_output = args.task_id.clone();
     let requirement_id_for_output = args.requirement_id.clone();
-    let on_phase_event: Box<dyn Fn(PhaseEvent<'_>) + Send + Sync> =
-        Box::new(move |event| match event {
-            PhaseEvent::Started {
-                phase_id,
-                phase_index,
-                total_phases,
-            } => {
-                emit_phase_header(phase_id, phase_index, total_phases, json_for_cb);
-            }
-            PhaseEvent::Decision { decision, .. } => {
-                emit_phase_decision(decision, json_for_cb);
-            }
-            PhaseEvent::Completed {
-                phase_id,
-                duration,
-                success,
-            } => {
-                emit_phase_footer(phase_id, duration, success, json_for_cb);
-            }
-        });
+    let on_phase_event: Box<dyn Fn(PhaseEvent<'_>) + Send + Sync> = Box::new(move |event| match event {
+        PhaseEvent::Started { phase_id, phase_index, total_phases } => {
+            emit_phase_header(phase_id, phase_index, total_phases, json_for_cb);
+        }
+        PhaseEvent::Decision { decision, .. } => {
+            emit_phase_decision(decision, json_for_cb);
+        }
+        PhaseEvent::Completed { phase_id, duration, success } => {
+            emit_phase_footer(phase_id, duration, success, json_for_cb);
+        }
+    });
 
     let params = WorkflowExecuteParams {
         project_root: project_root.to_string(),
@@ -57,11 +50,7 @@ pub(crate) async fn handle_workflow_execute(
         title: args.title,
         description: args.description,
         workflow_ref: args.workflow_ref,
-        input: args
-            .input_json
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()?,
+        input: args.input_json.as_deref().map(serde_json::from_str).transpose()?,
         vars,
         model: args.model,
         tool: args.tool,
@@ -131,18 +120,8 @@ fn format_duration(d: Duration) -> String {
 fn emit_phase_header(phase_id: &str, index: usize, total: usize, _json: bool) {
     use std::io::Write as _;
     let color = use_ansi_colors();
-    let (bold, cyan, reset) = if color {
-        ("\x1b[1m", "\x1b[36m", "\x1b[0m")
-    } else {
-        ("", "", "")
-    };
-    let _ = writeln!(
-        std::io::stderr(),
-        "\n{bold}{cyan}━━━ Phase {}/{}: {} ━━━{reset}",
-        index + 1,
-        total,
-        phase_id,
-    );
+    let (bold, cyan, reset) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+    let _ = writeln!(std::io::stderr(), "\n{bold}{cyan}━━━ Phase {}/{}: {} ━━━{reset}", index + 1, total, phase_id,);
 }
 
 fn emit_phase_footer(phase_id: &str, duration: Duration, succeeded: bool, _json: bool) {
@@ -150,21 +129,10 @@ fn emit_phase_footer(phase_id: &str, duration: Duration, succeeded: bool, _json:
     let color = use_ansi_colors();
     let dur = format_duration(duration);
     if succeeded {
-        let (green, reset) = if color {
-            ("\x1b[32m", "\x1b[0m")
-        } else {
-            ("", "")
-        };
-        let _ = writeln!(
-            std::io::stderr(),
-            "{green}completed {phase_id} in {dur}{reset}"
-        );
+        let (green, reset) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+        let _ = writeln!(std::io::stderr(), "{green}completed {phase_id} in {dur}{reset}");
     } else {
-        let (red, reset) = if color {
-            ("\x1b[31m", "\x1b[0m")
-        } else {
-            ("", "")
-        };
+        let (red, reset) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
         let _ = writeln!(std::io::stderr(), "{red}failed {phase_id} in {dur}{reset}");
     }
 }
@@ -172,11 +140,7 @@ fn emit_phase_footer(phase_id: &str, duration: Duration, succeeded: bool, _json:
 fn emit_phase_decision(decision: &orchestrator_core::PhaseDecision, _json: bool) {
     use std::io::Write as _;
     let color = use_ansi_colors();
-    let (dim, cyan, reset) = if color {
-        ("\x1b[2m", "\x1b[36m", "\x1b[0m")
-    } else {
-        ("", "", "")
-    };
+    let (dim, cyan, reset) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
     let verdict = match decision.verdict {
         orchestrator_core::PhaseDecisionVerdict::Advance => "advance",
         orchestrator_core::PhaseDecisionVerdict::Rework => "rework",
@@ -185,10 +149,7 @@ fn emit_phase_decision(decision: &orchestrator_core::PhaseDecision, _json: bool)
         orchestrator_core::PhaseDecisionVerdict::Unknown => "unknown",
     };
     let confidence_pct = (decision.confidence * 100.0) as u32;
-    let _ = writeln!(
-        std::io::stderr(),
-        "{cyan}  verdict: {verdict} ({confidence_pct}% confidence){reset}"
-    );
+    let _ = writeln!(std::io::stderr(), "{cyan}  verdict: {verdict} ({confidence_pct}% confidence){reset}");
     if !decision.reason.is_empty() {
         let reason = if decision.reason.len() > 120 {
             format!("{}...", &decision.reason[..120])
@@ -202,11 +163,8 @@ fn emit_phase_decision(decision: &orchestrator_core::PhaseDecision, _json: bool)
 fn emit_workflow_summary(results: &[serde_json::Value], total_duration: Duration, _json: bool) {
     use std::io::Write as _;
     let color = use_ansi_colors();
-    let (bold, green, red, dim, reset) = if color {
-        ("\x1b[1m", "\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m")
-    } else {
-        ("", "", "", "", "")
-    };
+    let (bold, green, red, dim, reset) =
+        if color { ("\x1b[1m", "\x1b[32m", "\x1b[31m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
     let _ = writeln!(std::io::stderr(), "\n{bold}━━━ Workflow Summary ━━━{reset}");
     for r in results {
         let pid = r["phase_id"].as_str().unwrap_or("?");
@@ -220,24 +178,13 @@ fn emit_workflow_summary(results: &[serde_json::Value], total_duration: Duration
             "manual_pending" => ("hold", dim),
             _ => ("FAIL", red),
         };
-        let _ = writeln!(
-            std::io::stderr(),
-            "  {clr}{icon}{reset} {pid}: {dim}{status} ({dur_str}){reset}"
-        );
+        let _ = writeln!(std::io::stderr(), "  {clr}{icon}{reset} {pid}: {dim}{status} ({dur_str}){reset}");
         if status == "failed" {
             if let Some(err) = r["error"].as_str() {
-                let err_short = if err.len() > 100 {
-                    format!("{}...", &err[..100])
-                } else {
-                    err.to_string()
-                };
+                let err_short = if err.len() > 100 { format!("{}...", &err[..100]) } else { err.to_string() };
                 let _ = writeln!(std::io::stderr(), "    {red}{err_short}{reset}");
             }
         }
     }
-    let _ = writeln!(
-        std::io::stderr(),
-        "  {bold}Total: {}{reset}",
-        format_duration(total_duration)
-    );
+    let _ = writeln!(std::io::stderr(), "  {bold}Total: {}{reset}", format_duration(total_duration));
 }

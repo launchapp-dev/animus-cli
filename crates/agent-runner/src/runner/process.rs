@@ -9,9 +9,7 @@ use tokio::time::{timeout, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 use super::lifecycle::spawn_wait_task;
-use super::mcp_policy::{
-    apply_native_mcp_policy, is_tool_call_allowed, resolve_mcp_tool_enforcement, TempPathCleanup,
-};
+use super::mcp_policy::{apply_native_mcp_policy, is_tool_call_allowed, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, resolve_idle_timeout_secs};
 use super::process_signals::{terminate_and_untrack, untrack_after_completion, untrack_after_error};
 use super::stream_bridge::spawn_stream_forwarders;
@@ -27,11 +25,7 @@ pub(super) fn truncate_for_log(text: &str, max_chars: usize) -> String {
 
 fn canonical_cli_name(command: &str) -> String {
     let trimmed = command.trim();
-    std::path::Path::new(trimmed)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(trimmed)
-        .to_ascii_lowercase()
+    std::path::Path::new(trimmed).file_name().and_then(|value| value.to_str()).unwrap_or(trimmed).to_ascii_lowercase()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -53,13 +47,7 @@ pub async fn spawn_cli_process(
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, hard_timeout_secs, runtime_contract);
     let mcp_tool_enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
-    apply_native_mcp_policy(
-        &mut invocation,
-        &mcp_tool_enforcement,
-        &mut env,
-        run_id,
-        &mut temp_cleanup,
-    )?;
+    apply_native_mcp_policy(&mut invocation, &mcp_tool_enforcement, &mut env, run_id, &mut temp_cleanup)?;
     let prompt_len = prompt.chars().count();
     let prompt_preview = truncate_for_log(prompt, 160);
 
@@ -110,9 +98,7 @@ pub async fn spawn_cli_process(
     #[cfg(unix)]
     command.process_group(0);
 
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to spawn CLI process '{}'", invocation.command))?;
+    let mut child = command.spawn().with_context(|| format!("Failed to spawn CLI process '{}'", invocation.command))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !prompt.is_empty() {

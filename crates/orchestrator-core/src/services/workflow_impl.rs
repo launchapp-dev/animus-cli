@@ -1,15 +1,8 @@
 use super::*;
 use crate::types::PhaseDecision;
 
-fn effective_workflow_ref(
-    requested: Option<&str>,
-    task: Option<&crate::types::OrchestratorTask>,
-) -> String {
-    if let Some(workflow_ref) = requested
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-    {
+fn effective_workflow_ref(requested: Option<&str>, task: Option<&crate::types::OrchestratorTask>) -> String {
+    if let Some(workflow_ref) = requested.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned) {
         return workflow_ref;
     }
 
@@ -27,11 +20,7 @@ fn load_phase_retry_configs(
     config
         .phases
         .iter()
-        .filter_map(|(phase_id, def)| {
-            def.retry
-                .as_ref()
-                .map(|retry| (phase_id.clone(), retry.clone()))
-        })
+        .filter_map(|(phase_id, def)| def.retry.as_ref().map(|retry| (phase_id.clone(), retry.clone())))
         .collect()
 }
 
@@ -57,24 +46,11 @@ fn load_compiled_state_machines(
 #[async_trait]
 impl WorkflowServiceApi for InMemoryServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        Ok(self
-            .state
-            .read()
-            .await
-            .workflows
-            .values()
-            .cloned()
-            .collect())
+        Ok(self.state.read().await.workflows.values().cloned().collect())
     }
 
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow> {
-        self.state
-            .read()
-            .await
-            .workflows
-            .get(id)
-            .cloned()
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))
+        self.state.read().await.workflows.get(id).cloned().ok_or_else(|| not_found(format!("workflow not found: {id}")))
     }
 
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>> {
@@ -83,26 +59,12 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 
     async fn list_checkpoints(&self, id: &str) -> Result<Vec<usize>> {
         let workflow = WorkflowServiceApi::get(self, id).await?;
-        Ok(workflow
-            .checkpoint_metadata
-            .checkpoints
-            .iter()
-            .map(|checkpoint| checkpoint.number)
-            .collect())
+        Ok(workflow.checkpoint_metadata.checkpoints.iter().map(|checkpoint| checkpoint.number).collect())
     }
 
-    async fn get_checkpoint(
-        &self,
-        id: &str,
-        checkpoint_number: usize,
-    ) -> Result<OrchestratorWorkflow> {
+    async fn get_checkpoint(&self, id: &str, checkpoint_number: usize) -> Result<OrchestratorWorkflow> {
         let workflow = WorkflowServiceApi::get(self, id).await?;
-        if workflow
-            .checkpoint_metadata
-            .checkpoints
-            .iter()
-            .any(|checkpoint| checkpoint.number == checkpoint_number)
-        {
+        if workflow.checkpoint_metadata.checkpoints.iter().any(|checkpoint| checkpoint.number == checkpoint_number) {
             Ok(workflow)
         } else {
             Err(not_found(format!("checkpoint not found: {id} #{checkpoint_number}")))
@@ -113,15 +75,13 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let id = Uuid::new_v4().to_string();
         let workflow = {
             let mut lock = self.state.write().await;
-            let task = if let WorkflowSubject::Task { ref id } = input.subject {
-                lock.tasks.get(id).cloned()
-            } else {
-                None
-            };
+            let task =
+                if let WorkflowSubject::Task { ref id } = input.subject { lock.tasks.get(id).cloned() } else { None };
             let workflow_ref = effective_workflow_ref(input.workflow_ref(), task.as_ref());
-            let executor = WorkflowLifecycleExecutor::new(
-                crate::resolve_phase_plan_for_workflow_ref(None, Some(workflow_ref.as_str()))?,
-            );
+            let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref(
+                None,
+                Some(workflow_ref.as_str()),
+            )?);
             let workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
             lock.workflows.insert(id.clone(), workflow.clone());
             workflow
@@ -131,10 +91,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 
     async fn resume(&self, id: &str) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         let executor = WorkflowLifecycleExecutor::default();
         executor.resume(workflow);
         Ok(workflow.clone())
@@ -142,20 +99,14 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 
     async fn pause(&self, id: &str) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().pause(workflow);
         Ok(workflow.clone())
     }
 
     async fn cancel(&self, id: &str) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().cancel(workflow);
         Ok(workflow.clone())
     }
@@ -170,81 +121,57 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         decision: Option<PhaseDecision>,
     ) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
-        WorkflowLifecycleExecutor::default()
-            .mark_current_phase_success_with_decision(workflow, decision);
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        WorkflowLifecycleExecutor::default().mark_current_phase_success_with_decision(workflow, decision);
         Ok(workflow.clone())
     }
 
     async fn fail_current_phase(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_current_phase_failed(workflow, error);
         Ok(workflow.clone())
     }
 
     async fn mark_completed_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_completed_failed(workflow, error);
         Ok(workflow.clone())
     }
 
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().mark_merge_conflict(workflow, error);
         Ok(workflow.clone())
     }
 
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
         WorkflowLifecycleExecutor::default().resolve_merge_conflict(workflow);
         Ok(workflow.clone())
     }
 
     async fn record_feedback(&self, id: &str, feedback: String) -> Result<()> {
         let mut lock = self.state.write().await;
-        let workflow = lock
-            .workflows
-            .get_mut(id)
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
-        let phase_id = workflow
-            .current_phase
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        workflow
-            .decision_history
-            .push(crate::types::WorkflowDecisionRecord {
-                timestamp: chrono::Utc::now(),
-                phase_id,
-                source: crate::types::WorkflowDecisionSource::Fallback,
-                decision: crate::types::WorkflowDecisionAction::Advance,
-                target_phase: None,
-                reason: feedback,
-                confidence: 1.0,
-                risk: crate::types::WorkflowDecisionRisk::Low,
-                guardrail_violations: Vec::new(),
-                machine_version: None,
-                machine_hash: None,
-                machine_source: Some("human-feedback".to_string()),
-            });
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let phase_id = workflow.current_phase.clone().unwrap_or_else(|| "unknown".to_string());
+        workflow.decision_history.push(crate::types::WorkflowDecisionRecord {
+            timestamp: chrono::Utc::now(),
+            phase_id,
+            source: crate::types::WorkflowDecisionSource::Fallback,
+            decision: crate::types::WorkflowDecisionAction::Advance,
+            target_phase: None,
+            reason: feedback,
+            confidence: 1.0,
+            risk: crate::types::WorkflowDecisionRisk::Low,
+            guardrail_violations: Vec::new(),
+            machine_version: None,
+            machine_hash: None,
+            machine_source: Some("human-feedback".to_string()),
+        });
         Ok(())
     }
 }
@@ -255,11 +182,7 @@ impl WorkflowServiceApi for FileServiceHub {
         let workflows = self.workflow_manager().list()?;
 
         self.mutate_persistent_state(|state| {
-            state.workflows = workflows
-                .iter()
-                .cloned()
-                .map(|workflow| (workflow.id.clone(), workflow))
-                .collect();
+            state.workflows = workflows.iter().cloned().map(|workflow| (workflow.id.clone(), workflow)).collect();
             Ok(())
         })
         .await?;
@@ -272,13 +195,7 @@ impl WorkflowServiceApi for FileServiceHub {
             return Ok(workflow);
         }
 
-        self.state
-            .read()
-            .await
-            .workflows
-            .get(id)
-            .cloned()
-            .ok_or_else(|| not_found(format!("workflow not found: {id}")))
+        self.state.read().await.workflows.get(id).cloned().ok_or_else(|| not_found(format!("workflow not found: {id}")))
     }
 
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>> {
@@ -289,13 +206,8 @@ impl WorkflowServiceApi for FileServiceHub {
         self.workflow_manager().list_checkpoints(id)
     }
 
-    async fn get_checkpoint(
-        &self,
-        id: &str,
-        checkpoint_number: usize,
-    ) -> Result<OrchestratorWorkflow> {
-        self.workflow_manager()
-            .load_checkpoint(id, checkpoint_number)
+    async fn get_checkpoint(&self, id: &str, checkpoint_number: usize) -> Result<OrchestratorWorkflow> {
+        self.workflow_manager().load_checkpoint(id, checkpoint_number)
     }
 
     async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow> {
@@ -309,15 +221,9 @@ impl WorkflowServiceApi for FileServiceHub {
         };
         let workflow_ref = effective_workflow_ref(input.workflow_ref(), task.as_ref());
         let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
-        let skip_guards = crate::resolve_workflow_skip_guards(
-            &workflow_config.config,
-            Some(workflow_ref.as_str()),
-        );
+        let skip_guards = crate::resolve_workflow_skip_guards(&workflow_config.config, Some(workflow_ref.as_str()));
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
-                Some(self.project_root.as_path()),
-                Some(workflow_ref.as_str()),
-            )?,
+            crate::resolve_phase_plan_for_workflow_ref(Some(self.project_root.as_path()), Some(workflow_ref.as_str()))?,
             state_machines,
         )
         .with_retry_configs(retry_configs)
@@ -422,10 +328,8 @@ impl WorkflowServiceApi for FileServiceHub {
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let retry_configs = load_phase_retry_configs(self.project_root.as_path());
         let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
-        let skip_guards = crate::resolve_workflow_skip_guards(
-            &workflow_config.config,
-            workflow.workflow_ref.as_deref(),
-        );
+        let skip_guards =
+            crate::resolve_workflow_skip_guards(&workflow_config.config, workflow.workflow_ref.as_deref());
         let executor = WorkflowLifecycleExecutor::with_state_machines(
             crate::resolve_phase_plan_for_workflow_ref(
                 Some(self.project_root.as_path()),
@@ -436,20 +340,16 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision);
-        let task_id = if let WorkflowSubject::Task { ref id } = workflow.subject {
-            id.clone()
-        } else {
-            workflow.task_id.clone()
-        };
+        let task_id =
+            if let WorkflowSubject::Task { ref id } = workflow.subject { id.clone() } else { workflow.task_id.clone() };
         if let Some(task) = self.state.read().await.tasks.get(&task_id).cloned() {
             executor.skip_guarded_phases(&mut workflow, &task);
         }
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
         if workflow.status == crate::types::WorkflowStatus::Completed {
-            let retention = crate::load_workflow_config_or_default(self.project_root.as_path())
-                .config
-                .checkpoint_retention;
+            let retention =
+                crate::load_workflow_config_or_default(self.project_root.as_path()).config.checkpoint_retention;
             if retention.auto_prune_on_completion {
                 match manager.prune_checkpoints(
                     &workflow.id,
@@ -589,26 +489,21 @@ impl WorkflowServiceApi for FileServiceHub {
     async fn record_feedback(&self, id: &str, feedback: String) -> Result<()> {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
-        let phase_id = workflow
-            .current_phase
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        workflow
-            .decision_history
-            .push(crate::types::WorkflowDecisionRecord {
-                timestamp: chrono::Utc::now(),
-                phase_id,
-                source: crate::types::WorkflowDecisionSource::Fallback,
-                decision: crate::types::WorkflowDecisionAction::Advance,
-                target_phase: None,
-                reason: feedback,
-                confidence: 1.0,
-                risk: crate::types::WorkflowDecisionRisk::Low,
-                guardrail_violations: Vec::new(),
-                machine_version: None,
-                machine_hash: None,
-                machine_source: Some("human-feedback".to_string()),
-            });
+        let phase_id = workflow.current_phase.clone().unwrap_or_else(|| "unknown".to_string());
+        workflow.decision_history.push(crate::types::WorkflowDecisionRecord {
+            timestamp: chrono::Utc::now(),
+            phase_id,
+            source: crate::types::WorkflowDecisionSource::Fallback,
+            decision: crate::types::WorkflowDecisionAction::Advance,
+            target_phase: None,
+            reason: feedback,
+            confidence: 1.0,
+            risk: crate::types::WorkflowDecisionRisk::Low,
+            guardrail_violations: Vec::new(),
+            machine_version: None,
+            machine_hash: None,
+            machine_source: Some("human-feedback".to_string()),
+        });
         manager.save(&workflow)?;
         self.mutate_persistent_state(|state| {
             state.workflows.insert(id.to_string(), workflow.clone());

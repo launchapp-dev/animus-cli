@@ -14,9 +14,7 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use include_dir::{include_dir, Dir};
 use orchestrator_web_api::{WebApiError, WebApiService};
-use orchestrator_web_contracts::{
-    http_status_for_exit_code, CliEnvelopeService, DaemonEventRecord,
-};
+use orchestrator_web_contracts::{http_status_for_exit_code, CliEnvelopeService, DaemonEventRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -60,10 +58,7 @@ impl WebServer {
             assets_dir: self.config.assets_dir.map(PathBuf::from),
             api_only: self.config.api_only,
             default_page_size: self.config.default_page_size.max(1),
-            max_page_size: self
-                .config
-                .max_page_size
-                .max(self.config.default_page_size.max(1)),
+            max_page_size: self.config.max_page_size.max(self.config.default_page_size.max(1)),
         };
 
         let router = build_router(state);
@@ -72,9 +67,7 @@ impl WebServer {
             .await
             .with_context(|| format!("failed to bind web server at {address}"))?;
 
-        axum::serve(listener, router)
-            .await
-            .context("web server failed")?;
+        axum::serve(listener, router).await.context("web server failed")?;
 
         Ok(())
     }
@@ -104,14 +97,8 @@ fn build_router(state: AppState) -> Router {
         .route("/projects/{id}/workflows", get(project_workflows_handler))
         .route("/projects/{id}", patch(projects_patch_handler))
         .route("/projects/{id}", delete(projects_delete_handler))
-        .route(
-            "/project-requirements/{id}",
-            get(projects_requirements_by_id_handler),
-        )
-        .route(
-            "/project-requirements/{project_id}/{requirement_id}",
-            get(project_requirement_get_handler),
-        )
+        .route("/project-requirements/{id}", get(projects_requirements_by_id_handler))
+        .route("/project-requirements/{project_id}/{requirement_id}", get(project_requirement_get_handler))
         .route("/projects/{id}/load", post(projects_load_handler))
         .route("/projects/{id}/archive", post(projects_archive_handler))
         .route("/vision", get(vision_get_handler))
@@ -136,33 +123,15 @@ fn build_router(state: AppState) -> Router {
         .route("/tasks/{id}/assign-agent", post(tasks_assign_agent_handler))
         .route("/tasks/{id}/assign-human", post(tasks_assign_human_handler))
         .route("/tasks/{id}/checklist", post(tasks_checklist_add_handler))
-        .route(
-            "/tasks/{id}/checklist/{item_id}",
-            patch(tasks_checklist_update_handler),
-        )
-        .route(
-            "/tasks/{id}/dependencies",
-            post(tasks_dependency_add_handler),
-        )
-        .route(
-            "/tasks/{id}/dependencies/{dependency_id}",
-            delete(tasks_dependency_remove_handler),
-        )
+        .route("/tasks/{id}/checklist/{item_id}", patch(tasks_checklist_update_handler))
+        .route("/tasks/{id}/dependencies", post(tasks_dependency_add_handler))
+        .route("/tasks/{id}/dependencies/{dependency_id}", delete(tasks_dependency_remove_handler))
         .route("/workflows", get(workflows_list_handler))
         .route("/workflows/run", post(workflows_run_handler))
         .route("/workflows/{id}", get(workflows_get_handler))
-        .route(
-            "/workflows/{id}/decisions",
-            get(workflows_decisions_handler),
-        )
-        .route(
-            "/workflows/{id}/checkpoints",
-            get(workflows_checkpoints_handler),
-        )
-        .route(
-            "/workflows/{id}/checkpoints/{checkpoint}",
-            get(workflows_get_checkpoint_handler),
-        )
+        .route("/workflows/{id}/decisions", get(workflows_decisions_handler))
+        .route("/workflows/{id}/checkpoints", get(workflows_checkpoints_handler))
+        .route("/workflows/{id}/checkpoints/{checkpoint}", get(workflows_get_checkpoint_handler))
         .route("/workflows/{id}/resume", post(workflows_resume_handler))
         .route("/workflows/{id}/pause", post(workflows_pause_handler))
         .route("/workflows/{id}/cancel", post(workflows_cancel_handler))
@@ -177,14 +146,8 @@ fn build_router(state: AppState) -> Router {
 
     Router::new()
         .nest("/api/v1", api_router)
-        .route(
-            "/graphql",
-            get(graphql::graphql_playground).post(graphql::graphql_handler),
-        )
-        .route_service(
-            "/graphql/ws",
-            graphql::ws_subscription(gql_schema.clone()),
-        )
+        .route("/graphql", get(graphql::graphql_playground).post(graphql::graphql_handler))
+        .route_service("/graphql/ws", graphql::ws_subscription(gql_schema.clone()))
         .route("/graphql/schema", get(graphql::graphql_sdl_handler))
         .route("/", get(root_handler))
         .route("/{*path}", get(static_handler))
@@ -195,21 +158,11 @@ fn build_router(state: AppState) -> Router {
                 .allow_origin(AllowOrigin::predicate(|origin, _| {
                     origin
                         .to_str()
-                        .map(|o| {
-                            o.starts_with("http://localhost")
-                                || o.starts_with("http://127.0.0.1")
-                        })
+                        .map(|o| o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"))
                         .unwrap_or(false)
                 }))
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::header::AUTHORIZATION,
-                ])
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::OPTIONS])
+                .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION])
                 .max_age(Duration::from_secs(3600)),
         )
         .with_state(state)
@@ -244,10 +197,7 @@ async fn daemon_health_handler(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn daemon_logs_handler(
-    State(state): State<AppState>,
-    Query(query): Query<DaemonLogsQuery>,
-) -> Response {
+async fn daemon_logs_handler(State(state): State<AppState>, Query(query): Query<DaemonLogsQuery>) -> Response {
     match state.api.daemon_logs(query.limit).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -317,10 +267,7 @@ async fn projects_requirements_handler(State(state): State<AppState>) -> Respons
     }
 }
 
-async fn projects_get_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn projects_get_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.projects_get(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -353,30 +300,21 @@ async fn project_tasks_handler(
     }
 }
 
-async fn project_workflows_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn project_workflows_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.project_workflows(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn projects_create_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn projects_create_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     match state.api.projects_create(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn projects_load_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn projects_load_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.projects_load(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -394,10 +332,7 @@ async fn projects_patch_handler(
     }
 }
 
-async fn projects_archive_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn projects_archive_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.projects_archive(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -418,20 +353,13 @@ async fn project_requirement_get_handler(
     State(state): State<AppState>,
     AxumPath((project_id, requirement_id)): AxumPath<(String, String)>,
 ) -> Response {
-    match state
-        .api
-        .project_requirement_get(&project_id, &requirement_id)
-        .await
-    {
+    match state.api.project_requirement_get(&project_id, &requirement_id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn projects_delete_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn projects_delete_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.projects_delete(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -463,11 +391,10 @@ async fn requirements_list_handler(
     State(state): State<AppState>,
     Query(query): Query<ListPaginationQuery>,
 ) -> Response {
-    let pagination =
-        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
-            Ok(pagination) => pagination,
-            Err(error) => return error_response(error),
-        };
+    let pagination = match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
+        Ok(pagination) => pagination,
+        Err(error) => return error_response(error),
+    };
 
     match state.api.requirements_list().await {
         Ok(data) => match paginated_success_response(data, pagination, None) {
@@ -478,40 +405,28 @@ async fn requirements_list_handler(
     }
 }
 
-async fn requirements_create_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn requirements_create_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     match state.api.requirements_create(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn requirements_draft_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn requirements_draft_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     match state.api.requirements_draft(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn requirements_refine_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn requirements_refine_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     match state.api.requirements_refine(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn requirements_get_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn requirements_get_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.requirements_get(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -529,10 +444,7 @@ async fn requirements_patch_handler(
     }
 }
 
-async fn requirements_delete_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn requirements_delete_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.requirements_delete(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -544,11 +456,7 @@ async fn tasks_list_handler(
     Query(query): Query<TasksListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let pagination = match normalize_pagination_query(
-        &query.pagination,
-        state.default_page_size,
-        state.max_page_size,
-    ) {
+    let pagination = match normalize_pagination_query(&query.pagination, state.default_page_size, state.max_page_size) {
         Ok(pagination) => pagination,
         Err(error) => return error_response(error),
     };
@@ -597,10 +505,7 @@ async fn tasks_stats_handler(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn tasks_get_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn tasks_get_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.tasks_get(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -625,10 +530,7 @@ async fn tasks_patch_handler(
     }
 }
 
-async fn tasks_delete_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn tasks_delete_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.tasks_delete(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -706,25 +608,17 @@ async fn tasks_dependency_remove_handler(
     AxumPath((id, dependency_id)): AxumPath<(String, String)>,
     body: Option<Json<Value>>,
 ) -> Response {
-    match state
-        .api
-        .tasks_dependency_remove(&id, &dependency_id, body.map(|json| json.0))
-        .await
-    {
+    match state.api.tasks_dependency_remove(&id, &dependency_id, body.map(|json| json.0)).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn workflows_list_handler(
-    State(state): State<AppState>,
-    Query(query): Query<ListPaginationQuery>,
-) -> Response {
-    let pagination =
-        match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
-            Ok(pagination) => pagination,
-            Err(error) => return error_response(error),
-        };
+async fn workflows_list_handler(State(state): State<AppState>, Query(query): Query<ListPaginationQuery>) -> Response {
+    let pagination = match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
+        Ok(pagination) => pagination,
+        Err(error) => return error_response(error),
+    };
 
     match state.api.workflows_list().await {
         Ok(data) => match paginated_success_response(data, pagination, None) {
@@ -735,30 +629,21 @@ async fn workflows_list_handler(
     }
 }
 
-async fn workflows_get_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_get_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_get(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn workflows_decisions_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_decisions_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_decisions(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn workflows_checkpoints_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_checkpoints_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_checkpoints(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -782,40 +667,28 @@ async fn workflows_run_handler(State(state): State<AppState>, Json(body): Json<V
     }
 }
 
-async fn workflows_resume_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_resume_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_resume(&id, None).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn workflows_pause_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_pause_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_pause(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn workflows_cancel_handler(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+async fn workflows_cancel_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_cancel(&id).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
 }
 
-async fn reviews_handoff_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn reviews_handoff_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     match state.api.reviews_handoff(body).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
@@ -896,13 +769,7 @@ async fn events_handler(State(state): State<AppState>, headers: HeaderMap) -> Re
         }
     };
 
-    Sse::new(stream)
-        .keep_alive(
-            KeepAlive::new()
-                .interval(Duration::from_secs(15))
-                .text("ping"),
-        )
-        .into_response()
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping")).into_response()
 }
 
 async fn root_handler(State(state): State<AppState>) -> Response {
@@ -916,10 +783,7 @@ async fn root_handler(State(state): State<AppState>) -> Response {
     serve_static_asset(&state, "index.html").await
 }
 
-async fn static_handler(
-    State(state): State<AppState>,
-    AxumPath(path): AxumPath<String>,
-) -> Response {
+async fn static_handler(State(state): State<AppState>, AxumPath(path): AxumPath<String>) -> Response {
     if state.api_only {
         return not_found_response("not found");
     }
@@ -973,22 +837,12 @@ fn paginated_success_response(
 ) -> std::result::Result<Response, WebApiError> {
     let paginated = paginate_array_data(data, pagination)?;
     let etag = conditional_headers.map(|_| compute_etag(&paginated));
-    let PaginatedArray {
-        items,
-        page_size,
-        total_count,
-        next_cursor,
-    } = paginated;
+    let PaginatedArray { items, page_size, total_count, next_cursor } = paginated;
 
     if let (Some(headers), Some(etag)) = (conditional_headers, etag.as_deref()) {
         if if_none_match_matches(headers, etag) {
             let mut response = not_modified_response(etag);
-            attach_pagination_headers(
-                &mut response,
-                page_size,
-                total_count,
-                next_cursor.as_deref(),
-            );
+            attach_pagination_headers(&mut response, page_size, total_count, next_cursor.as_deref());
             return Ok(response);
         }
     }
@@ -997,12 +851,7 @@ fn paginated_success_response(
     if let Some(etag) = etag.as_deref() {
         attach_cache_headers(&mut response, etag);
     }
-    attach_pagination_headers(
-        &mut response,
-        page_size,
-        total_count,
-        next_cursor.as_deref(),
-    );
+    attach_pagination_headers(&mut response, page_size, total_count, next_cursor.as_deref());
     Ok(response)
 }
 
@@ -1029,81 +878,40 @@ fn normalize_pagination_query(
 
 fn parse_pagination_cursor(cursor: &str) -> std::result::Result<usize, WebApiError> {
     cursor.parse::<usize>().map_err(|_| {
-        WebApiError::new(
-            "invalid_input",
-            format!("invalid cursor `{cursor}`: expected unsigned integer"),
-            2,
-        )
+        WebApiError::new("invalid_input", format!("invalid cursor `{cursor}`: expected unsigned integer"), 2)
     })
 }
 
 fn parse_page_size(page_size: &str) -> std::result::Result<usize, WebApiError> {
     let parsed = page_size.parse::<usize>().map_err(|_| {
-        WebApiError::new(
-            "invalid_input",
-            format!("invalid page_size `{page_size}`: expected unsigned integer"),
-            2,
-        )
+        WebApiError::new("invalid_input", format!("invalid page_size `{page_size}`: expected unsigned integer"), 2)
     })?;
 
     if parsed == 0 {
-        return Err(WebApiError::new(
-            "invalid_input",
-            "page_size must be at least 1",
-            2,
-        ));
+        return Err(WebApiError::new("invalid_input", "page_size must be at least 1", 2));
     }
 
     Ok(parsed)
 }
 
-fn paginate_array_data(
-    data: Value,
-    pagination: PaginationRequest,
-) -> std::result::Result<PaginatedArray, WebApiError> {
-    let items = data.as_array().ok_or_else(|| {
-        WebApiError::new(
-            "internal",
-            "expected list endpoint payload to be an array",
-            1,
-        )
-    })?;
+fn paginate_array_data(data: Value, pagination: PaginationRequest) -> std::result::Result<PaginatedArray, WebApiError> {
+    let items = data
+        .as_array()
+        .ok_or_else(|| WebApiError::new("internal", "expected list endpoint payload to be an array", 1))?;
 
     let total_count = items.len();
     let start = pagination.start.min(total_count);
     let end = start.saturating_add(pagination.page_size).min(total_count);
     let page_items = items[start..end].to_vec();
-    let next_cursor = if end < total_count {
-        Some(end.to_string())
-    } else {
-        None
-    };
+    let next_cursor = if end < total_count { Some(end.to_string()) } else { None };
 
-    Ok(PaginatedArray {
-        items: page_items,
-        page_size: pagination.page_size,
-        total_count,
-        next_cursor,
-    })
+    Ok(PaginatedArray { items: page_items, page_size: pagination.page_size, total_count, next_cursor })
 }
 
-fn attach_pagination_headers(
-    response: &mut Response,
-    page_size: usize,
-    total_count: usize,
-    next_cursor: Option<&str>,
-) {
+fn attach_pagination_headers(response: &mut Response, page_size: usize, total_count: usize, next_cursor: Option<&str>) {
     set_response_header(response, HEADER_PAGE_SIZE, &page_size.to_string());
     set_response_header(response, HEADER_TOTAL_COUNT, &total_count.to_string());
-    set_response_header(
-        response,
-        HEADER_HAS_MORE,
-        if next_cursor.is_some() {
-            "true"
-        } else {
-            "false"
-        },
-    );
+    set_response_header(response, HEADER_HAS_MORE, if next_cursor.is_some() { "true" } else { "false" });
     if let Some(next_cursor) = next_cursor {
         set_response_header(response, HEADER_NEXT_CURSOR, next_cursor);
     }
@@ -1121,9 +929,10 @@ fn if_none_match_matches(headers: &HeaderMap, current_etag: &str) -> bool {
         .get(IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
         .map(|value| {
-            value.split(',').map(str::trim).any(|candidate| {
-                candidate == "*" || normalize_etag(candidate) == normalized_current
-            })
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == "*" || normalize_etag(candidate) == normalized_current)
         })
         .unwrap_or(false)
 }
@@ -1143,10 +952,7 @@ fn attach_cache_headers(response: &mut Response, etag: &str) {
     if let Ok(etag_value) = HeaderValue::from_str(etag) {
         response.headers_mut().insert(ETAG, etag_value);
     }
-    response.headers_mut().insert(
-        CACHE_CONTROL,
-        HeaderValue::from_static(CACHE_CONTROL_REVALIDATE),
-    );
+    response.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(CACHE_CONTROL_REVALIDATE));
 }
 
 fn set_response_header(response: &mut Response, name: &'static str, value: &str) {
@@ -1168,17 +974,11 @@ fn not_found_response(message: &str) -> Response {
 
 fn to_sse_event(record: DaemonEventRecord) -> Event {
     let payload = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
-    Event::default()
-        .event("daemon-event")
-        .id(record.seq.to_string())
-        .data(payload)
+    Event::default().event("daemon-event").id(record.seq.to_string()).data(payload)
 }
 
 fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get("last-event-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
+    headers.get("last-event-id").and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u64>().ok())
 }
 
 fn normalize_asset_path(path: &str) -> String {
@@ -1225,35 +1025,23 @@ async fn load_asset_from_disk(state: &AppState, requested_path: &str) -> Option<
     }
 
     let bytes = tokio::fs::read(&full_path).await.ok()?;
-    let content_type = mime_guess::from_path(&full_path)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_string();
+    let content_type = mime_guess::from_path(&full_path).first_or_octet_stream().essence_str().to_string();
 
-    Some(AssetPayload {
-        bytes,
-        content_type,
-    })
+    Some(AssetPayload { bytes, content_type })
 }
 
 fn load_asset_from_embedded(requested_path: &str) -> Option<AssetPayload> {
     let file = EMBEDDED_ASSETS.get_file(requested_path)?;
     let bytes = file.contents().to_vec();
-    let content_type = mime_guess::from_path(requested_path)
-        .first_or_octet_stream()
-        .essence_str()
-        .to_string();
+    let content_type = mime_guess::from_path(requested_path).first_or_octet_stream().essence_str().to_string();
 
-    Some(AssetPayload {
-        bytes,
-        content_type,
-    })
+    Some(AssetPayload { bytes, content_type })
 }
 
 fn binary_response(bytes: Vec<u8>, content_type: &str) -> Response {
     let mut response = Response::new(Body::from(bytes));
-    let header_value = HeaderValue::from_str(content_type)
-        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    let header_value =
+        HeaderValue::from_str(content_type).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     response.headers_mut().insert(CONTENT_TYPE, header_value);
     response
 }
@@ -1318,10 +1106,7 @@ mod tests {
     use serde_json::Value;
     use tower::util::ServiceExt;
 
-    use super::{
-        build_router, AppState, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_PAGE_SIZE,
-        HEADER_TOTAL_COUNT,
-    };
+    use super::{build_router, AppState, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_PAGE_SIZE, HEADER_TOTAL_COUNT};
 
     fn build_test_app(
         hub: Arc<dyn ServiceHub>,
@@ -1335,22 +1120,11 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only,
-            default_page_size,
-            max_page_size,
-        })
+        build_router(AppState { api, assets_dir: None, api_only, default_page_size, max_page_size })
     }
 
     async fn seed_tasks(hub: &Arc<dyn ServiceHub>, count: usize) {
-        let base_index = hub
-            .tasks()
-            .list()
-            .await
-            .expect("tasks should list for seeding")
-            .len();
+        let base_index = hub.tasks().list().await.expect("tasks should list for seeding").len();
         for index in 0..count {
             hub.tasks()
                 .create(TaskCreateInput {
@@ -1427,9 +1201,7 @@ mod tests {
 
     #[test]
     fn tasks_list_query_deserializes_positive_page_size() {
-        let uri: axum::http::Uri = "/api/v1/tasks?page_size=200"
-            .parse()
-            .expect("uri should parse");
+        let uri: axum::http::Uri = "/api/v1/tasks?page_size=200".parse().expect("uri should parse");
         let query = axum::extract::Query::<super::TasksListQuery>::try_from_uri(&uri)
             .expect("query extraction should parse page_size")
             .0;
@@ -1446,13 +1218,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1477,13 +1244,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1498,16 +1260,9 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body should be readable");
-        let payload: Value =
-            serde_json::from_slice(&body).expect("openapi endpoint should return valid JSON");
-        assert_eq!(
-            payload["openapi"].as_str(),
-            Some("3.1.0"),
-            "spec should declare OpenAPI 3.1"
-        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body should be readable");
+        let payload: Value = serde_json::from_slice(&body).expect("openapi endpoint should return valid JSON");
+        assert_eq!(payload["openapi"].as_str(), Some("3.1.0"), "spec should declare OpenAPI 3.1");
     }
 
     #[tokio::test]
@@ -1519,13 +1274,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1540,24 +1290,13 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        assert!(
-            content_type.starts_with("text/html"),
-            "docs endpoint should return HTML"
-        );
+        let content_type =
+            response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).unwrap_or_default();
+        assert!(content_type.starts_with("text/html"), "docs endpoint should return HTML");
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body should be readable");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body should be readable");
         let html = String::from_utf8(body.to_vec()).expect("docs response should be utf-8");
-        assert!(
-            html.contains("SwaggerUIBundle"),
-            "docs response should include Swagger UI bootstrap"
-        );
+        assert!(html.contains("SwaggerUIBundle"), "docs response should include Swagger UI bootstrap");
     }
 
     #[tokio::test]
@@ -1569,13 +1308,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1599,19 +1333,11 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
-        assert_eq!(
-            payload
-                .get("data")
-                .and_then(|data| data.get("status"))
-                .and_then(Value::as_str),
-            Some("failed")
-        );
+        assert_eq!(payload.get("data").and_then(|data| data.get("status")).and_then(Value::as_str), Some("failed"));
     }
 
     #[tokio::test]
@@ -1623,13 +1349,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let vision_save_response = app
             .clone()
@@ -1695,16 +1416,12 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(
-            requirement_create_response.status(),
-            axum::http::StatusCode::OK
-        );
+        assert_eq!(requirement_create_response.status(), axum::http::StatusCode::OK);
 
-        let requirement_create_body = to_bytes(requirement_create_response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
-        let requirement_create_payload: Value = serde_json::from_slice(&requirement_create_body)
-            .expect("response should be valid json");
+        let requirement_create_body =
+            to_bytes(requirement_create_response.into_body(), usize::MAX).await.expect("response body should load");
+        let requirement_create_payload: Value =
+            serde_json::from_slice(&requirement_create_body).expect("response should be valid json");
         let requirement_id = requirement_create_payload["data"]["id"]
             .as_str()
             .expect("created requirement should include an id")
@@ -1728,10 +1445,7 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(
-            requirement_patch_response.status(),
-            axum::http::StatusCode::OK
-        );
+        assert_eq!(requirement_patch_response.status(), axum::http::StatusCode::OK);
 
         let requirement_refine_response = app
             .clone()
@@ -1750,10 +1464,7 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(
-            requirement_refine_response.status(),
-            axum::http::StatusCode::OK
-        );
+        assert_eq!(requirement_refine_response.status(), axum::http::StatusCode::OK);
 
         let requirement_delete_response = app
             .clone()
@@ -1766,10 +1477,7 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(
-            requirement_delete_response.status(),
-            axum::http::StatusCode::OK
-        );
+        assert_eq!(requirement_delete_response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1781,13 +1489,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1812,13 +1515,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1843,13 +1541,8 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
@@ -1906,30 +1599,16 @@ mod tests {
             let response = app
                 .clone()
                 .oneshot(
-                    Request::builder()
-                        .method("GET")
-                        .uri(route)
-                        .body(Body::empty())
-                        .expect("request should be built"),
+                    Request::builder().method("GET").uri(route).body(Body::empty()).expect("request should be built"),
                 )
                 .await
                 .expect("request should succeed");
 
-            assert_eq!(
-                response.status(),
-                axum::http::StatusCode::OK,
-                "{route} should return SPA html"
-            );
+            assert_eq!(response.status(), axum::http::StatusCode::OK, "{route} should return SPA html");
 
-            let content_type = response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default();
-            assert!(
-                content_type.starts_with("text/html"),
-                "{route} should return text/html content type"
-            );
+            let content_type =
+                response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).unwrap_or_default();
+            assert!(content_type.starts_with("text/html"), "{route} should return text/html content type");
         }
     }
 
@@ -1942,30 +1621,19 @@ mod tests {
             app_version: "test-version".to_string(),
         });
         let api = orchestrator_web_api::WebApiService::new(context);
-        let app = build_router(AppState {
-            api,
-            assets_dir: None,
-            api_only: true,
-            default_page_size: 50,
-            max_page_size: 200,
-        });
+        let app =
+            build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
 
         let response = app
             .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/events")
-                    .body(Body::empty())
-                    .expect("request should be built"),
+                Request::builder().method("GET").uri("/events").body(Body::empty()).expect("request should be built"),
             )
             .await
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
         assert_eq!(payload.get("ok"), Some(&Value::Bool(false)));
     }
@@ -1989,20 +1657,8 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(first_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("50")
-        );
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
+        assert_eq!(first_page.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("50"));
+        assert_eq!(first_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("true"));
         let next_cursor = first_page
             .headers()
             .get(HEADER_NEXT_CURSOR)
@@ -2010,18 +1666,10 @@ mod tests {
             .expect("first page should return next cursor")
             .to_string();
 
-        let first_page_body = to_bytes(first_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let first_page_body = to_bytes(first_page.into_body(), usize::MAX).await.expect("response body should load");
         let first_page_payload: Value =
             serde_json::from_slice(&first_page_body).expect("response should be valid json");
-        assert_eq!(
-            first_page_payload["data"]
-                .as_array()
-                .expect("tasks list payload should be an array")
-                .len(),
-            50
-        );
+        assert_eq!(first_page_payload["data"].as_array().expect("tasks list payload should be an array").len(), 50);
 
         let second_page = app
             .oneshot(
@@ -2035,30 +1683,16 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(second_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            second_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("false")
-        );
+        assert_eq!(second_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("false"));
         assert!(
             second_page.headers().get(HEADER_NEXT_CURSOR).is_none(),
             "final page should not include a next cursor header"
         );
 
-        let second_page_body = to_bytes(second_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let second_page_body = to_bytes(second_page.into_body(), usize::MAX).await.expect("response body should load");
         let second_page_payload: Value =
             serde_json::from_slice(&second_page_body).expect("response should be valid json");
-        assert_eq!(
-            second_page_payload["data"]
-                .as_array()
-                .expect("tasks list payload should be an array")
-                .len(),
-            10
-        );
+        assert_eq!(second_page_payload["data"].as_array().expect("tasks list payload should be an array").len(), 10);
     }
 
     #[tokio::test]
@@ -2117,39 +1751,13 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("30")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get(HEADER_TOTAL_COUNT)
-                .and_then(|value| value.to_str().ok()),
-            Some("45")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get(HEADER_NEXT_CURSOR)
-                .and_then(|value| value.to_str().ok()),
-            Some("30")
-        );
+        assert_eq!(response.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("30"));
+        assert_eq!(response.headers().get(HEADER_TOTAL_COUNT).and_then(|value| value.to_str().ok()), Some("45"));
+        assert_eq!(response.headers().get(HEADER_NEXT_CURSOR).and_then(|value| value.to_str().ok()), Some("30"));
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
-        assert_eq!(
-            payload["data"]
-                .as_array()
-                .expect("tasks list payload should be an array")
-                .len(),
-            30
-        );
+        assert_eq!(payload["data"].as_array().expect("tasks list payload should be an array").len(), 30);
     }
 
     #[tokio::test]
@@ -2169,13 +1777,7 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("50")
-        );
+        assert_eq!(response.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("50"));
     }
 
     #[tokio::test]
@@ -2197,27 +1799,9 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(first_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("30")
-        );
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_TOTAL_COUNT)
-                .and_then(|value| value.to_str().ok()),
-            Some("45")
-        );
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
+        assert_eq!(first_page.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("30"));
+        assert_eq!(first_page.headers().get(HEADER_TOTAL_COUNT).and_then(|value| value.to_str().ok()), Some("45"));
+        assert_eq!(first_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("true"));
         let next_cursor = first_page
             .headers()
             .get(HEADER_NEXT_CURSOR)
@@ -2225,16 +1809,11 @@ mod tests {
             .expect("first page should include next cursor")
             .to_string();
 
-        let first_page_body = to_bytes(first_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let first_page_body = to_bytes(first_page.into_body(), usize::MAX).await.expect("response body should load");
         let first_page_payload: Value =
             serde_json::from_slice(&first_page_body).expect("response should be valid json");
         assert_eq!(
-            first_page_payload["data"]
-                .as_array()
-                .expect("requirements list payload should be an array")
-                .len(),
+            first_page_payload["data"].as_array().expect("requirements list payload should be an array").len(),
             30
         );
 
@@ -2242,9 +1821,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!(
-                        "/api/v1/requirements?cursor={next_cursor}&page_size=500"
-                    ))
+                    .uri(format!("/api/v1/requirements?cursor={next_cursor}&page_size=500"))
                     .body(Body::empty())
                     .expect("request should be built"),
             )
@@ -2252,28 +1829,14 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(second_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            second_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("false")
-        );
-        assert!(
-            second_page.headers().get(HEADER_NEXT_CURSOR).is_none(),
-            "final page should not include next cursor"
-        );
+        assert_eq!(second_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("false"));
+        assert!(second_page.headers().get(HEADER_NEXT_CURSOR).is_none(), "final page should not include next cursor");
 
-        let second_page_body = to_bytes(second_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let second_page_body = to_bytes(second_page.into_body(), usize::MAX).await.expect("response body should load");
         let second_page_payload: Value =
             serde_json::from_slice(&second_page_body).expect("response should be valid json");
         assert_eq!(
-            second_page_payload["data"]
-                .as_array()
-                .expect("requirements list payload should be an array")
-                .len(),
+            second_page_payload["data"].as_array().expect("requirements list payload should be an array").len(),
             15
         );
     }
@@ -2295,13 +1858,7 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("50")
-        );
+        assert_eq!(response.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("50"));
     }
 
     #[tokio::test]
@@ -2332,27 +1889,9 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(first_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("30")
-        );
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_TOTAL_COUNT)
-                .and_then(|value| value.to_str().ok()),
-            Some("45")
-        );
-        assert_eq!(
-            first_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("true")
-        );
+        assert_eq!(first_page.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("30"));
+        assert_eq!(first_page.headers().get(HEADER_TOTAL_COUNT).and_then(|value| value.to_str().ok()), Some("45"));
+        assert_eq!(first_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("true"));
         let next_cursor = first_page
             .headers()
             .get(HEADER_NEXT_CURSOR)
@@ -2360,26 +1899,16 @@ mod tests {
             .expect("first page should include next cursor")
             .to_string();
 
-        let first_page_body = to_bytes(first_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let first_page_body = to_bytes(first_page.into_body(), usize::MAX).await.expect("response body should load");
         let first_page_payload: Value =
             serde_json::from_slice(&first_page_body).expect("response should be valid json");
-        assert_eq!(
-            first_page_payload["data"]
-                .as_array()
-                .expect("workflows list payload should be an array")
-                .len(),
-            30
-        );
+        assert_eq!(first_page_payload["data"].as_array().expect("workflows list payload should be an array").len(), 30);
 
         let second_page = app
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!(
-                        "/api/v1/workflows?cursor={next_cursor}&page_size=500"
-                    ))
+                    .uri(format!("/api/v1/workflows?cursor={next_cursor}&page_size=500"))
                     .body(Body::empty())
                     .expect("request should be built"),
             )
@@ -2387,28 +1916,14 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(second_page.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            second_page
-                .headers()
-                .get(HEADER_HAS_MORE)
-                .and_then(|value| value.to_str().ok()),
-            Some("false")
-        );
-        assert!(
-            second_page.headers().get(HEADER_NEXT_CURSOR).is_none(),
-            "final page should not include next cursor"
-        );
+        assert_eq!(second_page.headers().get(HEADER_HAS_MORE).and_then(|value| value.to_str().ok()), Some("false"));
+        assert!(second_page.headers().get(HEADER_NEXT_CURSOR).is_none(), "final page should not include next cursor");
 
-        let second_page_body = to_bytes(second_page.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let second_page_body = to_bytes(second_page.into_body(), usize::MAX).await.expect("response body should load");
         let second_page_payload: Value =
             serde_json::from_slice(&second_page_body).expect("response should be valid json");
         assert_eq!(
-            second_page_payload["data"]
-                .as_array()
-                .expect("workflows list payload should be an array")
-                .len(),
+            second_page_payload["data"].as_array().expect("workflows list payload should be an array").len(),
             15
         );
     }
@@ -2489,10 +2004,7 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        assert_eq!(
-            cached_response.status(),
-            axum::http::StatusCode::NOT_MODIFIED
-        );
+        assert_eq!(cached_response.status(), axum::http::StatusCode::NOT_MODIFIED);
 
         seed_tasks(&hub, 1).await;
 
@@ -2542,13 +2054,7 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .expect("tasks list should include etag")
             .to_string();
-        assert_eq!(
-            first_response
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("200")
-        );
+        assert_eq!(first_response.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("200"));
 
         let second_response = app
             .oneshot(
@@ -2563,30 +2069,15 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(second_response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            second_response
-                .headers()
-                .get(HEADER_PAGE_SIZE)
-                .and_then(|value| value.to_str().ok()),
-            Some("50")
-        );
-        assert_eq!(
-            second_response
-                .headers()
-                .get(HEADER_TOTAL_COUNT)
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
+        assert_eq!(second_response.headers().get(HEADER_PAGE_SIZE).and_then(|value| value.to_str().ok()), Some("50"));
+        assert_eq!(second_response.headers().get(HEADER_TOTAL_COUNT).and_then(|value| value.to_str().ok()), Some("1"));
 
         let refreshed_etag = second_response
             .headers()
             .get(ETAG)
             .and_then(|value| value.to_str().ok())
             .expect("tasks list should include refreshed etag");
-        assert_ne!(
-            refreshed_etag, initial_etag,
-            "etag should vary across different pagination metadata"
-        );
+        assert_ne!(refreshed_etag, initial_etag, "etag should vary across different pagination metadata");
     }
 
     #[tokio::test]
@@ -2608,13 +2099,7 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(CONTENT_ENCODING)
-                .and_then(|value| value.to_str().ok()),
-            Some("gzip")
-        );
+        assert_eq!(response.headers().get(CONTENT_ENCODING).and_then(|value| value.to_str().ok()), Some("gzip"));
     }
 
     #[tokio::test]
@@ -2636,13 +2121,7 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get(CONTENT_ENCODING)
-                .and_then(|value| value.to_str().ok()),
-            Some("br")
-        );
+        assert_eq!(response.headers().get(CONTENT_ENCODING).and_then(|value| value.to_str().ok()), Some("br"));
     }
 
     #[tokio::test]
@@ -2663,17 +2142,12 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
         let data = payload.get("data").expect("data should exist");
-        assert_eq!(
-            data.get("entries").and_then(Value::as_array).map(Vec::len),
-            Some(0)
-        );
+        assert_eq!(data.get("entries").and_then(Value::as_array).map(Vec::len), Some(0));
         let stats = data.get("stats").expect("stats should exist");
         assert_eq!(stats.get("total").and_then(Value::as_u64), Some(0));
     }
@@ -2696,19 +2170,14 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
         let data = payload.get("data").expect("data should exist");
         assert_eq!(data.get("depth").and_then(Value::as_u64), Some(0));
         assert_eq!(data.get("pending").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            data.get("throughput_last_hour").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(data.get("throughput_last_hour").and_then(Value::as_u64), Some(0));
     }
 
     #[tokio::test]
@@ -2735,9 +2204,7 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
@@ -2764,18 +2231,13 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
         let data = payload.get("data").expect("data should exist");
         assert_eq!(data.get("held").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            data.get("task_id").and_then(Value::as_str),
-            Some("TASK-001")
-        );
+        assert_eq!(data.get("task_id").and_then(Value::as_str), Some("TASK-001"));
     }
 
     #[tokio::test]
@@ -2797,17 +2259,12 @@ mod tests {
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body should load");
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
         let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
 
         assert_eq!(payload.get("ok"), Some(&Value::Bool(true)));
         let data = payload.get("data").expect("data should exist");
         assert_eq!(data.get("released").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            data.get("task_id").and_then(Value::as_str),
-            Some("TASK-001")
-        );
+        assert_eq!(data.get("task_id").and_then(Value::as_str), Some("TASK-001"));
     }
 }

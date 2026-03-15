@@ -74,9 +74,7 @@ pub fn is_process_alive(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn is_zombie_process(pid: i32) -> bool {
-    let output = Command::new("ps")
-        .args(["-o", "state=", "-p", &pid.to_string()])
-        .output();
+    let output = Command::new("ps").args(["-o", "state=", "-p", &pid.to_string()]).output();
     match output {
         Ok(out) => {
             let state = String::from_utf8_lossy(&out.stdout);

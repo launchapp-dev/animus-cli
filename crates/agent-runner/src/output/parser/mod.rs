@@ -19,23 +19,13 @@ mod tests {
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "phase_transition");
-        assert_eq!(
-            tool_event
-                .1
-                .get("target_phase")
-                .and_then(serde_json::Value::as_str),
-            Some("implement")
-        );
+        assert_eq!(tool_event.1.get("target_phase").and_then(serde_json::Value::as_str), Some("implement"));
     }
 
     #[test]
@@ -48,23 +38,13 @@ mod tests {
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "phase_transition");
-        assert_eq!(
-            tool_event
-                .1
-                .get("target_phase")
-                .and_then(serde_json::Value::as_str),
-            Some("design")
-        );
+        assert_eq!(tool_event.1.get("target_phase").and_then(serde_json::Value::as_str), Some("design"));
     }
 
     #[test]
@@ -77,58 +57,31 @@ mod tests {
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "documents-search");
-        assert_eq!(
-            tool_event
-                .1
-                .get("title")
-                .and_then(serde_json::Value::as_str),
-            Some("REQ-021")
-        );
-        assert_eq!(
-            tool_event
-                .1
-                .get("server")
-                .and_then(serde_json::Value::as_str),
-            Some("shortcut")
-        );
+        assert_eq!(tool_event.1.get("title").and_then(serde_json::Value::as_str), Some("REQ-021"));
+        assert_eq!(tool_event.1.get("server").and_then(serde_json::Value::as_str), Some("shortcut"));
     }
 
     #[test]
     fn parses_phase_transition_json_fallback_signal() {
         let mut parser = OutputParser::new("claude");
-        let events = parser.parse_line(
-            r#"{"type":"phase-transition","target_phase":"design","reason":"clarify product gap"}"#,
-        );
+        let events =
+            parser.parse_line(r#"{"type":"phase-transition","target_phase":"design","reason":"clarify product gap"}"#);
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "phase_transition");
-        assert_eq!(
-            tool_event
-                .1
-                .get("target_phase")
-                .and_then(serde_json::Value::as_str),
-            Some("design")
-        );
+        assert_eq!(tool_event.1.get("target_phase").and_then(serde_json::Value::as_str), Some("design"));
     }
 
     #[test]
@@ -139,9 +92,9 @@ mod tests {
         );
 
         assert!(
-            events
-                .iter()
-                .all(|event| !matches!(event, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "phase_transition")),
+            events.iter().all(
+                |event| !matches!(event, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "phase_transition")
+            ),
             "placeholder phase-transition signal should be ignored"
         );
     }
@@ -156,27 +109,14 @@ mod tests {
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "phase_transition");
-        assert_eq!(
-            tool_event
-                .1
-                .get("target_phase")
-                .and_then(serde_json::Value::as_str),
-            Some("implement")
-        );
-        assert!(
-            tool_event.1.get("reason").is_none(),
-            "placeholder reason should be dropped"
-        );
+        assert_eq!(tool_event.1.get("target_phase").and_then(serde_json::Value::as_str), Some("implement"));
+        assert!(tool_event.1.get("reason").is_none(), "placeholder reason should be dropped");
     }
 
     #[test]
@@ -184,30 +124,18 @@ mod tests {
         let mut parser = OutputParser::new("claude");
         let _ = parser.parse_line("<function_calls>");
         let _ = parser.parse_line(r#"<invoke name="phase_transition">"#);
-        let events = parser.parse_line(
-            r#"<parameter name="target_phase">"implement"</parameter></function_calls>"#,
-        );
+        let events = parser.parse_line(r#"<parameter name="target_phase">"implement"</parameter></function_calls>"#);
 
         let tool_event = events
             .into_iter()
             .find_map(|event| match event {
-                ParsedEvent::ToolCall {
-                    tool_name,
-                    parameters,
-                    ..
-                } => Some((tool_name, parameters)),
+                ParsedEvent::ToolCall { tool_name, parameters, .. } => Some((tool_name, parameters)),
                 _ => None,
             })
             .expect("tool call event");
 
         assert_eq!(tool_event.0, "phase_transition");
-        assert_eq!(
-            tool_event
-                .1
-                .get("target_phase")
-                .and_then(serde_json::Value::as_str),
-            Some("implement")
-        );
+        assert_eq!(tool_event.1.get("target_phase").and_then(serde_json::Value::as_str), Some("implement"));
     }
 
     #[test]
@@ -218,9 +146,7 @@ mod tests {
         );
 
         assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ParsedEvent::Output(_))),
+            events.iter().any(|event| matches!(event, ParsedEvent::Output(_))),
             "expected output event for plain text line"
         );
     }
@@ -231,15 +157,11 @@ mod tests {
         let events = parser.parse_line(r#"{"type":"tool_call","tool_name":"phase_transition","#);
 
         assert!(
-            events
-                .iter()
-                .all(|event| !matches!(event, ParsedEvent::ToolCall { .. })),
+            events.iter().all(|event| !matches!(event, ParsedEvent::ToolCall { .. })),
             "malformed JSON should not produce a tool call event"
         );
         assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ParsedEvent::Output(_))),
+            events.iter().any(|event| matches!(event, ParsedEvent::Output(_))),
             "malformed JSON should produce an output event"
         );
     }
@@ -251,10 +173,7 @@ mod tests {
         assert!(events.is_empty(), "empty line should produce no events");
 
         let events = parser.parse_line("   ");
-        assert!(
-            events.is_empty(),
-            "whitespace-only line should produce no events"
-        );
+        assert!(events.is_empty(), "whitespace-only line should produce no events");
     }
 
     #[test]
@@ -342,14 +261,8 @@ mod tests {
         };
 
         check("artifact created: photo.png", protocol::ArtifactType::Image);
-        check(
-            "artifact created: readme.md",
-            protocol::ArtifactType::Document,
-        );
-        check(
-            "artifact created: unknown.xyz",
-            protocol::ArtifactType::File,
-        );
+        check("artifact created: readme.md", protocol::ArtifactType::Document);
+        check("artifact created: unknown.xyz", protocol::ArtifactType::File);
     }
 
     #[test]
@@ -373,17 +286,13 @@ mod tests {
         let mut parser = OutputParser::new("claude");
         let events1 = parser.parse_line("<function_calls>");
         assert!(
-            events1
-                .iter()
-                .all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
+            events1.iter().all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
             "should not emit tool call before close tag"
         );
 
         let events2 = parser.parse_line(r#"<invoke name="some_tool">"#);
         assert!(
-            events2
-                .iter()
-                .all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
+            events2.iter().all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
             "should not emit tool call before close tag"
         );
 
@@ -402,19 +311,20 @@ mod tests {
     fn multiple_json_formats_parsed_in_sequence() {
         let mut parser = OutputParser::new("claude");
 
-        let events1 = parser.parse_line(
-            r#"{"type":"tool_call","tool_name":"read_file","arguments":{"path":"src/lib.rs"}}"#,
-        );
-        assert!(events1.iter().any(|e| matches!(e, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "read_file")));
+        let events1 =
+            parser.parse_line(r#"{"type":"tool_call","tool_name":"read_file","arguments":{"path":"src/lib.rs"}}"#);
+        assert!(events1
+            .iter()
+            .any(|e| matches!(e, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "read_file")));
 
-        let events2 = parser.parse_line(
-            r#"{"type":"tool_use","name":"write_file","input":{"path":"out.rs","content":"fn main(){}"}}"#,
-        );
-        assert!(events2.iter().any(|e| matches!(e, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "write_file")));
+        let events2 = parser
+            .parse_line(r#"{"type":"tool_use","name":"write_file","input":{"path":"out.rs","content":"fn main(){}"}}"#);
+        assert!(events2
+            .iter()
+            .any(|e| matches!(e, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "write_file")));
 
-        let events3 = parser.parse_line(
-            r#"{"type":"function_call","function":{"name":"search","arguments":"{\"query\":\"test\"}"}}"#,
-        );
+        let events3 = parser
+            .parse_line(r#"{"type":"function_call","function":{"name":"search","arguments":"{\"query\":\"test\"}"}}"#);
         assert!(events3.iter().any(|e| matches!(e, ParsedEvent::ToolCall { tool_name, .. } if tool_name == "search")));
     }
 
@@ -424,16 +334,9 @@ mod tests {
         let events = parser.parse_line(r#"{"status":"ok","message":"all tests passed"}"#);
 
         assert!(
-            events
-                .iter()
-                .all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
+            events.iter().all(|e| !matches!(e, ParsedEvent::ToolCall { .. })),
             "non-tool-call JSON should not emit tool call"
         );
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, ParsedEvent::Output(_))),
-            "non-tool-call JSON should emit output"
-        );
+        assert!(events.iter().any(|e| matches!(e, ParsedEvent::Output(_))), "non-tool-call JSON should emit output");
     }
 }

@@ -1,8 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use orchestrator_daemon_runtime::{
-    DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary,
-};
+use orchestrator_daemon_runtime::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary};
 use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use serde_json::json;
 
@@ -16,32 +14,16 @@ pub struct DefaultDaemonRunHost {
 impl DefaultDaemonRunHost {
     pub fn new(project_root: &str, json: bool) -> Self {
         match DaemonNotificationRuntime::new(project_root) {
-            Ok(runtime) => Self {
-                seq: 0,
-                json,
-                notification_runtime: Some(runtime),
-                startup_notification_error: None,
-            },
-            Err(error) => Self {
-                seq: 0,
-                json,
-                notification_runtime: None,
-                startup_notification_error: Some(error.to_string()),
-            },
+            Ok(runtime) => Self { seq: 0, json, notification_runtime: Some(runtime), startup_notification_error: None },
+            Err(error) => {
+                Self { seq: 0, json, notification_runtime: None, startup_notification_error: Some(error.to_string()) }
+            }
         }
     }
 
-    fn emit_notification_lifecycle_events(
-        &mut self,
-        events: Vec<NotificationLifecycleEvent>,
-    ) -> Result<()> {
+    fn emit_notification_lifecycle_events(&mut self, events: Vec<NotificationLifecycleEvent>) -> Result<()> {
         for event in events {
-            let record = DaemonEventLog::next_event(
-                &mut self.seq,
-                &event.event_type,
-                event.project_root,
-                event.data,
-            );
+            let record = DaemonEventLog::next_event(&mut self.seq, &event.event_type, event.project_root, event.data);
             self.emit_record(&record)?;
         }
         Ok(())
@@ -70,11 +52,7 @@ impl DefaultDaemonRunHost {
         if self.json {
             println!("{}", serde_json::to_string(record)?);
         } else {
-            let project = record
-                .project_root
-                .as_deref()
-                .map(|value| format!(" [{value}]"))
-                .unwrap_or_default();
+            let project = record.project_root.as_deref().map(|value| format!(" [{value}]")).unwrap_or_default();
             println!("{}{} {}", record.event_type, project, record.timestamp);
         }
         Ok(())
@@ -91,9 +69,7 @@ impl DefaultDaemonRunHost {
 
         if let Some(runtime) = self.notification_runtime.as_mut() {
             match runtime.enqueue_for_event(&record) {
-                Ok(lifecycle_events) => {
-                    self.emit_notification_lifecycle_events(lifecycle_events)?
-                }
+                Ok(lifecycle_events) => self.emit_notification_lifecycle_events(lifecycle_events)?,
                 Err(error) => self.emit_notification_runtime_error(
                     record.project_root.clone(),
                     "enqueue",
@@ -152,11 +128,7 @@ impl DefaultDaemonRunHost {
             if let Some(selection_source) = task_change.selection_source {
                 data["selection_source"] = json!(selection_source.as_str());
             }
-            self.emit_daemon_event_with_notifications(
-                "task-state-change",
-                Some(summary.project_root.clone()),
-                data,
-            )?;
+            self.emit_daemon_event_with_notifications("task-state-change", Some(summary.project_root.clone()), data)?;
         }
 
         for phase_event in &summary.phase_execution_events {
@@ -182,10 +154,7 @@ impl DefaultDaemonRunHost {
 impl DaemonRunHooks for DefaultDaemonRunHost {
     fn handle_event(&mut self, event: DaemonRunEvent) -> Result<()> {
         match event {
-            DaemonRunEvent::Startup {
-                project_root,
-                daemon_pid,
-            } => {
+            DaemonRunEvent::Startup { project_root, daemon_pid } => {
                 eprintln!(
                     "{}",
                     json!({
@@ -197,42 +166,30 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     })
                 );
                 if let Some(error) = self.startup_notification_error.clone() {
-                    self.emit_notification_runtime_error(
-                        Some(project_root),
-                        "startup",
-                        error.as_str(),
-                    )?;
+                    self.emit_notification_runtime_error(Some(project_root), "startup", error.as_str())?;
                 }
                 Ok(())
             }
-            DaemonRunEvent::Status {
-                project_root,
-                status,
-            } => self.emit_daemon_event_with_notifications(
-                "status",
-                Some(project_root),
-                json!({ "status": status }),
-            ),
-            DaemonRunEvent::StartupCleanup { project_root } => self
-                .emit_daemon_event_with_notifications(
-                    "recovery",
-                    Some(project_root),
-                    json!({
-                        "startup_cleanup": true,
-                    }),
-                ),
-            DaemonRunEvent::OrphanDetection {
-                project_root,
-                orphaned_workflows_recovered,
-            } => self.emit_daemon_event_with_notifications(
-                "orphan-detection",
+            DaemonRunEvent::Status { project_root, status } => {
+                self.emit_daemon_event_with_notifications("status", Some(project_root), json!({ "status": status }))
+            }
+            DaemonRunEvent::StartupCleanup { project_root } => self.emit_daemon_event_with_notifications(
+                "recovery",
                 Some(project_root),
                 json!({
-                    "orphaned_workflows_recovered": orphaned_workflows_recovered,
-                    "recovery_action": "blocked",
-                    "blocked_reason": "orphaned_after_daemon_restart",
+                    "startup_cleanup": true,
                 }),
             ),
+            DaemonRunEvent::OrphanDetection { project_root, orphaned_workflows_recovered } => self
+                .emit_daemon_event_with_notifications(
+                    "orphan-detection",
+                    Some(project_root),
+                    json!({
+                        "orphaned_workflows_recovered": orphaned_workflows_recovered,
+                        "recovery_action": "blocked",
+                        "blocked_reason": "orphaned_after_daemon_restart",
+                    }),
+                ),
             DaemonRunEvent::YamlCompileSucceeded {
                 project_root,
                 source_files,
@@ -250,10 +207,7 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     "agent_profiles": agent_profiles,
                 }),
             ),
-            DaemonRunEvent::YamlCompileFailed {
-                project_root,
-                error,
-            } => self.emit_daemon_event_with_notifications(
+            DaemonRunEvent::YamlCompileFailed { project_root, error } => self.emit_daemon_event_with_notifications(
                 "yaml-compile",
                 Some(project_root),
                 json!({
@@ -261,13 +215,8 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     "error": error,
                 }),
             ),
-            DaemonRunEvent::TickSummary { summary } => {
-                self.emit_project_tick_summary_events(&summary)
-            }
-            DaemonRunEvent::TickError {
-                project_root,
-                message,
-            } => self.emit_daemon_event_with_notifications(
+            DaemonRunEvent::TickSummary { summary } => self.emit_project_tick_summary_events(&summary),
+            DaemonRunEvent::TickError { project_root, message } => self.emit_daemon_event_with_notifications(
                 "log",
                 Some(project_root),
                 json!({
@@ -275,37 +224,25 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     "message": message,
                 }),
             ),
-            DaemonRunEvent::GracefulShutdown {
-                project_root,
-                timeout_secs,
-            } => self.emit_daemon_event_with_notifications(
-                "graceful-shutdown",
-                Some(project_root),
-                json!({
-                    "timeout_secs": timeout_secs,
-                }),
-            ),
-            DaemonRunEvent::Draining {
-                project_root,
-                trigger,
-            } => self.emit_daemon_event_with_notifications(
+            DaemonRunEvent::GracefulShutdown { project_root, timeout_secs } => self
+                .emit_daemon_event_with_notifications(
+                    "graceful-shutdown",
+                    Some(project_root),
+                    json!({
+                        "timeout_secs": timeout_secs,
+                    }),
+                ),
+            DaemonRunEvent::Draining { project_root, trigger } => self.emit_daemon_event_with_notifications(
                 "daemon-draining",
                 Some(project_root),
                 json!({
                     "trigger": trigger,
                 }),
             ),
-            DaemonRunEvent::NotificationRuntimeError {
-                project_root,
-                stage,
-                message,
-            } => {
+            DaemonRunEvent::NotificationRuntimeError { project_root, stage, message } => {
                 self.emit_notification_runtime_error(project_root, stage.as_str(), message.as_str())
             }
-            DaemonRunEvent::Shutdown {
-                project_root,
-                daemon_pid,
-            } => {
+            DaemonRunEvent::Shutdown { project_root, daemon_pid } => {
                 eprintln!(
                     "{}",
                     json!({
@@ -328,9 +265,7 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
 
         match runtime.flush_due_deliveries().await {
             Ok(lifecycle_events) => self.emit_notification_lifecycle_events(lifecycle_events),
-            Err(error) => {
-                Err(error.context(format!("failed to flush notifications for {project_root}")))
-            }
+            Err(error) => Err(error.context(format!("failed to flush notifications for {project_root}"))),
         }
     }
 }

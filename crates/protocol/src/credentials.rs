@@ -33,8 +33,7 @@ impl Credentials {
                 continue;
             }
             let p = provider.to_ascii_lowercase();
-            let matches =
-                model_lower.starts_with(&p) || model_lower.contains(&p) || base_lower.contains(&p);
+            let matches = model_lower.starts_with(&p) || model_lower.contains(&p) || base_lower.contains(&p);
             if matches {
                 return Some(cred.api_key.clone());
             }
@@ -50,97 +49,49 @@ mod tests {
     #[test]
     fn resolve_matches_model_prefix() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "minimax".to_string(),
-                ProviderCredential {
-                    api_key: "sk-test".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("minimax".to_string(), ProviderCredential { api_key: "sk-test".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("minimax/MiniMax-M2.5", "https://api.minimax.io/v1"),
-            Some("sk-test".to_string())
-        );
+        assert_eq!(creds.resolve("minimax/MiniMax-M2.5", "https://api.minimax.io/v1"), Some("sk-test".to_string()));
     }
 
     #[test]
     fn resolve_matches_model_contains() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "deepseek".to_string(),
-                ProviderCredential {
-                    api_key: "sk-ds".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("deepseek".to_string(), ProviderCredential { api_key: "sk-ds".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("deepseek/deepseek-chat", "https://api.deepseek.com/v1"),
-            Some("sk-ds".to_string())
-        );
+        assert_eq!(creds.resolve("deepseek/deepseek-chat", "https://api.deepseek.com/v1"), Some("sk-ds".to_string()));
     }
 
     #[test]
     fn resolve_matches_api_base() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "openrouter".to_string(),
-                ProviderCredential {
-                    api_key: "sk-or".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("openrouter".to_string(), ProviderCredential { api_key: "sk-or".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("anthropic/claude-3", "https://openrouter.ai/api/v1"),
-            Some("sk-or".to_string())
-        );
+        assert_eq!(creds.resolve("anthropic/claude-3", "https://openrouter.ai/api/v1"), Some("sk-or".to_string()));
     }
 
     #[test]
     fn resolve_returns_none_when_no_match() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "minimax".to_string(),
-                ProviderCredential {
-                    api_key: "sk-test".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("minimax".to_string(), ProviderCredential { api_key: "sk-test".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("deepseek/chat", "https://api.deepseek.com"),
-            None
-        );
+        assert_eq!(creds.resolve("deepseek/chat", "https://api.deepseek.com"), None);
     }
 
     #[test]
     fn resolve_skips_empty_keys() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "minimax".to_string(),
-                ProviderCredential {
-                    api_key: "  ".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("minimax".to_string(), ProviderCredential { api_key: "  ".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("minimax/M2.5", "https://api.minimax.io"),
-            None
-        );
+        assert_eq!(creds.resolve("minimax/M2.5", "https://api.minimax.io"), None);
     }
 
     #[test]
     fn resolve_is_case_insensitive() {
         let creds = Credentials {
-            providers: HashMap::from([(
-                "MiniMax".to_string(),
-                ProviderCredential {
-                    api_key: "sk-mm".to_string(),
-                },
-            )]),
+            providers: HashMap::from([("MiniMax".to_string(), ProviderCredential { api_key: "sk-mm".to_string() })]),
         };
-        assert_eq!(
-            creds.resolve("minimax/MiniMax-M2.5", "https://api.minimax.io/v1"),
-            Some("sk-mm".to_string())
-        );
+        assert_eq!(creds.resolve("minimax/MiniMax-M2.5", "https://api.minimax.io/v1"), Some("sk-mm".to_string()));
     }
 
     #[test]

@@ -1,26 +1,10 @@
 use super::ListToolProfile;
 
-const TASK_SUMMARY_FIELDS: &[&str] = &[
-    "id",
-    "title",
-    "status",
-    "priority",
-    "type",
-    "linked_requirements",
-    "dependencies",
-    "tags",
-    "assignee",
-];
+const TASK_SUMMARY_FIELDS: &[&str] =
+    &["id", "title", "status", "priority", "type", "linked_requirements", "dependencies", "tags", "assignee"];
 
-const REQUIREMENT_SUMMARY_FIELDS: &[&str] = &[
-    "id",
-    "title",
-    "status",
-    "priority",
-    "category",
-    "type",
-    "linked_task_ids",
-];
+const REQUIREMENT_SUMMARY_FIELDS: &[&str] =
+    &["id", "title", "status", "priority", "category", "type", "linked_task_ids"];
 
 const QUEUE_SUMMARY_FIELDS: &[&str] = &["subject_id", "task_id", "status", "workflow_id"];
 
@@ -37,26 +21,11 @@ const WORKFLOW_SUMMARY_FIELDS: &[&str] = &[
     "total_reworks",
 ];
 
-const WORKFLOW_DECISION_SUMMARY_FIELDS: &[&str] = &[
-    "timestamp",
-    "phase_id",
-    "source",
-    "decision",
-    "target_phase",
-    "reason",
-    "confidence",
-    "risk",
-];
+const WORKFLOW_DECISION_SUMMARY_FIELDS: &[&str] =
+    &["timestamp", "phase_id", "source", "decision", "target_phase", "reason", "confidence", "risk"];
 
-const WORKFLOW_CHECKPOINT_SUMMARY_FIELDS: &[&str] = &[
-    "id",
-    "workflow_id",
-    "task_id",
-    "phase_id",
-    "phase_index",
-    "reason",
-    "created_at",
-];
+const WORKFLOW_CHECKPOINT_SUMMARY_FIELDS: &[&str] =
+    &["id", "workflow_id", "task_id", "phase_id", "phase_index", "reason", "created_at"];
 
 const TASK_LIST_PROFILE: ListToolProfile = ListToolProfile {
     summary_fields: TASK_SUMMARY_FIELDS,

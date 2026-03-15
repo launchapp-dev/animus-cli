@@ -2,22 +2,14 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 pub fn validate_workspace(cwd: &str, project_root: &str) -> Result<()> {
-    let cwd_path = PathBuf::from(cwd)
-        .canonicalize()
-        .context("Invalid cwd path")?;
+    let cwd_path = PathBuf::from(cwd).canonicalize().context("Invalid cwd path")?;
 
-    let root_path = PathBuf::from(project_root)
-        .canonicalize()
-        .context("Invalid project_root path")?;
+    let root_path = PathBuf::from(project_root).canonicalize().context("Invalid project_root path")?;
 
     let inside_project_root = cwd_path.starts_with(&root_path);
     let inside_managed_worktree = is_managed_worktree_for_project(&cwd_path, &root_path);
     if !inside_project_root && !inside_managed_worktree {
-        bail!(
-            "Security violation: cwd '{}' is not within project_root '{}'",
-            cwd_path.display(),
-            root_path.display()
-        );
+        bail!("Security violation: cwd '{}' is not within project_root '{}'", cwd_path.display(), root_path.display());
     }
 
     Ok(())
@@ -79,15 +71,9 @@ mod tests {
 
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("project dir should be created");
-        let project_canonical = project
-            .canonicalize()
-            .expect("project path should canonicalize");
+        let project_canonical = project.canonicalize().expect("project path should canonicalize");
 
-        let worktree = root
-            .join(".ao")
-            .join("scope-abc123")
-            .join("worktrees")
-            .join("task-task-011");
+        let worktree = root.join(".ao").join("scope-abc123").join("worktrees").join("task-task-011");
         std::fs::create_dir_all(&worktree).expect("managed worktree should be created");
         std::fs::write(
             root.join(".ao").join("scope-abc123").join(".project-root"),
@@ -95,10 +81,7 @@ mod tests {
         )
         .expect("project marker should be written");
 
-        let result = validate_workspace(
-            worktree.to_string_lossy().as_ref(),
-            project.to_string_lossy().as_ref(),
-        );
+        let result = validate_workspace(worktree.to_string_lossy().as_ref(), project.to_string_lossy().as_ref());
         assert!(result.is_ok());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -117,10 +100,7 @@ mod tests {
         let subdir = root.join("src").join("deep").join("nested");
         std::fs::create_dir_all(&subdir).expect("subdir should be created");
 
-        let result = validate_workspace(
-            subdir.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
-        );
+        let result = validate_workspace(subdir.to_string_lossy().as_ref(), root.to_string_lossy().as_ref());
         assert!(result.is_ok());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -141,37 +121,24 @@ mod tests {
         std::fs::create_dir_all(&project).expect("project should be created");
         std::fs::create_dir_all(&sibling).expect("sibling should be created");
 
-        let result = validate_workspace(
-            sibling.to_string_lossy().as_ref(),
-            project.to_string_lossy().as_ref(),
-        );
+        let result = validate_workspace(sibling.to_string_lossy().as_ref(), project.to_string_lossy().as_ref());
         assert!(result.is_err());
 
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("Security violation"),
-            "error should mention security violation, got: {}",
-            err_msg
-        );
+        assert!(err_msg.contains("Security violation"), "error should mention security violation, got: {}", err_msg);
 
         let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
     fn rejects_nonexistent_cwd_path() {
-        let result = validate_workspace(
-            "/tmp/ao-nonexistent-path-xyz-999",
-            std::env::temp_dir().to_str().unwrap(),
-        );
+        let result = validate_workspace("/tmp/ao-nonexistent-path-xyz-999", std::env::temp_dir().to_str().unwrap());
         assert!(result.is_err());
     }
 
     #[test]
     fn rejects_nonexistent_project_root() {
-        let result = validate_workspace(
-            std::env::temp_dir().to_str().unwrap(),
-            "/tmp/ao-nonexistent-root-xyz-999",
-        );
+        let result = validate_workspace(std::env::temp_dir().to_str().unwrap(), "/tmp/ao-nonexistent-root-xyz-999");
         assert!(result.is_err());
     }
 
@@ -191,26 +158,17 @@ mod tests {
         std::fs::create_dir_all(&project).expect("project should be created");
         std::fs::create_dir_all(&other_project).expect("other project should be created");
 
-        let worktree = root
-            .join(".ao")
-            .join("scope-abc")
-            .join("worktrees")
-            .join("task-1");
+        let worktree = root.join(".ao").join("scope-abc").join("worktrees").join("task-1");
         std::fs::create_dir_all(&worktree).expect("worktree should be created");
 
-        let other_canonical = other_project
-            .canonicalize()
-            .expect("path should canonicalize");
+        let other_canonical = other_project.canonicalize().expect("path should canonicalize");
         std::fs::write(
             root.join(".ao").join("scope-abc").join(".project-root"),
             format!("{}\n", other_canonical.to_string_lossy()),
         )
         .expect("marker should be written");
 
-        let result = validate_workspace(
-            worktree.to_string_lossy().as_ref(),
-            project.to_string_lossy().as_ref(),
-        );
+        let result = validate_workspace(worktree.to_string_lossy().as_ref(), project.to_string_lossy().as_ref());
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&root);

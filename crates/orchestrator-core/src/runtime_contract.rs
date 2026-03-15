@@ -1,6 +1,4 @@
-use crate::agent_runtime_config::{
-    builtin_agent_runtime_config, AgentRuntimeConfig, CliToolConfig,
-};
+use crate::agent_runtime_config::{builtin_agent_runtime_config, AgentRuntimeConfig, CliToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -118,10 +116,7 @@ fn cli_capabilities_from_tool_config(config: &CliToolConfig) -> CliCapabilities 
     }
 }
 
-pub fn cli_capabilities_from_config(
-    tool: &str,
-    config: &AgentRuntimeConfig,
-) -> Option<CliCapabilities> {
+pub fn cli_capabilities_from_config(tool: &str, config: &AgentRuntimeConfig) -> Option<CliCapabilities> {
     let normalized = normalized_tool(tool);
     config
         .cli_tools
@@ -138,13 +133,7 @@ pub fn cli_tool_executable(tool: &str, config: &AgentRuntimeConfig) -> String {
         .get(&normalized)
         .or_else(|| builtin.cli_tools.get(&normalized))
         .and_then(|tc| tc.executable.clone())
-        .unwrap_or_else(|| {
-            if normalized == "oai-runner" {
-                "ao-oai-runner".to_string()
-            } else {
-                normalized
-            }
-        })
+        .unwrap_or_else(|| if normalized == "oai-runner" { "ao-oai-runner".to_string() } else { normalized })
 }
 
 pub fn cli_tool_read_only_flag(tool: &str, config: &AgentRuntimeConfig) -> Option<String> {
@@ -176,9 +165,7 @@ pub fn build_cli_launch_contract(
 ) -> Option<Value> {
     let normalized = normalized_tool(tool);
     let has_specific_model = !model_id.trim().is_empty() && model_id.trim() != normalized;
-    let resume_mode = resume_plan
-        .map(|plan| plan.mode)
-        .unwrap_or(CliSessionResumeMode::None);
+    let resume_mode = resume_plan.map(|plan| plan.mode).unwrap_or(CliSessionResumeMode::None);
     let resume_id = resume_plan
         .and_then(|plan| plan.session_id.as_deref())
         .map(str::trim)
@@ -313,8 +300,7 @@ pub fn build_runtime_contract(
     mcp_agent_id: Option<&str>,
 ) -> Option<Value> {
     let normalized = normalized_tool(tool);
-    let launch =
-        build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override)?;
+    let launch = build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override)?;
     let capabilities = cli_capabilities_for_tool(&normalized)?;
     let enforce_mcp_only = mcp_endpoint.is_some() && capabilities.supports_mcp;
 
@@ -358,8 +344,7 @@ mod tests {
     use super::*;
 
     fn default_codex_model() -> &'static str {
-        protocol::default_model_for_tool("codex")
-            .expect("default model for codex should be configured")
+        protocol::default_model_for_tool("codex").expect("default model for codex should be configured")
     }
 
     #[test]
@@ -375,39 +360,17 @@ mod tests {
         )
         .expect("runtime contract should build");
 
-        assert_eq!(
-            contract.pointer("/cli/name").and_then(Value::as_str),
-            Some("codex")
-        );
-        assert_eq!(
-            contract
-                .pointer("/cli/capabilities/supports_tool_use")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            contract.pointer("/model").and_then(Value::as_str),
-            Some(default_codex_model())
-        );
-        assert_eq!(
-            contract.pointer("/mcp/agent_id").and_then(Value::as_str),
-            Some("agent-1")
-        );
-        assert_eq!(
-            contract
-                .pointer("/mcp/enforce_only")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq!(contract.pointer("/cli/name").and_then(Value::as_str), Some("codex"));
+        assert_eq!(contract.pointer("/cli/capabilities/supports_tool_use").and_then(Value::as_bool), Some(true));
+        assert_eq!(contract.pointer("/model").and_then(Value::as_str), Some(default_codex_model()));
+        assert_eq!(contract.pointer("/mcp/agent_id").and_then(Value::as_str), Some("agent-1"));
+        assert_eq!(contract.pointer("/mcp/enforce_only").and_then(Value::as_bool), Some(true));
         let allowed_prefixes = contract
             .pointer("/mcp/allowed_tool_prefixes")
             .and_then(Value::as_array)
             .expect("allowed tool prefixes should be present");
         assert!(
-            allowed_prefixes
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|prefix| prefix == "ao."),
+            allowed_prefixes.iter().filter_map(Value::as_str).any(|prefix| prefix == "ao."),
             "AO prefix should always be allowed under MCP-only enforcement"
         );
     }
@@ -425,12 +388,7 @@ mod tests {
         )
         .expect("runtime contract should build");
 
-        assert_eq!(
-            contract
-                .pointer("/mcp/enforce_only")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq!(contract.pointer("/mcp/enforce_only").and_then(Value::as_bool), Some(true));
         let allowed_prefixes = contract
             .pointer("/mcp/allowed_tool_prefixes")
             .and_then(Value::as_array)
@@ -452,14 +410,10 @@ mod tests {
             reused: true,
             phase_thread_isolated: true,
         };
-        let launch =
-            build_cli_launch_contract("gemini", "gemini-2.5-pro", "hello", Some(&plan), None)
-                .expect("launch contract should build");
+        let launch = build_cli_launch_contract("gemini", "gemini-2.5-pro", "hello", Some(&plan), None)
+            .expect("launch contract should build");
 
-        let args = launch
-            .pointer("/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present");
+        let args = launch.pointer("/args").and_then(Value::as_array).expect("launch args should be present");
         let args = args.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(args.contains(&"--output-format"));
         assert!(args.contains(&"json"));
@@ -533,10 +487,8 @@ mod tests {
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>();
 
-            let model_flag_index = args
-                .iter()
-                .position(|entry| *entry == "-m")
-                .expect("opencode launch should include -m model flag");
+            let model_flag_index =
+                args.iter().position(|entry| *entry == "-m").expect("opencode launch should include -m model flag");
             assert_eq!(
                 args.get(model_flag_index + 1).copied(),
                 Some(model),
@@ -552,13 +504,7 @@ mod tests {
         let config = AgentRuntimeConfig::default();
 
         assert_eq!(cli_tool_executable("oai-runner", &config), "ao-oai-runner");
-        assert_eq!(
-            cli_tool_read_only_flag("oai-runner", &config),
-            Some("--read-only".to_string())
-        );
-        assert_eq!(
-            cli_tool_response_schema_flag("oai-runner", &config),
-            Some("--response-schema".to_string())
-        );
+        assert_eq!(cli_tool_read_only_flag("oai-runner", &config), Some("--read-only".to_string()));
+        assert_eq!(cli_tool_response_schema_flag("oai-runner", &config), Some("--response-schema".to_string()));
     }
 }

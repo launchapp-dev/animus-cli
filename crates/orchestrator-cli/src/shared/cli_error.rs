@@ -13,11 +13,7 @@ pub(crate) struct CliError {
 
 impl CliError {
     pub(crate) fn new(kind: CliErrorKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-            details: None,
-        }
+        Self { kind, message: message.into(), details: None }
     }
 
     pub(crate) fn with_details(mut self, details: serde_json::Value) -> Self {
@@ -111,20 +107,12 @@ mod tests {
 
     #[test]
     fn classify_cli_error_kind_maps_io_error_kinds_without_message_matching() {
-        let not_found = anyhow::Error::from(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "missing file",
-        ));
-        let unavailable = anyhow::Error::from(std::io::Error::new(
-            std::io::ErrorKind::ConnectionRefused,
-            "runner down",
-        ));
+        let not_found = anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::NotFound, "missing file"));
+        let unavailable =
+            anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "runner down"));
 
         assert_eq!(classify_cli_error_kind(&not_found), CliErrorKind::NotFound);
-        assert_eq!(
-            classify_cli_error_kind(&unavailable),
-            CliErrorKind::Unavailable
-        );
+        assert_eq!(classify_cli_error_kind(&unavailable), CliErrorKind::Unavailable);
     }
 
     #[test]
@@ -133,12 +121,7 @@ mod tests {
             .with_details(serde_json::json!({"startup_log_tail": "error: panic"}))
             .into();
         let details = extract_cli_error_details(&err).expect("details should be present");
-        assert_eq!(
-            details
-                .get("startup_log_tail")
-                .and_then(serde_json::Value::as_str),
-            Some("error: panic")
-        );
+        assert_eq!(details.get("startup_log_tail").and_then(serde_json::Value::as_str), Some("error: panic"));
     }
 
     #[test]

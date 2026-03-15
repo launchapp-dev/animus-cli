@@ -22,13 +22,7 @@ impl TaskSnapshot {
             Assignee::Human { user_id } => user_id.clone(),
             Assignee::Unassigned => String::new(),
         };
-        Self {
-            id: task.id,
-            status: task.status,
-            title: task.title,
-            description: task.description,
-            assignee_label,
-        }
+        Self { id: task.id, status: task.status, title: task.title, description: task.description, assignee_label }
     }
 
     pub(crate) fn status_label(&self) -> String {
@@ -166,9 +160,7 @@ mod tests {
     #[test]
     fn assignee_label_human() {
         let mut task = make_task("TASK-001", TaskStatus::Ready, "Test");
-        task.assignee = Assignee::Human {
-            user_id: "alice".to_string(),
-        };
+        task.assignee = Assignee::Human { user_id: "alice".to_string() };
         let snapshot = TaskSnapshot::from_task(task);
         assert_eq!(snapshot.assignee_label, "alice");
     }
@@ -176,10 +168,7 @@ mod tests {
     #[test]
     fn assignee_label_agent_without_model() {
         let mut task = make_task("TASK-001", TaskStatus::Ready, "Test");
-        task.assignee = Assignee::Agent {
-            role: "developer".to_string(),
-            model: None,
-        };
+        task.assignee = Assignee::Agent { role: "developer".to_string(), model: None };
         let snapshot = TaskSnapshot::from_task(task);
         assert_eq!(snapshot.assignee_label, "agent:developer");
     }
@@ -187,10 +176,7 @@ mod tests {
     #[test]
     fn assignee_label_agent_with_model() {
         let mut task = make_task("TASK-001", TaskStatus::Ready, "Test");
-        task.assignee = Assignee::Agent {
-            role: "reviewer".to_string(),
-            model: Some("claude-3".to_string()),
-        };
+        task.assignee = Assignee::Agent { role: "reviewer".to_string(), model: Some("claude-3".to_string()) };
         let snapshot = TaskSnapshot::from_task(task);
         assert_eq!(snapshot.assignee_label, "agent:reviewer/claude-3");
     }

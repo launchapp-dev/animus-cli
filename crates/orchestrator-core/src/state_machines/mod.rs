@@ -9,13 +9,12 @@ pub mod schema;
 mod validator;
 
 pub use engine::{
-    compile_state_machines_document, evaluate_guard, CompiledRequirementLifecycleMachine,
-    CompiledStateMachines, CompiledWorkflowMachine, GuardContext, MachineMetadata, MachineSource,
-    RequirementTransitionOutcome, TransitionError, WorkflowTransitionOutcome,
+    compile_state_machines_document, evaluate_guard, CompiledRequirementLifecycleMachine, CompiledStateMachines,
+    CompiledWorkflowMachine, GuardContext, MachineMetadata, MachineSource, RequirementTransitionOutcome,
+    TransitionError, WorkflowTransitionOutcome,
 };
 pub use schema::{
-    builtin_state_machines_document, RequirementLifecycleEvent, RequirementLifecyclePolicy,
-    StateMachinesDocument,
+    builtin_state_machines_document, RequirementLifecycleEvent, RequirementLifecyclePolicy, StateMachinesDocument,
 };
 pub use validator::validate_state_machines_document;
 
@@ -27,7 +26,6 @@ pub enum StateMachineMode {
     Json,
     JsonStrict,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMachineLoadWarning {
@@ -43,8 +41,7 @@ pub struct LoadedStateMachines {
 }
 
 pub fn state_machines_path(project_root: &Path) -> PathBuf {
-    let base =
-        protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
     base.join("state").join(STATE_MACHINES_FILE_NAME)
 }
 
@@ -85,31 +82,20 @@ pub fn load_state_machines_for_project_with_mode(
 
     match mode {
         StateMachineMode::Builtin => Ok(LoadedStateMachines {
-            compiled: compile_state_machines_document(
-                builtin_state_machines_document(),
-                MachineSource::Builtin,
-            )?,
+            compiled: compile_state_machines_document(builtin_state_machines_document(), MachineSource::Builtin)?,
             warnings: Vec::new(),
             path,
         }),
-        StateMachineMode::Json | StateMachineMode::JsonStrict => {
-            load_json_mode_state_machines(project_root, mode)
-        }
+        StateMachineMode::Json | StateMachineMode::JsonStrict => load_json_mode_state_machines(project_root, mode),
     }
 }
 
-fn load_json_mode_state_machines(
-    project_root: &Path,
-    mode: StateMachineMode,
-) -> Result<LoadedStateMachines> {
+fn load_json_mode_state_machines(project_root: &Path, mode: StateMachineMode) -> Result<LoadedStateMachines> {
     let path = state_machines_path(project_root);
 
     if !path.exists() {
         return match mode {
-            StateMachineMode::JsonStrict => Err(anyhow!(
-                "state machine metadata file not found: {}",
-                path.display()
-            )),
+            StateMachineMode::JsonStrict => Err(anyhow!("state machine metadata file not found: {}", path.display())),
             _ => Ok(fallback_loaded(
                 path,
                 "state_machine_file_missing",
@@ -118,12 +104,8 @@ fn load_json_mode_state_machines(
         };
     }
 
-    let content = fs::read_to_string(&path).with_context(|| {
-        format!(
-            "failed to read state machine metadata at {}",
-            path.display()
-        )
-    });
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read state machine metadata at {}", path.display()));
 
     let content = match content {
         Ok(content) => content,
@@ -133,9 +115,7 @@ fn load_json_mode_state_machines(
                 _ => Ok(fallback_loaded(
                     path,
                     "state_machine_file_unreadable",
-                    &format!(
-                        "failed to read state machine metadata; using builtin fallback: {error}"
-                    ),
+                    &format!("failed to read state machine metadata; using builtin fallback: {error}"),
                 )?),
             }
         }
@@ -146,16 +126,13 @@ fn load_json_mode_state_machines(
         Ok(document) => document,
         Err(error) => {
             return match mode {
-                StateMachineMode::JsonStrict => Err(anyhow!(
-                    "invalid state machine metadata JSON at {}: {error}",
-                    path.display()
-                )),
+                StateMachineMode::JsonStrict => {
+                    Err(anyhow!("invalid state machine metadata JSON at {}: {error}", path.display()))
+                }
                 _ => Ok(fallback_loaded(
                     path,
                     "state_machine_json_invalid",
-                    &format!(
-                        "invalid state machine metadata JSON; using builtin fallback: {error}"
-                    ),
+                    &format!("invalid state machine metadata JSON; using builtin fallback: {error}"),
                 )?),
             }
         }
@@ -163,11 +140,7 @@ fn load_json_mode_state_machines(
 
     let compiled = compile_state_machines_document(document, MachineSource::Json);
     match compiled {
-        Ok(compiled) => Ok(LoadedStateMachines {
-            compiled,
-            warnings: Vec::new(),
-            path,
-        }),
+        Ok(compiled) => Ok(LoadedStateMachines { compiled, warnings: Vec::new(), path }),
         Err(error) => match mode {
             StateMachineMode::JsonStrict => Err(error),
             _ => Ok(fallback_loaded(
@@ -181,14 +154,8 @@ fn load_json_mode_state_machines(
 
 fn fallback_loaded(path: PathBuf, code: &str, message: &str) -> Result<LoadedStateMachines> {
     Ok(LoadedStateMachines {
-        compiled: compile_state_machines_document(
-            builtin_state_machines_document(),
-            MachineSource::BuiltinFallback,
-        )?,
-        warnings: vec![StateMachineLoadWarning {
-            code: code.to_string(),
-            message: message.to_string(),
-        }],
+        compiled: compile_state_machines_document(builtin_state_machines_document(), MachineSource::BuiltinFallback)?,
+        warnings: vec![StateMachineLoadWarning { code: code.to_string(), message: message.to_string() }],
         path,
     })
 }
@@ -207,10 +174,7 @@ mod tests {
         let loaded = load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::Json)
             .expect("load should succeed with fallback");
 
-        assert_eq!(
-            loaded.compiled.metadata.source,
-            MachineSource::BuiltinFallback
-        );
+        assert_eq!(loaded.compiled.metadata.source, MachineSource::BuiltinFallback);
         assert_eq!(loaded.warnings.len(), 1);
     }
 
@@ -224,10 +188,7 @@ mod tests {
         let loaded = load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::Json)
             .expect("load should succeed with fallback");
 
-        assert_eq!(
-            loaded.compiled.metadata.source,
-            MachineSource::BuiltinFallback
-        );
+        assert_eq!(loaded.compiled.metadata.source, MachineSource::BuiltinFallback);
         assert_eq!(loaded.warnings.len(), 1);
     }
 
@@ -238,20 +199,16 @@ mod tests {
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
         fs::write(&path, "{ invalid json").expect("write invalid");
 
-        let error =
-            load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::JsonStrict)
-                .expect_err("strict mode should fail");
+        let error = load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::JsonStrict)
+            .expect_err("strict mode should fail");
 
-        assert!(error
-            .to_string()
-            .contains("invalid state machine metadata JSON"));
+        assert!(error.to_string().contains("invalid state machine metadata JSON"));
     }
 
     #[test]
     fn write_state_machines_document_is_atomic_and_readable() {
         let temp = tempfile::tempdir().expect("tempdir");
-        write_state_machines_document(temp.path(), &builtin_state_machines_document())
-            .expect("write should succeed");
+        write_state_machines_document(temp.path(), &builtin_state_machines_document()).expect("write should succeed");
 
         let loaded = load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::Json)
             .expect("load should succeed");

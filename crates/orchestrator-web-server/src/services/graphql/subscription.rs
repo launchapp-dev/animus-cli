@@ -16,13 +16,7 @@ pub struct GqlDaemonEvent {
 
 impl From<DaemonEventRecord> for GqlDaemonEvent {
     fn from(r: DaemonEventRecord) -> Self {
-        Self {
-            id: r.id,
-            seq: r.seq as i32,
-            timestamp: r.timestamp,
-            event_type: r.event_type,
-            data: r.data.to_string(),
-        }
+        Self { id: r.id, seq: r.seq as i32, timestamp: r.timestamp, event_type: r.event_type, data: r.data.to_string() }
     }
 }
 
@@ -65,11 +59,7 @@ impl SubscriptionRoot {
                     return None;
                 }
                 if let Some(ref tid) = task_id {
-                    let event_task_id = record
-                        .data
-                        .get("task_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let event_task_id = record.data.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
                     if event_task_id != tid.as_str() {
                         return None;
                     }
@@ -90,17 +80,12 @@ impl SubscriptionRoot {
         let rx = api.subscribe_events();
         let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
             Ok(record) => {
-                let is_workflow_event = record.event_type.contains("workflow")
-                    || record.event_type.contains("phase");
+                let is_workflow_event = record.event_type.contains("workflow") || record.event_type.contains("phase");
                 if !is_workflow_event {
                     return None;
                 }
                 if let Some(ref wid) = workflow_id {
-                    let event_wf_id = record
-                        .data
-                        .get("workflow_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let event_wf_id = record.data.get("workflow_id").and_then(|v| v.as_str()).unwrap_or("");
                     if event_wf_id != wid.as_str() {
                         return None;
                     }

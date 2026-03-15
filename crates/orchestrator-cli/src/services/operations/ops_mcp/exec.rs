@@ -1,10 +1,5 @@
-use super::exec_errors::{
-    batch_item_error_from_result, build_tool_error_payload, extract_cli_success_data,
-};
-use super::{
-    build_guarded_list_result, AoMcpServer, BatchItemExec, ListGuardInput, OnError,
-    BATCH_RESULT_SCHEMA,
-};
+use super::exec_errors::{batch_item_error_from_result, build_tool_error_payload, extract_cli_success_data};
+use super::{build_guarded_list_result, AoMcpServer, BatchItemExec, ListGuardInput, OnError, BATCH_RESULT_SCHEMA};
 use anyhow::Result;
 use rmcp::{model::CallToolResult, ErrorData as McpError};
 use serde_json::{json, Value};
@@ -26,9 +21,7 @@ impl AoMcpServer {
                         "result": data,
                     })))
                 } else {
-                    Ok(CallToolResult::structured_error(build_tool_error_payload(
-                        tool_name, &result,
-                    )))
+                    Ok(CallToolResult::structured_error(build_tool_error_payload(tool_name, &result)))
                 }
             }
             Err(err) => Ok(CallToolResult::structured_error(json!({
@@ -60,9 +53,7 @@ impl AoMcpServer {
                         }))),
                     }
                 } else {
-                    Ok(CallToolResult::structured_error(build_tool_error_payload(
-                        tool_name, &result,
-                    )))
+                    Ok(CallToolResult::structured_error(build_tool_error_payload(tool_name, &result)))
                 }
             }
             Err(err) => Ok(CallToolResult::structured_error(json!({
@@ -98,10 +89,7 @@ impl AoMcpServer {
                 continue;
             }
 
-            match self
-                .execute_ao(item.args, project_root_override.clone())
-                .await
-            {
+            match self.execute_ao(item.args, project_root_override.clone()).await {
                 Ok(exec_result) => {
                     if exec_result.success {
                         let data = extract_cli_success_data(exec_result.stdout_json);

@@ -101,10 +101,7 @@ fn parse_phase_transition_signal(value: &Value) -> Option<(String, Value)> {
         .and_then(Value::as_str)
         .map(normalize_token);
 
-    if !matches!(
-        event_type.as_deref(),
-        Some("phase_transition" | "phase-transition")
-    ) {
+    if !matches!(event_type.as_deref(), Some("phase_transition" | "phase-transition")) {
         return None;
     }
 
@@ -117,10 +114,7 @@ fn parse_phase_transition_signal(value: &Value) -> Option<(String, Value)> {
     let mut params = serde_json::Map::new();
     params.insert("target_phase".to_string(), target_phase);
     if let Some(reason) = value.get("reason") {
-        let include_reason = reason
-            .as_str()
-            .map(|text| !is_placeholder_phase_transition_token(text))
-            .unwrap_or(true);
+        let include_reason = reason.as_str().map(|text| !is_placeholder_phase_transition_token(text)).unwrap_or(true);
         if include_reason {
             params.insert("reason".to_string(), reason.clone());
         }
@@ -143,11 +137,7 @@ fn parse_json_tool_call_value(value: &Value) -> Option<(String, Value)> {
         .or_else(|| value.get("tool").and_then(Value::as_str))
         .or_else(|| value.get("name").and_then(Value::as_str))
         .or_else(|| {
-            value
-                .get("function")
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("name"))
-                .and_then(Value::as_str)
+            value.get("function").and_then(Value::as_object).and_then(|obj| obj.get("name")).and_then(Value::as_str)
         })
         .or_else(|| {
             value
@@ -189,26 +179,17 @@ fn parse_json_tool_call_value(value: &Value) -> Option<(String, Value)> {
         .map(normalize_arguments_value)
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
 
-    if let Some(server_name) = value
-        .get("server")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|server| !server.is_empty())
+    if let Some(server_name) =
+        value.get("server").and_then(Value::as_str).map(str::trim).filter(|server| !server.is_empty())
     {
         if let Some(object) = parameters.as_object_mut() {
             object.insert("server".to_string(), Value::String(server_name.to_string()));
         }
     }
 
-    if matches!(
-        normalize_token(&tool_name).as_str(),
-        "phase_transition" | "phase-transition"
-    ) {
-        let target_phase_text = parameters
-            .get("target_phase")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
+    if matches!(normalize_token(&tool_name).as_str(), "phase_transition" | "phase-transition") {
+        let target_phase_text =
+            parameters.get("target_phase").and_then(Value::as_str).map(str::trim).unwrap_or_default();
 
         if is_placeholder_phase_transition_token(target_phase_text) {
             return None;
@@ -277,8 +258,7 @@ pub(super) fn parse_xml_tool_parameters(content: &str) -> Option<Value> {
         let value_end = value_slice.find("</parameter>")?;
 
         let raw_value = value_slice[..value_end].trim();
-        let normalized =
-            normalize_arguments_value(Value::String(raw_value.trim_matches('"').to_string()));
+        let normalized = normalize_arguments_value(Value::String(raw_value.trim_matches('"').to_string()));
 
         params.insert(name, normalized);
         search_from = value_start + value_end + "</parameter>".len();

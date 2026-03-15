@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use orchestrator_core::{
-    dispatch_workflow_event, register_workflow_runner_pid, services::ServiceHub,
-    unregister_workflow_runner_pid, WorkflowEvent,
+    dispatch_workflow_event, register_workflow_runner_pid, services::ServiceHub, unregister_workflow_runner_pid,
+    WorkflowEvent,
 };
 use workflow_runner_v2::workflow_execute::{execute_workflow, WorkflowExecuteParams};
 
@@ -40,10 +40,7 @@ struct WorkflowRunnerPidGuard {
 impl WorkflowRunnerPidGuard {
     fn register(project_root: &str, workflow_id: &str) -> Result<Self> {
         register_workflow_runner_pid(Path::new(project_root), workflow_id, std::process::id())?;
-        Ok(Self {
-            project_root: project_root.to_string(),
-            workflow_id: workflow_id.to_string(),
-        })
+        Ok(Self { project_root: project_root.to_string(), workflow_id: workflow_id.to_string() })
     }
 }
 
@@ -55,29 +52,18 @@ impl Drop for WorkflowRunnerPidGuard {
 
 pub(crate) fn resumability_to_json(status: &orchestrator_core::ResumabilityStatus) -> Value {
     match status {
-        orchestrator_core::ResumabilityStatus::Resumable {
-            workflow_id,
-            reason,
-        } => serde_json::json!({
+        orchestrator_core::ResumabilityStatus::Resumable { workflow_id, reason } => serde_json::json!({
             "kind": "resumable",
             "workflow_id": workflow_id,
             "reason": reason,
         }),
-        orchestrator_core::ResumabilityStatus::Stale {
-            workflow_id,
-            age_hours,
-            max_age_hours,
-        } => serde_json::json!({
+        orchestrator_core::ResumabilityStatus::Stale { workflow_id, age_hours, max_age_hours } => serde_json::json!({
             "kind": "stale",
             "workflow_id": workflow_id,
             "age_hours": age_hours,
             "max_age_hours": max_age_hours,
         }),
-        orchestrator_core::ResumabilityStatus::InvalidState {
-            workflow_id,
-            status,
-            reason,
-        } => serde_json::json!({
+        orchestrator_core::ResumabilityStatus::InvalidState { workflow_id, status, reason } => serde_json::json!({
             "kind": "invalid_state",
             "workflow_id": workflow_id,
             "status": status,
@@ -104,11 +90,7 @@ pub(crate) fn upsert_phase_definition(
     definition: orchestrator_core::PhaseExecutionDefinition,
 ) -> Result<Value> {
     let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
-    if workflow
-        .phase_catalog
-        .keys()
-        .all(|existing| !existing.eq_ignore_ascii_case(phase_id))
-    {
+    if workflow.phase_catalog.keys().all(|existing| !existing.eq_ignore_ascii_case(phase_id)) {
         workflow.phase_catalog.insert(
             phase_id.to_string(),
             orchestrator_core::PhaseUiDefinition {
@@ -124,9 +106,7 @@ pub(crate) fn upsert_phase_definition(
     }
 
     let mut runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
-    runtime
-        .phases
-        .insert(phase_id.to_string(), definition.clone());
+    runtime.phases.insert(phase_id.to_string(), definition.clone());
 
     orchestrator_core::validate_workflow_and_runtime_configs(&workflow, &runtime)?;
     orchestrator_core::write_agent_runtime_config(Path::new(project_root), &runtime)?;
@@ -141,16 +121,12 @@ pub(crate) fn upsert_phase_definition(
 
 pub(crate) fn remove_phase_definition(project_root: &str, phase_id: &str) -> Result<Value> {
     let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
-    if workflow.workflows.iter().any(|pipeline| {
-        pipeline
-            .phases
-            .iter()
-            .any(|phase| phase.phase_id().eq_ignore_ascii_case(phase_id))
-    }) {
-        return Err(anyhow!(
-            "cannot remove phase '{}' because at least one pipeline references it",
-            phase_id
-        ));
+    if workflow
+        .workflows
+        .iter()
+        .any(|pipeline| pipeline.phases.iter().any(|phase| phase.phase_id().eq_ignore_ascii_case(phase_id)))
+    {
+        return Err(anyhow!("cannot remove phase '{}' because at least one pipeline references it", phase_id));
     }
 
     let mut runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
@@ -183,10 +159,7 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         serde_json::json!({"phase_id": &normalized_phase_id}),
         "workflow.phases.remove",
         vec!["remove phase runtime definition".to_string()],
-        &format!(
-            "rerun 'ao workflow phases remove --phase {} --confirm {}' to apply",
-            phase_id, phase_id
-        ),
+        &format!("rerun 'ao workflow phases remove --phase {} --confirm {}' to apply", phase_id, phase_id),
     );
     if let Some(obj) = envelope.as_object_mut() {
         obj.insert("can_remove".to_string(), serde_json::json!(true));
@@ -194,15 +167,10 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
     Ok(envelope)
 }
 
-pub(crate) fn upsert_pipeline(
-    project_root: &str,
-    pipeline: orchestrator_core::WorkflowDefinition,
-) -> Result<Value> {
+pub(crate) fn upsert_pipeline(project_root: &str, pipeline: orchestrator_core::WorkflowDefinition) -> Result<Value> {
     let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
-    if let Some(existing) = workflow
-        .workflows
-        .iter_mut()
-        .find(|existing| existing.id.eq_ignore_ascii_case(pipeline.id.as_str()))
+    if let Some(existing) =
+        workflow.workflows.iter_mut().find(|existing| existing.id.eq_ignore_ascii_case(pipeline.id.as_str()))
     {
         *existing = pipeline.clone();
     } else {
@@ -223,16 +191,10 @@ pub(crate) fn phase_payload(project_root: &str, phase_id: &str) -> Result<Value>
     let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
     let runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
 
-    let ui = workflow
-        .phase_catalog
-        .iter()
-        .find(|(id, _)| id.eq_ignore_ascii_case(phase_id))
-        .map(|(_, value)| value.clone());
-    let runtime_definition = runtime
-        .phases
-        .iter()
-        .find(|(id, _)| id.eq_ignore_ascii_case(phase_id))
-        .map(|(_, value)| value.clone());
+    let ui =
+        workflow.phase_catalog.iter().find(|(id, _)| id.eq_ignore_ascii_case(phase_id)).map(|(_, value)| value.clone());
+    let runtime_definition =
+        runtime.phases.iter().find(|(id, _)| id.eq_ignore_ascii_case(phase_id)).map(|(_, value)| value.clone());
 
     Ok(serde_json::json!({
         "phase_id": phase_id,
@@ -283,9 +245,7 @@ pub(crate) async fn approve_manual_phase(
         },
     )
     .await?;
-    let updated = outcome
-        .workflow
-        .ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
+    let updated = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
 
     let mut store = read_manual_approvals(project_root)?;
     store.approvals.push(ManualApprovalRecord {
@@ -399,9 +359,7 @@ pub(crate) async fn reject_manual_phase(
         },
     )
     .await?;
-    let updated = outcome
-        .workflow
-        .ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
+    let updated = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
 
     project_terminal_workflow_result(
         hub.clone(),
@@ -441,9 +399,9 @@ mod tests {
     use super::{approve_manual_phase, reject_manual_phase};
     use crate::shared::test_env_lock;
     use orchestrator_core::{
-        load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config,
-        FileServiceHub, PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput,
-        TaskStatus, TaskType, WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
+        load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config, FileServiceHub,
+        PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput, TaskStatus, TaskType,
+        WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
     };
     use protocol::test_utils::EnvVarGuard;
     use std::process::Command as ProcessCommand;
@@ -459,11 +417,8 @@ mod tests {
             .status()
             .expect("git init should run");
         if !init_main.success() {
-            let init = ProcessCommand::new("git")
-                .arg("init")
-                .current_dir(temp.path())
-                .status()
-                .expect("git init should run");
+            let init =
+                ProcessCommand::new("git").arg("init").current_dir(temp.path()).status().expect("git init should run");
             assert!(init.success(), "git init should succeed");
             let rename = ProcessCommand::new("git")
                 .args(["branch", "-M", "main"])
@@ -486,8 +441,7 @@ mod tests {
             .expect("git config user.name should run");
         assert!(name.success(), "git config user.name should succeed");
 
-        std::fs::write(temp.path().join("README.md"), "# test\n")
-            .expect("readme should be written");
+        std::fs::write(temp.path().join("README.md"), "# test\n").expect("readme should be written");
         let add = ProcessCommand::new("git")
             .args(["add", "README.md"])
             .current_dir(temp.path())
@@ -504,9 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn approve_manual_phase_continues_non_terminal_workflow() {
-        let _lock = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = test_env_lock().lock().expect("env lock should be available");
         let temp = TempDir::new().expect("temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         init_git_repo(&temp);
@@ -527,20 +479,14 @@ mod tests {
             })
             .await
             .expect("task should be created");
-        hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress, false)
-            .await
-            .expect("task should be in progress");
+        hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await.expect("task should be in progress");
 
         let workflow = hub
             .workflows()
             .run(WorkflowRunInput::for_task(task.id.clone(), None))
             .await
             .expect("workflow should start");
-        let current_phase = workflow
-            .current_phase
-            .clone()
-            .expect("workflow should have current phase");
+        let current_phase = workflow.current_phase.clone().expect("workflow should have current phase");
         let next_phase = workflow
             .phases
             .get(workflow.current_phase_index + 1)
@@ -548,10 +494,8 @@ mod tests {
             .expect("workflow should have a second phase");
 
         let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
-        let mut current_definition = runtime
-            .phase_execution(&current_phase)
-            .cloned()
-            .expect("current phase should exist");
+        let mut current_definition =
+            runtime.phase_execution(&current_phase).cloned().expect("current phase should exist");
         current_definition.mode = PhaseExecutionMode::Manual;
         current_definition.agent_id = None;
         current_definition.command = None;
@@ -560,14 +504,9 @@ mod tests {
             approval_note_required: false,
             timeout_secs: None,
         });
-        runtime
-            .phases
-            .insert(current_phase.clone(), current_definition);
+        runtime.phases.insert(current_phase.clone(), current_definition);
 
-        let mut next_definition = runtime
-            .phase_execution(&next_phase)
-            .cloned()
-            .expect("next phase should exist");
+        let mut next_definition = runtime.phase_execution(&next_phase).cloned().expect("next phase should exist");
         next_definition.mode = PhaseExecutionMode::Manual;
         next_definition.agent_id = None;
         next_definition.command = None;
@@ -579,28 +518,14 @@ mod tests {
         runtime.phases.insert(next_phase.clone(), next_definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
 
-        let paused = hub
-            .workflows()
-            .pause(&workflow.id)
-            .await
-            .expect("workflow should pause");
+        let paused = hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
         assert_eq!(paused.status, WorkflowStatus::Paused);
 
-        let response = approve_manual_phase(
-            hub.clone(),
-            &project_root,
-            &workflow.id,
-            &current_phase,
-            "approved",
-        )
-        .await
-        .expect("manual approval should succeed");
-
-        let updated = hub
-            .workflows()
-            .get(&workflow.id)
+        let response = approve_manual_phase(hub.clone(), &project_root, &workflow.id, &current_phase, "approved")
             .await
-            .expect("workflow should reload");
+            .expect("manual approval should succeed");
+
+        let updated = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
         let completed_phase = updated
             .phases
             .iter()
@@ -610,21 +535,13 @@ mod tests {
         assert_eq!(completed_phase.status, WorkflowPhaseStatus::Success);
         assert_eq!(updated.status, WorkflowStatus::Paused);
         assert_eq!(updated.current_phase.as_deref(), Some(next_phase.as_str()));
-        assert_eq!(
-            response["continued_execution"]["workflow_status"].as_str(),
-            Some("paused")
-        );
-        assert_eq!(
-            response["continued_execution"]["phase_results"][0]["phase_id"].as_str(),
-            Some(next_phase.as_str())
-        );
+        assert_eq!(response["continued_execution"]["workflow_status"].as_str(), Some("paused"));
+        assert_eq!(response["continued_execution"]["phase_results"][0]["phase_id"].as_str(), Some(next_phase.as_str()));
     }
 
     #[tokio::test]
     async fn reject_manual_phase_fails_workflow() {
-        let _lock = test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = test_env_lock().lock().expect("env lock should be available");
         let temp = TempDir::new().expect("temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         init_git_repo(&temp);
@@ -645,26 +562,17 @@ mod tests {
             })
             .await
             .expect("task should be created");
-        hub.tasks()
-            .set_status(&task.id, TaskStatus::InProgress, false)
-            .await
-            .expect("task should be in progress");
+        hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await.expect("task should be in progress");
 
         let workflow = hub
             .workflows()
             .run(WorkflowRunInput::for_task(task.id.clone(), None))
             .await
             .expect("workflow should start");
-        let current_phase = workflow
-            .current_phase
-            .clone()
-            .expect("workflow should have current phase");
+        let current_phase = workflow.current_phase.clone().expect("workflow should have current phase");
 
         let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
-        let mut definition = runtime
-            .phase_execution(&current_phase)
-            .cloned()
-            .expect("current phase should exist");
+        let mut definition = runtime.phase_execution(&current_phase).cloned().expect("current phase should exist");
         definition.mode = PhaseExecutionMode::Manual;
         definition.agent_id = None;
         definition.command = None;
@@ -676,28 +584,14 @@ mod tests {
         runtime.phases.insert(current_phase.clone(), definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
 
-        let paused = hub
-            .workflows()
-            .pause(&workflow.id)
-            .await
-            .expect("workflow should pause");
+        let paused = hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
         assert_eq!(paused.status, WorkflowStatus::Paused);
 
-        reject_manual_phase(
-            hub.clone(),
-            &project_root,
-            &workflow.id,
-            &current_phase,
-            "rejected",
-        )
-        .await
-        .expect("manual rejection should succeed");
-
-        let updated = hub
-            .workflows()
-            .get(&workflow.id)
+        reject_manual_phase(hub.clone(), &project_root, &workflow.id, &current_phase, "rejected")
             .await
-            .expect("workflow should reload");
+            .expect("manual rejection should succeed");
+
+        let updated = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
         let rejected_phase = updated
             .phases
             .iter()

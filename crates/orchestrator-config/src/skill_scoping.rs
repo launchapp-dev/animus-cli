@@ -29,10 +29,7 @@ pub struct SkillSource {
     pub skills: BTreeMap<String, SkillDefinition>,
 }
 
-pub fn load_skill_sources(
-    project_root: &Path,
-    user_config_dir: Option<&Path>,
-) -> Result<Vec<SkillSource>> {
+pub fn load_skill_sources(project_root: &Path, user_config_dir: Option<&Path>) -> Result<Vec<SkillSource>> {
     let mut sources = Vec::new();
 
     let builtin = load_builtin_skills()?;
@@ -45,10 +42,7 @@ pub fn load_skill_sources(
     if user_dir.is_dir() {
         let skills = load_skills_from_directory(&user_dir)?;
         if !skills.is_empty() {
-            sources.push(SkillSource {
-                origin: SkillSourceOrigin::User,
-                skills,
-            });
+            sources.push(SkillSource { origin: SkillSourceOrigin::User, skills });
         }
     }
 
@@ -56,10 +50,7 @@ pub fn load_skill_sources(
     if proj_dir.is_dir() {
         let skills = load_skills_from_directory(&proj_dir)?;
         if !skills.is_empty() {
-            sources.push(SkillSource {
-                origin: SkillSourceOrigin::Project,
-                skills,
-            });
+            sources.push(SkillSource { origin: SkillSourceOrigin::Project, skills });
         }
     }
 
@@ -88,11 +79,7 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!(
-                    "warning: could not read skill file {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("warning: could not read skill file {}: {}", path.display(), e);
                 continue;
             }
         };
@@ -106,19 +93,11 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
 
         match serde_yaml::from_str::<SkillDefinition>(&content) {
             Ok(def) => {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
                 skills.insert(name, def);
             }
             Err(e) => {
-                eprintln!(
-                    "warning: could not parse skill file {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("warning: could not parse skill file {}: {}", path.display(), e);
             }
         }
     }
@@ -127,94 +106,34 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
 }
 
 pub fn project_skills_dir(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join("config")
-        .join("skill_definitions")
+    project_root.join(".ao").join("config").join("skill_definitions")
 }
 
 pub fn user_skills_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    Path::new(&home)
-        .join(".ao")
-        .join("config")
-        .join("skill_definitions")
+    Path::new(&home).join(".ao").join("config").join("skill_definitions")
 }
 
 const BUILTIN_SKILL_YAMLS: &[(&str, &str)] = &[
-    (
-        "implementation",
-        include_str!("../config/skills/implementation.yaml"),
-    ),
+    ("implementation", include_str!("../config/skills/implementation.yaml")),
     ("debugging", include_str!("../config/skills/debugging.yaml")),
-    (
-        "refactoring",
-        include_str!("../config/skills/refactoring.yaml"),
-    ),
-    (
-        "unit-testing",
-        include_str!("../config/skills/unit-testing.yaml"),
-    ),
-    (
-        "code-review",
-        include_str!("../config/skills/code-review.yaml"),
-    ),
-    (
-        "deep-search",
-        include_str!("../config/skills/deep-search.yaml"),
-    ),
-    (
-        "code-analysis",
-        include_str!("../config/skills/code-analysis.yaml"),
-    ),
-    (
-        "architecture-review",
-        include_str!("../config/skills/architecture-review.yaml"),
-    ),
-    (
-        "impact-analysis",
-        include_str!("../config/skills/impact-analysis.yaml"),
-    ),
-    (
-        "technical-writing",
-        include_str!("../config/skills/technical-writing.yaml"),
-    ),
-    (
-        "api-documentation",
-        include_str!("../config/skills/api-documentation.yaml"),
-    ),
-    (
-        "task-decomposition",
-        include_str!("../config/skills/task-decomposition.yaml"),
-    ),
-    (
-        "prioritization",
-        include_str!("../config/skills/prioritization.yaml"),
-    ),
-    (
-        "incident-response",
-        include_str!("../config/skills/incident-response.yaml"),
-    ),
-    (
-        "ci-cd-authoring",
-        include_str!("../config/skills/ci-cd-authoring.yaml"),
-    ),
-    (
-        "release-management",
-        include_str!("../config/skills/release-management.yaml"),
-    ),
-    (
-        "pr-summary",
-        include_str!("../config/skills/pr-summary.yaml"),
-    ),
-    (
-        "changelog-generation",
-        include_str!("../config/skills/changelog-generation.yaml"),
-    ),
-    (
-        "security-audit",
-        include_str!("../config/skills/security-audit.yaml"),
-    ),
+    ("refactoring", include_str!("../config/skills/refactoring.yaml")),
+    ("unit-testing", include_str!("../config/skills/unit-testing.yaml")),
+    ("code-review", include_str!("../config/skills/code-review.yaml")),
+    ("deep-search", include_str!("../config/skills/deep-search.yaml")),
+    ("code-analysis", include_str!("../config/skills/code-analysis.yaml")),
+    ("architecture-review", include_str!("../config/skills/architecture-review.yaml")),
+    ("impact-analysis", include_str!("../config/skills/impact-analysis.yaml")),
+    ("technical-writing", include_str!("../config/skills/technical-writing.yaml")),
+    ("api-documentation", include_str!("../config/skills/api-documentation.yaml")),
+    ("task-decomposition", include_str!("../config/skills/task-decomposition.yaml")),
+    ("prioritization", include_str!("../config/skills/prioritization.yaml")),
+    ("incident-response", include_str!("../config/skills/incident-response.yaml")),
+    ("ci-cd-authoring", include_str!("../config/skills/ci-cd-authoring.yaml")),
+    ("release-management", include_str!("../config/skills/release-management.yaml")),
+    ("pr-summary", include_str!("../config/skills/pr-summary.yaml")),
+    ("changelog-generation", include_str!("../config/skills/changelog-generation.yaml")),
+    ("security-audit", include_str!("../config/skills/security-audit.yaml")),
 ];
 
 pub fn load_builtin_skills() -> Result<SkillSource> {
@@ -224,10 +143,7 @@ pub fn load_builtin_skills() -> Result<SkillSource> {
             .map_err(|e| anyhow::anyhow!("Failed to parse built-in skill '{}': {}", name, e))?;
         skills.insert(name.to_string(), def);
     }
-    Ok(SkillSource {
-        origin: SkillSourceOrigin::Builtin,
-        skills,
-    })
+    Ok(SkillSource { origin: SkillSourceOrigin::Builtin, skills })
 }
 
 #[cfg(test)]
@@ -356,9 +272,7 @@ description: Project skill
         let sources = load_skill_sources(tmp.path(), None).unwrap();
         assert!(sources.len() >= 2);
         assert_eq!(sources[0].origin, SkillSourceOrigin::Builtin);
-        let project_source = sources
-            .iter()
-            .find(|s| s.origin == SkillSourceOrigin::Project);
+        let project_source = sources.iter().find(|s| s.origin == SkillSourceOrigin::Project);
         assert!(project_source.is_some());
         assert!(project_source.unwrap().skills.contains_key("proj"));
     }

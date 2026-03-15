@@ -31,10 +31,7 @@ pub(crate) async fn run_agent_session(
         Some(&mcp_agent_id),
     )
     .with_context(|| format!("failed to build runtime contract for tool `{tool}`"))?;
-    if let Some(mcp) = runtime_contract
-        .get_mut("mcp")
-        .and_then(serde_json::Value::as_object_mut)
-    {
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(serde_json::Value::as_object_mut) {
         mcp.insert(
             "stdio".to_string(),
             json!({
@@ -48,31 +45,18 @@ pub(crate) async fn run_agent_session(
             }),
         );
     }
-    let runtime_contract_json = serde_json::to_string(&runtime_contract)
-        .context("failed to serialize runtime contract JSON")?;
+    let runtime_contract_json =
+        serde_json::to_string(&runtime_contract).context("failed to serialize runtime contract JSON")?;
 
     let mut child = TokioCommand::new(binary)
-        .args(build_agent_run_args(
-            &project_root,
-            &tool,
-            &model,
-            &prompt,
-            &runtime_contract_json,
-            envelope_json,
-        ))
+        .args(build_agent_run_args(&project_root, &tool, &model, &prompt, &runtime_contract_json, envelope_json))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to start `ao agent run` for tool `{tool}`"))?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .context("failed to capture agent-run stdout")?;
-    let stderr = child
-        .stderr
-        .take()
-        .context("failed to capture agent-run stderr")?;
+    let stdout = child.stdout.take().context("failed to capture agent-run stdout")?;
+    let stderr = child.stderr.take().context("failed to capture agent-run stderr")?;
 
     let tx_stdout = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -88,10 +72,7 @@ pub(crate) async fn run_agent_session(
             if formatted.is_empty() {
                 continue;
             }
-            let _ = tx_stdout.send(AppEvent::AgentOutput {
-                line: formatted,
-                is_error: false,
-            });
+            let _ = tx_stdout.send(AppEvent::AgentOutput { line: formatted, is_error: false });
         }
     });
 
@@ -99,17 +80,11 @@ pub(crate) async fn run_agent_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = tx_stderr.send(AppEvent::AgentOutput {
-                line,
-                is_error: true,
-            });
+            let _ = tx_stderr.send(AppEvent::AgentOutput { line, is_error: true });
         }
     });
 
-    let status = child
-        .wait()
-        .await
-        .context("failed while waiting for agent run process")?;
+    let status = child.wait().await.context("failed while waiting for agent run process")?;
 
     let _ = stdout_task.await;
     let _ = stderr_task.await;
@@ -118,10 +93,7 @@ pub(crate) async fn run_agent_session(
         Some(code) => format!("agent run finished with exit code {code}"),
         None => "agent run terminated by signal".to_string(),
     };
-    let _ = event_tx.send(AppEvent::AgentFinished {
-        summary,
-        success: status.success(),
-    });
+    let _ = event_tx.send(AppEvent::AgentFinished { summary, success: status.success() });
 
     Ok(())
 }
@@ -169,11 +141,7 @@ fn format_agent_line(line: &str, tool: &str) -> String {
         Ok(value) => value,
         Err(_) => return trimmed.to_string(),
     };
-    if parsed
-        .get("schema")
-        .and_then(Value::as_str)
-        .is_some_and(|schema| schema == "ao.agent.event.v1")
-    {
+    if parsed.get("schema").and_then(Value::as_str).is_some_and(|schema| schema == "ao.agent.event.v1") {
         if let Some(data) = parsed.get("data") {
             if let Some(object) = data.as_object() {
                 if let Some((event_name, payload)) = object.iter().next() {

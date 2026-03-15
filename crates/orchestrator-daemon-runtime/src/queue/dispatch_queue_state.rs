@@ -13,7 +13,6 @@ pub enum DispatchQueueEntryStatus {
     Unknown,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchQueueEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,12 +50,7 @@ impl DispatchQueueEntry {
     }
 
     pub fn subject_id(&self) -> &str {
-        if let Some(subject_id) = self
-            .subject_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(subject_id) = self.subject_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
             return subject_id;
         }
         if let Some(dispatch) = &self.dispatch {

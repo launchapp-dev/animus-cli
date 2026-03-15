@@ -12,86 +12,85 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
         default_workflow_ref: "standard".to_string(),
         checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
         phase_catalog: BTreeMap::from([
-                (
-                    "requirements".to_string(),
-                    phase_ui_definition(
-                        "Requirements",
-                        "Clarify scope, constraints, and acceptance criteria.",
-                        "planning",
-                        &["planning", "scope"],
-                    ),
+            (
+                "requirements".to_string(),
+                phase_ui_definition(
+                    "Requirements",
+                    "Clarify scope, constraints, and acceptance criteria.",
+                    "planning",
+                    &["planning", "scope"],
                 ),
-                (
-                    "research".to_string(),
-                    phase_ui_definition(
-                        "Research",
-                        "Gather implementation evidence and references for execution.",
-                        "planning",
-                        &["research"],
-                    ),
+            ),
+            (
+                "research".to_string(),
+                phase_ui_definition(
+                    "Research",
+                    "Gather implementation evidence and references for execution.",
+                    "planning",
+                    &["research"],
                 ),
-                (
-                    "ux-research".to_string(),
-                    phase_ui_definition(
-                        "UX Research",
-                        "Document interaction patterns, user journeys, and accessibility constraints.",
-                        "design",
-                        &["design", "ux"],
-                    ),
+            ),
+            (
+                "ux-research".to_string(),
+                phase_ui_definition(
+                    "UX Research",
+                    "Document interaction patterns, user journeys, and accessibility constraints.",
+                    "design",
+                    &["design", "ux"],
                 ),
-                (
-                    "wireframe".to_string(),
-                    phase_ui_definition(
-                        "Wireframe",
-                        "Produce concrete wireframes and interaction states.",
-                        "design",
-                        &["design", "wireframe"],
-                    ),
+            ),
+            (
+                "wireframe".to_string(),
+                phase_ui_definition(
+                    "Wireframe",
+                    "Produce concrete wireframes and interaction states.",
+                    "design",
+                    &["design", "wireframe"],
                 ),
-                (
-                    "mockup-review".to_string(),
-                    phase_ui_definition(
-                        "Mockup Review",
-                        "Validate mockups against requirements and UX constraints.",
-                        "review",
-                        &["design", "review"],
-                    ),
+            ),
+            (
+                "mockup-review".to_string(),
+                phase_ui_definition(
+                    "Mockup Review",
+                    "Validate mockups against requirements and UX constraints.",
+                    "review",
+                    &["design", "review"],
                 ),
-                (
-                    "implementation".to_string(),
-                    phase_ui_definition(
-                        "Implementation",
-                        "Deliver production-quality implementation changes.",
-                        "build",
-                        &["build", "code"],
-                    ),
+            ),
+            (
+                "implementation".to_string(),
+                phase_ui_definition(
+                    "Implementation",
+                    "Deliver production-quality implementation changes.",
+                    "build",
+                    &["build", "code"],
                 ),
-                (
-                    "code-review".to_string(),
-                    phase_ui_definition(
-                        "Code Review",
-                        "Review quality, risks, and maintainability before completion.",
-                        "review",
-                        &["review", "quality"],
-                    ),
+            ),
+            (
+                "code-review".to_string(),
+                phase_ui_definition(
+                    "Code Review",
+                    "Review quality, risks, and maintainability before completion.",
+                    "review",
+                    &["review", "quality"],
                 ),
-                (
-                    "testing".to_string(),
-                    phase_ui_definition(
-                        "Testing",
-                        "Run and update test coverage for the delivered changes.",
-                        "qa",
-                        &["qa", "testing"],
-                    ),
+            ),
+            (
+                "testing".to_string(),
+                phase_ui_definition(
+                    "Testing",
+                    "Run and update test coverage for the delivered changes.",
+                    "qa",
+                    &["qa", "testing"],
                 ),
+            ),
         ]),
         workflows: vec![
             WorkflowDefinition {
                 id: "standard".to_string(),
                 name: "Standard".to_string(),
-                description:
-                    "Default execution flow across requirements, implementation, review, and testing."
-                        .to_string(),
+                description: "Default execution flow across requirements, implementation, review, and testing."
+                    .to_string(),
                 phases: vec![
                     "requirements".to_string().into(),
                     "implementation".to_string().into(),
@@ -104,9 +103,8 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
             WorkflowDefinition {
                 id: "ui-ux-standard".to_string(),
                 name: "UI UX Standard".to_string(),
-                description:
-                    "Frontend-oriented flow with UX research, wireframes, and mockup review gates."
-                        .to_string(),
+                description: "Frontend-oriented flow with UX research, wireframes, and mockup review gates."
+                    .to_string(),
                 phases: vec![
                     "requirements".to_string().into(),
                     "ux-research".to_string().into(),
@@ -145,94 +143,49 @@ pub(crate) fn builtin_workflow_yaml_overlays() -> [(&'static str, &'static str);
     [
         (
             "vision-draft",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/vision-draft.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/vision-draft.yaml")),
         ),
         (
             "vision-refine",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/vision-refine.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/vision-refine.yaml")),
         ),
         (
             "requirements-draft",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/requirements-draft.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-draft.yaml")),
         ),
         (
             "requirements-refine",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/requirements-refine.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-refine.yaml")),
         ),
         (
             "requirements-execute",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/requirements-execute.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-execute.yaml")),
         ),
         (
             "task-standard",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-standard.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-standard.yaml")),
         ),
-        (
-            "task-ui-ux",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-ui-ux.yaml"
-            )),
-        ),
+        ("task-ui-ux", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-ui-ux.yaml"))),
         (
             "review-cycle",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/review-cycle.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/review-cycle.yaml")),
         ),
         (
             "task-quick-fix",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-quick-fix.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-quick-fix.yaml")),
         ),
-        (
-            "task-gated",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-gated.yaml"
-            )),
-        ),
+        ("task-gated", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-gated.yaml"))),
         (
             "task-triage",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-triage.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-triage.yaml")),
         ),
         (
             "task-refine",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/task-refine.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/task-refine.yaml")),
         ),
         (
             "requirement-plan",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/config/builtin-workflows/requirement-plan.yaml"
-            )),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirement-plan.yaml")),
         ),
     ]
 }
@@ -243,10 +196,8 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
         .get_or_init(|| {
             let mut config = builtin_workflow_config_base();
             for (name, yaml) in builtin_workflow_yaml_overlays() {
-                let overlay =
-                    parse_yaml_workflow_config_with_base(yaml, &config).unwrap_or_else(|error| {
-                        panic!("invalid builtin workflow YAML '{name}': {error}")
-                    });
+                let overlay = parse_yaml_workflow_config_with_base(yaml, &config)
+                    .unwrap_or_else(|error| panic!("invalid builtin workflow YAML '{name}': {error}"));
                 config = merge_yaml_into_config(config, overlay);
             }
             config

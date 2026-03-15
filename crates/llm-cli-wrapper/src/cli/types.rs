@@ -93,7 +93,6 @@ impl CliMetadata {
             last_tested: None,
         }
     }
-
 }
 
 impl CliCapability {

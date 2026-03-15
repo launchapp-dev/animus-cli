@@ -136,21 +136,11 @@ mod tests {
 
     #[test]
     fn parses_queue_enqueue_command() {
-        let cli = Cli::try_parse_from([
-            "ao",
-            "queue",
-            "enqueue",
-            "--task-id",
-            "TASK-123",
-            "--workflow-ref",
-            "ops",
-        ])
-        .expect("queue enqueue command should parse");
+        let cli = Cli::try_parse_from(["ao", "queue", "enqueue", "--task-id", "TASK-123", "--workflow-ref", "ops"])
+            .expect("queue enqueue command should parse");
 
         match cli.command {
-            Command::Queue {
-                command: QueueCommand::Enqueue(args),
-            } => {
+            Command::Queue { command: QueueCommand::Enqueue(args) } => {
                 assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
                 assert_eq!(args.workflow_ref.as_deref(), Some("ops"));
             }
@@ -160,21 +150,11 @@ mod tests {
 
     #[test]
     fn parses_queue_reorder_subject_ids() {
-        let cli = Cli::try_parse_from([
-            "ao",
-            "queue",
-            "reorder",
-            "--subject-id",
-            "TASK-2",
-            "--subject-id",
-            "TASK-1",
-        ])
-        .expect("queue reorder command should parse");
+        let cli = Cli::try_parse_from(["ao", "queue", "reorder", "--subject-id", "TASK-2", "--subject-id", "TASK-1"])
+            .expect("queue reorder command should parse");
 
         match cli.command {
-            Command::Queue {
-                command: QueueCommand::Reorder(args),
-            } => {
+            Command::Queue { command: QueueCommand::Reorder(args) } => {
                 assert_eq!(args.subject_ids, vec!["TASK-2", "TASK-1"]);
             }
             _ => panic!("expected queue reorder command"),
@@ -183,21 +163,11 @@ mod tests {
 
     #[test]
     fn parses_requirements_execute_command() {
-        let cli = Cli::try_parse_from([
-            "ao",
-            "requirements",
-            "execute",
-            "--id",
-            "REQ-101",
-            "--id",
-            "REQ-102",
-        ])
-        .expect("requirements execute should parse");
+        let cli = Cli::try_parse_from(["ao", "requirements", "execute", "--id", "REQ-101", "--id", "REQ-102"])
+            .expect("requirements execute should parse");
 
         match cli.command {
-            Command::Requirements {
-                command: RequirementsCommand::Execute(args),
-            } => {
+            Command::Requirements { command: RequirementsCommand::Execute(args) } => {
                 assert_eq!(args.requirement_ids, vec!["REQ-101", "REQ-102"]);
                 assert!(args.start_workflows);
             }
@@ -231,9 +201,7 @@ mod tests {
         .expect("task list command should parse");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::List(args),
-            } => {
+            Command::Task { command: TaskCommand::List(args) } => {
                 assert_eq!(args.task_type.as_deref(), Some("feature"));
                 assert_eq!(args.status.as_deref(), Some("in-progress"));
                 assert_eq!(args.priority.as_deref(), Some("high"));
@@ -261,9 +229,7 @@ mod tests {
         .expect("task create should parse linked requirement");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::Create(args),
-            } => {
+            Command::Task { command: TaskCommand::Create(args) } => {
                 assert_eq!(args.linked_requirement, vec!["REQ-123".to_string()]);
             }
             _ => panic!("expected task create command"),
@@ -286,13 +252,8 @@ mod tests {
         .expect("task create should parse repeated linked requirements");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::Create(args),
-            } => {
-                assert_eq!(
-                    args.linked_requirement,
-                    vec!["REQ-123".to_string(), "REQ-456".to_string()]
-                );
+            Command::Task { command: TaskCommand::Create(args) } => {
+                assert_eq!(args.linked_requirement, vec!["REQ-123".to_string(), "REQ-456".to_string()]);
             }
             _ => panic!("expected task create command"),
         }
@@ -304,9 +265,7 @@ mod tests {
             .expect("task stats command should parse");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::Stats(args),
-            } => {
+            Command::Task { command: TaskCommand::Stats(args) } => {
                 assert_eq!(args.stale_threshold_hours, 72);
             }
             _ => panic!("expected task stats command"),
@@ -342,9 +301,7 @@ mod tests {
         .expect("task rebalance-priority should parse");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::RebalancePriority(args),
-            } => {
+            Command::Task { command: TaskCommand::RebalancePriority(args) } => {
                 assert_eq!(args.high_budget_percent, 15);
                 assert_eq!(args.essential_task_id, vec!["TASK-001".to_string()]);
                 assert_eq!(args.nice_to_have_task_id, vec!["TASK-009".to_string()]);
@@ -357,14 +314,8 @@ mod tests {
 
     #[test]
     fn task_rebalance_priority_rejects_budget_above_100() {
-        let error = Cli::try_parse_from([
-            "ao",
-            "task",
-            "rebalance-priority",
-            "--high-budget-percent",
-            "101",
-        ])
-        .expect_err("budget above 100 should fail validation");
+        let error = Cli::try_parse_from(["ao", "task", "rebalance-priority", "--high-budget-percent", "101"])
+            .expect_err("budget above 100 should fail validation");
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
         let message = error.to_string();
         assert!(message.contains("--high-budget-percent"));
@@ -373,23 +324,12 @@ mod tests {
 
     #[test]
     fn parses_task_assign() {
-        let cli = Cli::try_parse_from([
-            "ao",
-            "task",
-            "assign",
-            "--id",
-            "TASK-001",
-            "--assignee",
-            "alice",
-            "--type",
-            "human",
-        ])
-        .expect("task assign should parse");
+        let cli =
+            Cli::try_parse_from(["ao", "task", "assign", "--id", "TASK-001", "--assignee", "alice", "--type", "human"])
+                .expect("task assign should parse");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::Assign(args),
-            } => {
+            Command::Task { command: TaskCommand::Assign(args) } => {
                 assert_eq!(args.id, "TASK-001");
                 assert_eq!(args.assignee, "alice");
                 assert_eq!(args.assignee_type.as_deref(), Some("human"));
@@ -411,9 +351,7 @@ mod tests {
         .expect("task assign with --agent-role should parse");
 
         match cli.command {
-            Command::Task {
-                command: TaskCommand::Assign(args),
-            } => {
+            Command::Task { command: TaskCommand::Assign(args) } => {
                 assert_eq!(args.id, "TASK-001");
                 assert_eq!(args.assignee, "coder");
                 assert_eq!(args.agent_role.as_deref(), Some("coder"));
@@ -439,12 +377,7 @@ mod tests {
         .expect("workflow phase approve should parse");
 
         match cli.command {
-            Command::Workflow {
-                command:
-                    WorkflowCommand::Phase {
-                        command: WorkflowPhaseCommand::Approve(args),
-                    },
-            } => {
+            Command::Workflow { command: WorkflowCommand::Phase { command: WorkflowPhaseCommand::Approve(args) } } => {
                 assert_eq!(args.id, "WF-001");
                 assert_eq!(args.phase, "testing");
                 assert_eq!(args.note, "gate approved");
@@ -470,12 +403,7 @@ mod tests {
         .expect("workflow phase reject should parse");
 
         match cli.command {
-            Command::Workflow {
-                command:
-                    WorkflowCommand::Phase {
-                        command: WorkflowPhaseCommand::Reject(args),
-                    },
-            } => {
+            Command::Workflow { command: WorkflowCommand::Phase { command: WorkflowPhaseCommand::Reject(args) } } => {
                 assert_eq!(args.id, "WF-002");
                 assert_eq!(args.phase, "testing");
                 assert_eq!(args.note, "gate rejected");
@@ -503,12 +431,7 @@ mod tests {
         .expect("workflow prompt render should parse");
 
         match cli.command {
-            Command::Workflow {
-                command:
-                    WorkflowCommand::Prompt {
-                        command: WorkflowPromptCommand::Render(args),
-                    },
-            } => {
+            Command::Workflow { command: WorkflowCommand::Prompt { command: WorkflowPromptCommand::Render(args) } } => {
                 assert_eq!(args.title.as_deref(), Some("Release Preview"));
                 assert_eq!(args.phase.as_deref(), Some("implementation"));
                 assert_eq!(args.input_json.as_deref(), Some("{\"ticket\":\"REL-9\"}"));
@@ -520,24 +443,12 @@ mod tests {
 
     #[test]
     fn parses_workflow_prompt_render_for_existing_workflow() {
-        let cli = Cli::try_parse_from([
-            "ao",
-            "workflow",
-            "prompt",
-            "render",
-            "--workflow-id",
-            "WF-123",
-            "--all-phases",
-        ])
-        .expect("workflow prompt render should parse");
+        let cli =
+            Cli::try_parse_from(["ao", "workflow", "prompt", "render", "--workflow-id", "WF-123", "--all-phases"])
+                .expect("workflow prompt render should parse");
 
         match cli.command {
-            Command::Workflow {
-                command:
-                    WorkflowCommand::Prompt {
-                        command: WorkflowPromptCommand::Render(args),
-                    },
-            } => {
+            Command::Workflow { command: WorkflowCommand::Prompt { command: WorkflowPromptCommand::Render(args) } } => {
                 assert_eq!(args.workflow_id.as_deref(), Some("WF-123"));
                 assert!(args.all_phases);
                 assert!(args.vars.is_empty());

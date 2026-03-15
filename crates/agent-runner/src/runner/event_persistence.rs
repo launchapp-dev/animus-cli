@@ -11,10 +11,8 @@ pub(super) struct RunEventPersistence {
 
 impl RunEventPersistence {
     pub(super) fn new(context: &Value, run_id: &RunId) -> Self {
-        let run_dir = context
-            .get("project_root")
-            .and_then(Value::as_str)
-            .and_then(|root| build_run_dir(root, &run_id.0));
+        let run_dir =
+            context.get("project_root").and_then(Value::as_str).and_then(|root| build_run_dir(root, &run_id.0));
         Self { run_dir }
     }
 
@@ -27,10 +25,7 @@ impl RunEventPersistence {
         let line = serde_json::to_string(event)?;
         append_line(&event_path, &line)?;
 
-        if let AgentRunEvent::OutputChunk {
-            stream_type, text, ..
-        } = event
-        {
+        if let AgentRunEvent::OutputChunk { stream_type, text, .. } = event {
             persist_json_output(run_dir, *stream_type, text)?;
         }
 
@@ -50,11 +45,7 @@ fn build_run_dir(project_root: &str, run_id: &str) -> Option<PathBuf> {
 
 fn project_runs_root(project_root: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    Some(
-        home.join(".ao")
-            .join(protocol::repository_scope_for_path(project_root))
-            .join("runs"),
-    )
+    Some(home.join(".ao").join(protocol::repository_scope_for_path(project_root)).join("runs"))
 }
 
 fn persist_json_output(run_dir: &Path, stream_type: OutputStreamType, text: &str) -> Result<()> {
@@ -105,10 +96,7 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{line}")?;
     Ok(())
 }
@@ -152,10 +140,7 @@ mod tests {
         let mut persistence = RunEventPersistence::new(&context, &run_id);
 
         persistence
-            .persist(&AgentRunEvent::Started {
-                run_id: run_id.clone(),
-                timestamp: Timestamp::now(),
-            })
+            .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
             .expect("persist started");
         persistence
             .persist(&AgentRunEvent::OutputChunk {
@@ -165,9 +150,8 @@ mod tests {
             })
             .expect("persist output");
 
-        let run_dir = project_runs_root(&project_root)
-            .expect("project-scoped runtime root should resolve")
-            .join(&run_id.0);
+        let run_dir =
+            project_runs_root(&project_root).expect("project-scoped runtime root should resolve").join(&run_id.0);
         let events_path = run_dir.join("events.jsonl");
         let json_output_path = run_dir.join("json-output.jsonl");
 
@@ -193,11 +177,8 @@ mod tests {
         let project_root = test_root();
         let run_dir = build_run_dir(project_root.to_string_lossy().as_ref(), "run-test-123")
             .expect("run dir should resolve for safe run id");
-        let expected = home
-            .join(".ao")
-            .join(protocol::repository_scope_for_path(&project_root))
-            .join("runs")
-            .join("run-test-123");
+        let expected =
+            home.join(".ao").join(protocol::repository_scope_for_path(&project_root)).join("runs").join("run-test-123");
         assert_eq!(run_dir, expected);
     }
 
@@ -211,15 +192,11 @@ mod tests {
         let mut persistence = RunEventPersistence::new(&context, &run_id);
 
         persistence
-            .persist(&AgentRunEvent::Started {
-                run_id: run_id.clone(),
-                timestamp: Timestamp::now(),
-            })
+            .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
             .expect("persist with unsafe id should no-op");
 
-        let run_dir = project_runs_root(&project_root)
-            .expect("project-scoped runtime root should resolve")
-            .join(&run_id.0);
+        let run_dir =
+            project_runs_root(&project_root).expect("project-scoped runtime root should resolve").join(&run_id.0);
         assert!(!run_dir.exists());
     }
 
@@ -230,10 +207,7 @@ mod tests {
         let _home = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
         let override_dir = home.join("override-config");
-        let _ao_config = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(override_dir.to_string_lossy().as_ref()),
-        );
+        let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(override_dir.to_string_lossy().as_ref()));
 
         let project_root = test_root();
         let run_id = RunId("run-global-scope-123".to_string());
@@ -242,10 +216,7 @@ mod tests {
         });
         let mut persistence = RunEventPersistence::new(&context, &run_id);
         persistence
-            .persist(&AgentRunEvent::Started {
-                run_id: run_id.clone(),
-                timestamp: Timestamp::now(),
-            })
+            .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
             .expect("persist started");
         persistence
             .persist(&AgentRunEvent::OutputChunk {
@@ -255,9 +226,8 @@ mod tests {
             })
             .expect("persist output");
 
-        let canonical_run_dir = project_runs_root(&project_root)
-            .expect("project-scoped runtime root should resolve")
-            .join(&run_id.0);
+        let canonical_run_dir =
+            project_runs_root(&project_root).expect("project-scoped runtime root should resolve").join(&run_id.0);
         let override_run_dir = override_dir.join("runs").join(&run_id.0);
         assert!(canonical_run_dir.join("events.jsonl").exists());
         assert!(canonical_run_dir.join("json-output.jsonl").exists());

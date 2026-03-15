@@ -8,10 +8,7 @@ pub struct OutputFormatter {
 
 impl OutputFormatter {
     pub fn new(json_mode: bool) -> Self {
-        Self {
-            json_mode,
-            text_buffer: String::new(),
-        }
+        Self { json_mode, text_buffer: String::new() }
     }
 
     pub fn text_chunk(&mut self, text: &str) {

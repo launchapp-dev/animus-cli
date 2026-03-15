@@ -1,6 +1,4 @@
-use crate::types::{
-    ComplexityAssessment, ComplexityTier, RequirementRange, TaskDensity, VisionDocument,
-};
+use crate::types::{ComplexityAssessment, ComplexityTier, RequirementRange, TaskDensity, VisionDocument};
 
 fn complexity_keywords_score(text: &str) -> i32 {
     let normalized = text.to_ascii_lowercase();
@@ -111,10 +109,7 @@ fn defaults_for_tier(tier: ComplexityTier) -> (RequirementRange, TaskDensity) {
     (RequirementRange { min, max }, density)
 }
 
-fn clamp_requirement_range_for_tier(
-    tier: ComplexityTier,
-    range: RequirementRange,
-) -> RequirementRange {
+fn clamp_requirement_range_for_tier(tier: ComplexityTier, range: RequirementRange) -> RequirementRange {
     let bounds = defaults_for_tier(tier).0;
     let mut clamped = normalize_requirement_range(range);
     clamped.min = clamped.min.clamp(bounds.min, bounds.max);
@@ -133,19 +128,9 @@ pub(crate) fn infer_complexity_assessment(
 ) -> ComplexityAssessment {
     let mut score = 0i32;
     score += complexity_keywords_score(problem_statement);
-    score += goals
-        .iter()
-        .map(|goal| complexity_keywords_score(goal))
-        .sum::<i32>();
-    score += constraints
-        .iter()
-        .map(|constraint| complexity_keywords_score(constraint))
-        .sum::<i32>();
-    score += target_users
-        .iter()
-        .map(|target| complexity_keywords_score(target))
-        .sum::<i32>()
-        / 2;
+    score += goals.iter().map(|goal| complexity_keywords_score(goal)).sum::<i32>();
+    score += constraints.iter().map(|constraint| complexity_keywords_score(constraint)).sum::<i32>();
+    score += target_users.iter().map(|target| complexity_keywords_score(target)).sum::<i32>() / 2;
     score += (goals.len() as i32).saturating_sub(4);
     score += (constraints.len() as i32).saturating_sub(4);
     if goals.len() >= 8 {
@@ -176,10 +161,7 @@ pub(crate) fn infer_complexity_assessment(
     ComplexityAssessment {
         tier,
         confidence,
-        rationale: Some(
-            "Complexity inferred from vision scope, constraints, and delivery expectations."
-                .to_string(),
-        ),
+        rationale: Some("Complexity inferred from vision scope, constraints, and delivery expectations.".to_string()),
         recommended_requirement_range,
         task_density,
         source: Some("heuristic".to_string()),
@@ -188,12 +170,7 @@ pub(crate) fn infer_complexity_assessment(
 
 pub(crate) fn effective_complexity_assessment(vision: &VisionDocument) -> ComplexityAssessment {
     let mut assessment = vision.complexity_assessment.clone().unwrap_or_else(|| {
-        infer_complexity_assessment(
-            &vision.problem_statement,
-            &vision.target_users,
-            &vision.goals,
-            &vision.constraints,
-        )
+        infer_complexity_assessment(&vision.problem_statement, &vision.target_users, &vision.goals, &vision.constraints)
     });
     assessment.recommended_requirement_range =
         clamp_requirement_range_for_tier(assessment.tier, assessment.recommended_requirement_range);

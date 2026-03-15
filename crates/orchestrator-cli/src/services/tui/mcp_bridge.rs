@@ -35,14 +35,8 @@ impl AoCliMcpBridge {
             .spawn()
             .context("failed to spawn `ao mcp serve`")?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .context("failed to capture stdin for `ao mcp serve`")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("failed to capture stdout for `ao mcp serve`")?;
+        let stdin = child.stdin.take().context("failed to capture stdin for `ao mcp serve`")?;
+        let stdout = child.stdout.take().context("failed to capture stdout for `ao mcp serve`")?;
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
@@ -51,18 +45,13 @@ impl AoCliMcpBridge {
         }
 
         let state = Arc::new(BridgeState::new(stdin, stdout));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .context("failed to bind MCP bridge listener")?;
-        let address = listener
-            .local_addr()
-            .context("failed to read MCP bridge address")?;
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.context("failed to bind MCP bridge listener")?;
+        let address = listener.local_addr().context("failed to read MCP bridge address")?;
         let endpoint = format!("http://{address}/mcp/ao");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let app = Router::new()
-            .route("/mcp/ao", post(handle_bridge_request))
-            .with_state(state);
+        let app = Router::new().route("/mcp/ao", post(handle_bridge_request)).with_state(state);
 
         let server_task = tokio::spawn(async move {
             let server = axum::serve(listener, app).with_graceful_shutdown(async {
@@ -71,12 +60,7 @@ impl AoCliMcpBridge {
             let _ = server.await;
         });
 
-        Ok(Self {
-            endpoint,
-            shutdown_tx: Some(shutdown_tx),
-            server_task: Some(server_task),
-            child: Some(child),
-        })
+        Ok(Self { endpoint, shutdown_tx: Some(shutdown_tx), server_task: Some(server_task), child: Some(child) })
     }
 
     pub(crate) fn endpoint(&self) -> &str {
@@ -117,9 +101,7 @@ struct BridgeState {
 
 impl BridgeState {
     fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
-        Self {
-            io: Mutex::new(BridgeIo::new(stdin, stdout)),
-        }
+        Self { io: Mutex::new(BridgeIo::new(stdin, stdout)) }
     }
 
     async fn forward_request(&self, payload: Value) -> Result<Value> {
@@ -135,34 +117,16 @@ struct BridgeIo {
 
 impl BridgeIo {
     fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
-        Self {
-            stdin,
-            stdout_lines: BufReader::new(stdout).lines(),
-        }
+        Self { stdin, stdout_lines: BufReader::new(stdout).lines() }
     }
 
     async fn forward_request(&mut self, payload: Value) -> Result<Value> {
-        let serialized =
-            serde_json::to_string(&payload).context("failed to serialize MCP request")?;
-        self.stdin
-            .write_all(serialized.as_bytes())
-            .await
-            .context("failed to write request to `ao mcp serve`")?;
-        self.stdin
-            .write_all(b"\n")
-            .await
-            .context("failed to write newline to `ao mcp serve`")?;
-        self.stdin
-            .flush()
-            .await
-            .context("failed to flush `ao mcp serve` stdin")?;
+        let serialized = serde_json::to_string(&payload).context("failed to serialize MCP request")?;
+        self.stdin.write_all(serialized.as_bytes()).await.context("failed to write request to `ao mcp serve`")?;
+        self.stdin.write_all(b"\n").await.context("failed to write newline to `ao mcp serve`")?;
+        self.stdin.flush().await.context("failed to flush `ao mcp serve` stdin")?;
 
-        while let Some(line) = self
-            .stdout_lines
-            .next_line()
-            .await
-            .context("failed to read `ao mcp serve` output")?
-        {
+        while let Some(line) = self.stdout_lines.next_line().await.context("failed to read `ao mcp serve` output")? {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -176,10 +140,7 @@ impl BridgeIo {
     }
 }
 
-async fn handle_bridge_request(
-    State(state): State<Arc<BridgeState>>,
-    Json(payload): Json<Value>,
-) -> Response {
+async fn handle_bridge_request(State(state): State<Arc<BridgeState>>, Json(payload): Json<Value>) -> Response {
     match state.forward_request(payload).await {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => {

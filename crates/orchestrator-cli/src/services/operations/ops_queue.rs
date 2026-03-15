@@ -3,8 +3,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use orchestrator_core::{services::ServiceHub, workflow_ref_for_task, STANDARD_WORKFLOW_REF};
 use orchestrator_daemon_runtime::{
-    enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject,
-    reorder_subjects,
+    enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject, reorder_subjects,
 };
 use protocol::SubjectDispatch;
 
@@ -50,12 +49,8 @@ async fn resolve_enqueue_dispatch(
             input,
             "manual-queue-enqueue",
         )),
-        (None, None, None) => Err(anyhow!(
-            "one of --task-id, --requirement-id, or --title must be provided"
-        )),
-        _ => Err(anyhow!(
-            "--task-id, --requirement-id, and --title are mutually exclusive"
-        )),
+        (None, None, None) => Err(anyhow!("one of --task-id, --requirement-id, or --title must be provided")),
+        _ => Err(anyhow!("--task-id, --requirement-id, and --title are mutually exclusive")),
     }
 }
 
@@ -69,10 +64,7 @@ pub(crate) async fn handle_queue(
         QueueCommand::List => print_value(queue_snapshot(project_root)?, json),
         QueueCommand::Stats => print_value(queue_stats(project_root)?, json),
         QueueCommand::Enqueue(args) => {
-            let input = args
-                .input_json
-                .map(|value| serde_json::from_str(&value))
-                .transpose()?;
+            let input = args.input_json.map(|value| serde_json::from_str(&value)).transpose()?;
             let dispatch = resolve_enqueue_dispatch(
                 hub.clone(),
                 project_root,
@@ -104,10 +96,7 @@ pub(crate) async fn handle_queue(
                 }
                 return Err(anyhow!("queue subject not found or not pending"));
             }
-            print_value(
-                serde_json::json!({ "held": held, "subject_id": args.subject_id }),
-                true,
-            )
+            print_value(serde_json::json!({ "held": held, "subject_id": args.subject_id }), true)
         }
         QueueCommand::Release(args) => {
             let released = release_subject(project_root, &args.subject_id)?;
@@ -118,10 +107,7 @@ pub(crate) async fn handle_queue(
                 }
                 return Err(anyhow!("queue subject not found or not held"));
             }
-            print_value(
-                serde_json::json!({ "released": released, "subject_id": args.subject_id }),
-                true,
-            )
+            print_value(serde_json::json!({ "released": released, "subject_id": args.subject_id }), true)
         }
         QueueCommand::Reorder(args) => {
             let reordered = reorder_subjects(project_root, args.subject_ids.clone())?;
@@ -133,10 +119,7 @@ pub(crate) async fn handle_queue(
                 print_ok("queue order unchanged", false);
                 return Ok(());
             }
-            print_value(
-                serde_json::json!({ "reordered": reordered, "subject_ids": args.subject_ids }),
-                true,
-            )
+            print_value(serde_json::json!({ "reordered": reordered, "subject_ids": args.subject_ids }), true)
         }
     }
 }
@@ -146,10 +129,9 @@ mod tests {
     use std::sync::Arc;
 
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
-        write_workflow_config, InMemoryServiceHub, RequirementItem, RequirementLinks,
-        RequirementPriority, RequirementStatus, WorkflowDefinition,
-        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
+        WorkflowDefinition, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
     };
     use serde_json::json;
 
@@ -168,8 +150,7 @@ mod tests {
             variables: Vec::new(),
         });
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
         let now = chrono::Utc::now();
@@ -210,10 +191,7 @@ mod tests {
         .await
         .expect("dispatch should resolve");
 
-        assert_eq!(
-            dispatch.workflow_ref,
-            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
-        );
+        assert_eq!(dispatch.workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
         assert_eq!(dispatch.input, Some(json!({"scope":"shared-ingress"})));
     }
 }

@@ -26,11 +26,7 @@ pub(crate) enum ProjectCommand {
 pub(crate) struct ProjectCreateArgs {
     #[arg(long, value_name = "NAME", help = "Human-friendly project name.")]
     pub(crate) name: String,
-    #[arg(
-        long,
-        value_name = "PATH",
-        help = "Filesystem path to the project root."
-    )]
+    #[arg(long, value_name = "PATH", help = "Filesystem path to the project root.")]
     pub(crate) path: String,
     #[arg(
         long,

@@ -7,16 +7,8 @@ impl AoMcpServer {
         description = "Check runner process health. Purpose: Verify runner is running and has capacity for agent execution. Prerequisites: None. Example: {}. Sequencing: Use before ao.agent.run to ensure runner is ready, or ao.runner.orphans-detect if issues suspected.",
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
-    async fn ao_runner_health(
-        &self,
-        params: Parameters<ProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
-        self.run_tool(
-            "ao.runner.health",
-            vec!["runner".to_string(), "health".to_string()],
-            params.0.project_root,
-        )
-        .await
+    async fn ao_runner_health(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
+        self.run_tool("ao.runner.health", vec!["runner".to_string(), "health".to_string()], params.0.project_root).await
     }
 
     #[tool(
@@ -24,17 +16,10 @@ impl AoMcpServer {
         description = "Detect orphaned runner processes. Purpose: Find runner processes that are no longer managed by the daemon. Prerequisites: None. Example: {}. Sequencing: Use if agents aren't starting or ao.runner.health shows issues, then ao.runner.orphans-cleanup to fix.",
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
-    async fn ao_runner_orphans_detect(
-        &self,
-        params: Parameters<ProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_runner_orphans_detect(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.runner.orphans-detect",
-            vec![
-                "runner".to_string(),
-                "orphans".to_string(),
-                "detect".to_string(),
-            ],
+            vec!["runner".to_string(), "orphans".to_string(), "detect".to_string()],
             params.0.project_root,
         )
         .await
@@ -45,10 +30,7 @@ impl AoMcpServer {
         description = "Get runner restart statistics. Purpose: View runner uptime and restart history for reliability analysis. Prerequisites: None. Example: {}. Sequencing: Use if investigating stability issues, or after ao.runner.health shows problems.",
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
-    async fn ao_runner_restart_stats(
-        &self,
-        params: Parameters<ProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_runner_restart_stats(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
         self.run_tool(
             "ao.runner.restart-stats",
             vec!["runner".to_string(), "restart-stats".to_string()],

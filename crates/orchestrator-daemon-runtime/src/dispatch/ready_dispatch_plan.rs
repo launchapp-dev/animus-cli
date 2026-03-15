@@ -181,9 +181,6 @@ mod tests {
         let plan = plan_ready_dispatch(&[queued], &[fallback], &[]);
 
         assert_eq!(plan.ordered_starts.len(), 1);
-        assert_eq!(
-            plan.ordered_starts[0].selection_source,
-            DispatchSelectionSource::DispatchQueue
-        );
+        assert_eq!(plan.ordered_starts[0].selection_source, DispatchSelectionSource::DispatchQueue);
     }
 }

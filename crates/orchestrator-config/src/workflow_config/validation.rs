@@ -16,9 +16,7 @@ fn validate_cron_expression(expression: &str) -> Result<()> {
         .seconds(croner::parser::Seconds::Disallowed)
         .year(croner::parser::Year::Disallowed)
         .build();
-    parser
-        .parse(expression)
-        .map_err(|error| anyhow::anyhow!("invalid cron expression '{}': {}", expression, error))?;
+    parser.parse(expression).map_err(|error| anyhow::anyhow!("invalid cron expression '{}': {}", expression, error))?;
     Ok(())
 }
 
@@ -26,10 +24,7 @@ fn is_supported_shortcut_cron(expression: &str) -> bool {
     matches!(expression, "@hourly" | "@daily" | "@weekly" | "@monthly")
 }
 
-pub fn validate_workflow_and_runtime_configs(
-    workflow: &WorkflowConfig,
-    runtime: &AgentRuntimeConfig,
-) -> Result<()> {
+pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime: &AgentRuntimeConfig) -> Result<()> {
     validate_workflow_config(workflow)?;
 
     let mut errors = Vec::new();
@@ -45,21 +40,12 @@ pub fn validate_workflow_and_runtime_configs(
                 continue;
             }
 
-            if workflow
-                .phase_catalog
-                .keys()
-                .all(|candidate| !candidate.eq_ignore_ascii_case(phase_id))
-            {
-                errors.push(format!(
-                    "workflow '{}' phase '{}' is missing from phase_catalog",
-                    workflow_def.id, phase_id
-                ));
+            if workflow.phase_catalog.keys().all(|candidate| !candidate.eq_ignore_ascii_case(phase_id)) {
+                errors
+                    .push(format!("workflow '{}' phase '{}' is missing from phase_catalog", workflow_def.id, phase_id));
             }
 
-            let in_workflow = workflow
-                .phase_definitions
-                .keys()
-                .any(|k| k.eq_ignore_ascii_case(phase_id));
+            let in_workflow = workflow.phase_definitions.keys().any(|k| k.eq_ignore_ascii_case(phase_id));
             if !in_workflow && !runtime.has_phase_definition(phase_id) {
                 errors.push(format!(
                     "workflow '{}' phase '{}' is missing from agent-runtime phases and workflow phase_definitions",
@@ -80,17 +66,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
     let mut errors = Vec::new();
 
     if config.schema.trim() != WORKFLOW_CONFIG_SCHEMA_ID {
-        errors.push(format!(
-            "schema must be '{}' (got '{}')",
-            WORKFLOW_CONFIG_SCHEMA_ID, config.schema
-        ));
+        errors.push(format!("schema must be '{}' (got '{}')", WORKFLOW_CONFIG_SCHEMA_ID, config.schema));
     }
 
     if config.version != WORKFLOW_CONFIG_VERSION {
-        errors.push(format!(
-            "version must be {} (got {})",
-            WORKFLOW_CONFIG_VERSION, config.version
-        ));
+        errors.push(format!("version must be {} (got {})", WORKFLOW_CONFIG_VERSION, config.version));
     }
 
     if config.default_workflow_ref.trim().is_empty() {
@@ -98,8 +78,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
     }
 
     if config.checkpoint_retention.keep_last_per_phase == 0 {
-        errors
-            .push("checkpoint_retention.keep_last_per_phase must be greater than zero".to_string());
+        errors.push("checkpoint_retention.keep_last_per_phase must be greater than zero".to_string());
     }
 
     if config.phase_catalog.is_empty() {
@@ -113,17 +92,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         }
 
         if definition.label.trim().is_empty() {
-            errors.push(format!(
-                "phase_catalog['{}'].label must not be empty",
-                phase_id
-            ));
+            errors.push(format!("phase_catalog['{}'].label must not be empty", phase_id));
         }
 
         if definition.tags.iter().any(|tag| tag.trim().is_empty()) {
-            errors.push(format!(
-                "phase_catalog['{}'].tags must not contain empty values",
-                phase_id
-            ));
+            errors.push(format!("phase_catalog['{}'].tags must not contain empty values", phase_id));
         }
     }
 
@@ -146,17 +119,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         }
 
         if workflow.name.trim().is_empty() {
-            errors.push(format!(
-                "workflow '{}' name must not be empty",
-                workflow_ref
-            ));
+            errors.push(format!("workflow '{}' name must not be empty", workflow_ref));
         }
 
         if workflow.phases.is_empty() {
-            errors.push(format!(
-                "workflow '{}' must include at least one phase",
-                workflow_ref
-            ));
+            errors.push(format!("workflow '{}' must include at least one phase", workflow_ref));
             continue;
         }
 
@@ -170,33 +137,19 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                     ));
                     continue;
                 }
-                if !config
-                    .workflows
-                    .iter()
-                    .any(|p| p.id.eq_ignore_ascii_case(ref_id))
-                {
-                    errors.push(format!(
-                        "workflow '{}' references unknown sub-workflow '{}'",
-                        workflow_ref, ref_id
-                    ));
+                if !config.workflows.iter().any(|p| p.id.eq_ignore_ascii_case(ref_id)) {
+                    errors.push(format!("workflow '{}' references unknown sub-workflow '{}'", workflow_ref, ref_id));
                 }
                 continue;
             }
 
             let phase_id = entry.phase_id().trim();
             if phase_id.is_empty() {
-                errors.push(format!(
-                    "workflow '{}' contains an empty phase id",
-                    workflow_ref
-                ));
+                errors.push(format!("workflow '{}' contains an empty phase id", workflow_ref));
                 continue;
             }
 
-            if config
-                .phase_catalog
-                .keys()
-                .all(|candidate| !candidate.eq_ignore_ascii_case(phase_id))
-            {
+            if config.phase_catalog.keys().all(|candidate| !candidate.eq_ignore_ascii_case(phase_id)) {
                 errors.push(format!(
                     "workflow '{}' references unknown phase '{}'; add it to phase_catalog",
                     workflow_ref, phase_id
@@ -214,10 +167,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                 }
 
                 if !merge_strategy_is_valid(&merge.strategy) {
-                    errors.push(format!(
-                        "workflow '{}' post_success.merge.strategy is not supported",
-                        workflow_ref
-                    ));
+                    errors.push(format!("workflow '{}' post_success.merge.strategy is not supported", workflow_ref));
                 }
             }
         }
@@ -225,17 +175,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         match expand_workflow_phases(&config.workflows, workflow_ref) {
             Ok(expanded) => {
                 if expanded.is_empty() {
-                    errors.push(format!(
-                        "workflow '{}' expands to zero phases",
-                        workflow_ref
-                    ));
+                    errors.push(format!("workflow '{}' expands to zero phases", workflow_ref));
                 }
 
-                let expanded_phase_ids: Vec<String> = expanded
-                    .iter()
-                    .map(|e| e.phase_id().trim().to_owned())
-                    .filter(|id| !id.is_empty())
-                    .collect();
+                let expanded_phase_ids: Vec<String> =
+                    expanded.iter().map(|e| e.phase_id().trim().to_owned()).filter(|id| !id.is_empty()).collect();
 
                 for entry in &expanded {
                     let phase_id = entry.phase_id().trim();
@@ -258,10 +202,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                                 ));
                                 continue;
                             }
-                            if !expanded_phase_ids
-                                .iter()
-                                .any(|id| id.eq_ignore_ascii_case(target))
-                            {
+                            if !expanded_phase_ids.iter().any(|id| id.eq_ignore_ascii_case(target)) {
                                 errors.push(format!(
                                     "workflow '{}' phase '{}' on_verdict '{}' targets unknown phase '{}'",
                                     workflow_ref, phase_id, verdict_key, target
@@ -272,19 +213,12 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                 }
             }
             Err(e) => {
-                errors.push(format!(
-                    "workflow '{}' sub-workflow expansion failed: {}",
-                    workflow_ref, e
-                ));
+                errors.push(format!("workflow '{}' sub-workflow expansion failed: {}", workflow_ref, e));
             }
         }
     }
 
-    if config.workflows.iter().all(|workflow| {
-        !workflow
-            .id
-            .eq_ignore_ascii_case(config.default_workflow_ref.as_str())
-    }) {
+    if config.workflows.iter().all(|workflow| !workflow.id.eq_ignore_ascii_case(config.default_workflow_ref.as_str())) {
         errors.push(format!(
             "default_workflow_ref '{}' must reference an existing workflow",
             config.default_workflow_ref
@@ -299,17 +233,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         match definition.mode {
             PhaseExecutionMode::Command => {
                 let Some(command) = definition.command.as_ref() else {
-                    errors.push(format!(
-                        "phase_definitions['{}'] mode 'command' requires command block",
-                        phase_id
-                    ));
+                    errors.push(format!("phase_definitions['{}'] mode 'command' requires command block", phase_id));
                     continue;
                 };
                 if command.program.trim().is_empty() {
-                    errors.push(format!(
-                        "phase_definitions['{}'].command.program must not be empty",
-                        phase_id
-                    ));
+                    errors.push(format!("phase_definitions['{}'].command.program must not be empty", phase_id));
                 }
                 if command.success_exit_codes.is_empty() {
                     errors.push(format!(
@@ -318,10 +246,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
                     ));
                 }
                 if !config.tools_allowlist.is_empty()
-                    && !config
-                        .tools_allowlist
-                        .iter()
-                        .any(|t| t.eq_ignore_ascii_case(&command.program))
+                    && !config.tools_allowlist.iter().any(|t| t.eq_ignore_ascii_case(&command.program))
                 {
                     errors.push(format!(
                         "phase_definitions['{}'].command.program '{}' is not in tools_allowlist",
@@ -337,17 +262,11 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             }
             PhaseExecutionMode::Manual => {
                 let Some(manual) = definition.manual.as_ref() else {
-                    errors.push(format!(
-                        "phase_definitions['{}'] mode 'manual' requires manual block",
-                        phase_id
-                    ));
+                    errors.push(format!("phase_definitions['{}'] mode 'manual' requires manual block", phase_id));
                     continue;
                 };
                 if manual.instructions.trim().is_empty() {
-                    errors.push(format!(
-                        "phase_definitions['{}'].manual.instructions must not be empty",
-                        phase_id
-                    ));
+                    errors.push(format!("phase_definitions['{}'].manual.instructions must not be empty", phase_id));
                 }
                 if let Some(timeout_secs) = manual.timeout_secs {
                     if timeout_secs == 0 {
@@ -367,9 +286,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             PhaseExecutionMode::Agent => {
                 if definition.agent_id.is_some() {
                     if let Some(agent_id) = definition.agent_id.as_deref() {
-                        if !agent_id.trim().is_empty()
-                            && !config.agent_profiles.contains_key(agent_id)
-                        {
+                        if !agent_id.trim().is_empty() && !config.agent_profiles.contains_key(agent_id) {
                             errors.push(format!(
                                 "phase_definitions['{}'] references agent '{}' not found in agent_profiles (will check runtime config at execution time)",
                                 phase_id, agent_id
@@ -390,46 +307,23 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             errors.push(format!("mcp_servers['{}'].command must not be empty", name));
         }
         if definition.args.iter().any(|arg| arg.trim().is_empty()) {
-            errors.push(format!(
-                "mcp_servers['{}'].args must not contain empty values",
-                name
-            ));
+            errors.push(format!("mcp_servers['{}'].args must not contain empty values", name));
         }
         if definition.tools.iter().any(|tool| tool.trim().is_empty()) {
-            errors.push(format!(
-                "mcp_servers['{}'].tools must not contain empty values",
-                name
-            ));
+            errors.push(format!("mcp_servers['{}'].tools must not contain empty values", name));
         }
-        if definition
-            .transport
-            .as_deref()
-            .is_some_and(|transport| transport.trim().is_empty())
-        {
-            errors.push(format!(
-                "mcp_servers['{}'].transport must not be empty when set",
-                name
-            ));
+        if definition.transport.as_deref().is_some_and(|transport| transport.trim().is_empty()) {
+            errors.push(format!("mcp_servers['{}'].transport must not be empty when set", name));
         }
-        if definition
-            .env
-            .iter()
-            .any(|(key, value)| key.trim().is_empty() || value.trim().is_empty())
-        {
-            errors.push(format!(
-                "mcp_servers['{}'].env must not contain empty keys or values",
-                name
-            ));
+        if definition.env.iter().any(|(key, value)| key.trim().is_empty() || value.trim().is_empty()) {
+            errors.push(format!("mcp_servers['{}'].env must not contain empty keys or values", name));
         }
     }
 
     for (agent_id, profile) in &config.agent_profiles {
         for server in &profile.mcp_servers {
             if server.trim().is_empty() {
-                errors.push(format!(
-                    "agent_profiles['{}'].mcp_servers must not contain empty values",
-                    agent_id
-                ));
+                errors.push(format!("agent_profiles['{}'].mcp_servers must not contain empty values", agent_id));
                 continue;
             }
             if !config.mcp_servers.contains_key(server) {
@@ -450,16 +344,10 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             errors.push(format!("tools['{}'].executable must not be empty", name));
         }
         if definition.base_args.iter().any(|arg| arg.trim().is_empty()) {
-            errors.push(format!(
-                "tools['{}'].base_args must not contain empty values",
-                name
-            ));
+            errors.push(format!("tools['{}'].base_args must not contain empty values", name));
         }
         if definition.context_window.is_some_and(|value| value == 0) {
-            errors.push(format!(
-                "tools['{}'].context_window must be greater than 0 when set",
-                name
-            ));
+            errors.push(format!("tools['{}'].context_window must be greater than 0 when set", name));
         }
     }
 
@@ -475,9 +363,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             }
             if let Some(base_branch) = git.base_branch.as_deref() {
                 if base_branch.trim().is_empty() {
-                    errors.push(
-                        "integrations.git.base_branch must not be empty when set".to_string(),
-                    );
+                    errors.push("integrations.git.base_branch must not be empty when set".to_string());
                 }
             }
         }
@@ -498,59 +384,31 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         }
 
         if schedule.cron.trim().is_empty() {
-            errors.push(format!(
-                "schedules['{}'].cron must not be empty",
-                schedule_id
-            ));
+            errors.push(format!("schedules['{}'].cron must not be empty", schedule_id));
         }
         if schedule.workflow_ref.is_none() {
-            errors.push(format!(
-                "schedules['{}'] must define workflow_ref",
-                schedule_id
-            ));
+            errors.push(format!("schedules['{}'] must define workflow_ref", schedule_id));
         }
         if let Some(workflow_ref) = schedule.workflow_ref.as_deref() {
             if workflow_ref.trim().is_empty() {
-                errors.push(format!(
-                    "schedules['{}'].workflow_ref must not be empty",
-                    schedule_id
-                ));
-            } else if !config
-                .workflows
-                .iter()
-                .any(|workflow| workflow.id.eq_ignore_ascii_case(workflow_ref))
-            {
-                errors.push(format!(
-                    "schedules['{}'].workflow_ref '{}' does not exist",
-                    schedule_id, workflow_ref
-                ));
+                errors.push(format!("schedules['{}'].workflow_ref must not be empty", schedule_id));
+            } else if !config.workflows.iter().any(|workflow| workflow.id.eq_ignore_ascii_case(workflow_ref)) {
+                errors.push(format!("schedules['{}'].workflow_ref '{}' does not exist", schedule_id, workflow_ref));
             }
         }
         if let Some(command) = schedule.command.as_deref() {
             if command.trim().is_empty() {
-                errors.push(format!(
-                    "schedules['{}'].command must not be empty",
-                    schedule_id
-                ));
+                errors.push(format!("schedules['{}'].command must not be empty", schedule_id));
             } else {
-                errors.push(format!(
-                    "schedules['{}'].command is no longer supported; use workflow_ref",
-                    schedule_id
-                ));
+                errors.push(format!("schedules['{}'].command is no longer supported; use workflow_ref", schedule_id));
             }
         }
         if let Err(error) = validate_cron_expression(schedule.cron.as_str()) {
-            errors.push(format!(
-                "schedules['{}'].cron is not valid: {}",
-                schedule_id, error
-            ));
+            errors.push(format!("schedules['{}'].cron is not valid: {}", schedule_id, error));
         } else if schedule.cron.trim().starts_with('@') {
             let shortcut = schedule.cron.trim().to_ascii_lowercase();
             if !is_supported_shortcut_cron(shortcut.as_str()) {
-                errors.push(format!(
-                    "schedules['{}'].cron shortcut '{}' is not supported",
-                    schedule_id, schedule.cron
-                ));
+                errors.push(format!("schedules['{}'].cron shortcut '{}' is not supported", schedule_id, schedule.cron));
             }
         }
     }
@@ -562,11 +420,7 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         if daemon.pool_size == Some(0) {
             errors.push("daemon.pool_size must be greater than zero when set".to_string());
         }
-        if daemon
-            .active_hours
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
+        if daemon.active_hours.as_deref().is_some_and(|value| value.trim().is_empty()) {
             errors.push("daemon.active_hours must not be empty when set".to_string());
         }
     }

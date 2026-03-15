@@ -3,14 +3,13 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
 use protocol::{
-    AgentControlRequest, AgentControlResponse, AgentStatusErrorCode, AgentStatusQueryResponse,
-    AgentStatusRequest, AgentStatusResponse, RunId, RunnerStatusResponse,
+    AgentControlRequest, AgentControlResponse, AgentStatusErrorCode, AgentStatusQueryResponse, AgentStatusRequest,
+    AgentStatusResponse, RunId, RunnerStatusResponse,
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{
-    internal_error, not_found_error, print_value, read_agent_status, write_json_line,
-    AgentControlArgs, AgentStatusArgs,
+    internal_error, not_found_error, print_value, read_agent_status, write_json_line, AgentControlArgs, AgentStatusArgs,
 };
 
 use super::connection::connect_runner_for_agent_command;
@@ -30,10 +29,7 @@ pub(super) async fn handle_agent_control(
     let stream = connect_runner_for_agent_command(&hub, project_root, args.start_runner).await?;
     let (read_half, mut write_half) = tokio::io::split(stream);
 
-    let request = AgentControlRequest {
-        run_id: RunId(args.run_id),
-        action: args.action.into(),
-    };
+    let request = AgentControlRequest { run_id: RunId(args.run_id), action: args.action.into() };
     write_json_line(&mut write_half, &request).await?;
 
     let mut lines = BufReader::new(read_half).lines();
@@ -47,12 +43,7 @@ pub(super) async fn handle_agent_control(
             if response.success {
                 return print_value(response, json);
             }
-            return Err(anyhow!(
-                "{}",
-                response
-                    .message
-                    .unwrap_or_else(|| "agent control request failed".to_string())
-            ));
+            return Err(anyhow!("{}", response.message.unwrap_or_else(|| "agent control request failed".to_string())));
         }
 
         if serde_json::from_str::<RunnerStatusResponse>(line).is_ok() {
@@ -71,8 +62,7 @@ pub(super) async fn handle_agent_status(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    match query_agent_status_from_runner(&hub, project_root, &args.run_id, args.start_runner).await
-    {
+    match query_agent_status_from_runner(&hub, project_root, &args.run_id, args.start_runner).await {
         Ok(AgentStatusLookup::Found(status)) => print_value(status, json),
         Ok(AgentStatusLookup::NotFound { message }) => Err(not_found_error(message)),
         Err(_) => {
@@ -91,9 +81,7 @@ async fn query_agent_status_from_runner(
     let stream = connect_runner_for_agent_command(hub, project_root, start_runner).await?;
     let (read_half, mut write_half) = tokio::io::split(stream);
 
-    let request = AgentStatusRequest {
-        run_id: RunId(run_id.to_string()),
-    };
+    let request = AgentStatusRequest { run_id: RunId(run_id.to_string()) };
     write_json_line(&mut write_half, &request).await?;
 
     let mut lines = BufReader::new(read_half).lines();
@@ -116,9 +104,7 @@ fn parse_agent_status_query_line(line: &str) -> Option<AgentStatusLookup> {
         return match response {
             AgentStatusQueryResponse::Status(status) => Some(AgentStatusLookup::Found(status)),
             AgentStatusQueryResponse::Error(error) => match error.code {
-                AgentStatusErrorCode::NotFound => Some(AgentStatusLookup::NotFound {
-                    message: error.message,
-                }),
+                AgentStatusErrorCode::NotFound => Some(AgentStatusLookup::NotFound { message: error.message }),
             },
         };
     }

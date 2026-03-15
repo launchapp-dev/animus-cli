@@ -30,15 +30,10 @@ pub async fn connect(config: &McpServerConfig) -> Result<McpClient> {
 
     let transport = TokioChildProcess::new(cmd).context("failed to spawn MCP server process")?;
 
-    let service: RunningService<RoleClient, ()> = ()
-        .serve(transport)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to initialize MCP session: {}", e))?;
+    let service: RunningService<RoleClient, ()> =
+        ().serve(transport).await.map_err(|e| anyhow::anyhow!("failed to initialize MCP session: {}", e))?;
 
-    Ok(McpClient {
-        service,
-        tool_names: Vec::new(),
-    })
+    Ok(McpClient { service, tool_names: Vec::new() })
 }
 
 pub async fn connect_all(configs: &[McpServerConfig]) -> Result<Vec<McpClient>> {
@@ -50,12 +45,8 @@ pub async fn connect_all(configs: &[McpServerConfig]) -> Result<Vec<McpClient>> 
 }
 
 pub async fn fetch_tool_definitions(client: &mut McpClient) -> Result<Vec<ToolDefinition>> {
-    let tools = client
-        .service
-        .peer()
-        .list_all_tools()
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to list MCP tools: {}", e))?;
+    let tools =
+        client.service.peer().list_all_tools().await.map_err(|e| anyhow::anyhow!("failed to list MCP tools: {}", e))?;
 
     let mut defs = Vec::new();
     for tool in &tools {
@@ -88,9 +79,7 @@ fn mcp_tool_to_openai(tool: &rmcp::model::Tool) -> ToolDefinition {
 }
 
 pub fn find_client_for_tool<'a>(clients: &'a [McpClient], name: &str) -> Option<&'a McpClient> {
-    clients
-        .iter()
-        .find(|c| c.tool_names.iter().any(|n| n == name))
+    clients.iter().find(|c| c.tool_names.iter().any(|n| n == name))
 }
 
 pub async fn call_tool(client: &McpClient, name: &str, args_json: &str) -> Result<String> {

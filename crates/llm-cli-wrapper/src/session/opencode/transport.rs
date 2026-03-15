@@ -10,9 +10,7 @@ use uuid::Uuid;
 
 use crate::cli::{ensure_flag_value, parse_launch_from_runtime_contract, LaunchInvocation};
 use crate::error::{Error, Result};
-use crate::session::{
-    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
-};
+use crate::session::{session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun};
 
 use super::parser::parse_opencode_json_line;
 
@@ -35,18 +33,9 @@ pub(crate) async fn start_opencode_session(
             })
             .await;
 
-        if let Err(error) =
-            run_opencode_session(request, invocation, event_tx.clone(), cancel_rx).await
-        {
-            let _ = event_tx
-                .send(SessionEvent::Error {
-                    message: error.to_string(),
-                    recoverable: false,
-                })
-                .await;
-            let _ = event_tx
-                .send(SessionEvent::Finished { exit_code: Some(1) })
-                .await;
+        if let Err(error) = run_opencode_session(request, invocation, event_tx.clone(), cancel_rx).await {
+            let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
+            let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
         unregister_session(&control_session_id);
     });
@@ -74,17 +63,12 @@ pub(crate) fn opencode_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) =
-        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
-    {
+    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
         return Ok(invocation);
     }
 
     let mut args = vec!["run".to_string()];
-    if let Some(session_id) = resume_session_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(session_id) = resume_session_id.map(str::trim).filter(|value| !value.is_empty()) {
         args.push("--session".to_string());
         args.push(session_id.to_string());
     }
@@ -96,11 +80,7 @@ pub(crate) fn opencode_invocation_for_request(
     args.push("json".to_string());
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation {
-        command: "opencode".to_string(),
-        args,
-        prompt_via_stdin: false,
-    };
+    let mut invocation = LaunchInvocation { command: "opencode".to_string(), args, prompt_via_stdin: false };
     ensure_flag_value(&mut invocation.args, "--format", "json", 1);
     Ok(invocation)
 }
@@ -131,14 +111,10 @@ async fn run_opencode_session(
         drop(stdin);
     }
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture opencode stdout".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture opencode stderr".to_string()))?;
+    let stdout =
+        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture opencode stdout".to_string()))?;
+    let stderr =
+        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture opencode stderr".to_string()))?;
 
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
@@ -161,17 +137,11 @@ async fn run_opencode_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx
-                .send(SessionEvent::Error {
-                    message: line,
-                    recoverable: true,
-                })
-                .await;
+            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
         }
     });
 
-    let exit_code =
-        wait_for_child(&mut child, request.timeout_secs, &mut cancel_rx, "opencode").await?;
+    let exit_code = wait_for_child(&mut child, request.timeout_secs, &mut cancel_rx, "opencode").await?;
     let _ = stdout_task.await;
     let _ = stderr_task.await;
     let _ = event_tx.send(SessionEvent::Finished { exit_code }).await;
@@ -230,8 +200,5 @@ fn unregister_session(session_id: &str) {
 }
 
 fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
-    session_registry()
-        .lock()
-        .ok()
-        .and_then(|mut registry| registry.remove(session_id))
+    session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
 }

@@ -6,17 +6,16 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
-    evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub,
-    TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions,
-    TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub, TaskCreateInput, TaskFilter,
+    TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskStatus, TaskType, TaskUpdateInput,
+    DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 
 use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 use crate::{
-    ensure_destructive_confirmation, invalid_input_error, not_found_error, parse_dependency_type,
-    parse_input_json_or, parse_priority_opt, parse_risk_opt, parse_task_status,
-    parse_task_type_opt, print_value, TaskCommand,
+    ensure_destructive_confirmation, invalid_input_error, not_found_error, parse_dependency_type, parse_input_json_or,
+    parse_priority_opt, parse_risk_opt, parse_task_status, parse_task_type_opt, print_value, TaskCommand,
 };
 
 #[derive(Debug, Serialize)]
@@ -38,10 +37,7 @@ fn paginate<T>(items: Vec<T>, offset: usize, limit: Option<usize>) -> Vec<T> {
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    std::env::var(key).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
 }
 
 fn git_local_config_value(project_root: &Path, key: &str) -> Option<String> {
@@ -107,15 +103,11 @@ fn classify_task_service_error(e: anyhow::Error) -> anyhow::Error {
 }
 
 fn has_non_empty_linked_requirements(input: &TaskCreateInput) -> bool {
-    input
-        .linked_requirements
-        .iter()
-        .any(|requirement| !requirement.trim().is_empty())
+    input.linked_requirements.iter().any(|requirement| !requirement.trim().is_empty())
 }
 
 fn should_warn_missing_linked_requirements(input: &TaskCreateInput) -> bool {
-    input.task_type.unwrap_or(TaskType::Feature) != TaskType::Chore
-        && !has_non_empty_linked_requirements(input)
+    input.task_type.unwrap_or(TaskType::Feature) != TaskType::Chore && !has_non_empty_linked_requirements(input)
 }
 
 pub(crate) async fn handle_task(
@@ -139,11 +131,7 @@ pub(crate) async fn handle_task(
                 priority: parse_priority_opt(args.priority.as_deref())?,
                 risk: parse_risk_opt(args.risk.as_deref())?,
                 assignee_type: args.assignee_type,
-                tags: if args.tag.is_empty() {
-                    None
-                } else {
-                    Some(args.tag)
-                },
+                tags: if args.tag.is_empty() { None } else { Some(args.tag) },
                 linked_requirement: args.linked_requirement,
                 linked_architecture_entity: args.linked_architecture_entity,
                 search_text: args.search,
@@ -159,11 +147,7 @@ pub(crate) async fn handle_task(
                 || filter.linked_architecture_entity.is_some()
                 || filter.search_text.is_some();
 
-            let result = if has_filter {
-                tasks.list_filtered(filter).await?
-            } else {
-                tasks.list().await?
-            };
+            let result = if has_filter { tasks.list_filtered(filter).await? } else { tasks.list().await? };
             print_value(paginate(result, offset, limit), json)
         }
         TaskCommand::Prioritized(args) => {
@@ -185,8 +169,7 @@ pub(crate) async fn handle_task(
                     search_text: args.search,
                     ..Default::default()
                 };
-                result
-                    .retain(|task| orchestrator_core::services::task_matches_filter(task, &filter));
+                result.retain(|task| orchestrator_core::services::task_matches_filter(task, &filter));
             }
             print_value(paginate(result, args.offset, args.limit), json)
         }
@@ -194,24 +177,12 @@ pub(crate) async fn handle_task(
         TaskCommand::Stats(args) => {
             let task_list = tasks.list().await?;
             let stats = tasks.statistics().await?;
-            let stale_in_progress =
-                stale_in_progress_summary(&task_list, args.stale_threshold_hours, Utc::now());
-            let priority_policy =
-                evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
-            print_value(
-                TaskStatsOutput {
-                    stats,
-                    stale_in_progress,
-                    priority_policy,
-                },
-                json,
-            )
+            let stale_in_progress = stale_in_progress_summary(&task_list, args.stale_threshold_hours, Utc::now());
+            let priority_policy = evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
+            print_value(TaskStatsOutput { stats, stale_in_progress, priority_policy }, json)
         }
         TaskCommand::Get(args) => {
-            let task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             print_value(task, json)
         }
         TaskCommand::Create(args) => {
@@ -258,10 +229,7 @@ pub(crate) async fn handle_task(
             print_value(tasks.update(&args.id, input).await?, json)
         }
         TaskCommand::Delete(args) => {
-            let task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             if args.dry_run {
                 let task_id = task.id.clone();
                 let task_title = task.title.clone();
@@ -298,12 +266,7 @@ pub(crate) async fn handle_task(
                 );
             }
 
-            ensure_destructive_confirmation(
-                args.confirm.as_deref(),
-                &args.id,
-                "task delete",
-                "--id",
-            )?;
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "task delete", "--id")?;
             tasks.delete(&args.id).await?;
             print_value(
                 serde_json::json!({
@@ -315,57 +278,31 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::Assign(args) => {
-            let is_agent =
-                args.assignee_type.as_deref() == Some("agent") || args.agent_role.is_some();
+            let is_agent = args.assignee_type.as_deref() == Some("agent") || args.agent_role.is_some();
             if is_agent {
                 let role = args.agent_role.unwrap_or(args.assignee);
-                print_value(
-                    tasks
-                        .assign_agent(&args.id, role, args.model, args.updated_by)
-                        .await?,
-                    json,
-                )
+                print_value(tasks.assign_agent(&args.id, role, args.model, args.updated_by).await?, json)
             } else {
-                print_value(
-                    tasks
-                        .assign_human(&args.id, args.assignee, args.updated_by)
-                        .await?,
-                    json,
-                )
+                print_value(tasks.assign_human(&args.id, args.assignee, args.updated_by).await?, json)
             }
         }
-        TaskCommand::ChecklistAdd(args) => print_value(
-            tasks
-                .add_checklist_item(&args.id, args.description, args.updated_by)
-                .await?,
-            json,
-        ),
+        TaskCommand::ChecklistAdd(args) => {
+            print_value(tasks.add_checklist_item(&args.id, args.description, args.updated_by).await?, json)
+        }
         TaskCommand::ChecklistUpdate(args) => print_value(
-            tasks
-                .update_checklist_item(&args.id, &args.item_id, args.completed, args.updated_by)
-                .await?,
+            tasks.update_checklist_item(&args.id, &args.item_id, args.completed, args.updated_by).await?,
             json,
         ),
         TaskCommand::DependencyAdd(args) => {
             let dependency_type = parse_dependency_type(&args.dependency_type)?;
             print_value(
-                tasks
-                    .add_dependency(
-                        &args.id,
-                        &args.dependency_id,
-                        dependency_type,
-                        args.updated_by,
-                    )
-                    .await?,
+                tasks.add_dependency(&args.id, &args.dependency_id, dependency_type, args.updated_by).await?,
                 json,
             )
         }
-        TaskCommand::DependencyRemove(args) => print_value(
-            tasks
-                .remove_dependency(&args.id, &args.dependency_id, args.updated_by)
-                .await?,
-            json,
-        ),
+        TaskCommand::DependencyRemove(args) => {
+            print_value(tasks.remove_dependency(&args.id, &args.dependency_id, args.updated_by).await?, json)
+        }
         TaskCommand::Status(args) => {
             let status = parse_task_status(&args.status)?;
             print_value(
@@ -381,17 +318,11 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::History(args) => {
-            let task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             print_value(&task.dispatch_history, json)
         }
         TaskCommand::Pause(args) => {
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             if task.paused {
                 return print_value(
                     serde_json::json!({
@@ -414,10 +345,7 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::Resume(args) => {
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             if !task.paused {
                 return print_value(
                     serde_json::json!({
@@ -440,10 +368,7 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::Cancel(args) => {
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             if task.cancelled {
                 return print_value(
                     serde_json::json!({
@@ -476,12 +401,7 @@ pub(crate) async fn handle_task(
                     json,
                 );
             }
-            ensure_destructive_confirmation(
-                args.confirm.as_deref(),
-                &args.id,
-                "task cancel",
-                "--id",
-            )?;
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "task cancel", "--id")?;
             task.cancelled = true;
             task.status = TaskStatus::Cancelled;
             task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
@@ -495,10 +415,7 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::Reopen(args) => {
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             if !task.status.is_terminal() {
                 return print_value(
                     serde_json::json!({
@@ -510,12 +427,7 @@ pub(crate) async fn handle_task(
                     json,
                 );
             }
-            ensure_destructive_confirmation(
-                args.confirm.as_deref(),
-                &args.id,
-                "task reopen",
-                "--id",
-            )?;
+            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "task reopen", "--id")?;
             // Reopen bypasses terminal state validation by using validate: false
             // and explicitly setting status to Backlog
             task.status = TaskStatus::Backlog;
@@ -532,12 +444,9 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::SetPriority(args) => {
-            let priority = parse_priority_opt(Some(args.priority.as_str()))?
-                .ok_or_else(|| anyhow!("priority is required"))?;
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let priority =
+                parse_priority_opt(Some(args.priority.as_str()))?.ok_or_else(|| anyhow!("priority is required"))?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             task.priority = priority;
             task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
             tasks.replace(task).await?;
@@ -550,10 +459,7 @@ pub(crate) async fn handle_task(
             )
         }
         TaskCommand::SetDeadline(args) => {
-            let mut task = tasks
-                .get(&args.id)
-                .await
-                .map_err(classify_task_service_error)?;
+            let mut task = tasks.get(&args.id).await.map_err(classify_task_service_error)?;
             let normalized = args
                 .deadline
                 .as_deref()
@@ -621,10 +527,8 @@ pub(crate) async fn handle_task(
                 )));
             }
 
-            let mut tasks_by_id: HashMap<String, orchestrator_core::OrchestratorTask> = all_tasks
-                .into_iter()
-                .map(|task| (task.id.clone(), task))
-                .collect();
+            let mut tasks_by_id: HashMap<String, orchestrator_core::OrchestratorTask> =
+                all_tasks.into_iter().map(|task| (task.id.clone(), task)).collect();
             for change in &plan.changes {
                 if let Some(mut task) = tasks_by_id.remove(change.task_id.as_str()) {
                     task.priority = change.to;
@@ -633,11 +537,7 @@ pub(crate) async fn handle_task(
                 }
             }
 
-            let changed_task_ids: Vec<String> = plan
-                .changes
-                .iter()
-                .map(|change| change.task_id.clone())
-                .collect();
+            let changed_task_ids: Vec<String> = plan.changes.iter().map(|change| change.task_id.clone()).collect();
             print_value(
                 serde_json::json!({
                     "success": true,
@@ -663,11 +563,8 @@ mod tests {
     use protocol::test_utils::EnvVarGuard;
 
     fn init_git_repo(path: &TempDir) {
-        let init = ProcessCommand::new("git")
-            .arg("init")
-            .current_dir(path.path())
-            .status()
-            .expect("git init should run");
+        let init =
+            ProcessCommand::new("git").arg("init").current_dir(path.path()).status().expect("git init should run");
         assert!(init.success(), "git init should succeed");
     }
 
@@ -680,10 +577,7 @@ mod tests {
         assert!(status.success(), "git config should succeed");
     }
 
-    fn task_create_input(
-        task_type: Option<TaskType>,
-        linked_requirements: Vec<&str>,
-    ) -> TaskCreateInput {
+    fn task_create_input(task_type: Option<TaskType>, linked_requirements: Vec<&str>) -> TaskCreateInput {
         TaskCreateInput {
             title: "task".to_string(),
             description: String::new(),
@@ -691,10 +585,7 @@ mod tests {
             priority: None,
             created_by: None,
             tags: Vec::new(),
-            linked_requirements: linked_requirements
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            linked_requirements: linked_requirements.into_iter().map(str::to_string).collect(),
             linked_architecture_entities: Vec::new(),
         }
     }
@@ -737,9 +628,7 @@ mod tests {
 
     #[test]
     fn infer_human_assignee_prefers_ao_assignee_user_id() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("assignee-user"));
         let _ao_user = EnvVarGuard::set("AO_USER_ID", Some("ao-user"));
         let _user = EnvVarGuard::set("USER", Some("shell-user"));
@@ -753,9 +642,7 @@ mod tests {
 
     #[test]
     fn infer_human_assignee_prefers_git_identity_before_shell_user() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", None);
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
         let _user = EnvVarGuard::set("USER", Some("shell-user"));
@@ -766,17 +653,12 @@ mod tests {
         git_config(&repo, "user.email", "git-email@example.com");
         git_config(&repo, "user.name", "Git Name");
 
-        assert_eq!(
-            infer_human_assignee_identity(repo.path()).as_deref(),
-            Some("git-email@example.com")
-        );
+        assert_eq!(infer_human_assignee_identity(repo.path()).as_deref(), Some("git-email@example.com"));
     }
 
     #[tokio::test]
     async fn set_task_status_in_progress_assigns_human_when_identity_is_available() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("operator@example.com"));
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
 
@@ -806,20 +688,13 @@ mod tests {
         .await
         .expect("status update should succeed");
         assert_eq!(updated.status, TaskStatus::InProgress);
-        assert_eq!(
-            updated.assignee,
-            Assignee::Human {
-                user_id: "operator@example.com".to_string()
-            }
-        );
+        assert_eq!(updated.assignee, Assignee::Human { user_id: "operator@example.com".to_string() });
         assert_eq!(updated.metadata.updated_by, "operator@example.com");
     }
 
     #[tokio::test]
     async fn set_task_status_in_progress_keeps_unassigned_when_identity_is_unavailable() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", None);
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
         let _user = EnvVarGuard::set("USER", None);
@@ -857,9 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_task_status_non_in_progress_does_not_assign_human() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("operator@example.com"));
 
         let hub = Arc::new(InMemoryServiceHub::new());

@@ -1,8 +1,7 @@
 use anyhow::anyhow;
 use orchestrator_core::{
-    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementPriority,
-    RequirementStatus, RequirementType, RiskLevel, TaskFilter, TaskStatus, TaskType,
-    VisionDocument, VisionDraftInput,
+    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementPriority, RequirementStatus, RequirementType,
+    RiskLevel, TaskFilter, TaskStatus, TaskType, VisionDocument, VisionDraftInput,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -10,18 +9,14 @@ use serde_json::{json, Value};
 use crate::models::WebApiError;
 
 pub(super) fn parse_json_body<T: DeserializeOwned>(body: Value) -> Result<T, WebApiError> {
-    serde_json::from_value(body).map_err(|error| {
-        WebApiError::new("invalid_input", format!("invalid JSON body: {error}"), 2)
-    })
+    serde_json::from_value(body)
+        .map_err(|error| WebApiError::new("invalid_input", format!("invalid JSON body: {error}"), 2))
 }
 
 pub(super) fn enum_as_string<T: serde::Serialize>(value: &T) -> Result<String, WebApiError> {
-    let serialized = serde_json::to_value(value)
-        .map_err(|error| WebApiError::from(anyhow!("failed to serialize enum: {error}")))?;
-    Ok(serialized
-        .as_str()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "unknown".to_string()))
+    let serialized =
+        serde_json::to_value(value).map_err(|error| WebApiError::from(anyhow!("failed to serialize enum: {error}")))?;
+    Ok(serialized.as_str().map(ToOwned::to_owned).unwrap_or_else(|| "unknown".to_string()))
 }
 
 pub(super) fn default_true_flag() -> bool {
@@ -93,12 +88,9 @@ pub(super) fn refine_vision_heuristically(
     }
 
     let constraints_haystack = constraints.join(" ").to_ascii_lowercase();
-    if !constraints_haystack.contains("traceable")
-        && !constraints_haystack.contains("machine-readable")
-    {
+    if !constraints_haystack.contains("traceable") && !constraints_haystack.contains("machine-readable") {
         let addition =
-            "Requirements, tasks, and workflow artifacts must remain traceable and machine-readable."
-                .to_string();
+            "Requirements, tasks, and workflow artifacts must remain traceable and machine-readable.".to_string();
         constraints.push(addition.clone());
         constraints_added.push(addition);
         notes.push("added traceability constraint".to_string());
@@ -110,14 +102,12 @@ pub(super) fn refine_vision_heuristically(
         if !focus.is_empty() {
             normalized_focus = Some(focus.to_string());
             let focus_lower = focus.to_ascii_lowercase();
-            let already_present = constraints
-                .iter()
-                .any(|constraint| constraint.to_ascii_lowercase().contains(&focus_lower));
+            let already_present =
+                constraints.iter().any(|constraint| constraint.to_ascii_lowercase().contains(&focus_lower));
 
             if !already_present {
-                let addition = format!(
-                    "Refinement focus must be reflected in requirement acceptance criteria: {focus}."
-                );
+                let addition =
+                    format!("Refinement focus must be reflected in requirement acceptance criteria: {focus}.");
                 constraints.push(addition.clone());
                 constraints_added.push(addition);
             }
@@ -151,14 +141,7 @@ pub(super) fn refine_vision_heuristically(
     let rationale = if notes.is_empty() {
         "No heuristic deltas were required; retained current vision content.".to_string()
     } else {
-        format!(
-            "Heuristic refinement {}.",
-            notes
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        format!("Heuristic refinement {}.", notes.iter().map(String::as_str).collect::<Vec<_>>().join(", "))
     };
 
     (
@@ -188,18 +171,11 @@ pub(super) fn build_task_filter(
 
     Ok(TaskFilter {
         task_type: parse_task_type_opt(task_type.as_deref())?,
-        status: status
-            .as_deref()
-            .map(parse_task_status)
-            .transpose()?,
+        status: status.as_deref().map(parse_task_status).transpose()?,
         priority: parse_priority_opt(priority.as_deref())?,
         risk: parse_risk_opt(risk.as_deref())?,
         assignee_type: parse_assignee_type_opt(assignee_type)?,
-        tags: if normalized_tags.is_empty() {
-            None
-        } else {
-            Some(normalized_tags)
-        },
+        tags: if normalized_tags.is_empty() { None } else { Some(normalized_tags) },
         linked_requirement: normalize_optional_string(linked_requirement),
         linked_architecture_entity: normalize_optional_string(linked_architecture_entity),
         search_text: normalize_optional_string(search),
@@ -219,9 +195,7 @@ pub(super) fn is_empty_task_filter(filter: &TaskFilter) -> bool {
 }
 
 pub(super) fn parse_task_status(value: &str) -> Result<TaskStatus, WebApiError> {
-    value
-        .parse()
-        .map_err(|_| WebApiError::new("invalid_input", format!("invalid status: {value}"), 2))
+    value.parse().map_err(|_| WebApiError::new("invalid_input", format!("invalid status: {value}"), 2))
 }
 
 pub(super) fn parse_requirement_priority(value: &str) -> Result<RequirementPriority, WebApiError> {
@@ -230,21 +204,13 @@ pub(super) fn parse_requirement_priority(value: &str) -> Result<RequirementPrior
         "should" => RequirementPriority::Should,
         "could" => RequirementPriority::Could,
         "wont" | "won't" => RequirementPriority::Wont,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid requirement priority: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid requirement priority: {value}"), 2)),
     };
 
     Ok(parsed)
 }
 
-pub(super) fn parse_requirement_priority_opt(
-    value: Option<&str>,
-) -> Result<Option<RequirementPriority>, WebApiError> {
+pub(super) fn parse_requirement_priority_opt(value: Option<&str>) -> Result<Option<RequirementPriority>, WebApiError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -253,18 +219,10 @@ pub(super) fn parse_requirement_priority_opt(
 }
 
 pub(super) fn parse_requirement_status(value: &str) -> Result<RequirementStatus, WebApiError> {
-    value.parse().map_err(|_| {
-        WebApiError::new(
-            "invalid_input",
-            format!("invalid requirement status: {value}"),
-            2,
-        )
-    })
+    value.parse().map_err(|_| WebApiError::new("invalid_input", format!("invalid requirement status: {value}"), 2))
 }
 
-pub(super) fn parse_requirement_status_opt(
-    value: Option<&str>,
-) -> Result<Option<RequirementStatus>, WebApiError> {
+pub(super) fn parse_requirement_status_opt(value: Option<&str>) -> Result<Option<RequirementStatus>, WebApiError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -272,9 +230,7 @@ pub(super) fn parse_requirement_status_opt(
     Ok(Some(parse_requirement_status(value)?))
 }
 
-pub(super) fn parse_requirement_type_opt(
-    value: Option<&str>,
-) -> Result<Option<RequirementType>, WebApiError> {
+pub(super) fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<RequirementType>, WebApiError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -286,21 +242,14 @@ pub(super) fn parse_requirement_type_opt(
         "non-functional" => RequirementType::NonFunctional,
         "technical" => RequirementType::Technical,
         "other" => RequirementType::Other,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid requirement_type: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid requirement_type: {value}"), 2)),
     };
 
     Ok(Some(parsed))
 }
 
 pub(super) fn parse_handoff_target_role(value: &str) -> Result<HandoffTargetRole, WebApiError> {
-    HandoffTargetRole::try_from(value)
-        .map_err(|error| WebApiError::new("invalid_input", error.to_string(), 2))
+    HandoffTargetRole::try_from(value).map_err(|error| WebApiError::new("invalid_input", error.to_string(), 2))
 }
 
 pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType>, WebApiError> {
@@ -318,13 +267,7 @@ pub(super) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType
         "test" => TaskType::Test,
         "chore" => TaskType::Chore,
         "experiment" => TaskType::Experiment,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid task_type: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid task_type: {value}"), 2)),
     };
 
     Ok(Some(parsed))
@@ -341,13 +284,7 @@ pub(super) fn parse_priority_opt(value: Option<&str>) -> Result<Option<Priority>
         "high" => Priority::High,
         "medium" => Priority::Medium,
         "low" => Priority::Low,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid priority: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid priority: {value}"), 2)),
     };
 
     Ok(Some(parsed))
@@ -363,13 +300,7 @@ pub(super) fn parse_risk_opt(value: Option<&str>) -> Result<Option<RiskLevel>, W
         "high" => RiskLevel::High,
         "medium" => RiskLevel::Medium,
         "low" => RiskLevel::Low,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid risk: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid risk: {value}"), 2)),
     };
 
     Ok(Some(parsed))
@@ -381,21 +312,13 @@ pub(super) fn parse_dependency_type(value: &str) -> Result<DependencyType, WebAp
         "blocks-by" | "blocksby" => DependencyType::BlocksBy,
         "blocked-by" | "blockedby" => DependencyType::BlockedBy,
         "related-to" | "relatedto" => DependencyType::RelatedTo,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid dependency_type: {value}"),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid dependency_type: {value}"), 2)),
     };
 
     Ok(parsed)
 }
 
-pub(super) fn parse_project_type_opt(
-    value: Option<&str>,
-) -> Result<Option<ProjectType>, WebApiError> {
+pub(super) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<ProjectType>, WebApiError> {
     let Some(value) = value else {
         return Ok(Some(ProjectType::Other));
     };
@@ -415,13 +338,7 @@ pub(super) fn parse_project_type_opt(
         "library" => ProjectType::Library,
         "infrastructure" => ProjectType::Infrastructure,
         "other" | "greenfield" | "existing" => ProjectType::Other,
-        _ => {
-            return Err(WebApiError::new(
-                "invalid_input",
-                format!("invalid project_type: {}", value.trim()),
-                2,
-            ))
-        }
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid project_type: {}", value.trim()), 2)),
     };
 
     Ok(Some(parsed))
@@ -437,11 +354,7 @@ fn parse_assignee_type_opt(value: Option<String>) -> Result<Option<String>, WebA
         return Ok(Some(normalized));
     }
 
-    Err(WebApiError::new(
-        "invalid_input",
-        format!("invalid assignee_type: {value}"),
-        2,
-    ))
+    Err(WebApiError::new("invalid_input", format!("invalid assignee_type: {value}"), 2))
 }
 
 fn normalize_enum_key(value: &str) -> String {
@@ -457,50 +370,23 @@ mod tests {
 
     #[test]
     fn parse_task_status_accepts_case_and_separator_variants() {
-        assert!(matches!(
-            parse_task_status(" In_Progress "),
-            Ok(TaskStatus::InProgress)
-        ));
-        assert!(matches!(
-            parse_task_status("ON-HOLD"),
-            Ok(TaskStatus::OnHold)
-        ));
-        assert!(matches!(
-            parse_task_status(" Todo "),
-            Ok(TaskStatus::Backlog)
-        ));
+        assert!(matches!(parse_task_status(" In_Progress "), Ok(TaskStatus::InProgress)));
+        assert!(matches!(parse_task_status("ON-HOLD"), Ok(TaskStatus::OnHold)));
+        assert!(matches!(parse_task_status(" Todo "), Ok(TaskStatus::Backlog)));
     }
 
     #[test]
     fn parse_task_type_priority_and_risk_are_trimmed_and_case_insensitive() {
-        assert!(matches!(
-            parse_task_type_opt(Some(" Feature ")),
-            Ok(Some(TaskType::Feature))
-        ));
-        assert!(matches!(
-            parse_priority_opt(Some(" HIGH ")),
-            Ok(Some(Priority::High))
-        ));
-        assert!(matches!(
-            parse_risk_opt(Some(" low ")),
-            Ok(Some(RiskLevel::Low))
-        ));
+        assert!(matches!(parse_task_type_opt(Some(" Feature ")), Ok(Some(TaskType::Feature))));
+        assert!(matches!(parse_priority_opt(Some(" HIGH ")), Ok(Some(Priority::High))));
+        assert!(matches!(parse_risk_opt(Some(" low ")), Ok(Some(RiskLevel::Low))));
     }
 
     #[test]
     fn parse_dependency_type_accepts_mixed_case_aliases() {
-        assert!(matches!(
-            parse_dependency_type(" Blocks_By "),
-            Ok(DependencyType::BlocksBy)
-        ));
-        assert!(matches!(
-            parse_dependency_type("BLOCKEDBY"),
-            Ok(DependencyType::BlockedBy)
-        ));
-        assert!(matches!(
-            parse_dependency_type("related-to"),
-            Ok(DependencyType::RelatedTo)
-        ));
+        assert!(matches!(parse_dependency_type(" Blocks_By "), Ok(DependencyType::BlocksBy)));
+        assert!(matches!(parse_dependency_type("BLOCKEDBY"), Ok(DependencyType::BlockedBy)));
+        assert!(matches!(parse_dependency_type("related-to"), Ok(DependencyType::RelatedTo)));
     }
 
     #[test]
@@ -511,12 +397,7 @@ mod tests {
             Some(" HIGH ".to_string()),
             Some(" low ".to_string()),
             Some(" Human ".to_string()),
-            vec![
-                "backend".to_string(),
-                " backend ".to_string(),
-                " api ".to_string(),
-                "".to_string(),
-            ],
+            vec!["backend".to_string(), " backend ".to_string(), " api ".to_string(), "".to_string()],
             Some(" REQ-1 ".to_string()),
             Some(" entity-1 ".to_string()),
             Some(" shipping blocker ".to_string()),
@@ -528,15 +409,9 @@ mod tests {
         assert!(matches!(filter.priority, Some(Priority::High)));
         assert!(matches!(filter.risk, Some(RiskLevel::Low)));
         assert_eq!(filter.assignee_type.as_deref(), Some("human"));
-        assert_eq!(
-            filter.tags,
-            Some(vec!["backend".to_string(), "api".to_string()])
-        );
+        assert_eq!(filter.tags, Some(vec!["backend".to_string(), "api".to_string()]));
         assert_eq!(filter.linked_requirement.as_deref(), Some("REQ-1"));
-        assert_eq!(
-            filter.linked_architecture_entity.as_deref(),
-            Some("entity-1")
-        );
+        assert_eq!(filter.linked_architecture_entity.as_deref(), Some("entity-1"));
         assert_eq!(filter.search_text.as_deref(), Some("shipping blocker"));
     }
 
@@ -560,18 +435,8 @@ mod tests {
 
     #[test]
     fn build_task_filter_rejects_unknown_assignee_type() {
-        let error = build_task_filter(
-            None,
-            None,
-            None,
-            None,
-            Some("robot".to_string()),
-            Vec::new(),
-            None,
-            None,
-            None,
-        )
-        .expect_err("unknown assignee type should fail");
+        let error = build_task_filter(None, None, None, None, Some("robot".to_string()), Vec::new(), None, None, None)
+            .expect_err("unknown assignee type should fail");
 
         assert_eq!(error.code, "invalid_input");
         assert!(error.message.contains("invalid assignee_type"));
@@ -579,29 +444,14 @@ mod tests {
 
     #[test]
     fn parse_requirement_status_accepts_case_and_underscore_variants() {
-        assert!(matches!(
-            parse_requirement_status(" In_Progress "),
-            Ok(RequirementStatus::InProgress)
-        ));
-        assert!(matches!(
-            parse_requirement_status("PO_REVIEW"),
-            Ok(RequirementStatus::PoReview)
-        ));
+        assert!(matches!(parse_requirement_status(" In_Progress "), Ok(RequirementStatus::InProgress)));
+        assert!(matches!(parse_requirement_status("PO_REVIEW"), Ok(RequirementStatus::PoReview)));
     }
 
     #[test]
     fn parse_project_type_defaults_and_aliases_are_stable() {
-        assert!(matches!(
-            parse_project_type_opt(None),
-            Ok(Some(ProjectType::Other))
-        ));
-        assert!(matches!(
-            parse_project_type_opt(Some("full_stack")),
-            Ok(Some(ProjectType::FullStackPlatform))
-        ));
-        assert!(matches!(
-            parse_project_type_opt(Some("desktop_app")),
-            Ok(Some(ProjectType::DesktopApp))
-        ));
+        assert!(matches!(parse_project_type_opt(None), Ok(Some(ProjectType::Other))));
+        assert!(matches!(parse_project_type_opt(Some("full_stack")), Ok(Some(ProjectType::FullStackPlatform))));
+        assert!(matches!(parse_project_type_opt(Some("desktop_app")), Ok(Some(ProjectType::DesktopApp))));
     }
 }

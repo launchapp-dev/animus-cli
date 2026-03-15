@@ -25,10 +25,7 @@ pub struct LaunchInvocation {
 pub fn lookup_binary_in_path(binary_name: &str) -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        let output = std::process::Command::new("which")
-            .arg(binary_name)
-            .output()
-            .ok()?;
+        let output = std::process::Command::new("which").arg(binary_name).output().ok()?;
         if !output.status.success() {
             return None;
         }
@@ -42,19 +39,12 @@ pub fn lookup_binary_in_path(binary_name: &str) -> Option<PathBuf> {
 
     #[cfg(windows)]
     {
-        let output = std::process::Command::new("where")
-            .arg(binary_name)
-            .output()
-            .ok()?;
+        let output = std::process::Command::new("where").arg(binary_name).output().ok()?;
         if !output.status.success() {
             return None;
         }
-        let first_line = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
+        let first_line =
+            String::from_utf8_lossy(&output.stdout).lines().next().map(str::trim).unwrap_or_default().to_string();
         if first_line.is_empty() {
             None
         } else {
@@ -97,10 +87,7 @@ pub fn is_ai_cli_tool(name: &str) -> bool {
 
 fn canonical_cli_name(command: &str) -> String {
     let trimmed = command.trim();
-    let file_name = Path::new(trimmed)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(trimmed);
+    let file_name = Path::new(trimmed).file_name().and_then(|value| value.to_str()).unwrap_or(trimmed);
     file_name.to_ascii_lowercase()
 }
 
@@ -131,19 +118,13 @@ pub fn ensure_flag_value(args: &mut Vec<String>, flag: &str, value: &str, insert
 
 /// Ensure a flag is present in JSON args, inserting it at the specified position if missing.
 pub fn ensure_flag_value_json(args: &mut Vec<Value>, flag: &str, value: &str, insert_at: usize) {
-    if args
-        .iter()
-        .any(|item| item.as_str().is_some_and(|existing| existing == flag))
-    {
+    if args.iter().any(|item| item.as_str().is_some_and(|existing| existing == flag)) {
         return;
     }
 
     let insert_at = insert_at.min(args.len());
     args.insert(insert_at, Value::String(flag.to_string()));
-    args.insert(
-        (insert_at + 1).min(args.len()),
-        Value::String(value.to_string()),
-    );
+    args.insert((insert_at + 1).min(args.len()), Value::String(value.to_string()));
 }
 
 /// Ensure a Codex config override is present in args (for `Vec<String>`).
@@ -185,10 +166,7 @@ pub fn ensure_codex_config_override_json(args: &mut Vec<Value>, key: &str, value
     let mut index = 0usize;
     while index + 1 < args.len() {
         let flag = args[index].as_str().unwrap_or_default();
-        let value = args
-            .get(index + 1)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let value = args.get(index + 1).and_then(Value::as_str).unwrap_or_default();
         if (flag == "-c" || flag == "--config") && value.starts_with(&key_prefix) {
             args[index + 1] = Value::String(target);
             return;
@@ -203,9 +181,7 @@ pub fn ensure_codex_config_override_json(args: &mut Vec<Value>, key: &str, value
 
 /// Find the insertion index for Codex exec flags in JSON args.
 pub fn codex_exec_insert_index_json(args: &[Value]) -> usize {
-    args.iter()
-        .position(|item| item.as_str().is_some_and(|value| value == "exec"))
-        .unwrap_or(0)
+    args.iter().position(|item| item.as_str().is_some_and(|value| value == "exec")).unwrap_or(0)
 }
 
 /// Find the insertion index for prompt-related flags in JSON args.
@@ -218,70 +194,38 @@ pub fn ensure_machine_json_output(invocation: &mut LaunchInvocation) {
 
     match cli.as_str() {
         "codex" => {
-            let insert_at = invocation
-                .args
-                .iter()
-                .position(|entry| entry == "exec")
-                .map(|index| index + 1)
-                .unwrap_or(0);
+            let insert_at =
+                invocation.args.iter().position(|entry| entry == "exec").map(|index| index + 1).unwrap_or(0);
             ensure_flag(&mut invocation.args, "--json", insert_at);
         }
         "claude" => {
-            let insert_at = invocation
-                .args
-                .iter()
-                .position(|entry| entry == "--print")
-                .map(|index| index + 1)
-                .unwrap_or(0);
+            let insert_at =
+                invocation.args.iter().position(|entry| entry == "--print").map(|index| index + 1).unwrap_or(0);
             ensure_flag(&mut invocation.args, "--verbose", insert_at);
-            ensure_flag_value(
-                &mut invocation.args,
-                "--output-format",
-                "stream-json",
-                insert_at,
-            );
+            ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", insert_at);
         }
         "gemini" => {
-            let insert_at = invocation
-                .args
-                .iter()
-                .position(|entry| entry == "-p")
-                .unwrap_or(invocation.args.len());
+            let insert_at = invocation.args.iter().position(|entry| entry == "-p").unwrap_or(invocation.args.len());
             ensure_flag_value(&mut invocation.args, "--output-format", "json", insert_at);
         }
         "opencode" => {
-            let insert_at = invocation
-                .args
-                .iter()
-                .position(|entry| entry == "run")
-                .map(|index| index + 1)
-                .unwrap_or(0);
+            let insert_at = invocation.args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
             ensure_flag_value(&mut invocation.args, "--format", "json", insert_at);
         }
         "ao-oai-runner" | "oai-runner" => {
-            let insert_at = invocation
-                .args
-                .iter()
-                .position(|entry| entry == "run")
-                .map(|index| index + 1)
-                .unwrap_or(0);
+            let insert_at = invocation.args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
             ensure_flag_value(&mut invocation.args, "--format", "json", insert_at);
         }
         _ => {}
     }
 }
 
-pub fn parse_launch_from_runtime_contract(
-    runtime_contract: Option<&Value>,
-) -> Result<Option<LaunchInvocation>> {
+pub fn parse_launch_from_runtime_contract(runtime_contract: Option<&Value>) -> Result<Option<LaunchInvocation>> {
     let Some(contract) = runtime_contract else {
         return Ok(None);
     };
 
-    let Some(launch) = contract
-        .pointer("/cli/launch")
-        .or_else(|| contract.get("launch"))
-    else {
+    let Some(launch) = contract.pointer("/cli/launch").or_else(|| contract.get("launch")) else {
         return Ok(None);
     };
     if launch.is_null() {
@@ -311,16 +255,9 @@ pub fn parse_launch_from_runtime_contract(
         .transpose()?
         .unwrap_or_default();
 
-    let prompt_via_stdin = launch
-        .get("prompt_via_stdin")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let prompt_via_stdin = launch.get("prompt_via_stdin").and_then(Value::as_bool).unwrap_or(false);
 
-    let mut invocation = LaunchInvocation {
-        command: command.to_string(),
-        args,
-        prompt_via_stdin,
-    };
+    let mut invocation = LaunchInvocation { command: command.to_string(), args, prompt_via_stdin };
 
     ensure_machine_json_output(&mut invocation);
     Ok(Some(invocation))
@@ -353,11 +290,7 @@ mod tests {
         let launch = parse_launch_from_runtime_contract(Some(&contract))
             .expect("launch should parse")
             .expect("launch should be present");
-        let idx = launch
-            .args
-            .iter()
-            .position(|arg| arg == "--format")
-            .expect("opencode format flag should be present");
+        let idx = launch.args.iter().position(|arg| arg == "--format").expect("opencode format flag should be present");
         assert_eq!(launch.args.get(idx + 1).map(String::as_str), Some("json"));
 
         let claude_contract = json!({
@@ -378,9 +311,6 @@ mod tests {
             .iter()
             .position(|arg| arg == "--output-format")
             .expect("claude output format flag should be present");
-        assert_eq!(
-            claude_launch.args.get(output_idx + 1).map(String::as_str),
-            Some("stream-json")
-        );
+        assert_eq!(claude_launch.args.get(output_idx + 1).map(String::as_str), Some("stream-json"));
     }
 }

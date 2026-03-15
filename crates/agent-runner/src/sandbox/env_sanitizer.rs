@@ -22,10 +22,7 @@ const ALLOWED_ENV_VARS: &[&str] = &[
 const ALLOWED_ENV_PREFIXES: &[&str] = &["AO_", "XDG_"];
 
 fn is_allowed_env_var(var: &str) -> bool {
-    ALLOWED_ENV_VARS.contains(&var)
-        || ALLOWED_ENV_PREFIXES
-            .iter()
-            .any(|prefix| var.starts_with(prefix))
+    ALLOWED_ENV_VARS.contains(&var) || ALLOWED_ENV_PREFIXES.iter().any(|prefix| var.starts_with(prefix))
 }
 
 pub fn sanitize_env() -> HashMap<String, String> {
@@ -50,9 +47,7 @@ mod tests {
     use protocol::test_utils::EnvVarGuard;
 
     fn env_lock() -> MutexGuard<'static, ()> {
-        crate::test_env_lock()
-            .lock()
-            .expect("env lock should be available")
+        crate::test_env_lock().lock().expect("env lock should be available")
     }
 
     #[test]
@@ -73,10 +68,7 @@ mod tests {
         }
 
         for key in ["AO_TASK_029_PREFIX_TEST", "XDG_RUNTIME_DIR"] {
-            assert!(
-                is_allowed_env_var(key),
-                "expected {key} to be allowed by prefix"
-            );
+            assert!(is_allowed_env_var(key), "expected {key} to be allowed by prefix");
         }
 
         for key in ["AO", "XDG", "GOOGLE", "TERMINFO"] {
@@ -95,10 +87,7 @@ mod tests {
 
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
-        assert_eq!(
-            env.get("SSH_AUTH_SOCK").map(String::as_str),
-            Some("/tmp/test-agent.sock")
-        );
+        assert_eq!(env.get("SSH_AUTH_SOCK").map(String::as_str), Some("/tmp/test-agent.sock"));
     }
 
     #[test]
@@ -109,48 +98,26 @@ mod tests {
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("AO_TASK_029_TEST_VAR").map(String::as_str),
-            Some("ao-test-value")
-        );
-        assert_eq!(
-            env.get("XDG_RUNTIME_DIR").map(String::as_str),
-            Some("/tmp/xdg-runtime")
-        );
+        assert_eq!(env.get("AO_TASK_029_TEST_VAR").map(String::as_str), Some("ao-test-value"));
+        assert_eq!(env.get("XDG_RUNTIME_DIR").map(String::as_str), Some("/tmp/xdg-runtime"));
     }
 
     #[test]
     fn forwards_known_ao_and_xdg_configuration_entries() {
         let _lock = env_lock();
         let _ao_config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some("/tmp/ao-config"));
-        let _ao_runner_config_dir =
-            EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", Some("/tmp/ao-runner-config"));
+        let _ao_runner_config_dir = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", Some("/tmp/ao-runner-config"));
         let _ao_runner_scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("project"));
         let _xdg_config_home = EnvVarGuard::set("XDG_CONFIG_HOME", Some("/tmp/xdg-config"));
         let _xdg_cache_home = EnvVarGuard::set("XDG_CACHE_HOME", Some("/tmp/xdg-cache"));
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("AO_CONFIG_DIR").map(String::as_str),
-            Some("/tmp/ao-config")
-        );
-        assert_eq!(
-            env.get("AO_RUNNER_CONFIG_DIR").map(String::as_str),
-            Some("/tmp/ao-runner-config")
-        );
-        assert_eq!(
-            env.get("AO_RUNNER_SCOPE").map(String::as_str),
-            Some("project")
-        );
-        assert_eq!(
-            env.get("XDG_CONFIG_HOME").map(String::as_str),
-            Some("/tmp/xdg-config")
-        );
-        assert_eq!(
-            env.get("XDG_CACHE_HOME").map(String::as_str),
-            Some("/tmp/xdg-cache")
-        );
+        assert_eq!(env.get("AO_CONFIG_DIR").map(String::as_str), Some("/tmp/ao-config"));
+        assert_eq!(env.get("AO_RUNNER_CONFIG_DIR").map(String::as_str), Some("/tmp/ao-runner-config"));
+        assert_eq!(env.get("AO_RUNNER_SCOPE").map(String::as_str), Some("project"));
+        assert_eq!(env.get("XDG_CONFIG_HOME").map(String::as_str), Some("/tmp/xdg-config"));
+        assert_eq!(env.get("XDG_CACHE_HOME").map(String::as_str), Some("/tmp/xdg-cache"));
     }
 
     #[test]
@@ -178,14 +145,8 @@ mod tests {
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("AO_TASK_029_STRICT_TEST").map(String::as_str),
-            Some("ao-allowed")
-        );
-        assert_eq!(
-            env.get("XDG_RUNTIME_DIR").map(String::as_str),
-            Some("/tmp/xdg-allowed")
-        );
+        assert_eq!(env.get("AO_TASK_029_STRICT_TEST").map(String::as_str), Some("ao-allowed"));
+        assert_eq!(env.get("XDG_RUNTIME_DIR").map(String::as_str), Some("/tmp/xdg-allowed"));
         assert!(!env.contains_key("AO"));
         assert!(!env.contains_key("XDG"));
         assert!(!env.contains_key("ao_TASK_029_STRICT_TEST"));
@@ -213,14 +174,8 @@ mod tests {
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("PATH").map(String::as_str),
-            Some("/usr/bin:/usr/local/bin")
-        );
-        assert_eq!(
-            env.get("HOME").map(String::as_str),
-            Some("/Users/testuser")
-        );
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin:/usr/local/bin"));
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/Users/testuser"));
     }
 
     #[test]
@@ -250,14 +205,8 @@ mod tests {
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("AO_MY_CUSTOM_SETTING").map(String::as_str),
-            Some("value1")
-        );
-        assert_eq!(
-            env.get("AO_RUNNER_BUILD_ID").map(String::as_str),
-            Some("build-abc")
-        );
+        assert_eq!(env.get("AO_MY_CUSTOM_SETTING").map(String::as_str), Some("value1"));
+        assert_eq!(env.get("AO_RUNNER_BUILD_ID").map(String::as_str), Some("build-abc"));
         assert_eq!(env.get("AO_DEBUG").map(String::as_str), Some("true"));
     }
 
@@ -270,37 +219,21 @@ mod tests {
         let env = sanitize_env();
 
         for key in env.keys() {
-            assert!(
-                is_allowed_env_var(key),
-                "sanitize_env returned disallowed key: {}",
-                key
-            );
+            assert!(is_allowed_env_var(key), "sanitize_env returned disallowed key: {}", key);
         }
     }
 
     #[test]
     fn claude_specific_env_vars_allowed() {
         let _lock = env_lock();
-        let _settings = EnvVarGuard::set(
-            "CLAUDE_CODE_SETTINGS_PATH",
-            Some("/tmp/.claude/settings.json"),
-        );
+        let _settings = EnvVarGuard::set("CLAUDE_CODE_SETTINGS_PATH", Some("/tmp/.claude/settings.json"));
         let _api = EnvVarGuard::set("CLAUDE_API_KEY", Some("claude-key-123"));
         let _dir = EnvVarGuard::set("CLAUDE_CODE_DIR", Some("/tmp/claude-dir"));
 
         let env = sanitize_env();
 
-        assert_eq!(
-            env.get("CLAUDE_CODE_SETTINGS_PATH").map(String::as_str),
-            Some("/tmp/.claude/settings.json")
-        );
-        assert_eq!(
-            env.get("CLAUDE_API_KEY").map(String::as_str),
-            Some("claude-key-123")
-        );
-        assert_eq!(
-            env.get("CLAUDE_CODE_DIR").map(String::as_str),
-            Some("/tmp/claude-dir")
-        );
+        assert_eq!(env.get("CLAUDE_CODE_SETTINGS_PATH").map(String::as_str), Some("/tmp/.claude/settings.json"));
+        assert_eq!(env.get("CLAUDE_API_KEY").map(String::as_str), Some("claude-key-123"));
+        assert_eq!(env.get("CLAUDE_CODE_DIR").map(String::as_str), Some("/tmp/claude-dir"));
     }
 }

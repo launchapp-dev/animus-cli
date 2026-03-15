@@ -9,18 +9,13 @@ use chrono::Utc;
 use protocol::SubjectExecutionFact;
 
 use crate::{
-    load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask,
-    TaskStatus, WorkflowStatus,
+    load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask, TaskStatus, WorkflowStatus,
 };
 
 pub use project_requirement_workflow_status::project_requirement_workflow_status;
 pub use project_task_terminal_workflow_status::project_task_terminal_workflow_status;
 
-pub async fn project_task_status(
-    hub: Arc<dyn ServiceHub>,
-    task_id: &str,
-    status: TaskStatus,
-) -> Result<()> {
+pub async fn project_task_status(hub: Arc<dyn ServiceHub>, task_id: &str, status: TaskStatus) -> Result<()> {
     hub.tasks().set_status(task_id, status, false).await?;
     Ok(())
 }
@@ -57,10 +52,7 @@ pub async fn project_task_dispatch_failure(
         }
     };
 
-    let count = task
-        .consecutive_dispatch_failures
-        .unwrap_or(0)
-        .saturating_add(1);
+    let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
 
     if count >= max_dispatch_retries {
         let reason = format!("auto-blocked after {} consecutive dispatch failures", count);
@@ -81,20 +73,12 @@ pub async fn project_task_workflow_start(
     model: Option<String>,
     updated_by: String,
 ) -> Result<()> {
-    hub.tasks()
-        .set_status(task_id, TaskStatus::InProgress, false)
-        .await?;
-    hub.tasks()
-        .assign_agent(task_id, role, model, updated_by)
-        .await?;
+    hub.tasks().set_status(task_id, TaskStatus::InProgress, false).await?;
+    hub.tasks().assign_agent(task_id, role, model, updated_by).await?;
     Ok(())
 }
 
-pub async fn project_task_execution_fact(
-    hub: Arc<dyn ServiceHub>,
-    _root: &str,
-    fact: &SubjectExecutionFact,
-) {
+pub async fn project_task_execution_fact(hub: Arc<dyn ServiceHub>, _root: &str, fact: &SubjectExecutionFact) {
     let Some(task_id) = fact.task_id.as_deref() else {
         return;
     };
@@ -129,12 +113,7 @@ pub async fn project_task_execution_fact(
     let _ = project_task_status(hub, task_id, TaskStatus::Blocked).await;
 }
 
-pub fn project_schedule_dispatch_attempt(
-    root: &str,
-    schedule_id: &str,
-    run_at: chrono::DateTime<Utc>,
-    status: &str,
-) {
+pub fn project_schedule_dispatch_attempt(root: &str, schedule_id: &str, run_at: chrono::DateTime<Utc>, status: &str) {
     update_schedule_state(root, schedule_id, Some(run_at), status, true);
 }
 
@@ -159,10 +138,7 @@ fn update_schedule_state(
 ) {
     let project_root = Path::new(root);
     let mut state = load_schedule_state(project_root).unwrap_or_default();
-    let entry = state
-        .schedules
-        .entry(schedule_id.to_string())
-        .or_default();
+    let entry = state.schedules.entry(schedule_id.to_string()).or_default();
     if let Some(run_at) = run_at {
         entry.last_run = Some(run_at);
     }

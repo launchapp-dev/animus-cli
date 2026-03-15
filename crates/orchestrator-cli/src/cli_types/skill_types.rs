@@ -67,20 +67,13 @@ pub(crate) struct SkillInstallArgs {
     pub(crate) source: Option<String>,
     #[arg(long, help = "Optional registry constraint.")]
     pub(crate) registry: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Allow pre-release versions during resolution."
-    )]
+    #[arg(long, default_value_t = false, help = "Allow pre-release versions during resolution.")]
     pub(crate) allow_prerelease: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SkillUpdateArgs {
-    #[arg(
-        long,
-        help = "Optional skill name target; omit to update all installed skills."
-    )]
+    #[arg(long, help = "Optional skill name target; omit to update all installed skills.")]
     pub(crate) name: Option<String>,
     #[arg(long, help = "Optional version constraint override (semver req).")]
     pub(crate) version: Option<String>,
@@ -88,20 +81,13 @@ pub(crate) struct SkillUpdateArgs {
     pub(crate) source: Option<String>,
     #[arg(long, help = "Optional registry constraint override.")]
     pub(crate) registry: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Allow pre-release versions during resolution."
-    )]
+    #[arg(long, default_value_t = false, help = "Allow pre-release versions during resolution.")]
     pub(crate) allow_prerelease: bool,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SkillListArgs {
-    #[arg(
-        long,
-        help = "Filter by source: built-in, user, project, or installed."
-    )]
+    #[arg(long, help = "Filter by source: built-in, user, project, or installed.")]
     pub(crate) source: Option<String>,
 }
 
@@ -117,10 +103,7 @@ pub(crate) struct SkillPublishArgs {
     pub(crate) name: String,
     #[arg(long, help = "Skill semver version.")]
     pub(crate) version: String,
-    #[arg(
-        long,
-        help = "Source identifier (for example local, github, internal)."
-    )]
+    #[arg(long, help = "Source identifier (for example local, github, internal).")]
     pub(crate) source: String,
     #[arg(long, default_value = "project", help = "Target registry identifier.")]
     pub(crate) registry: String,

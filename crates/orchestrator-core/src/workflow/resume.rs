@@ -18,19 +18,13 @@ pub struct ResumeConfig {
 
 impl Default for ResumeConfig {
     fn default() -> Self {
-        Self {
-            max_age_hours: 24,
-            auto_resume_enabled: true,
-            resume_paused: true,
-            resume_failed: false,
-        }
+        Self { max_age_hours: 24, auto_resume_enabled: true, resume_paused: true, resume_failed: false }
     }
 }
 
 impl ResumeConfig {
     pub fn load(project_root: &Path) -> Result<Self> {
-        let base =
-            protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+        let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
         let config_path = base.join("resume-config.json");
         if !config_path.exists() {
             return Ok(Self::default());
@@ -43,20 +37,9 @@ impl ResumeConfig {
 
 #[derive(Debug, Clone)]
 pub enum ResumabilityStatus {
-    Resumable {
-        workflow_id: String,
-        reason: String,
-    },
-    Stale {
-        workflow_id: String,
-        age_hours: i64,
-        max_age_hours: i64,
-    },
-    InvalidState {
-        workflow_id: String,
-        status: WorkflowStatus,
-        reason: String,
-    },
+    Resumable { workflow_id: String, reason: String },
+    Stale { workflow_id: String, age_hours: i64, max_age_hours: i64 },
+    InvalidState { workflow_id: String, status: WorkflowStatus, reason: String },
 }
 
 impl ResumabilityStatus {
@@ -75,10 +58,7 @@ impl WorkflowResumeManager {
         let project_root = project_root.into();
         let config = ResumeConfig::load(&project_root)?;
         let state_manager = WorkflowStateManager::new(project_root);
-        Ok(Self {
-            state_manager,
-            config,
-        })
+        Ok(Self { state_manager, config })
     }
 
     pub fn detect_interrupted_workflows(&self) -> Result<Vec<OrchestratorWorkflow>> {
@@ -133,9 +113,7 @@ impl WorkflowResumeManager {
         }
     }
 
-    pub fn get_resumable_workflows(
-        &self,
-    ) -> Result<Vec<(OrchestratorWorkflow, ResumabilityStatus)>> {
+    pub fn get_resumable_workflows(&self) -> Result<Vec<(OrchestratorWorkflow, ResumabilityStatus)>> {
         let interrupted = self.detect_interrupted_workflows()?;
         Ok(interrupted
             .into_iter()
@@ -149,5 +127,4 @@ impl WorkflowResumeManager {
             })
             .collect())
     }
-
 }

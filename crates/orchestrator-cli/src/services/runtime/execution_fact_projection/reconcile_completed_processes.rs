@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
-use orchestrator_core::{
-    project_schedule_execution_fact, project_task_execution_fact, services::ServiceHub,
-};
+use orchestrator_core::{project_schedule_execution_fact, project_task_execution_fact, services::ServiceHub};
 use orchestrator_daemon_runtime::{
-    build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal,
-    CompletedProcess,
+    build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal, CompletedProcess,
 };
 
 pub(crate) async fn reconcile_completed_processes(

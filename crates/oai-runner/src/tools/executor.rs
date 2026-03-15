@@ -10,14 +10,8 @@ pub fn execute_tool(name: &str, args_json: &str, working_dir: &Path) -> Result<S
     match name {
         "read_file" => {
             let path = get_str(&args, "path")?;
-            let offset = args
-                .get("offset")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize);
-            let limit = args
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize);
+            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
             file_ops::read_file(working_dir, path, offset, limit)
         }
         "write_file" => {
@@ -52,9 +46,7 @@ pub fn execute_tool(name: &str, args_json: &str, working_dir: &Path) -> Result<S
 }
 
 fn get_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing required parameter: {}", key))
+    args.get(key).and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("Missing required parameter: {}", key))
 }
 
 #[cfg(test)]
@@ -65,11 +57,7 @@ mod tests {
 
     fn setup_temp_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("test.txt"),
-            "line one\nline two\nline three\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("test.txt"), "line one\nline two\nline three\n").unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
         dir
@@ -87,12 +75,7 @@ mod tests {
     #[test]
     fn read_file_supports_offset_and_limit() {
         let dir = setup_temp_dir();
-        let result = execute_tool(
-            "read_file",
-            r#"{"path": "test.txt", "offset": 2, "limit": 1}"#,
-            dir.path(),
-        )
-        .unwrap();
+        let result = execute_tool("read_file", r#"{"path": "test.txt", "offset": 2, "limit": 1}"#, dir.path()).unwrap();
         assert!(result.contains("line two"));
         assert!(!result.contains("line one"));
         assert!(!result.contains("line three"));
@@ -101,12 +84,8 @@ mod tests {
     #[test]
     fn write_file_creates_new_file() {
         let dir = setup_temp_dir();
-        let result = execute_tool(
-            "write_file",
-            r#"{"path": "new.txt", "content": "hello world"}"#,
-            dir.path(),
-        )
-        .unwrap();
+        let result =
+            execute_tool("write_file", r#"{"path": "new.txt", "content": "hello world"}"#, dir.path()).unwrap();
         assert!(result.contains("Successfully wrote"));
         let content = fs::read_to_string(dir.path().join("new.txt")).unwrap();
         assert_eq!(content, "hello world");
@@ -115,12 +94,7 @@ mod tests {
     #[test]
     fn write_file_creates_parent_directories() {
         let dir = setup_temp_dir();
-        execute_tool(
-            "write_file",
-            r#"{"path": "deep/nested/dir/file.txt", "content": "nested"}"#,
-            dir.path(),
-        )
-        .unwrap();
+        execute_tool("write_file", r#"{"path": "deep/nested/dir/file.txt", "content": "nested"}"#, dir.path()).unwrap();
         let content = fs::read_to_string(dir.path().join("deep/nested/dir/file.txt")).unwrap();
         assert_eq!(content, "nested");
     }
@@ -169,20 +143,14 @@ mod tests {
     #[test]
     fn execute_command_runs_shell_commands() {
         let dir = setup_temp_dir();
-        let result = execute_tool(
-            "execute_command",
-            r#"{"command": "echo hello"}"#,
-            dir.path(),
-        )
-        .unwrap();
+        let result = execute_tool("execute_command", r#"{"command": "echo hello"}"#, dir.path()).unwrap();
         assert!(result.contains("hello"));
     }
 
     #[test]
     fn execute_command_captures_exit_code() {
         let dir = setup_temp_dir();
-        let result =
-            execute_tool("execute_command", r#"{"command": "exit 42"}"#, dir.path()).unwrap();
+        let result = execute_tool("execute_command", r#"{"command": "exit 42"}"#, dir.path()).unwrap();
         assert!(result.contains("[exit code: 42]"));
     }
 
@@ -199,9 +167,6 @@ mod tests {
         let dir = setup_temp_dir();
         let result = execute_tool("read_file", r#"{}"#, dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing required parameter"));
+        assert!(result.unwrap_err().to_string().contains("Missing required parameter"));
     }
 }

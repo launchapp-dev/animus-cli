@@ -8,38 +8,22 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use uuid::Uuid;
 
-fn event_matches_project(
-    record: &crate::services::runtime::DaemonEventRecord,
-    canonical: &str,
-) -> bool {
+fn event_matches_project(record: &crate::services::runtime::DaemonEventRecord, canonical: &str) -> bool {
     if let Some(root) = record.project_root.as_deref() {
         return crate::services::runtime::canonicalize_lossy(root) == canonical;
     }
     true
 }
 
-fn daemon_log_error_record(
-    record: &crate::services::runtime::DaemonEventRecord,
-) -> Option<ErrorRecord> {
-    let level = record
-        .data
-        .get("level")
-        .and_then(|value| value.as_str())
-        .unwrap_or("info")
-        .to_ascii_lowercase();
+fn daemon_log_error_record(record: &crate::services::runtime::DaemonEventRecord) -> Option<ErrorRecord> {
+    let level = record.data.get("level").and_then(|value| value.as_str()).unwrap_or("info").to_ascii_lowercase();
     if level != "error" {
         return None;
     }
 
-    let message = record
-        .data
-        .get("message")
-        .and_then(|value| value.as_str())
-        .unwrap_or("daemon error")
-        .to_string();
+    let message = record.data.get("message").and_then(|value| value.as_str()).unwrap_or("daemon error").to_string();
     let lower = message.to_ascii_lowercase();
-    let recoverable =
-        lower.contains("connection") || lower.contains("timeout") || lower.contains("unavailable");
+    let recoverable = lower.contains("connection") || lower.contains("timeout") || lower.contains("unavailable");
 
     Some(ErrorRecord {
         id: format!("ERR-{}", Uuid::new_v4().simple()),
@@ -63,43 +47,26 @@ fn notification_data_field(data: &Value, key: &str) -> Option<String> {
         .map(|value| value.to_string())
 }
 
-fn notification_error_record(
-    record: &crate::services::runtime::DaemonEventRecord,
-    dead_lettered: bool,
-) -> ErrorRecord {
-    let connector_id = notification_data_field(&record.data, "connector_id")
-        .unwrap_or_else(|| "unknown-connector".to_string());
-    let delivery_id = notification_data_field(&record.data, "delivery_id")
-        .unwrap_or_else(|| "unknown-delivery".to_string());
+fn notification_error_record(record: &crate::services::runtime::DaemonEventRecord, dead_lettered: bool) -> ErrorRecord {
+    let connector_id =
+        notification_data_field(&record.data, "connector_id").unwrap_or_else(|| "unknown-connector".to_string());
+    let delivery_id =
+        notification_data_field(&record.data, "delivery_id").unwrap_or_else(|| "unknown-delivery".to_string());
     let last_error = notification_data_field(&record.data, "last_error")
         .unwrap_or_else(|| "notification delivery failed".to_string());
-    let prefix = if dead_lettered {
-        "notification delivery dead-lettered"
-    } else {
-        "notification delivery failed"
-    };
+    let prefix = if dead_lettered { "notification delivery dead-lettered" } else { "notification delivery failed" };
 
     ErrorRecord {
         id: format!("ERR-{}", Uuid::new_v4().simple()),
         category: "notification".to_string(),
-        severity: if dead_lettered {
-            "critical".to_string()
-        } else {
-            "error".to_string()
-        },
-        message: format!(
-            "{prefix} (connector: {connector_id}, delivery: {delivery_id}): {last_error}"
-        ),
+        severity: if dead_lettered { "critical".to_string() } else { "error".to_string() },
+        message: format!("{prefix} (connector: {connector_id}, delivery: {delivery_id}): {last_error}"),
         task_id: notification_data_field(&record.data, "task_id"),
         workflow_id: notification_data_field(&record.data, "workflow_id"),
         recoverable: if dead_lettered {
             false
         } else {
-            record
-                .data
-                .get("retriable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
+            record.data.get("retriable").and_then(Value::as_bool).unwrap_or(false)
         },
         recovered: false,
         created_at: record.timestamp.clone(),
@@ -107,10 +74,7 @@ fn notification_error_record(
     }
 }
 
-fn daemon_event_to_error(
-    record: &crate::services::runtime::DaemonEventRecord,
-    canonical: &str,
-) -> Option<ErrorRecord> {
+fn daemon_event_to_error(record: &crate::services::runtime::DaemonEventRecord, canonical: &str) -> Option<ErrorRecord> {
     if !event_matches_project(record, canonical) {
         return None;
     }
@@ -126,11 +90,8 @@ fn daemon_event_to_error(
 fn sync_errors_from_daemon_events(project_root: &str) -> Result<ErrorStore> {
     let canonical = crate::services::runtime::canonicalize_lossy(project_root);
     let mut store = load_errors(project_root)?;
-    let mut synced_event_ids: HashSet<String> = store
-        .errors
-        .iter()
-        .filter_map(|error| error.source_event_id.clone())
-        .collect();
+    let mut synced_event_ids: HashSet<String> =
+        store.errors.iter().filter_map(|error| error.source_event_id.clone()).collect();
     let path = crate::services::runtime::daemon_events_log_path();
     if !path.exists() {
         return Ok(store);
@@ -140,8 +101,7 @@ fn sync_errors_from_daemon_events(project_root: &str) -> Result<ErrorStore> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(record) = serde_json::from_str::<crate::services::runtime::DaemonEventRecord>(line)
-        else {
+        let Ok(record) = serde_json::from_str::<crate::services::runtime::DaemonEventRecord>(line) else {
             continue;
         };
         if synced_event_ids.contains(record.id.as_str()) {
@@ -157,28 +117,18 @@ fn sync_errors_from_daemon_events(project_root: &str) -> Result<ErrorStore> {
     Ok(store)
 }
 
-pub(crate) async fn handle_errors(
-    command: ErrorsCommand,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(crate) async fn handle_errors(command: ErrorsCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         ErrorsCommand::List(args) => {
             let mut store = sync_errors_from_daemon_events(project_root)?;
             if let Some(category) = args.category {
-                store
-                    .errors
-                    .retain(|error| error.category.eq_ignore_ascii_case(category.as_str()));
+                store.errors.retain(|error| error.category.eq_ignore_ascii_case(category.as_str()));
             }
             if let Some(severity) = args.severity {
-                store
-                    .errors
-                    .retain(|error| error.severity.eq_ignore_ascii_case(severity.as_str()));
+                store.errors.retain(|error| error.severity.eq_ignore_ascii_case(severity.as_str()));
             }
             if let Some(task_id) = args.task_id {
-                store
-                    .errors
-                    .retain(|error| error.task_id.as_deref() == Some(task_id.as_str()));
+                store.errors.retain(|error| error.task_id.as_deref() == Some(task_id.as_str()));
             }
             if let Some(limit) = args.limit {
                 if store.errors.len() > limit {
@@ -201,11 +151,7 @@ pub(crate) async fn handle_errors(
             let mut by_category: HashMap<String, usize> = HashMap::new();
             let mut by_severity: HashMap<String, usize> = HashMap::new();
             let recovered = store.errors.iter().filter(|error| error.recovered).count();
-            let recoverable = store
-                .errors
-                .iter()
-                .filter(|error| error.recoverable)
-                .count();
+            let recoverable = store.errors.iter().filter(|error| error.recoverable).count();
             for error in &store.errors {
                 *by_category.entry(error.category.clone()).or_insert(0) += 1;
                 *by_severity.entry(error.severity.clone()).or_insert(0) += 1;
@@ -247,9 +193,7 @@ pub(crate) async fn handle_errors(
                 error
                     .created_at
                     .parse::<chrono::DateTime<chrono::FixedOffset>>()
-                    .map(|value: chrono::DateTime<chrono::FixedOffset>| {
-                        value.with_timezone(&chrono::Utc) >= cutoff
-                    })
+                    .map(|value: chrono::DateTime<chrono::FixedOffset>| value.with_timezone(&chrono::Utc) >= cutoff)
                     .unwrap_or(true)
             });
             save_errors(project_root, &store)?;
@@ -285,15 +229,10 @@ mod tests {
 
     #[test]
     fn sync_errors_ingests_notification_lifecycle_events() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
 
         let config_root = TempDir::new().expect("config temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
         let project_root = TempDir::new().expect("project temp dir");
@@ -374,15 +313,11 @@ mod tests {
         );
         std::fs::write(&events_path, content).expect("daemon events log should be written");
 
-        let store = sync_errors_from_daemon_events(project_root_str.as_str())
-            .expect("error sync should succeed");
+        let store = sync_errors_from_daemon_events(project_root_str.as_str()).expect("error sync should succeed");
         assert_eq!(store.errors.len(), 3);
 
-        let notification_errors: Vec<&ErrorRecord> = store
-            .errors
-            .iter()
-            .filter(|error| error.category == "notification")
-            .collect();
+        let notification_errors: Vec<&ErrorRecord> =
+            store.errors.iter().filter(|error| error.category == "notification").collect();
         assert_eq!(notification_errors.len(), 2);
 
         let failed_error = notification_errors
@@ -406,8 +341,8 @@ mod tests {
         assert!(!dead_letter_error.recoverable);
         assert!(dead_letter_error.message.contains("dead-lettered"));
 
-        let store_second_sync = sync_errors_from_daemon_events(project_root_str.as_str())
-            .expect("second sync should also succeed");
+        let store_second_sync =
+            sync_errors_from_daemon_events(project_root_str.as_str()).expect("second sync should also succeed");
         assert_eq!(store_second_sync.errors.len(), 3);
     }
 }

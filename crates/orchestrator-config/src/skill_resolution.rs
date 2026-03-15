@@ -15,26 +15,16 @@ pub struct ResolvedSkill {
 pub fn resolve_skill(name: &str, sources: &[SkillSource]) -> Result<ResolvedSkill> {
     for source in sources.iter().rev() {
         if let Some(def) = source.skills.get(name) {
-            return Ok(ResolvedSkill {
-                definition: def.clone(),
-                source: source.origin.clone(),
-            });
+            return Ok(ResolvedSkill { definition: def.clone(), source: source.origin.clone() });
         }
     }
 
-    let available: Vec<String> = list_available_skills(sources)
-        .into_iter()
-        .map(|r| r.definition.name)
-        .collect();
+    let available: Vec<String> = list_available_skills(sources).into_iter().map(|r| r.definition.name).collect();
 
     if available.is_empty() {
         bail!("skill '{}' not found (no skills available)", name);
     } else {
-        bail!(
-            "skill '{}' not found. Available skills: {}",
-            name,
-            available.join(", ")
-        );
+        bail!("skill '{}' not found. Available skills: {}", name, available.join(", "));
     }
 }
 
@@ -46,10 +36,7 @@ pub fn resolve_skills(names: &[String], sources: &[SkillSource]) -> Result<Vec<R
     Ok(resolved)
 }
 
-pub fn resolve_skills_for_project(
-    names: &[String],
-    project_root: &Path,
-) -> Result<Vec<ResolvedSkill>> {
+pub fn resolve_skills_for_project(names: &[String], project_root: &Path) -> Result<Vec<ResolvedSkill>> {
     let sources = load_skill_sources(project_root, None)?;
     resolve_skills(names, &sources)
 }
@@ -59,13 +46,7 @@ pub fn list_available_skills(sources: &[SkillSource]) -> Vec<ResolvedSkill> {
 
     for source in sources {
         for (name, def) in &source.skills {
-            map.insert(
-                name.clone(),
-                ResolvedSkill {
-                    definition: def.clone(),
-                    source: source.origin.clone(),
-                },
-            );
+            map.insert(name.clone(), ResolvedSkill { definition: def.clone(), source: source.origin.clone() });
         }
     }
 
@@ -77,11 +58,7 @@ mod tests {
     use super::*;
 
     fn make_skill(name: &str) -> SkillDefinition {
-        serde_yaml::from_str(&format!(
-            "name: {}\ndescription: {} description\n",
-            name, name
-        ))
-        .unwrap()
+        serde_yaml::from_str(&format!("name: {}\ndescription: {} description\n", name, name)).unwrap()
     }
 
     fn make_source(origin: SkillSourceOrigin, skills: &[&str]) -> SkillSource {
@@ -89,18 +66,13 @@ mod tests {
         for name in skills {
             map.insert(name.to_string(), make_skill(name));
         }
-        SkillSource {
-            origin,
-            skills: map,
-        }
+        SkillSource { origin, skills: map }
     }
 
     #[test]
     fn test_resolve_skill_found() {
-        let sources = vec![
-            make_source(SkillSourceOrigin::Builtin, &["alpha"]),
-            make_source(SkillSourceOrigin::User, &["beta"]),
-        ];
+        let sources =
+            vec![make_source(SkillSourceOrigin::Builtin, &["alpha"]), make_source(SkillSourceOrigin::User, &["beta"])];
 
         let resolved = resolve_skill("alpha", &sources).unwrap();
         assert_eq!(resolved.definition.name, "alpha");
@@ -147,10 +119,8 @@ mod tests {
 
     #[test]
     fn test_resolve_skills_all_found() {
-        let sources = vec![
-            make_source(SkillSourceOrigin::Builtin, &["a", "b"]),
-            make_source(SkillSourceOrigin::User, &["c"]),
-        ];
+        let sources =
+            vec![make_source(SkillSourceOrigin::Builtin, &["a", "b"]), make_source(SkillSourceOrigin::User, &["c"])];
 
         let names = vec!["a".to_string(), "c".to_string()];
         let resolved = resolve_skills(&names, &sources).unwrap();
@@ -176,22 +146,13 @@ mod tests {
         ];
 
         let available = list_available_skills(&sources);
-        let names: Vec<&str> = available
-            .iter()
-            .map(|r| r.definition.name.as_str())
-            .collect();
+        let names: Vec<&str> = available.iter().map(|r| r.definition.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta", "delta", "gamma"]);
 
-        let beta = available
-            .iter()
-            .find(|r| r.definition.name == "beta")
-            .unwrap();
+        let beta = available.iter().find(|r| r.definition.name == "beta").unwrap();
         assert_eq!(beta.source, SkillSourceOrigin::User);
 
-        let gamma = available
-            .iter()
-            .find(|r| r.definition.name == "gamma")
-            .unwrap();
+        let gamma = available.iter().find(|r| r.definition.name == "gamma").unwrap();
         assert_eq!(gamma.source, SkillSourceOrigin::Project);
     }
 

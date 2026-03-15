@@ -4,11 +4,7 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-pub(super) fn spawn_wait_task(
-    mut child: Child,
-    run_id: RunId,
-    wait_tx: oneshot::Sender<std::io::Result<ExitStatus>>,
-) {
+pub(super) fn spawn_wait_task(mut child: Child, run_id: RunId, wait_tx: oneshot::Sender<std::io::Result<ExitStatus>>) {
     tokio::spawn(async move {
         let status = child.wait().await;
         if let Err(ref e) = status {

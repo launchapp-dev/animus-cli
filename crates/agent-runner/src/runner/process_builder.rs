@@ -61,10 +61,7 @@ pub(super) async fn build_cli_invocation(
     }
 
     if is_ai_cli_tool(tool) {
-        warn!(
-            tool,
-            model, "AI CLI tool requested without runtime contract launch configuration"
-        );
+        warn!(tool, model, "AI CLI tool requested without runtime contract launch configuration");
         bail!(
             "Missing runtime contract launch for AI CLI '{}'. Provide context.runtime_contract.cli.launch from cli-wrapper.",
             tool
@@ -73,9 +70,7 @@ pub(super) async fn build_cli_invocation(
 
     let _ = model;
     let args = match tool {
-        "npm" | "pnpm" | "yarn" | "cargo" | "git" | "python" | "python3" | "node" => {
-            parse_prompt_as_args(prompt)
-        }
+        "npm" | "pnpm" | "yarn" | "cargo" | "git" | "python" | "python3" | "node" => parse_prompt_as_args(prompt),
         "echo" => vec![prompt.to_string()],
         _ if is_command_on_path(tool) => parse_prompt_as_args(prompt),
         _ => {
@@ -87,11 +82,7 @@ pub(super) async fn build_cli_invocation(
         }
     };
 
-    let invocation = LaunchInvocation {
-        command: tool.to_string(),
-        args,
-        prompt_via_stdin: false,
-    };
+    let invocation = LaunchInvocation { command: tool.to_string(), args, prompt_via_stdin: false };
     debug!(
         tool,
         model,
@@ -102,9 +93,7 @@ pub(super) async fn build_cli_invocation(
     Ok(invocation)
 }
 
-fn parse_contract_launch(
-    runtime_contract: Option<&serde_json::Value>,
-) -> Result<Option<LaunchInvocation>> {
+fn parse_contract_launch(runtime_contract: Option<&serde_json::Value>) -> Result<Option<LaunchInvocation>> {
     let invocation = parse_launch_from_runtime_contract(runtime_contract)?;
     if let Some(ref inv) = invocation {
         debug!(
@@ -134,19 +123,12 @@ mod tests {
             }
         });
 
-        let invocation = parse_contract_launch(Some(&contract))
-            .expect("parse launch")
-            .expect("launch present");
+        let invocation = parse_contract_launch(Some(&contract)).expect("parse launch").expect("launch present");
 
         assert_eq!(invocation.command, "codex");
         assert_eq!(
             invocation.args,
-            vec![
-                "exec".to_string(),
-                "--json".to_string(),
-                "--skip-git-repo-check".to_string(),
-                "hello".to_string()
-            ]
+            vec!["exec".to_string(), "--json".to_string(), "--skip-git-repo-check".to_string(), "hello".to_string()]
         );
         assert!(!invocation.prompt_via_stdin);
     }
@@ -170,18 +152,13 @@ mod tests {
             }
         });
 
-        let invocation = parse_contract_launch(Some(&contract))
-            .expect("parse launch")
-            .expect("launch present");
+        let invocation = parse_contract_launch(Some(&contract)).expect("parse launch").expect("launch present");
         let idx = invocation
             .args
             .iter()
             .position(|entry| entry == "--output-format")
             .expect("claude output format flag should be present");
-        assert_eq!(
-            invocation.args.get(idx + 1).map(String::as_str),
-            Some("stream-json")
-        );
+        assert_eq!(invocation.args.get(idx + 1).map(String::as_str), Some("stream-json"));
         assert!(invocation.args.contains(&"--verbose".to_string()));
     }
 
@@ -190,10 +167,6 @@ mod tests {
         let err = build_cli_invocation("codex", "codex", "hello", None)
             .await
             .expect_err("missing launch contract should fail");
-        assert!(
-            err.to_string()
-                .contains("Missing runtime contract launch for AI CLI"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("Missing runtime contract launch for AI CLI"), "unexpected error: {err}");
     }
 }

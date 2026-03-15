@@ -14,11 +14,7 @@ pub(crate) enum AgentCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentRunArgs {
-    #[arg(
-        long,
-        value_name = "RUN_ID",
-        help = "Run identifier. Omit to auto-generate a UUID."
-    )]
+    #[arg(long, value_name = "RUN_ID", help = "Run identifier. Omit to auto-generate a UUID.")]
     pub(crate) run_id: Option<String>,
     #[arg(
         long,
@@ -35,11 +31,7 @@ pub(crate) struct AgentRunArgs {
     pub(crate) model: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Prompt text to send to the agent.")]
     pub(crate) prompt: Option<String>,
-    #[arg(
-        long,
-        value_name = "PATH",
-        help = "Working directory for the run. Must resolve inside the project root."
-    )]
+    #[arg(long, value_name = "PATH", help = "Working directory for the run. Must resolve inside the project root.")]
     pub(crate) cwd: Option<String>,
     #[arg(
         long,
@@ -52,11 +44,7 @@ pub(crate) struct AgentRunArgs {
     pub(crate) context_json: Option<String>,
     #[arg(long, value_name = "JSON", help = "Runtime contract JSON override.")]
     pub(crate) runtime_contract_json: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Submit run and return immediately without streaming events."
-    )]
+    #[arg(long, default_value_t = false, help = "Submit run and return immediately without streaming events.")]
     pub(crate) detach: bool,
     #[arg(
         long,
@@ -72,11 +60,7 @@ pub(crate) struct AgentRunArgs {
         help = "Persist run event logs under .ao/runs."
     )]
     pub(crate) save_jsonl: bool,
-    #[arg(
-        long,
-        value_name = "PATH",
-        help = "Override the base directory used for persisted run logs."
-    )]
+    #[arg(long, value_name = "PATH", help = "Override the base directory used for persisted run logs.")]
     pub(crate) jsonl_dir: Option<String>,
     #[arg(
         long,
@@ -85,12 +69,7 @@ pub(crate) struct AgentRunArgs {
         help = "Start the runner automatically when required."
     )]
     pub(crate) start_runner: bool,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
+    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
@@ -98,25 +77,11 @@ pub(crate) struct AgentRunArgs {
 pub(crate) struct AgentControlArgs {
     #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "ACTION",
-        help = "Control action: pause, resume, or terminate."
-    )]
+    #[arg(long, value_enum, value_name = "ACTION", help = "Control action: pause, resume, or terminate.")]
     pub(crate) action: AgentControlActionArg,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Start the runner automatically when required."
-    )]
+    #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
     pub(crate) start_runner: bool,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
+    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
@@ -131,23 +96,10 @@ pub(crate) enum AgentControlActionArg {
 pub(crate) struct AgentStatusArgs {
     #[arg(long, value_name = "RUN_ID", help = "Run identifier.")]
     pub(crate) run_id: String,
-    #[arg(
-        long,
-        value_name = "PATH",
-        help = "Override the base directory used to read persisted run logs."
-    )]
+    #[arg(long, value_name = "PATH", help = "Override the base directory used to read persisted run logs.")]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Start the runner automatically when required."
-    )]
+    #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
     pub(crate) start_runner: bool,
-    #[arg(
-        long,
-        value_enum,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
+    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
 }

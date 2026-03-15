@@ -10,13 +10,8 @@ impl AoMcpServer {
         requested_args: Vec<String>,
         project_root_override: Option<String>,
     ) -> Result<CliExecutionResult> {
-        let project_root =
-            project_root_override.unwrap_or_else(|| self.default_project_root.clone());
-        let mut args = vec![
-            "--json".to_string(),
-            "--project-root".to_string(),
-            project_root.clone(),
-        ];
+        let project_root = project_root_override.unwrap_or_else(|| self.default_project_root.clone());
+        let mut args = vec!["--json".to_string(), "--project-root".to_string(), project_root.clone()];
         args.extend(requested_args.iter().cloned());
 
         let binary = std::env::current_exe().context("failed to resolve ao binary path")?;

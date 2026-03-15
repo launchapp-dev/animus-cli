@@ -1,6 +1,5 @@
 use crate::types::{
-    CodebaseInsight, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
-    VisionDocument,
+    CodebaseInsight, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus, VisionDocument,
 };
 use chrono::Utc;
 
@@ -9,13 +8,7 @@ use super::complexity::effective_complexity_assessment;
 fn title_to_slug(title: &str) -> String {
     title
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_lowercase() } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|chunk| !chunk.is_empty())
@@ -50,21 +43,15 @@ fn requirement_from_goal(
         title: format!("{} ({})", title, slug),
         description: format!(
             "Translate the goal into a deliverable requirement: {}",
-            if normalized_goal.is_empty() {
-                "Define initial product behavior"
-            } else {
-                normalized_goal
-            }
+            if normalized_goal.is_empty() { "Define initial product behavior" } else { normalized_goal }
         ),
         body: None,
         legacy_id: None,
         category: None,
         requirement_type: None,
         acceptance_criteria: vec![
-            "Repository contains runnable product code that implements the goal end-to-end."
-                .to_string(),
-            "APIs and data contracts needed by the goal are implemented with persisted run history."
-                .to_string(),
+            "Repository contains runnable product code that implements the goal end-to-end.".to_string(),
+            "APIs and data contracts needed by the goal are implemented with persisted run history.".to_string(),
             "Automated tests cover the critical user journey for this goal.".to_string(),
         ],
         priority,
@@ -83,13 +70,7 @@ fn requirement_from_goal(
 fn normalize_text_for_match(value: &str) -> String {
     value
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() {
-                ch.to_ascii_lowercase()
-            } else {
-                ' '
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() { ch.to_ascii_lowercase() } else { ' ' })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -133,11 +114,7 @@ fn significant_constraint_tokens(constraint: &str) -> Vec<String> {
 }
 
 fn requirement_text_haystack(requirement: &RequirementItem) -> String {
-    let mut chunks = vec![
-        requirement.title.clone(),
-        requirement.description.clone(),
-        requirement.source.clone(),
-    ];
+    let mut chunks = vec![requirement.title.clone(), requirement.description.clone(), requirement.source.clone()];
     if let Some(body) = &requirement.body {
         chunks.push(body.clone());
     }
@@ -150,10 +127,7 @@ fn constraint_requirement_tags(constraint: &str) -> Vec<String> {
     let normalized = normalize_text_for_match(constraint);
     let mut tags = vec!["constraint".to_string(), "vision-constraint".to_string()];
 
-    if normalized.contains("next js")
-        || normalized.contains("nextjs")
-        || normalized.contains("app router")
-    {
+    if normalized.contains("next js") || normalized.contains("nextjs") || normalized.contains("app router") {
         tags.push("frontend".to_string());
         tags.push("nextjs".to_string());
     }
@@ -186,10 +160,7 @@ fn constraint_requirement_tags(constraint: &str) -> Vec<String> {
     tags
 }
 
-fn requirement_from_constraint(
-    constraint: &str,
-    now: chrono::DateTime<Utc>,
-) -> Option<RequirementItem> {
+fn requirement_from_constraint(constraint: &str, now: chrono::DateTime<Utc>) -> Option<RequirementItem> {
     let constraint = constraint.trim();
     if constraint.is_empty() {
         return None;
@@ -207,12 +178,8 @@ fn requirement_from_constraint(
         category: None,
         requirement_type: None,
         acceptance_criteria: vec![
-            format!(
-                "Implementation demonstrates explicit compliance with vision constraint: {}.",
-                constraint
-            ),
-            "Verification artifacts (tests/checklists/review notes) confirm the constraint is enforced."
-                .to_string(),
+            format!("Implementation demonstrates explicit compliance with vision constraint: {}.", constraint),
+            "Verification artifacts (tests/checklists/review notes) confirm the constraint is enforced.".to_string(),
         ],
         priority: RequirementPriority::Must,
         status: RequirementStatus::Draft,
@@ -227,10 +194,7 @@ fn requirement_from_constraint(
     })
 }
 
-fn requirements_from_constraints(
-    vision: &VisionDocument,
-    now: chrono::DateTime<Utc>,
-) -> Vec<RequirementItem> {
+fn requirements_from_constraints(vision: &VisionDocument, now: chrono::DateTime<Utc>) -> Vec<RequirementItem> {
     let assessment = effective_complexity_assessment(vision);
     let mut seen = std::collections::HashSet::new();
     let mut unique_constraints = Vec::new();
@@ -257,11 +221,7 @@ fn requirements_from_constraints(
     }
 
     if !remaining.is_empty() {
-        let mut tags = vec![
-            "constraint".to_string(),
-            "vision-constraint".to_string(),
-            "constraint-matrix".to_string(),
-        ];
+        let mut tags = vec!["constraint".to_string(), "vision-constraint".to_string(), "constraint-matrix".to_string()];
         for constraint in &remaining {
             tags.extend(constraint_requirement_tags(constraint));
         }
@@ -281,9 +241,7 @@ fn requirements_from_constraints(
             requirement_type: None,
             acceptance_criteria: remaining
                 .iter()
-                .map(|constraint| {
-                    format!("Implementation demonstrates compliance with: {constraint}.")
-                })
+                .map(|constraint| format!("Implementation demonstrates compliance with: {constraint}."))
                 .collect(),
             priority: RequirementPriority::Must,
             status: RequirementStatus::Draft,
@@ -313,10 +271,7 @@ pub(crate) fn missing_vision_constraint_coverage(
         return Vec::new();
     }
 
-    let haystacks = requirements
-        .iter()
-        .map(requirement_text_haystack)
-        .collect::<Vec<_>>();
+    let haystacks = requirements.iter().map(requirement_text_haystack).collect::<Vec<_>>();
     let mut missing = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -355,16 +310,13 @@ fn baseline_requirements_from_context(
         RequirementItem {
             id: String::new(),
             title: "Define MVP user journey".to_string(),
-            description:
-                "Specify the first complete user journey from entry to successful outcome."
-                    .to_string(),
+            description: "Specify the first complete user journey from entry to successful outcome.".to_string(),
             body: None,
             legacy_id: None,
             category: None,
             requirement_type: None,
             acceptance_criteria: vec![
-                "Journey includes entry point, key interaction steps, and success confirmation."
-                    .to_string(),
+                "Journey includes entry point, key interaction steps, and success confirmation.".to_string(),
                 "Failure and retry behaviors are documented.".to_string(),
             ],
             priority: RequirementPriority::Must,
@@ -381,8 +333,7 @@ fn baseline_requirements_from_context(
         RequirementItem {
             id: String::new(),
             title: "Establish quality and observability guardrails".to_string(),
-            description: "Define test, logging, and monitoring expectations before implementation."
-                .to_string(),
+            description: "Define test, logging, and monitoring expectations before implementation.".to_string(),
             body: None,
             legacy_id: None,
             category: None,
@@ -410,17 +361,13 @@ fn baseline_requirements_from_context(
             requirements.push(RequirementItem {
                 id: String::new(),
                 title: "Align implementation with existing stack".to_string(),
-                description: format!(
-                    "Ensure new scope integrates with current stack: {}.",
-                    stacks
-                ),
+                description: format!("Ensure new scope integrates with current stack: {}.", stacks),
                 body: None,
                 legacy_id: None,
                 category: None,
                 requirement_type: None,
                 acceptance_criteria: vec![
-                    "Requirements reference concrete integration points in the existing codebase."
-                        .to_string(),
+                    "Requirements reference concrete integration points in the existing codebase.".to_string(),
                     "Compatibility constraints are documented before execution.".to_string(),
                 ],
                 priority: RequirementPriority::Should,
@@ -462,12 +409,7 @@ pub(crate) fn build_requirement_candidates(
 
     if !vision.goals.is_empty() {
         for (index, goal) in vision.goals.iter().enumerate() {
-            candidates.push(requirement_from_goal(
-                goal,
-                requirement_priority_for_index(index),
-                "vision",
-                now,
-            ));
+            candidates.push(requirement_from_goal(goal, requirement_priority_for_index(index), "vision", now));
         }
     }
 
@@ -478,16 +420,8 @@ pub(crate) fn build_requirement_candidates(
     let mut deduped = dedupe_requirements(candidates);
 
     let requirement_range = assessment.recommended_requirement_range;
-    let target_max = if max_requirements > 0 {
-        max_requirements
-    } else {
-        requirement_range.max
-    };
-    let target_min = if max_requirements > 0 {
-        0
-    } else {
-        requirement_range.min
-    };
+    let target_max = if max_requirements > 0 { max_requirements } else { requirement_range.max };
+    let target_min = if max_requirements > 0 { 0 } else { requirement_range.min };
 
     if target_max > 0 && deduped.len() > target_max {
         let mut pinned = Vec::new();
@@ -510,10 +444,7 @@ pub(crate) fn build_requirement_candidates(
         let mut extras = baseline_requirements_from_context(codebase_insight, now);
         extras = dedupe_requirements(extras);
         for extra in extras {
-            if deduped
-                .iter()
-                .any(|existing| existing.title.eq_ignore_ascii_case(&extra.title))
-            {
+            if deduped.iter().any(|existing| existing.title.eq_ignore_ascii_case(&extra.title)) {
                 continue;
             }
             deduped.push(extra);
@@ -526,14 +457,9 @@ pub(crate) fn build_requirement_candidates(
     dedupe_requirements(deduped)
 }
 
-pub(crate) fn requirement_matches_id_filter(
-    requirement: &RequirementItem,
-    filter_ids: &[String],
-) -> bool {
+pub(crate) fn requirement_matches_id_filter(requirement: &RequirementItem, filter_ids: &[String]) -> bool {
     if filter_ids.is_empty() {
         return true;
     }
-    filter_ids
-        .iter()
-        .any(|id| id.eq_ignore_ascii_case(requirement.id.as_str()))
+    filter_ids.iter().any(|id| id.eq_ignore_ascii_case(requirement.id.as_str()))
 }

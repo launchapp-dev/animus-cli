@@ -28,28 +28,16 @@ fn merge_schema_into(base: &mut Value, overlay: &Value) -> Result<()> {
     Ok(())
 }
 
-fn phase_field_schema(
-    definition: &orchestrator_core::agent_runtime_config::PhaseFieldDefinition,
-) -> Result<Value> {
+fn phase_field_schema(definition: &orchestrator_core::agent_runtime_config::PhaseFieldDefinition) -> Result<Value> {
     let mut schema = serde_json::json!({
         "type": definition.field_type
     });
 
     if !definition.enum_values.is_empty() {
-        schema
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("field schema should be object"))?
-            .insert(
-                "enum".to_string(),
-                Value::Array(
-                    definition
-                        .enum_values
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
+        schema.as_object_mut().ok_or_else(|| anyhow!("field schema should be object"))?.insert(
+            "enum".to_string(),
+            Value::Array(definition.enum_values.iter().cloned().map(Value::String).collect()),
+        );
     }
 
     if let Some(items) = definition.items.as_ref() {
@@ -68,9 +56,7 @@ fn phase_field_schema(
                 required.push(Value::String(name.clone()));
             }
         }
-        let object = schema
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("field schema should be object"))?;
+        let object = schema.as_object_mut().ok_or_else(|| anyhow!("field schema should be object"))?;
         object.insert("properties".to_string(), Value::Object(properties));
         if !required.is_empty() {
             object.insert("required".to_string(), Value::Array(required));
@@ -83,10 +69,7 @@ fn phase_field_schema(
 
 fn apply_contract_fields(
     schema: &mut Value,
-    fields: &std::collections::BTreeMap<
-        String,
-        orchestrator_core::agent_runtime_config::PhaseFieldDefinition,
-    >,
+    fields: &std::collections::BTreeMap<String, orchestrator_core::agent_runtime_config::PhaseFieldDefinition>,
     required_fields: &[String],
 ) -> Result<()> {
     let mut property_updates: Vec<(String, Value)> = Vec::new();
@@ -154,10 +137,7 @@ pub fn phase_output_json_schema_for(ctx: &RuntimeConfigContext, phase_id: &str) 
     }
 }
 
-pub fn phase_decision_json_schema_for(
-    ctx: &RuntimeConfigContext,
-    phase_id: &str,
-) -> Result<Option<Value>> {
+pub fn phase_decision_json_schema_for(ctx: &RuntimeConfigContext, phase_id: &str) -> Result<Option<Value>> {
     let contract = match ctx.phase_decision_contract(phase_id) {
         Some(c) => c,
         None => return Ok(None),
@@ -216,28 +196,21 @@ pub fn phase_decision_json_schema_for(
     Ok(Some(schema))
 }
 
-pub fn phase_response_json_schema_for(
-    ctx: &RuntimeConfigContext,
-    phase_id: &str,
-) -> Result<Option<Value>> {
+pub fn phase_response_json_schema_for(ctx: &RuntimeConfigContext, phase_id: &str) -> Result<Option<Value>> {
     let output_schema = phase_output_json_schema_for(ctx, phase_id)?;
     let decision_schema = phase_decision_json_schema_for(ctx, phase_id)?;
 
     match (output_schema, decision_schema) {
         (Some(mut output_schema), Some(decision_schema)) => {
-            let required_decision = ctx
-                .phase_decision_contract(phase_id)
-                .map(|contract| !contract.allow_missing_decision)
-                .unwrap_or(false);
+            let required_decision =
+                ctx.phase_decision_contract(phase_id).map(|contract| !contract.allow_missing_decision).unwrap_or(false);
             let properties = output_schema
                 .get_mut("properties")
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| anyhow!("output schema properties should be an object"))?;
             properties.insert("phase_decision".to_string(), decision_schema);
             if required_decision {
-                let required = output_schema
-                    .get_mut("required")
-                    .and_then(Value::as_array_mut);
+                let required = output_schema.get_mut("required").and_then(Value::as_array_mut);
                 if let Some(required) = required {
                     let field = Value::String("phase_decision".to_string());
                     if !required.contains(&field) {
@@ -258,20 +231,11 @@ pub fn phase_response_json_schema_for(
     }
 }
 
-pub fn inject_read_only_flag(
-    runtime_contract: &mut Value,
-    config: &orchestrator_core::AgentRuntimeConfig,
-) {
-    let cli_name = runtime_contract
-        .pointer("/cli/name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+pub fn inject_read_only_flag(runtime_contract: &mut Value, config: &orchestrator_core::AgentRuntimeConfig) {
+    let cli_name = runtime_contract.pointer("/cli/name").and_then(Value::as_str).unwrap_or("");
 
     if let Some(flag) = orchestrator_core::cli_tool_read_only_flag(cli_name, config) {
-        if let Some(args) = runtime_contract
-            .pointer_mut("/cli/launch/args")
-            .and_then(Value::as_array_mut)
-        {
+        if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
             let prompt_idx = args.len().saturating_sub(1);
             args.insert(prompt_idx, Value::String(flag));
         }
@@ -283,16 +247,10 @@ pub fn inject_response_schema_into_launch_args(
     schema: &Value,
     config: &orchestrator_core::AgentRuntimeConfig,
 ) {
-    let cli_name = runtime_contract
-        .pointer("/cli/name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let cli_name = runtime_contract.pointer("/cli/name").and_then(Value::as_str).unwrap_or("");
 
     if let Some(flag) = orchestrator_core::cli_tool_response_schema_flag(cli_name, config) {
-        if let Some(args) = runtime_contract
-            .pointer_mut("/cli/launch/args")
-            .and_then(Value::as_array_mut)
-        {
+        if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
             let prompt_idx = args.len().saturating_sub(1);
             let schema_str = serde_json::to_string(schema).unwrap_or_default();
             args.insert(prompt_idx, Value::String(flag));
@@ -310,11 +268,7 @@ pub fn inject_default_stdio_mcp_with_config(
     project_root: &str,
     mcp_config: &protocol::McpRuntimeConfig,
 ) {
-    if runtime_contract
-        .pointer("/mcp/stdio/command")
-        .and_then(Value::as_str)
-        .is_some_and(|v| !v.trim().is_empty())
-    {
+    if runtime_contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()) {
         return;
     }
 
@@ -322,72 +276,43 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     }
 
-    let supports_mcp = runtime_contract
-        .pointer("/cli/capabilities/supports_mcp")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let supports_mcp =
+        runtime_contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool).unwrap_or(false);
     if !supports_mcp {
         return;
     }
 
-    let command = mcp_config.stdio_command.clone()
+    let command = mcp_config
+        .stdio_command
+        .clone()
         .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        });
+        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().to_string()));
     let Some(command) = command else {
         return;
     };
 
-    let args = mcp_config.stdio_args_json.as_deref()
-        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
-        .unwrap_or_else(|| {
-            vec![
-                "--project-root".to_string(),
-                project_root.to_string(),
-                "mcp".to_string(),
-                "serve".to_string(),
-            ]
-        });
-
-    if let Some(mcp) = runtime_contract
-        .get_mut("mcp")
-        .and_then(Value::as_object_mut)
-    {
-        mcp.insert(
-            "stdio".to_string(),
-            serde_json::json!({ "command": command, "args": args }),
+    let args =
+        mcp_config.stdio_args_json.as_deref().and_then(|v| serde_json::from_str::<Vec<String>>(v).ok()).unwrap_or_else(
+            || vec!["--project-root".to_string(), project_root.to_string(), "mcp".to_string(), "serve".to_string()],
         );
-        let has_agent_id = mcp
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .is_some_and(|v| !v.trim().is_empty());
+
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
+        mcp.insert("stdio".to_string(), serde_json::json!({ "command": command, "args": args }));
+        let has_agent_id = mcp.get("agent_id").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
         if !has_agent_id {
             mcp.insert("agent_id".to_string(), serde_json::json!("ao"));
         }
     }
 }
 
-pub fn inject_agent_tool_policy(
-    runtime_contract: &mut Value,
-    ctx: &RuntimeConfigContext,
-    phase_id: &str,
-) {
+pub fn inject_agent_tool_policy(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
     let agent_id = ctx.phase_agent_id(phase_id);
 
-    let wf_profile = agent_id
-        .as_deref()
-        .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id));
+    let wf_profile = agent_id.as_deref().and_then(|id| ctx.workflow_config.config.agent_profiles.get(id));
 
-    let rt_profile = agent_id
-        .as_deref()
-        .and_then(|id| ctx.agent_runtime_config.agent_profile(id));
+    let rt_profile = agent_id.as_deref().and_then(|id| ctx.agent_runtime_config.agent_profile(id));
 
-    let policy = wf_profile
-        .map(|p| &p.tool_policy)
-        .or_else(|| rt_profile.map(|p| &p.tool_policy));
+    let policy = wf_profile.map(|p| &p.tool_policy).or_else(|| rt_profile.map(|p| &p.tool_policy));
 
     let Some(policy) = policy else {
         return;
@@ -395,10 +320,7 @@ pub fn inject_agent_tool_policy(
     if policy.allow.is_empty() && policy.deny.is_empty() {
         return;
     }
-    if let Some(mcp) = runtime_contract
-        .get_mut("mcp")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert(
             "tool_policy".to_string(),
             serde_json::json!({
@@ -426,9 +348,7 @@ pub fn inject_project_mcp_servers(
     let mut servers = serde_json::Map::new();
     for (name, entry) in &project_config.mcp_servers {
         let assigned = entry.assign_to.is_empty()
-            || agent_id
-                .as_deref()
-                .is_some_and(|id| entry.assign_to.iter().any(|a| a.eq_ignore_ascii_case(id)));
+            || agent_id.as_deref().is_some_and(|id| entry.assign_to.iter().any(|a| a.eq_ignore_ascii_case(id)));
         if !assigned {
             continue;
         }
@@ -444,19 +364,12 @@ pub fn inject_project_mcp_servers(
     if servers.is_empty() {
         return;
     }
-    if let Some(mcp) = runtime_contract
-        .get_mut("mcp")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert("additional_servers".to_string(), Value::Object(servers));
     }
 }
 
-pub fn inject_workflow_mcp_servers(
-    runtime_contract: &mut Value,
-    ctx: &RuntimeConfigContext,
-    phase_id: &str,
-) {
+pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
     if ctx.workflow_config.config.mcp_servers.is_empty() {
         return;
     }
@@ -475,14 +388,10 @@ pub fn inject_workflow_mcp_servers(
     } else {
         None
     };
-    let allowed_servers: Option<&[String]> =
-        workflow_profile_servers.or(runtime_profile_servers.as_deref());
+    let allowed_servers: Option<&[String]> = workflow_profile_servers.or(runtime_profile_servers.as_deref());
 
-    let existing = runtime_contract
-        .pointer("/mcp/additional_servers")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let existing =
+        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut servers = existing;
 
     for (name, definition) in &ctx.workflow_config.config.mcp_servers {
@@ -503,10 +412,7 @@ pub fn inject_workflow_mcp_servers(
     if servers.is_empty() {
         return;
     }
-    if let Some(mcp) = runtime_contract
-        .get_mut("mcp")
-        .and_then(Value::as_object_mut)
-    {
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert("additional_servers".to_string(), Value::Object(servers));
     }
 }

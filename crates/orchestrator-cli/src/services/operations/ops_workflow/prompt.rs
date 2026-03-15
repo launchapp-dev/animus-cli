@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{
-    ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
-    resolve_phase_plan_for_workflow_ref, workflow_ref_for_task, OrchestratorWorkflow,
-    WorkflowDecisionAction, WorkflowSubject, STANDARD_WORKFLOW_REF,
+    ensure_workflow_config_compiled, load_workflow_config, resolve_phase_plan_for_workflow_ref, services::ServiceHub,
+    workflow_ref_for_task, OrchestratorWorkflow, WorkflowDecisionAction, WorkflowSubject, STANDARD_WORKFLOW_REF,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -14,8 +13,7 @@ use uuid::Uuid;
 use crate::{print_value, WorkflowPromptRenderArgs};
 
 use ::workflow_runner_v2::{
-    ensure_execution_cwd, render_phase_prompt, PhasePromptInputs, PhaseRenderParams,
-    RenderedPhasePrompt,
+    ensure_execution_cwd, render_phase_prompt, PhasePromptInputs, PhaseRenderParams, RenderedPhasePrompt,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,16 +160,10 @@ async fn render_ad_hoc_prompts(
         .collect())
 }
 
-fn effective_existing_workflow_ref(
-    project_root: &str,
-    workflow: &OrchestratorWorkflow,
-) -> Result<String> {
+fn effective_existing_workflow_ref(project_root: &str, workflow: &OrchestratorWorkflow) -> Result<String> {
     ensure_workflow_config_compiled(Path::new(project_root))?;
     let workflow_config = load_workflow_config(Path::new(project_root))?;
-    Ok(workflow
-        .workflow_ref
-        .clone()
-        .unwrap_or_else(|| workflow_config.default_workflow_ref.clone()))
+    Ok(workflow.workflow_ref.clone().unwrap_or_else(|| workflow_config.default_workflow_ref.clone()))
 }
 
 fn select_existing_workflow_phases(
@@ -187,12 +179,7 @@ fn select_existing_workflow_phases(
     workflow
         .current_phase
         .clone()
-        .or_else(|| {
-            workflow
-                .phases
-                .get(workflow.current_phase_index)
-                .map(|phase| phase.phase_id.clone())
-        })
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
         .map(|phase| vec![phase])
         .ok_or_else(|| anyhow!("workflow '{}' has no current phase to render", workflow.id))
 }
@@ -207,12 +194,7 @@ async fn resolve_existing_workflow_context(
         .subject_resolver()
         .resolve_subject_context(&workflow.subject, None, None)
         .await
-        .with_context(|| {
-            format!(
-                "failed to resolve subject context for workflow '{}'",
-                workflow.id
-            )
-        })?;
+        .with_context(|| format!("failed to resolve subject context for workflow '{}'", workflow.id))?;
     let execution_cwd = ensure_execution_cwd(hub, project_root, resolved.task.as_ref()).await?;
 
     Ok(ResolvedPromptContext {
@@ -239,28 +221,14 @@ async fn resolve_ad_hoc_context(
         match (&args.task_id, &args.requirement_id, &args.title) {
             (Some(task_id), None, None) => {
                 let task = hub.tasks().get(task_id).await?;
-                let workflow_ref = args
-                    .workflow_ref
-                    .clone()
-                    .unwrap_or_else(|| workflow_ref_for_task(&task));
-                (
-                    WorkflowSubject::Task {
-                        id: task.id.clone(),
-                    },
-                    workflow_ref,
-                    Some(task.title),
-                    Some(task.description),
-                )
+                let workflow_ref = args.workflow_ref.clone().unwrap_or_else(|| workflow_ref_for_task(&task));
+                (WorkflowSubject::Task { id: task.id.clone() }, workflow_ref, Some(task.title), Some(task.description))
             }
             (None, Some(requirement_id), None) => {
                 hub.planning().get_requirement(requirement_id).await?;
                 (
-                    WorkflowSubject::Requirement {
-                        id: requirement_id.clone(),
-                    },
-                    args.workflow_ref
-                        .clone()
-                        .unwrap_or(super::resolve_requirement_workflow_ref(project_root)?),
+                    WorkflowSubject::Requirement { id: requirement_id.clone() },
+                    args.workflow_ref.clone().unwrap_or(super::resolve_requirement_workflow_ref(project_root)?),
                     None,
                     None,
                 )
@@ -270,38 +238,23 @@ async fn resolve_ad_hoc_context(
                     title: title.clone(),
                     description: args.description.clone().unwrap_or_default(),
                 },
-                args.workflow_ref
-                    .clone()
-                    .unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+                args.workflow_ref.clone().unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
                 Some(title.clone()),
                 Some(args.description.clone().unwrap_or_default()),
             ),
             (None, None, None) => {
-                return Err(anyhow!(
-                    "one of --workflow-id, --task-id, --requirement-id, or --title must be provided"
-                ));
+                return Err(anyhow!("one of --workflow-id, --task-id, --requirement-id, or --title must be provided"));
             }
             _ => {
-                return Err(anyhow!(
-                    "--task-id, --requirement-id, and --title are mutually exclusive"
-                ));
+                return Err(anyhow!("--task-id, --requirement-id, and --title are mutually exclusive"));
             }
         };
 
     let resolved = hub
         .subject_resolver()
-        .resolve_subject_context(
-            &subject,
-            fallback_title.as_deref(),
-            fallback_description.as_deref(),
-        )
+        .resolve_subject_context(&subject, fallback_title.as_deref(), fallback_description.as_deref())
         .await
-        .with_context(|| {
-            format!(
-                "failed to resolve subject context for ad-hoc subject '{}'",
-                subject.id()
-            )
-        })?;
+        .with_context(|| format!("failed to resolve subject context for ad-hoc subject '{}'", subject.id()))?;
     let execution_cwd = ensure_execution_cwd(hub, project_root, resolved.task.as_ref()).await?;
 
     Ok(ResolvedPromptContext {
@@ -323,10 +276,7 @@ fn select_ad_hoc_phases(
     args: &WorkflowPromptRenderArgs,
 ) -> Result<Vec<String>> {
     if args.all_phases {
-        return resolve_phase_plan_for_workflow_ref(
-            Some(Path::new(project_root)),
-            Some(workflow_ref),
-        );
+        return resolve_phase_plan_for_workflow_ref(Some(Path::new(project_root)), Some(workflow_ref));
     }
 
     args.phase
@@ -335,10 +285,7 @@ fn select_ad_hoc_phases(
         .ok_or_else(|| anyhow!("--phase is required for ad-hoc prompt rendering unless --all-phases is set"))
 }
 
-fn existing_workflow_rework_context(
-    workflow: &OrchestratorWorkflow,
-    phase_id: &str,
-) -> Option<String> {
+fn existing_workflow_rework_context(workflow: &OrchestratorWorkflow, phase_id: &str) -> Option<String> {
     workflow
         .decision_history
         .iter()
@@ -368,15 +315,7 @@ fn print_human_render_output(outputs: &[PromptRenderOutput]) {
 
         let rendered = &output.rendered;
         println!("Phase: {}", rendered.phase_id);
-        println!(
-            "Workflow: {}{}",
-            rendered.workflow_id,
-            if output.workflow_id_is_preview {
-                " (preview)"
-            } else {
-                ""
-            }
-        );
+        println!("Workflow: {}{}", rendered.workflow_id, if output.workflow_id_is_preview { " (preview)" } else { "" });
         println!("Workflow Ref: {}", output.workflow_ref);
         println!("Subject: {}", rendered.subject_id);
         println!("Subject Title: {}", rendered.subject_title);
@@ -385,12 +324,7 @@ fn print_human_render_output(outputs: &[PromptRenderOutput]) {
         if !rendered.inputs.pipeline_vars.is_empty() {
             println!();
             println!("Pipeline Vars:");
-            let mut keys = rendered
-                .inputs
-                .pipeline_vars
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut keys = rendered.inputs.pipeline_vars.keys().cloned().collect::<Vec<_>>();
             keys.sort();
             for key in keys {
                 if let Some(value) = rendered.inputs.pipeline_vars.get(&key) {
@@ -423,14 +357,8 @@ fn print_human_render_output(outputs: &[PromptRenderOutput]) {
         print_named_section("Safety Rules", Some(rendered.phase_safety_rules.as_str()));
         print_named_section("Decision Rule", Some(rendered.phase_decision_rule.as_str()));
         print_named_section("Result Rule", Some(rendered.structured_result_rule.as_str()));
-        print_named_section(
-            "Pipeline Context",
-            Some(rendered.pipeline_context.as_str()),
-        );
-        print_named_section(
-            "Prior Phase Outputs",
-            Some(rendered.prior_phase_outputs.as_str()),
-        );
+        print_named_section("Pipeline Context", Some(rendered.pipeline_context.as_str()));
+        print_named_section("Prior Phase Outputs", Some(rendered.prior_phase_outputs.as_str()));
         print_named_section("Final Prompt", Some(rendered.final_prompt.as_str()));
     }
 }
@@ -448,24 +376,18 @@ fn print_named_section(title: &str, content: Option<&str>) {
 mod tests {
     use super::*;
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
-        write_workflow_config, InMemoryServiceHub, WorkflowRunInput,
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        InMemoryServiceHub, WorkflowRunInput,
     };
     use std::collections::HashMap;
 
     fn write_prompt_test_config(project_root: &Path) {
         let mut workflow_config = builtin_workflow_config();
-        let default_agent = builtin_agent_runtime_config()
-            .agent_profile("default")
-            .expect("default agent profile")
-            .clone();
-        workflow_config
-            .agent_profiles
-            .insert("default".to_string(), default_agent);
-        let phase = workflow_config
-            .phase_definitions
-            .entry("implementation".to_string())
-            .or_insert(orchestrator_core::PhaseExecutionDefinition {
+        let default_agent =
+            builtin_agent_runtime_config().agent_profile("default").expect("default agent profile").clone();
+        workflow_config.agent_profiles.insert("default".to_string(), default_agent);
+        let phase = workflow_config.phase_definitions.entry("implementation".to_string()).or_insert(
+            orchestrator_core::PhaseExecutionDefinition {
                 mode: orchestrator_core::PhaseExecutionMode::Agent,
                 agent_id: Some("default".to_string()),
                 directive: None,
@@ -480,12 +402,12 @@ mod tests {
                 command: None,
                 manual: None,
                 default_tool: None,
-            });
+            },
+        );
         phase.directive = Some("Implement {{release_name}} safely.".to_string());
         phase.system_prompt = Some("System guidance for {{release_name}}.".to_string());
         write_workflow_config(project_root, &workflow_config).expect("write workflow config");
-        write_agent_runtime_config(project_root, &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(project_root, &builtin_agent_runtime_config()).expect("write runtime config");
     }
 
     fn base_args() -> WorkflowPromptRenderArgs {
@@ -517,50 +439,19 @@ mod tests {
         args.rework_context = Some("Fix the remaining release issues.".to_string());
         args.vars = vec!["release_name=Mercury".to_string()];
 
-        let outputs = render_ad_hoc_prompts(
-            &args,
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-        )
-        .await
-        .expect("ad-hoc prompt render should succeed");
+        let outputs = render_ad_hoc_prompts(&args, hub, temp.path().to_string_lossy().as_ref())
+            .await
+            .expect("ad-hoc prompt render should succeed");
 
         assert_eq!(outputs.len(), 1);
         assert!(outputs[0].workflow_id_is_preview);
-        assert_eq!(
-            outputs[0]
-                .rendered
-                .inputs
-                .pipeline_vars
-                .get("release_name")
-                .map(String::as_str),
-            Some("Mercury")
-        );
-        assert_eq!(
-            outputs[0].rendered.inputs.dispatch_input.as_deref(),
-            Some("{\"ticket\":\"REL-9\"}")
-        );
-        assert_eq!(
-            outputs[0].rendered.inputs.rework_context.as_deref(),
-            Some("Fix the remaining release issues.")
-        );
-        assert!(
-            outputs[0]
-                .rendered
-                .final_prompt
-                .contains("Implement Mercury safely.")
-        );
-        assert!(
-            outputs[0]
-                .rendered
-                .final_prompt
-                .contains("System guidance for Mercury.")
-        );
+        assert_eq!(outputs[0].rendered.inputs.pipeline_vars.get("release_name").map(String::as_str), Some("Mercury"));
+        assert_eq!(outputs[0].rendered.inputs.dispatch_input.as_deref(), Some("{\"ticket\":\"REL-9\"}"));
+        assert_eq!(outputs[0].rendered.inputs.rework_context.as_deref(), Some("Fix the remaining release issues."));
+        assert!(outputs[0].rendered.final_prompt.contains("Implement Mercury safely."));
+        assert!(outputs[0].rendered.final_prompt.contains("System guidance for Mercury."));
         let json = serde_json::to_value(&outputs).expect("prompt outputs should serialize");
-        assert_eq!(
-            json[0]["rendered"]["final_prompt"].as_str(),
-            Some(outputs[0].rendered.final_prompt.as_str())
-        );
+        assert_eq!(json[0]["rendered"]["final_prompt"].as_str(), Some(outputs[0].rendered.final_prompt.as_str()));
     }
 
     #[tokio::test]
@@ -577,10 +468,7 @@ mod tests {
                     None,
                 )
                 .with_input(Some(serde_json::json!({"ticket":"WF-7"})))
-                .with_vars(HashMap::from([(
-                    "release_name".to_string(),
-                    "Mercury".to_string(),
-                )])),
+                .with_vars(HashMap::from([("release_name".to_string(), "Mercury".to_string())])),
             )
             .await
             .expect("workflow should bootstrap");
@@ -588,36 +476,16 @@ mod tests {
         args.workflow_id = Some(workflow.id.clone());
         args.phase = Some("implementation".to_string());
 
-        let outputs = render_existing_workflow_prompts(
-            &workflow.id,
-            &args,
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-        )
-        .await
-        .expect("existing workflow prompt render should succeed");
+        let outputs =
+            render_existing_workflow_prompts(&workflow.id, &args, hub, temp.path().to_string_lossy().as_ref())
+                .await
+                .expect("existing workflow prompt render should succeed");
 
         assert_eq!(outputs.len(), 1);
         assert!(!outputs[0].workflow_id_is_preview);
-        assert_eq!(
-            outputs[0]
-                .rendered
-                .inputs
-                .pipeline_vars
-                .get("release_name")
-                .map(String::as_str),
-            Some("Mercury")
-        );
-        assert_eq!(
-            outputs[0].rendered.inputs.dispatch_input.as_deref(),
-            Some("{\"ticket\":\"WF-7\"}")
-        );
-        assert!(
-            outputs[0]
-                .rendered
-                .final_prompt
-                .contains("Implement Mercury safely.")
-        );
+        assert_eq!(outputs[0].rendered.inputs.pipeline_vars.get("release_name").map(String::as_str), Some("Mercury"));
+        assert_eq!(outputs[0].rendered.inputs.dispatch_input.as_deref(), Some("{\"ticket\":\"WF-7\"}"));
+        assert!(outputs[0].rendered.final_prompt.contains("Implement Mercury safely."));
     }
 
     #[tokio::test]
@@ -638,35 +506,19 @@ mod tests {
         args.workflow_id = Some(workflow.id);
         args.vars = vec!["release_name=Mercury".to_string()];
 
-        let error = handle_workflow_prompt_render(
-            args,
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            true,
-        )
-        .await
-        .expect_err("existing workflow render should reject ad-hoc vars");
+        let error = handle_workflow_prompt_render(args, hub, temp.path().to_string_lossy().as_ref(), true)
+            .await
+            .expect_err("existing workflow render should reject ad-hoc vars");
         assert!(error.to_string().contains("--var cannot be used with --workflow-id"));
     }
 
     #[test]
     fn schedule_prompt_input_only_applies_to_schedule_subjects() {
         let input = serde_json::json!({"window":"nightly"});
+        assert_eq!(schedule_prompt_input(&WorkflowSubject::Task { id: "TASK-1".to_string() }, Some(&input),), None);
         assert_eq!(
             schedule_prompt_input(
-                &WorkflowSubject::Task {
-                    id: "TASK-1".to_string(),
-                },
-                Some(&input),
-            ),
-            None
-        );
-        assert_eq!(
-            schedule_prompt_input(
-                &WorkflowSubject::Custom {
-                    title: "schedule:nightly".to_string(),
-                    description: String::new(),
-                },
+                &WorkflowSubject::Custom { title: "schedule:nightly".to_string(), description: String::new() },
                 Some(&input),
             ),
             Some("{\"window\":\"nightly\"}".to_string())

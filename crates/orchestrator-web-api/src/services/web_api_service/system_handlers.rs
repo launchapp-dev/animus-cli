@@ -8,10 +8,7 @@ impl WebApiService {
         let status = self.context.hub.daemon().status().await?;
         let daemon_running = matches!(
             status,
-            DaemonStatus::Starting
-                | DaemonStatus::Running
-                | DaemonStatus::Paused
-                | DaemonStatus::Stopping
+            DaemonStatus::Starting | DaemonStatus::Running | DaemonStatus::Paused | DaemonStatus::Stopping
         );
         let daemon_status = enum_as_string(&status)?;
 

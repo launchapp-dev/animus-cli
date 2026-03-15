@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use orchestrator_core::{
-    dispatch_workflow_event, services::ServiceHub, OrchestratorWorkflow, WorkflowEvent,
-};
+use orchestrator_core::{dispatch_workflow_event, services::ServiceHub, OrchestratorWorkflow, WorkflowEvent};
 
 use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 
@@ -14,9 +12,7 @@ pub(crate) async fn cancel_orphaned_running_workflow(
     let outcome = match dispatch_workflow_event(
         hub.clone(),
         project_root,
-        WorkflowEvent::Cancel {
-            workflow_id: workflow.id.clone(),
-        },
+        WorkflowEvent::Cancel { workflow_id: workflow.id.clone() },
     )
     .await
     {

@@ -34,32 +34,23 @@ impl CliInterface for ClaudeCli {
             .await
             .is_ok()
             .then_some(true)
-            .ok_or(Error::AuthenticationRequired(
-                "Claude not configured".to_string(),
-            ))
+            .ok_or(Error::AuthenticationRequired("Claude not configured".to_string()))
     }
 
     async fn get_version(&self) -> Result<String> {
-        let output = self
-            .run_process(&["--version"], None, &[], Some(10))
-            .await?;
+        let output = self.run_process(&["--version"], None, &[], Some(10)).await?;
 
         if output.is_success() {
             Ok(output.stdout.trim().to_string())
         } else {
-            Err(Error::ExecutionFailed(
-                "Failed to get Claude version".to_string(),
-            ))
+            Err(Error::ExecutionFailed("Failed to get Claude version".to_string()))
         }
     }
 
     async fn execute(&self, command: &CliCommand) -> Result<CliOutput> {
         debug!("Executing Claude command: {}", command.prompt);
 
-        let mut args: Vec<String> = vec![
-            "--print".to_string(),
-            "--no-session-persistence".to_string(),
-        ];
+        let mut args: Vec<String> = vec!["--print".to_string(), "--no-session-persistence".to_string()];
 
         if let Some(model) = command.model_for_cli("claude") {
             args.push("--model".to_string());
@@ -76,12 +67,6 @@ impl CliInterface for ClaudeCli {
 
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
-        self.run_process(
-            &args_refs,
-            command.working_dir.as_ref(),
-            &command.env_vars,
-            command.timeout_secs,
-        )
-        .await
+        self.run_process(&args_refs, command.working_dir.as_ref(), &command.env_vars, command.timeout_secs).await
     }
 }

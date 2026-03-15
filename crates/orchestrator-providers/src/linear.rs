@@ -6,9 +6,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use protocol::orchestrator::{
-    Assignee, Complexity, DependencyType, DispatchHistoryEntry, OrchestratorTask, Priority,
-    ResourceRequirements, RiskLevel, Scope, TaskCreateInput, TaskFilter, TaskMetadata,
-    TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, WorkflowMetadata,
+    Assignee, Complexity, DependencyType, DispatchHistoryEntry, OrchestratorTask, Priority, ResourceRequirements,
+    RiskLevel, Scope, TaskCreateInput, TaskFilter, TaskMetadata, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput,
+    WorkflowMetadata,
 };
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -33,17 +33,11 @@ pub struct LinearTaskProvider {
 
 impl LinearTaskProvider {
     pub fn new(config: LinearConfig) -> Self {
-        Self {
-            config,
-            client: Client::new(),
-        }
+        Self { config, client: Client::new() }
     }
 
     fn normalize_status_key(raw: &str) -> String {
-        raw.trim()
-            .to_ascii_lowercase()
-            .replace(' ', "-")
-            .replace('_', "-")
+        raw.trim().to_ascii_lowercase().replace(' ', "-").replace('_', "-")
     }
 
     fn normalize_priority(raw: &str) -> String {
@@ -78,9 +72,7 @@ impl LinearTaskProvider {
         self.config
             .status_mapping
             .iter()
-            .find_map(|(key, value)| {
-                (Self::normalize_status_key(key) == normalized).then_some(value.clone())
-            })
+            .find_map(|(key, value)| (Self::normalize_status_key(key) == normalized).then_some(value.clone()))
             .ok_or_else(|| anyhow!("no Linear state mapping configured for status: {status}"))
     }
 
@@ -90,9 +82,7 @@ impl LinearTaskProvider {
             .assignee
             .and_then(|assignee| assignee.name)
             .filter(|value| !value.is_empty())
-            .map_or(Assignee::Unassigned, |name| Assignee::Human {
-                user_id: name,
-            });
+            .map_or(Assignee::Unassigned, |name| Assignee::Human { user_id: name });
 
         OrchestratorTask {
             id: issue.id,
@@ -144,22 +134,12 @@ impl LinearTaskProvider {
         }
     }
 
-    async fn execute_graphql<T: DeserializeOwned>(
-        &self,
-        query: &str,
-        variables: Option<Value>,
-    ) -> Result<T> {
-        let api_key = env::var(&self.config.api_key_env).with_context(|| {
-            format!(
-                "Linear API key env var missing: {}",
-                self.config.api_key_env
-            )
-        })?;
+    async fn execute_graphql<T: DeserializeOwned>(&self, query: &str, variables: Option<Value>) -> Result<T> {
+        let api_key = env::var(&self.config.api_key_env)
+            .with_context(|| format!("Linear API key env var missing: {}", self.config.api_key_env))?;
 
-        let request_body = variables.map_or_else(
-            || json!({ "query": query }),
-            |value| json!({ "query": query, "variables": value }),
-        );
+        let request_body =
+            variables.map_or_else(|| json!({ "query": query }), |value| json!({ "query": query, "variables": value }));
 
         let response: GraphqlEnvelope<T> = self
             .client
@@ -174,11 +154,7 @@ impl LinearTaskProvider {
 
         if let Some(errors) = response.errors {
             if !errors.is_empty() {
-                let message = errors
-                    .into_iter()
-                    .map(|error| error.message)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let message = errors.into_iter().map(|error| error.message).collect::<Vec<_>>().join(", ");
                 bail!("Linear GraphQL error: {message}");
             }
         }
@@ -279,20 +255,10 @@ impl TaskProvider for LinearTaskProvider {
             }
         "#;
 
-        let response: GraphqlEnvelope<LinearIssuesResponse> = self
-            .execute_graphql(
-                query,
-                Some(json!({ "teamId": self.config.team_id.clone() })),
-            )
-            .await?;
+        let response: GraphqlEnvelope<LinearIssuesResponse> =
+            self.execute_graphql(query, Some(json!({ "teamId": self.config.team_id.clone() }))).await?;
 
-        let tasks = response
-            .data
-            .issues
-            .nodes
-            .into_iter()
-            .map(|issue| self.build_task_from_issue(issue))
-            .collect();
+        let tasks = response.data.issues.nodes.into_iter().map(|issue| self.build_task_from_issue(issue)).collect();
         Ok(tasks)
     }
 
@@ -326,9 +292,8 @@ impl TaskProvider for LinearTaskProvider {
             }
         "#;
 
-        let response: GraphqlEnvelope<LinearIssueResponse> = self
-            .execute_graphql(query, Some(json!({ "id": id })))
-            .await?;
+        let response: GraphqlEnvelope<LinearIssueResponse> =
+            self.execute_graphql(query, Some(json!({ "id": id }))).await?;
 
         Ok(self.build_task_from_issue(response.data.issue))
     }
@@ -413,12 +378,7 @@ impl TaskProvider for LinearTaskProvider {
         self.get(&response.data.issue_update.issue.id).await
     }
 
-    async fn set_status(
-        &self,
-        id: &str,
-        status: TaskStatus,
-        validate: bool,
-    ) -> Result<OrchestratorTask> {
+    async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask> {
         let _ = validate;
         let mapped_status = self.map_status_id(&status)?;
         let response: GraphqlEnvelope<LinearIssueUpdateResponse> = self

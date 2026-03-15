@@ -26,8 +26,7 @@ fn test_env_lock() -> &'static std::sync::Mutex<()> {
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,agent_runner=debug".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,agent_runner=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();

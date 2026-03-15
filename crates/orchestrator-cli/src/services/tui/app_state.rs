@@ -24,20 +24,10 @@ pub(crate) enum CreateTaskField {
 pub(crate) enum ModalState {
     None,
     TaskDetail,
-    StatusPicker {
-        selected: usize,
-    },
-    AssignInput {
-        input: String,
-    },
-    CreateTask {
-        title_input: String,
-        description_input: String,
-        focused_field: CreateTaskField,
-    },
-    DeleteTask {
-        confirm: bool,
-    },
+    StatusPicker { selected: usize },
+    AssignInput { input: String },
+    CreateTask { title_input: String, description_input: String, focused_field: CreateTaskField },
+    DeleteTask { confirm: bool },
 }
 
 pub(crate) struct AppState {
@@ -85,9 +75,8 @@ impl AppState {
             profiles: Vec::new(),
             selected_profile_idx: 0,
             prompt: String::new(),
-            status_line:
-                "Tab=switch pane  Enter=detail/run  s=status  a=assign  c=create  d=delete  q=quit"
-                    .to_string(),
+            status_line: "Tab=switch pane  Enter=detail/run  s=status  a=assign  c=create  d=delete  q=quit"
+                .to_string(),
             history: VecDeque::new(),
             run_in_flight: false,
             print_mode: true,
@@ -164,20 +153,12 @@ impl AppState {
             .profiles
             .get(self.selected_profile_idx)
             .map(|profile| (profile.tool.clone(), profile.model_id.clone()));
-        self.profiles =
-            discover_profiles(self.model_filter.as_deref(), self.tool_filter.as_deref());
+        self.profiles = discover_profiles(self.model_filter.as_deref(), self.tool_filter.as_deref());
         self.selected_profile_idx = selected
             .and_then(|(tool, model)| {
-                self.profiles
-                    .iter()
-                    .position(|profile| profile.tool == tool && profile.model_id == model)
+                self.profiles.iter().position(|profile| profile.tool == tool && profile.model_id == model)
             })
-            .unwrap_or_else(|| {
-                self.profiles
-                    .iter()
-                    .position(ModelProfile::is_available)
-                    .unwrap_or(0)
-            });
+            .unwrap_or_else(|| self.profiles.iter().position(ModelProfile::is_available).unwrap_or(0));
     }
 
     pub(crate) fn set_tasks(&mut self, tasks: Vec<TaskSnapshot>) {
@@ -195,34 +176,18 @@ impl AppState {
     }
 
     pub(crate) fn history_lines(&self, max_lines: usize) -> Vec<String> {
-        self.history
-            .iter()
-            .rev()
-            .take(max_lines)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
+        self.history.iter().rev().take(max_lines).cloned().collect::<Vec<_>>().into_iter().rev().collect()
     }
 
     pub(crate) fn drain_events(&mut self) {
         loop {
             match self.event_rx.try_recv() {
                 Ok(AppEvent::AgentOutput { line, is_error }) => {
-                    self.push_history(if is_error {
-                        format!("stderr: {line}")
-                    } else {
-                        line
-                    });
+                    self.push_history(if is_error { format!("stderr: {line}") } else { line });
                 }
                 Ok(AppEvent::AgentFinished { summary, success }) => {
                     self.run_in_flight = false;
-                    self.status_line = if success {
-                        summary.clone()
-                    } else {
-                        format!("run failed: {summary}")
-                    };
+                    self.status_line = if success { summary.clone() } else { format!("run failed: {summary}") };
                     self.push_history(summary);
                 }
                 Ok(AppEvent::TasksRefreshed(tasks)) => {
@@ -257,9 +222,7 @@ impl AppState {
 }
 
 fn discover_profiles(model_filter: Option<&str>, tool_filter: Option<&str>) -> Vec<ModelProfile> {
-    let normalized_model_filter = model_filter
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let normalized_model_filter = model_filter.map(str::trim).filter(|value| !value.is_empty());
     let normalized_tool_filter = tool_filter
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -350,8 +313,7 @@ mod tests {
     fn ordered_defaults_start_with_tool_default_model() {
         let defaults = ordered_default_model_specs();
         for tool in ["claude", "codex", "gemini", "oai-runner"] {
-            let expected =
-                protocol::default_model_for_tool(tool).expect("tool should have default");
+            let expected = protocol::default_model_for_tool(tool).expect("tool should have default");
             let first_for_tool = defaults
                 .iter()
                 .find_map(|(model_id, tool_id)| (tool_id == tool).then_some(model_id.as_str()))
@@ -370,15 +332,7 @@ mod tests {
     #[test]
     fn focus_pane_cycle_toggles_between_models_and_tasks() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            vec![],
-            tx,
-            rx,
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, vec![], tx, rx);
         assert_eq!(state.focus, FocusPane::Models);
         state.cycle_focus();
         assert_eq!(state.focus, FocusPane::Tasks);
@@ -405,15 +359,7 @@ mod tests {
                 assignee_label: String::new(),
             },
         ];
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            tasks,
-            tx,
-            rx,
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, tasks, tx, rx);
         assert_eq!(state.task_selected_idx, 0);
         state.task_move_down();
         assert_eq!(state.task_selected_idx, 1);
@@ -444,38 +390,16 @@ mod tests {
                 assignee_label: String::new(),
             },
         ];
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            tasks,
-            tx,
-            rx,
-        );
-        assert_eq!(
-            state.selected_task().map(|t| t.id.as_str()),
-            Some("TASK-001")
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, tasks, tx, rx);
+        assert_eq!(state.selected_task().map(|t| t.id.as_str()), Some("TASK-001"));
         state.task_move_down();
-        assert_eq!(
-            state.selected_task().map(|t| t.id.as_str()),
-            Some("TASK-002")
-        );
+        assert_eq!(state.selected_task().map(|t| t.id.as_str()), Some("TASK-002"));
     }
 
     #[test]
     fn set_tasks_clamps_selection_to_valid_range() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            vec![],
-            tx,
-            rx,
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, vec![], tx, rx);
         state.task_selected_idx = 5;
         state.set_tasks(vec![]);
         assert_eq!(state.task_selected_idx, 0);
@@ -509,15 +433,7 @@ mod tests {
                 assignee_label: String::new(),
             },
         ];
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            tasks,
-            tx,
-            rx,
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, tasks, tx, rx);
         state.task_selected_idx = 1;
         state.set_tasks(vec![TaskSnapshot {
             id: "TASK-003".to_string(),
@@ -539,15 +455,7 @@ mod tests {
             description: "A description".to_string(),
             assignee_label: "agent:dev".to_string(),
         }];
-        let mut state = AppState::new(
-            "endpoint".to_string(),
-            "agent".to_string(),
-            None,
-            None,
-            tasks,
-            tx,
-            rx,
-        );
+        let mut state = AppState::new("endpoint".to_string(), "agent".to_string(), None, None, tasks, tx, rx);
         state.modal = ModalState::TaskDetail;
         assert!(matches!(state.modal, ModalState::TaskDetail));
         assert_eq!(state.selected_task().unwrap().id, "TASK-001");
@@ -565,9 +473,7 @@ mod tests {
 
     #[test]
     fn modal_state_assign_input_stores_input() {
-        let modal = ModalState::AssignInput {
-            input: "agent:reviewer".to_string(),
-        };
+        let modal = ModalState::AssignInput { input: "agent:reviewer".to_string() };
         if let ModalState::AssignInput { input } = modal {
             assert_eq!(input, "agent:reviewer");
         } else {
@@ -582,12 +488,7 @@ mod tests {
             description_input: "Description".to_string(),
             focused_field: CreateTaskField::Description,
         };
-        if let ModalState::CreateTask {
-            title_input,
-            description_input,
-            focused_field,
-        } = modal
-        {
+        if let ModalState::CreateTask { title_input, description_input, focused_field } = modal {
             assert_eq!(title_input, "New task");
             assert_eq!(description_input, "Description");
             assert_eq!(focused_field, CreateTaskField::Description);

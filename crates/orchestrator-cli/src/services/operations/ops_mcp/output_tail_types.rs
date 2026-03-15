@@ -42,8 +42,6 @@ pub(super) fn parse_output_tail_event_type(value: &str) -> Result<OutputTailEven
         "output" => Ok(OutputTailEventType::Output),
         "error" => Ok(OutputTailEventType::Error),
         "thinking" => Ok(OutputTailEventType::Thinking),
-        _ => Err(invalid_input_error(format!(
-            "invalid event type '{value}'; expected one of: output|error|thinking"
-        ))),
+        _ => Err(invalid_input_error(format!("invalid event type '{value}'; expected one of: output|error|thinking"))),
     }
 }

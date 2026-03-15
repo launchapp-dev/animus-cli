@@ -38,9 +38,7 @@ pub fn traverse_text<T>(
 ) -> Option<T> {
     let mut last_match = None;
     for (_raw, payload) in collect_json_payload_lines(text) {
-        if let Some(result) =
-            traverse_payload(&payload, object_keys, text_keys, extractor, text_extractor)
-        {
+        if let Some(result) = traverse_payload(&payload, object_keys, text_keys, extractor, text_extractor) {
             last_match = Some(result);
         }
     }
@@ -50,10 +48,7 @@ pub fn traverse_text<T>(
     text_extractor(text)
 }
 
-pub fn parse_phase_decision_from_text(
-    text: &str,
-    phase_id: &str,
-) -> Option<orchestrator_core::PhaseDecision> {
+pub fn parse_phase_decision_from_text(text: &str, phase_id: &str) -> Option<orchestrator_core::PhaseDecision> {
     traverse_text(
         text,
         &|payload| extract_phase_decision(payload, phase_id),
@@ -97,21 +92,14 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
         .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(0.0) as f32;
 
-    let risk_str = value
-        .get("risk")
-        .and_then(Value::as_str)
-        .unwrap_or("medium");
+    let risk_str = value.get("risk").and_then(Value::as_str).unwrap_or("medium");
     let risk = match risk_str.trim().to_ascii_lowercase().as_str() {
         "low" => orchestrator_core::WorkflowDecisionRisk::Low,
         "high" => orchestrator_core::WorkflowDecisionRisk::High,
         _ => orchestrator_core::WorkflowDecisionRisk::Medium,
     };
 
-    let reason = value
-        .get("reason")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let reason = value.get("reason").and_then(Value::as_str).unwrap_or("").to_string();
 
     let evidence = value
         .get("evidence")
@@ -120,12 +108,10 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
             arr.iter()
                 .map(|ev| {
                     let kind_str = ev.get("kind").and_then(Value::as_str).unwrap_or("custom");
-                    let kind: orchestrator_core::PhaseEvidenceKind = serde_json::from_value(Value::String(kind_str.to_string())).unwrap_or(orchestrator_core::PhaseEvidenceKind::Custom);
-                    let description = ev
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
+                    let kind: orchestrator_core::PhaseEvidenceKind =
+                        serde_json::from_value(Value::String(kind_str.to_string()))
+                            .unwrap_or(orchestrator_core::PhaseEvidenceKind::Custom);
+                    let description = ev.get("description").and_then(Value::as_str).unwrap_or("").to_string();
                     orchestrator_core::PhaseEvidence {
                         kind,
                         description,
@@ -140,23 +126,12 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
     let guardrail_violations = value
         .get("guardrail_violations")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(ToOwned::to_owned).collect())
         .unwrap_or_default();
 
-    let commit_message = value
-        .get("commit_message")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let commit_message = value.get("commit_message").and_then(Value::as_str).map(ToOwned::to_owned);
 
-    let target_phase = value
-        .get("target_phase")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let target_phase = value.get("target_phase").and_then(Value::as_str).map(ToOwned::to_owned);
 
     Some(orchestrator_core::PhaseDecision {
         kind: "phase_decision".to_string(),
@@ -173,13 +148,7 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
 }
 
 pub fn parse_commit_message_from_text(text: &str) -> Option<String> {
-    traverse_text(
-        text,
-        &extract_commit_message_from_payload,
-        &|_| None,
-        &["phase_decision", "decision"],
-        &[],
-    )
+    traverse_text(text, &extract_commit_message_from_payload, &|_| None, &["phase_decision", "decision"], &[])
 }
 
 fn extract_commit_message_from_payload(payload: &Value) -> Option<String> {

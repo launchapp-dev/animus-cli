@@ -61,11 +61,7 @@ pub async fn run_agent_loop(
     if let Some(sid) = session_id {
         let prior = load_session_messages_from(&config_dir(), sid);
         if !prior.is_empty() {
-            eprintln!(
-                "[oai-runner] Resuming session {} ({} prior messages)",
-                sid,
-                prior.len()
-            );
+            eprintln!("[oai-runner] Resuming session {} ({} prior messages)", sid, prior.len());
             messages.extend(prior);
         }
     }
@@ -106,10 +102,7 @@ pub async fn run_agent_loop(
             output.metadata(u.prompt_tokens, u.completion_tokens);
         }
 
-        let has_tool_calls = assistant_msg
-            .tool_calls
-            .as_ref()
-            .is_some_and(|tc| !tc.is_empty());
+        let has_tool_calls = assistant_msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
 
         messages.push(assistant_msg.clone());
 
@@ -118,29 +111,16 @@ pub async fn run_agent_loop(
             if let Some(schema) = response_schema {
                 let content = assistant_msg.content.as_deref().unwrap_or("");
                 if let Err(errors) = validate_output_against_schema(content, schema) {
-                    let corrected = retry_schema_validation(
-                        client,
-                        model,
-                        &mut messages,
-                        schema,
-                        &errors,
-                        output,
-                    )
-                    .await;
+                    let corrected =
+                        retry_schema_validation(client, model, &mut messages, schema, &errors, output).await;
                     if !corrected {
-                        eprintln!(
-                            "Warning: schema validation failed after {} retries",
-                            SCHEMA_RETRY_LIMIT
-                        );
+                        eprintln!("Warning: schema validation failed after {} retries", SCHEMA_RETRY_LIMIT);
                     }
                 }
             }
             if let Some(sid) = session_id {
                 if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
-                    eprintln!(
-                        "[oai-runner] Warning: failed to save session {}: {}",
-                        sid, e
-                    );
+                    eprintln!("[oai-runner] Warning: failed to save session {}: {}", sid, e);
                 }
             }
             output.newline();
@@ -155,9 +135,7 @@ pub async fn run_agent_loop(
 
             output.tool_call(&tc.function.name, &args);
 
-            let result = if let Some(mcp) =
-                mcp_client::find_client_for_tool(mcp_clients, &tc.function.name)
-            {
+            let result = if let Some(mcp) = mcp_client::find_client_for_tool(mcp_clients, &tc.function.name) {
                 match mcp_client::call_tool(mcp, &tc.function.name, &tc.function.arguments).await {
                     Ok(r) => {
                         output.tool_result(&tc.function.name, &r);
@@ -170,8 +148,7 @@ pub async fn run_agent_loop(
                     }
                 }
             } else {
-                match executor::execute_tool(&tc.function.name, &tc.function.arguments, working_dir)
-                {
+                match executor::execute_tool(&tc.function.name, &tc.function.arguments, working_dir) {
                     Ok(r) => {
                         output.tool_result(&tc.function.name, &r);
                         r
@@ -199,10 +176,7 @@ pub async fn run_agent_loop(
 
     if let Some(sid) = session_id {
         if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
-            eprintln!(
-                "[oai-runner] Warning: failed to save session {}: {}",
-                sid, e
-            );
+            eprintln!("[oai-runner] Warning: failed to save session {}: {}", sid, e);
         }
     }
     output.flush_result();
@@ -221,10 +195,7 @@ async fn retry_schema_validation(
     let mut last_errors = initial_errors.to_string();
 
     for attempt in 1..=SCHEMA_RETRY_LIMIT {
-        eprintln!(
-            "Schema validation failed (attempt {}/{}): {}",
-            attempt, SCHEMA_RETRY_LIMIT, last_errors
-        );
+        eprintln!("Schema validation failed (attempt {}/{}): {}", attempt, SCHEMA_RETRY_LIMIT, last_errors);
 
         let correction = format!(
             "Your last response did not match the required output JSON schema. Errors:\n{}\n\n\
@@ -277,13 +248,9 @@ async fn retry_schema_validation(
     false
 }
 
-fn validate_output_against_schema(
-    content: &str,
-    schema: &Value,
-) -> std::result::Result<(), String> {
-    let parsed = extract_json_from_content(content).ok_or_else(|| {
-        "Response does not contain valid JSON. Expected a JSON object.".to_string()
-    })?;
+fn validate_output_against_schema(content: &str, schema: &Value) -> std::result::Result<(), String> {
+    let parsed = extract_json_from_content(content)
+        .ok_or_else(|| "Response does not contain valid JSON. Expected a JSON object.".to_string())?;
 
     let mut errors = Vec::new();
 
@@ -320,19 +287,13 @@ fn validate_output_against_schema(
 
                 if let Some(constant) = rule.get("const") {
                     if value != constant {
-                        errors.push(format!(
-                            "field '{}' must equal {}, got {}",
-                            key, constant, value
-                        ));
+                        errors.push(format!("field '{}' must equal {}, got {}", key, constant, value));
                     }
                 }
 
                 if let Some(enum_values) = rule.get("enum").and_then(Value::as_array) {
                     if !enum_values.contains(value) {
-                        errors.push(format!(
-                            "field '{}' must be one of {:?}, got {}",
-                            key, enum_values, value
-                        ));
+                        errors.push(format!("field '{}' must be one of {:?}, got {}", key, enum_values, value));
                     }
                 }
 

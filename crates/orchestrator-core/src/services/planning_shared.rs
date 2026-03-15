@@ -13,12 +13,7 @@ pub(super) fn draft_vision_and_record(
     now: chrono::DateTime<Utc>,
 ) -> VisionDocument {
     let complexity_assessment = input.complexity_assessment.clone().unwrap_or_else(|| {
-        infer_complexity_assessment(
-            &input.problem_statement,
-            &input.target_users,
-            &input.goals,
-            &input.constraints,
-        )
+        infer_complexity_assessment(&input.problem_statement, &input.target_users, &input.goals, &input.constraints)
     });
     let vision = VisionDocument {
         id: Uuid::new_v4().to_string(),
@@ -43,11 +38,7 @@ pub(super) fn draft_vision_and_record(
     };
 
     lock.vision = Some(vision.clone());
-    lock.logs.push(LogEntry {
-        timestamp: now,
-        level: LogLevel::Info,
-        message: "vision drafted".to_string(),
-    });
+    lock.logs.push(LogEntry { timestamp: now, level: LogLevel::Info, message: "vision drafted".to_string() });
     vision
 }
 
@@ -67,11 +58,8 @@ pub(super) fn draft_requirements_and_record(
     // `0` means uncapped; callers can still pass an explicit limit.
     let max_requirements = input.max_requirements;
     let mut candidates = build_requirement_candidates(&vision, codebase_insight, max_requirements);
-    let existing_titles: std::collections::HashSet<String> = lock
-        .requirements
-        .values()
-        .map(|requirement| requirement.title.trim().to_ascii_lowercase())
-        .collect();
+    let existing_titles: std::collections::HashSet<String> =
+        lock.requirements.values().map(|requirement| requirement.title.trim().to_ascii_lowercase()).collect();
 
     let mut appended_count = 0usize;
     let mut appended_ids = Vec::new();
@@ -82,38 +70,28 @@ pub(super) fn draft_requirements_and_record(
         }
 
         if requirement_needs_research(candidate) {
-            if !candidate
-                .tags
-                .iter()
-                .any(|tag| tag.eq_ignore_ascii_case("needs-research"))
-            {
+            if !candidate.tags.iter().any(|tag| tag.eq_ignore_ascii_case("needs-research")) {
                 candidate.tags.push("needs-research".to_string());
             }
-            if !candidate.acceptance_criteria.iter().any(|criterion| {
-                criterion
-                    .to_ascii_lowercase()
-                    .contains("research findings documented")
-            }) {
-                candidate.acceptance_criteria.push(
-                    "Research findings documented with sources and decision rationale.".to_string(),
-                );
+            if !candidate
+                .acceptance_criteria
+                .iter()
+                .any(|criterion| criterion.to_ascii_lowercase().contains("research findings documented"))
+            {
+                candidate
+                    .acceptance_criteria
+                    .push("Research findings documented with sources and decision rationale.".to_string());
             }
         }
 
         let requirement_id = next_requirement_id(&lock.requirements);
         candidate.id = requirement_id.clone();
-        if candidate
-            .relative_path
-            .as_ref()
-            .map(|value| value.trim().is_empty())
-            .unwrap_or(true)
-        {
+        if candidate.relative_path.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) {
             candidate.relative_path = Some(format!("generated/{}.json", requirement_id));
         }
         candidate.created_at = Utc::now();
         candidate.updated_at = candidate.created_at;
-        lock.requirements
-            .insert(requirement_id.clone(), candidate.clone());
+        lock.requirements.insert(requirement_id.clone(), candidate.clone());
         appended_count = appended_count.saturating_add(1);
         appended_ids.push(requirement_id);
     }
@@ -134,20 +112,11 @@ pub(super) fn list_requirements_sorted(lock: &CoreState) -> Vec<RequirementItem>
 }
 
 pub(super) fn get_requirement(lock: &CoreState, id: &str) -> Result<RequirementItem> {
-    lock.requirements
-        .get(id)
-        .cloned()
-        .ok_or_else(|| not_found(format!("requirement not found: {id}")))
+    lock.requirements.get(id).cloned().ok_or_else(|| not_found(format!("requirement not found: {id}")))
 }
 
-pub(super) fn requirements_by_ids_sorted(
-    lock: &CoreState,
-    requirement_ids: &[String],
-) -> Vec<RequirementItem> {
-    let mut requirements: Vec<_> = requirement_ids
-        .iter()
-        .filter_map(|id| lock.requirements.get(id).cloned())
-        .collect();
+pub(super) fn requirements_by_ids_sorted(lock: &CoreState, requirement_ids: &[String]) -> Vec<RequirementItem> {
+    let mut requirements: Vec<_> = requirement_ids.iter().filter_map(|id| lock.requirements.get(id).cloned()).collect();
     requirements.sort_by(|a, b| a.id.cmp(&b.id));
     requirements
 }
@@ -156,12 +125,7 @@ pub(super) fn refine_requirements_and_record(
     lock: &mut CoreState,
     input: RequirementsRefineInput,
 ) -> Vec<RequirementItem> {
-    let focus_hint = input
-        .focus
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let focus_hint = input.focus.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
     let requirement_ids = input.requirement_ids;
 
     let mut refined = Vec::new();
@@ -172,9 +136,7 @@ pub(super) fn refine_requirements_and_record(
         let needs_research = requirement_needs_research(requirement);
 
         if requirement.acceptance_criteria.is_empty() {
-            requirement
-                .acceptance_criteria
-                .push("Validation criteria must be measurable and testable.".to_string());
+            requirement.acceptance_criteria.push("Validation criteria must be measurable and testable.".to_string());
         }
 
         if !requirement
@@ -189,21 +151,13 @@ pub(super) fn refine_requirements_and_record(
 
         if let Some(focus_hint) = &focus_hint {
             let criteria = format!("Refinement focus addressed: {focus_hint}");
-            if !requirement
-                .acceptance_criteria
-                .iter()
-                .any(|value| value == &criteria)
-            {
+            if !requirement.acceptance_criteria.iter().any(|value| value == &criteria) {
                 requirement.acceptance_criteria.push(criteria);
             }
         }
 
         if needs_research {
-            if !requirement
-                .tags
-                .iter()
-                .any(|tag| tag.eq_ignore_ascii_case("needs-research"))
-            {
+            if !requirement.tags.iter().any(|tag| tag.eq_ignore_ascii_case("needs-research")) {
                 requirement.tags.push("needs-research".to_string());
             }
 
@@ -212,11 +166,7 @@ pub(super) fn refine_requirements_and_record(
                 "Requirement validation confirms research outputs are reflected in acceptance criteria.",
             ];
             for criterion in research_criteria {
-                if !requirement
-                    .acceptance_criteria
-                    .iter()
-                    .any(|value| value == criterion)
-                {
+                if !requirement.acceptance_criteria.iter().any(|value| value == criterion) {
                     requirement.acceptance_criteria.push(criterion.to_string());
                 }
             }
@@ -239,12 +189,8 @@ pub(super) fn refine_requirements_and_record(
 }
 
 fn requirement_is_frontend_related(requirement: &RequirementItem) -> bool {
-    let text = format!(
-        "{} {} {}",
-        requirement.title,
-        requirement.description,
-        requirement.acceptance_criteria.join(" ")
-    );
+    let text =
+        format!("{} {} {}", requirement.title, requirement.description, requirement.acceptance_criteria.join(" "));
     crate::types::is_frontend_related_content(&requirement.tags, &text)
 }
 
@@ -258,13 +204,9 @@ fn requirement_needs_research(requirement: &RequirementItem) -> bool {
         return true;
     }
 
-    let haystack = format!(
-        "{} {} {}",
-        requirement.title,
-        requirement.description,
-        requirement.acceptance_criteria.join(" ")
-    )
-    .to_ascii_lowercase();
+    let haystack =
+        format!("{} {} {}", requirement.title, requirement.description, requirement.acceptance_criteria.join(" "))
+            .to_ascii_lowercase();
     [
         "research",
         "investigate",
@@ -283,12 +225,7 @@ fn requirement_needs_research(requirement: &RequirementItem) -> bool {
 }
 
 fn criterion_title_fragment(criterion: &str, max_chars: usize) -> String {
-    let cleaned = criterion
-        .trim()
-        .trim_start_matches('-')
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cleaned = criterion.trim().trim_start_matches('-').split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out = String::new();
     for ch in cleaned.chars() {
         if out.chars().count() >= max_chars {
@@ -377,18 +314,9 @@ fn build_requirement_task_specs(
 
     let preferred_count = actionable_criteria.len().clamp(min_tasks, max_tasks);
 
-    let mut fragments = actionable_criteria
-        .iter()
-        .map(|criterion| criterion_title_fragment(criterion, 56))
-        .collect::<Vec<_>>();
-    let fallback_fragments = [
-        "Implementation",
-        "Integration",
-        "Testing",
-        "Docs",
-        "Hardening",
-        "Release Readiness",
-    ];
+    let mut fragments =
+        actionable_criteria.iter().map(|criterion| criterion_title_fragment(criterion, 56)).collect::<Vec<_>>();
+    let fallback_fragments = ["Implementation", "Integration", "Testing", "Docs", "Hardening", "Release Readiness"];
     for fallback in fallback_fragments {
         if fragments.len() >= preferred_count {
             break;
@@ -416,19 +344,10 @@ fn build_requirement_task_specs(
 
 fn sync_requirement_task_links(requirement: &mut RequirementItem, task_ids: &[String]) {
     for task_id in task_ids {
-        if !requirement
-            .linked_task_ids
-            .iter()
-            .any(|existing| existing == task_id)
-        {
+        if !requirement.linked_task_ids.iter().any(|existing| existing == task_id) {
             requirement.linked_task_ids.push(task_id.clone());
         }
-        if !requirement
-            .links
-            .tasks
-            .iter()
-            .any(|existing| existing == task_id)
-        {
+        if !requirement.links.tasks.iter().any(|existing| existing == task_id) {
             requirement.links.tasks.push(task_id.clone());
         }
     }
@@ -446,10 +365,8 @@ fn default_task_checklist(needs_research: bool, now: chrono::DateTime<Utc>) -> V
         "QA/testing gate passes with automated validation evidence.".to_string(),
     ];
     if needs_research {
-        checklist_items.insert(
-            1,
-            "Research findings are captured and linked before implementation proceeds.".to_string(),
-        );
+        checklist_items
+            .insert(1, "Research findings are captured and linked before implementation proceeds.".to_string());
     }
 
     checklist_items
@@ -508,13 +425,8 @@ pub(super) fn execute_requirements_and_record(
         return Err(anyhow!("no requirements matched; {guidance}"));
     }
 
-    let requirements_snapshot = lock
-        .requirements
-        .values()
-        .cloned()
-        .collect::<Vec<RequirementItem>>();
-    let missing_constraints =
-        missing_vision_constraint_coverage(lock.vision.as_ref(), &requirements_snapshot);
+    let requirements_snapshot = lock.requirements.values().cloned().collect::<Vec<RequirementItem>>();
+    let missing_constraints = missing_vision_constraint_coverage(lock.vision.as_ref(), &requirements_snapshot);
     if !missing_constraints.is_empty() {
         return Err(anyhow!(
             "vision constraints missing from requirements: {}. \
@@ -529,27 +441,18 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
         let Some(requirement) = lock.requirements.get_mut(requirement_id) else {
             continue;
         };
-        if let Err(error) =
-            run_requirement_lifecycle_state_machine(requirement, vision.as_ref(), state_machines)
-        {
+        if let Err(error) = run_requirement_lifecycle_state_machine(requirement, vision.as_ref(), state_machines) {
             lifecycle_failures.push(format!("{requirement_id}: {error}"));
         }
     }
     if !lifecycle_failures.is_empty() {
-        return Err(anyhow!(
-            "requirement lifecycle gating failed: {}",
-            lifecycle_failures.join(" | ")
-        ));
+        return Err(anyhow!("requirement lifecycle gating failed: {}", lifecycle_failures.join(" | ")));
     }
 
     let mut task_ids_created = Vec::new();
     let mut task_ids_reused = Vec::new();
     let mut requirement_to_tasks: HashMap<String, Vec<String>> = HashMap::new();
-    let complexity_assessment = lock
-        .vision
-        .as_ref()
-        .map(effective_complexity_assessment)
-        .unwrap_or_default();
+    let complexity_assessment = lock.vision.as_ref().map(effective_complexity_assessment).unwrap_or_default();
 
     for requirement_id in &selected_requirements {
         let mut existing_task_ids = lock
@@ -566,11 +469,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
             existing_task_ids = lock
                 .tasks
                 .values()
-                .filter(|task| {
-                    task.linked_requirements
-                        .iter()
-                        .any(|id| id == requirement_id)
-                })
+                .filter(|task| task.linked_requirements.iter().any(|id| id == requirement_id))
                 .map(|task| task.id.clone())
                 .collect();
             existing_task_ids.sort();
@@ -606,15 +505,8 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                     risk: RiskLevel::Medium,
                     scope: Scope::Medium,
                     complexity: Complexity::Medium,
-                    impact_area: if frontend_related {
-                        vec![crate::types::ImpactArea::Frontend]
-                    } else {
-                        Vec::new()
-                    },
-                    assignee: Assignee::Agent {
-                        role: "implementation".to_string(),
-                        model: None,
-                    },
+                    impact_area: if frontend_related { vec![crate::types::ImpactArea::Frontend] } else { Vec::new() },
+                    assignee: Assignee::Agent { role: "implementation".to_string(), model: None },
                     estimated_effort: None,
                     linked_requirements: vec![requirement.id.clone()],
                     linked_architecture_entities: Vec::new(),
@@ -667,11 +559,8 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
 
         if let Some(requirement) = lock.requirements.get_mut(requirement_id) {
             sync_requirement_task_links(requirement, &task_ids_for_requirement);
-            requirement.status = if input.start_workflows {
-                RequirementStatus::InProgress
-            } else {
-                RequirementStatus::Planned
-            };
+            requirement.status =
+                if input.start_workflows { RequirementStatus::InProgress } else { RequirementStatus::Planned };
             requirement.updated_at = Utc::now();
         }
         requirement_to_tasks.insert(requirement_id.clone(), task_ids_for_requirement);
@@ -690,10 +579,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                 if let Some(task) = lock.tasks.get_mut(task_id) {
                     task.status = TaskStatus::Blocked;
                     task.paused = true;
-                    task.blocked_reason = Some(format!(
-                        "dependency gate: waiting on {}",
-                        dependency_issues.join(", ")
-                    ));
+                    task.blocked_reason = Some(format!("dependency gate: waiting on {}", dependency_issues.join(", ")));
                     task.blocked_at = Some(Utc::now());
                     task.metadata.updated_at = Utc::now();
                     task.metadata.updated_by = protocol::ACTOR_CLI.to_string();
@@ -706,9 +592,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                 workflow.task_id == *task_id
                     && matches!(
                         workflow.status,
-                        crate::WorkflowStatus::Running
-                            | crate::WorkflowStatus::Pending
-                            | crate::WorkflowStatus::Paused
+                        crate::WorkflowStatus::Running | crate::WorkflowStatus::Pending | crate::WorkflowStatus::Paused
                     )
                     && workflow.machine_state != crate::types::WorkflowMachineState::MergeConflict
             });
@@ -718,30 +602,21 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
 
             let task = lock.tasks.get(task_id).cloned();
             let workflow_ref = input.workflow_ref.clone().unwrap_or_else(|| {
-                if task
-                    .as_ref()
-                    .map(|task| task.is_frontend_related())
-                    .unwrap_or(false)
-                {
+                if task.as_ref().map(|task| task.is_frontend_related()).unwrap_or(false) {
                     UI_UX_WORKFLOW_REF.to_string()
                 } else {
                     STANDARD_WORKFLOW_REF.to_string()
                 }
             });
-            let phase_plan = crate::resolve_phase_plan_for_workflow_ref(
-                project_root,
-                Some(workflow_ref.as_str()),
-            )?;
+            let phase_plan = crate::resolve_phase_plan_for_workflow_ref(project_root, Some(workflow_ref.as_str()))?;
             let executor = if let Some(machine_catalog) = state_machines {
                 WorkflowLifecycleExecutor::with_state_machines(phase_plan, machine_catalog.clone())
             } else {
                 WorkflowLifecycleExecutor::new(phase_plan)
             };
             let workflow_id = Uuid::new_v4().to_string();
-            let workflow = executor.bootstrap(
-                workflow_id.clone(),
-                WorkflowRunInput::for_task(task_id.clone(), Some(workflow_ref)),
-            );
+            let workflow = executor
+                .bootstrap(workflow_id.clone(), WorkflowRunInput::for_task(task_id.clone(), Some(workflow_ref)));
 
             if let Some(manager) = workflow_manager {
                 manager.save(&workflow)?;

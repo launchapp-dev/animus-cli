@@ -16,11 +16,7 @@ impl AoMcpServer {
             "ao.workflow.list",
             vec!["workflow".to_string(), "list".to_string()],
             input.project_root,
-            ListGuardInput {
-                limit: input.limit,
-                offset: input.offset,
-                max_tokens: input.max_tokens,
-            },
+            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )
         .await
     }
@@ -30,10 +26,7 @@ impl AoMcpServer {
         description = "Run a workflow for a task. Purpose: Execute a workflow to complete task phases automatically. Prerequisites: Task should exist (use ao.task.get to verify). Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"workflow_ref\": \"default\"}. Sequencing: Use ao.task.status to track progress, ao.workflow.get to monitor, ao.workflow.pause/resume/cancel for control.",
         input_schema = ao_schema_for_type::<WorkflowRunInput>()
     )]
-    async fn ao_workflow_run(
-        &self,
-        params: Parameters<WorkflowRunInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec!["workflow".to_string(), "run".to_string()];
         push_opt(&mut args, "--task-id", input.task_id);
@@ -42,8 +35,7 @@ impl AoMcpServer {
         push_opt(&mut args, "--description", input.description);
         push_opt(&mut args, "--workflow-ref", input.workflow_ref);
         push_opt(&mut args, "--input-json", input.input_json);
-        self.run_tool("ao.workflow.run", args, input.project_root)
-            .await
+        self.run_tool("ao.workflow.run", args, input.project_root).await
     }
 
     #[tool(
@@ -51,19 +43,10 @@ impl AoMcpServer {
         description = "Get workflow details by ID. Purpose: View full workflow state including current phase, decisions, and checkpoints. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.list to find workflows, or ao.workflow.run to start new ones.",
         input_schema = ao_schema_for_type::<IdInput>()
     )]
-    async fn ao_workflow_get(
-        &self,
-        params: Parameters<IdInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_get(&self, params: Parameters<IdInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec![
-            "workflow".to_string(),
-            "get".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
-        self.run_tool("ao.workflow.get", args, input.project_root)
-            .await
+        let args = vec!["workflow".to_string(), "get".to_string(), "--id".to_string(), input.id];
+        self.run_tool("ao.workflow.get", args, input.project_root).await
     }
 
     #[tool(
@@ -76,18 +59,12 @@ impl AoMcpServer {
         params: Parameters<WorkflowDestructiveInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec![
-            "workflow".to_string(),
-            "pause".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
+        let mut args = vec!["workflow".to_string(), "pause".to_string(), "--id".to_string(), input.id];
         push_opt(&mut args, "--confirm", input.confirm);
         if input.dry_run {
             args.push("--dry-run".to_string());
         }
-        self.run_tool("ao.workflow.pause", args, input.project_root)
-            .await
+        self.run_tool("ao.workflow.pause", args, input.project_root).await
     }
 
     #[tool(
@@ -100,18 +77,12 @@ impl AoMcpServer {
         params: Parameters<WorkflowDestructiveInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec![
-            "workflow".to_string(),
-            "cancel".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
+        let mut args = vec!["workflow".to_string(), "cancel".to_string(), "--id".to_string(), input.id];
         push_opt(&mut args, "--confirm", input.confirm);
         if input.dry_run {
             args.push("--dry-run".to_string());
         }
-        self.run_tool("ao.workflow.cancel", args, input.project_root)
-            .await
+        self.run_tool("ao.workflow.cancel", args, input.project_root).await
     }
 
     #[tool(
@@ -119,19 +90,10 @@ impl AoMcpServer {
         description = "Resume a paused workflow. Purpose: Continue execution of a paused workflow. Prerequisites: Workflow must be paused. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.pause, or ao.workflow.get to verify paused state.",
         input_schema = ao_schema_for_type::<IdInput>()
     )]
-    async fn ao_workflow_resume(
-        &self,
-        params: Parameters<IdInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_resume(&self, params: Parameters<IdInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec![
-            "workflow".to_string(),
-            "resume".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
-        self.run_tool("ao.workflow.resume", args, input.project_root)
-            .await
+        let args = vec!["workflow".to_string(), "resume".to_string(), "--id".to_string(), input.id];
+        self.run_tool("ao.workflow.resume", args, input.project_root).await
     }
 
     #[tool(
@@ -139,26 +101,14 @@ impl AoMcpServer {
         description = "List workflow decisions. Purpose: View automated and manual decisions made during workflow execution. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.get to understand workflow state, or ao.workflow.checkpoints.list for phase boundaries.",
         input_schema = ao_schema_for_type::<IdListInput>()
     )]
-    async fn ao_workflow_decisions(
-        &self,
-        params: Parameters<IdListInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_decisions(&self, params: Parameters<IdListInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec![
-            "workflow".to_string(),
-            "decisions".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
+        let args = vec!["workflow".to_string(), "decisions".to_string(), "--id".to_string(), input.id];
         self.run_list_tool(
             "ao.workflow.decisions",
             args,
             input.project_root,
-            ListGuardInput {
-                limit: input.limit,
-                offset: input.offset,
-                max_tokens: input.max_tokens,
-            },
+            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )
         .await
     }
@@ -168,27 +118,15 @@ impl AoMcpServer {
         description = "List workflow checkpoints. Purpose: View saved workflow states for recovery or auditing. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.get to see current state, or ao.workflow.decisions to understand decision history.",
         input_schema = ao_schema_for_type::<IdListInput>()
     )]
-    async fn ao_workflow_checkpoints_list(
-        &self,
-        params: Parameters<IdListInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_checkpoints_list(&self, params: Parameters<IdListInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec![
-            "workflow".to_string(),
-            "checkpoints".to_string(),
-            "list".to_string(),
-            "--id".to_string(),
-            input.id,
-        ];
+        let args =
+            vec!["workflow".to_string(), "checkpoints".to_string(), "list".to_string(), "--id".to_string(), input.id];
         self.run_list_tool(
             "ao.workflow.checkpoints.list",
             args,
             input.project_root,
-            ListGuardInput {
-                limit: input.limit,
-                offset: input.offset,
-                max_tokens: input.max_tokens,
-            },
+            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )
         .await
     }
@@ -203,9 +141,7 @@ impl AoMcpServer {
         params: Parameters<WorkflowRunMultipleInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        if let Err(msg) =
-            validate_workflow_run_multiple_input("ao.workflow.run-multiple", &input.runs)
-        {
+        if let Err(msg) = validate_workflow_run_multiple_input("ao.workflow.run-multiple", &input.runs) {
             return Ok(CallToolResult::structured_error(json!({
                 "tool": "ao.workflow.run-multiple",
                 "error": msg,
@@ -217,20 +153,10 @@ impl AoMcpServer {
             .map(|item| {
                 let args = build_bulk_workflow_run_item_args(&item);
                 let command = args.join(" ");
-                BatchItemExec {
-                    target_id: item.task_id,
-                    command,
-                    args,
-                }
+                BatchItemExec { target_id: item.task_id, command, args }
             })
             .collect();
-        self.run_batch_tool(
-            "ao.workflow.run-multiple",
-            items,
-            &input.on_error,
-            input.project_root,
-        )
-        .await
+        self.run_batch_tool("ao.workflow.run-multiple", items, &input.on_error, input.project_root).await
     }
 
     #[tool(
@@ -238,10 +164,7 @@ impl AoMcpServer {
         description = "Execute a workflow synchronously. Purpose: Run a workflow without the daemon, blocking until completion. Prerequisites: Task must exist (use ao.task.get to verify). Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"phase\": \"implementation\"}. Sequencing: Use ao.task.get to verify the task first, or ao.workflow.config.get to review workflow config.",
         input_schema = ao_schema_for_type::<WorkflowExecuteInput>()
     )]
-    async fn ao_workflow_execute(
-        &self,
-        params: Parameters<WorkflowExecuteInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_execute(&self, params: Parameters<WorkflowExecuteInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec![
             "workflow".to_string(),
@@ -256,8 +179,7 @@ impl AoMcpServer {
         push_opt(&mut args, "--tool", input.tool);
         push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
         push_opt(&mut args, "--input-json", input.input_json);
-        self.run_tool("ao.workflow.execute", args, input.project_root)
-            .await
+        self.run_tool("ao.workflow.execute", args, input.project_root).await
     }
 
     #[tool(
@@ -279,7 +201,6 @@ impl AoMcpServer {
         ];
         push_opt(&mut args, "--phase-id", input.phase_id);
         push_opt(&mut args, "--feedback", input.feedback);
-        self.run_tool("ao.workflow.phase.approve", args, input.project_root)
-            .await
+        self.run_tool("ao.workflow.phase.approve", args, input.project_root).await
     }
 }

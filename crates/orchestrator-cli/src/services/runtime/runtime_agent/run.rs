@@ -7,8 +7,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use uuid::Uuid;
 
 use crate::{
-    build_agent_context, event_matches_run, persist_agent_event, persist_json_output,
-    print_agent_event, print_value, run_dir, write_json_line, AgentRunArgs,
+    build_agent_context, event_matches_run, persist_agent_event, persist_json_output, print_agent_event, print_value,
+    run_dir, write_json_line, AgentRunArgs,
 };
 
 use super::connection::connect_runner_for_agent_command;
@@ -19,16 +19,14 @@ pub(super) async fn handle_agent_run(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let run_id = RunId(
-        args.run_id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string()),
-    );
+    let run_id = RunId(args.run_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()));
     let context = build_agent_context(&args, project_root)?;
     let request = AgentRunRequest {
         protocol_version: PROTOCOL_VERSION.to_string(),
         run_id: run_id.clone(),
-        model: ModelId(args.model.clone().unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string())),
+        model: ModelId(args.model.clone().unwrap_or_else(|| {
+            protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string()
+        })),
         context,
         timeout_secs: args.timeout_secs,
     };
@@ -48,11 +46,7 @@ pub(super) async fn handle_agent_run(
     }
 
     let mut lines = BufReader::new(read_half).lines();
-    let run_dir = if args.save_jsonl {
-        Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref()))
-    } else {
-        None
-    };
+    let run_dir = if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
 
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();
@@ -70,10 +64,7 @@ pub(super) async fn handle_agent_run(
 
         if let Some(path) = &run_dir {
             persist_agent_event(path, &event)?;
-            if let AgentRunEvent::OutputChunk {
-                stream_type, text, ..
-            } = &event
-            {
+            if let AgentRunEvent::OutputChunk { stream_type, text, .. } = &event {
                 persist_json_output(path, *stream_type, text)?;
             }
         }
@@ -97,8 +88,5 @@ pub(super) async fn handle_agent_run(
         }
     }
 
-    Err(anyhow!(
-        "runner connection closed before run {} completed",
-        run_id.0
-    ))
+    Err(anyhow!("runner connection closed before run {} completed", run_id.0))
 }

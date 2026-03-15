@@ -17,12 +17,7 @@ pub(super) fn spawn_stream_forwarders(
     spawn_stderr_forwarder(stderr, run_id, output_tx);
 }
 
-fn spawn_stdout_forwarder(
-    stdout: ChildStdout,
-    run_id: RunId,
-    tool: String,
-    output_tx: mpsc::Sender<AgentRunEvent>,
-) {
+fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, output_tx: mpsc::Sender<AgentRunEvent>) {
     tokio::spawn(async move {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
@@ -40,26 +35,16 @@ fn spawn_stdout_forwarder(
 
                     for parsed in parser.parse_line(&line) {
                         let event = match parsed {
-                            ParsedEvent::ToolCall {
-                                tool_name,
-                                parameters,
-                                ..
-                            } => Some(AgentRunEvent::ToolCall {
+                            ParsedEvent::ToolCall { tool_name, parameters, .. } => Some(AgentRunEvent::ToolCall {
                                 run_id: run_id.clone(),
-                                tool_info: ToolCallInfo {
-                                    tool_name,
-                                    parameters,
-                                    timestamp: Timestamp::now(),
-                                },
+                                tool_info: ToolCallInfo { tool_name, parameters, timestamp: Timestamp::now() },
                             }),
-                            ParsedEvent::Artifact(artifact_info) => Some(AgentRunEvent::Artifact {
-                                run_id: run_id.clone(),
-                                artifact_info,
-                            }),
-                            ParsedEvent::Thinking(content) => Some(AgentRunEvent::Thinking {
-                                run_id: run_id.clone(),
-                                content,
-                            }),
+                            ParsedEvent::Artifact(artifact_info) => {
+                                Some(AgentRunEvent::Artifact { run_id: run_id.clone(), artifact_info })
+                            }
+                            ParsedEvent::Thinking(content) => {
+                                Some(AgentRunEvent::Thinking { run_id: run_id.clone(), content })
+                            }
                             ParsedEvent::Output(_) => None,
                         };
 
@@ -85,11 +70,7 @@ fn spawn_stdout_forwarder(
     });
 }
 
-fn spawn_stderr_forwarder(
-    stderr: ChildStderr,
-    run_id: RunId,
-    output_tx: mpsc::Sender<AgentRunEvent>,
-) {
+fn spawn_stderr_forwarder(stderr: ChildStderr, run_id: RunId, output_tx: mpsc::Sender<AgentRunEvent>) {
     tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();

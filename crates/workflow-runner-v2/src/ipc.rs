@@ -5,10 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use orchestrator_core::runtime_contract;
-use protocol::{
-    AgentRunEvent, IpcAuthRequest, IpcAuthResult, RunId,
-    MAX_UNIX_SOCKET_PATH_LEN,
-};
+use protocol::{AgentRunEvent, IpcAuthRequest, IpcAuthResult, RunId, MAX_UNIX_SOCKET_PATH_LEN};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
@@ -18,9 +15,7 @@ fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
 }
 
 pub fn runner_config_dir(project_root: &Path) -> PathBuf {
-    let config_dir = scoped_ao_root(project_root)
-        .unwrap_or_else(|| project_root.join(".ao"))
-        .join("runner");
+    let config_dir = scoped_ao_root(project_root).unwrap_or_else(|| project_root.join(".ao")).join("runner");
 
     normalize_runner_config_dir(config_dir)
 }
@@ -48,14 +43,9 @@ fn shorten_runner_config_dir_if_needed(config_dir: PathBuf) -> PathBuf {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     config_dir.to_string_lossy().hash(&mut hasher);
     let digest = hasher.finish();
-    let shortened = std::env::temp_dir()
-        .join("ao-runner")
-        .join(format!("{digest:016x}"));
+    let shortened = std::env::temp_dir().join("ao-runner").join(format!("{digest:016x}"));
     let _ = std::fs::create_dir_all(&shortened);
-    let _ = std::fs::write(
-        shortened.join("origin-path.txt"),
-        config_dir.to_string_lossy().as_bytes(),
-    );
+    let _ = std::fs::write(shortened.join("origin-path.txt"), config_dir.to_string_lossy().as_bytes());
     shortened
 }
 
@@ -104,9 +94,7 @@ pub async fn connect_runner(config_dir: &Path) -> Result<tokio::net::TcpStream> 
         .map_err(|error| anyhow!("failed to connect to runner at 127.0.0.1:9001: {error}"))?;
     authenticate_runner_stream(&mut stream, config_dir)
         .await
-        .map_err(|error| {
-            anyhow!("failed to authenticate runner connection at 127.0.0.1:9001: {error}")
-        })?;
+        .map_err(|error| anyhow!("failed to authenticate runner connection at 127.0.0.1:9001: {error}"))?;
     Ok(stream)
 }
 
@@ -116,16 +104,11 @@ where
 {
     let token = protocol::Config::load_from_dir(config_dir)
         .map_err(|error| {
-            anyhow!(
-                "failed to load runner config for authentication from {}: {error}",
-                config_dir.display()
-            )
+            anyhow!("failed to load runner config for authentication from {}: {error}", config_dir.display())
         })?
         .get_token()
         .map_err(|error| {
-            format!(
-                "agent runner token unavailable; set AGENT_RUNNER_TOKEN or configure agent_runner_token: {error}"
-            )
+            format!("agent runner token unavailable; set AGENT_RUNNER_TOKEN or configure agent_runner_token: {error}")
         })
         .map_err(|msg| anyhow!(msg))?;
 
@@ -153,18 +136,11 @@ where
     }
 
     let failure_code = response.code.map(|code| code.as_str()).unwrap_or("unknown");
-    let message = response
-        .message
-        .unwrap_or_else(|| "unauthorized".to_string());
-    Err(anyhow!(
-        "runner authentication failed ({failure_code}): {message}"
-    ))
+    let message = response.message.unwrap_or_else(|| "unauthorized".to_string());
+    Err(anyhow!("runner authentication failed ({failure_code}): {message}"))
 }
 
-pub async fn write_json_line<W: AsyncWrite + Unpin, T: serde::Serialize>(
-    writer: &mut W,
-    payload: &T,
-) -> Result<()> {
+pub async fn write_json_line<W: AsyncWrite + Unpin, T: serde::Serialize>(writer: &mut W, payload: &T) -> Result<()> {
     let json = serde_json::to_string(payload)?;
     writer.write_all(json.as_bytes()).await?;
     writer.write_all(b"\n").await?;
@@ -200,42 +176,15 @@ pub fn build_runtime_contract_with_resume(
 
 pub fn event_matches_run(event: &AgentRunEvent, run_id: &RunId) -> bool {
     match event {
-        AgentRunEvent::Started {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::OutputChunk {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Metadata {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Error {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Finished {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::ToolCall {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::ToolResult {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Artifact {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
-        AgentRunEvent::Thinking {
-            run_id: event_run_id,
-            ..
-        } => event_run_id == run_id,
+        AgentRunEvent::Started { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::OutputChunk { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::Metadata { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::Error { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::Finished { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::ToolCall { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::ToolResult { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::Artifact { run_id: event_run_id, .. } => event_run_id == run_id,
+        AgentRunEvent::Thinking { run_id: event_run_id, .. } => event_run_id == run_id,
     }
 }
 
@@ -251,9 +200,7 @@ pub fn ensure_safe_run_id(run_id: &str) -> Result<()> {
 
 pub fn run_dir(project_root: &str, run_id: &RunId, base_override: Option<&str>) -> PathBuf {
     let base = base_override.map(PathBuf::from).unwrap_or_else(|| {
-        scoped_ao_root(Path::new(project_root))
-            .unwrap_or_else(|| Path::new(project_root).join(".ao"))
-            .join("runs")
+        scoped_ao_root(Path::new(project_root)).unwrap_or_else(|| Path::new(project_root).join(".ao")).join("runs")
     });
     base.join(&run_id.0)
 }
@@ -280,11 +227,7 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{line}")?;
     Ok(())
 }
-

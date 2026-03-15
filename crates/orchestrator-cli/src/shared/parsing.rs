@@ -5,8 +5,7 @@ use serde_json::Value;
 
 use crate::{ensure_safe_run_id, event_matches_run, invalid_input_error, not_found_error, run_dir};
 
-const TASK_STATUS_EXPECTED: &str =
-    "backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled";
+const TASK_STATUS_EXPECTED: &str = "backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled";
 const TASK_TYPE_EXPECTED: &str = "feature|bugfix|hotfix|refactor|docs|test|chore|experiment";
 const PRIORITY_EXPECTED: &str = "critical|high|medium|low";
 const DEPENDENCY_TYPE_EXPECTED: &str =
@@ -46,9 +45,7 @@ pub(crate) fn ensure_destructive_confirmation(
 ) -> Result<()> {
     let expected = expected.trim();
     if expected.is_empty() {
-        return Err(invalid_input_error(format!(
-            "invalid confirmation token for {command_path}"
-        )));
+        return Err(invalid_input_error(format!("invalid confirmation token for {command_path}")));
     }
 
     let command_path = command_path.trim();
@@ -58,9 +55,7 @@ pub(crate) fn ensure_destructive_confirmation(
 
     let id_flag = id_flag.trim();
     if id_flag.is_empty() || !id_flag.starts_with("--") {
-        return Err(invalid_input_error(format!(
-            "invalid confirmation id flag for {command_path}"
-        )));
+        return Err(invalid_input_error(format!("invalid confirmation id flag for {command_path}")));
     }
 
     let provided = confirm.map(str::trim).filter(|value| !value.is_empty());
@@ -73,20 +68,12 @@ pub(crate) fn ensure_destructive_confirmation(
     )))
 }
 
-pub(crate) fn read_agent_status(
-    project_root: &str,
-    run_id: &str,
-    jsonl_dir_override: Option<&str>,
-) -> Result<Value> {
+pub(crate) fn read_agent_status(project_root: &str, run_id: &str, jsonl_dir_override: Option<&str>) -> Result<Value> {
     ensure_safe_run_id(run_id)?;
     let run_id = RunId(run_id.to_string());
     let events_path = run_dir(project_root, &run_id, jsonl_dir_override).join("events.jsonl");
     if !events_path.exists() {
-        return Err(not_found_error(format!(
-            "no event log found for run {} at {}",
-            run_id.0,
-            events_path.display()
-        )));
+        return Err(not_found_error(format!("no event log found for run {} at {}", run_id.0, events_path.display())));
     }
 
     let mut event_count = 0usize;
@@ -126,18 +113,10 @@ pub(crate) fn read_agent_status(
                 status = "failed".to_string();
                 last_error = Some(error);
             }
-            AgentRunEvent::Finished {
-                exit_code: code,
-                duration_ms: duration,
-                ..
-            } => {
+            AgentRunEvent::Finished { exit_code: code, duration_ms: duration, .. } => {
                 exit_code = code;
                 duration_ms = Some(duration);
-                status = if code.unwrap_or_default() == 0 {
-                    "completed".to_string()
-                } else {
-                    "failed".to_string()
-                };
+                status = if code.unwrap_or_default() == 0 { "completed".to_string() } else { "failed".to_string() };
             }
             AgentRunEvent::ToolCall { .. }
             | AgentRunEvent::ToolResult { .. }
@@ -163,9 +142,7 @@ pub(crate) fn read_agent_status(
 }
 
 pub(crate) fn parse_task_status(value: &str) -> Result<TaskStatus> {
-    value
-        .parse()
-        .map_err(|_| invalid_value_error("status", value, TASK_STATUS_EXPECTED))
+    value.parse().map_err(|_| invalid_value_error("status", value, TASK_STATUS_EXPECTED))
 }
 
 pub(crate) fn parse_task_type_opt(value: Option<&str>) -> Result<Option<TaskType>> {
@@ -228,13 +205,7 @@ pub(crate) fn parse_dependency_type(value: &str) -> Result<DependencyType> {
         "blocks-by" | "blocks_by" | "blocksby" => DependencyType::BlocksBy,
         "blocked-by" | "blocked_by" | "blockedby" => DependencyType::BlockedBy,
         "related-to" | "related_to" | "relatedto" => DependencyType::RelatedTo,
-        _ => {
-            return Err(invalid_value_error(
-                "dependency type",
-                value,
-                DEPENDENCY_TYPE_EXPECTED,
-            ))
-        }
+        _ => return Err(invalid_value_error("dependency type", value, DEPENDENCY_TYPE_EXPECTED)),
     };
 
     Ok(dependency_type)
@@ -260,13 +231,7 @@ pub(crate) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<Proje
         "library" => ProjectType::Library,
         "infrastructure" => ProjectType::Infrastructure,
         "other" | "greenfield" | "existing" => ProjectType::Other,
-        _ => {
-            return Err(invalid_value_error(
-                "project type",
-                value,
-                PROJECT_TYPE_EXPECTED,
-            ))
-        }
+        _ => return Err(invalid_value_error("project type", value, PROJECT_TYPE_EXPECTED)),
     };
 
     Ok(Some(project_type))
@@ -341,8 +306,7 @@ mod tests {
 
     #[test]
     fn parse_dependency_type_rejects_unknown_values_with_actionable_message() {
-        let err =
-            parse_dependency_type("unrelated").expect_err("unknown dependency type should fail");
+        let err = parse_dependency_type("unrelated").expect_err("unknown dependency type should fail");
         let message = err.to_string();
         assert!(message.contains("invalid dependency type"));
         assert!(message.contains("blocks-by|blocks_by|blocksby"));
@@ -351,10 +315,9 @@ mod tests {
 
     #[test]
     fn parse_input_json_or_reports_help_hint_on_invalid_json() {
-        let err = parse_input_json_or::<serde_json::Value, _>(Some("{invalid".to_string()), || {
-            Ok(serde_json::Value::Null)
-        })
-        .expect_err("invalid json should fail");
+        let err =
+            parse_input_json_or::<serde_json::Value, _>(Some("{invalid".to_string()), || Ok(serde_json::Value::Null))
+                .expect_err("invalid json should fail");
         let message = err.to_string();
         assert!(message.contains("failed to parse --input-json payload as JSON"));
         assert!(message.contains(COMMAND_HELP_HINT));
@@ -368,9 +331,8 @@ mod tests {
 
     #[test]
     fn destructive_confirmation_requires_exact_token() {
-        let error =
-            ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task delete", "--id")
-                .expect_err("mismatched token should fail");
+        let error = ensure_destructive_confirmation(Some("wrong"), "TASK-123", "task delete", "--id")
+            .expect_err("mismatched token should fail");
         let message = error.to_string();
         assert!(message.contains("CONFIRMATION_REQUIRED"));
         assert!(message.contains("ao task delete --id TASK-123 --confirm TASK-123"));
@@ -381,25 +343,19 @@ mod tests {
     fn destructive_confirmation_requires_non_empty_command_path() {
         let error = ensure_destructive_confirmation(None, "TASK-123", "   ", "--id")
             .expect_err("empty command path should fail");
-        assert!(error
-            .to_string()
-            .contains("invalid confirmation command path"));
+        assert!(error.to_string().contains("invalid confirmation command path"));
     }
 
     #[test]
     fn destructive_confirmation_requires_long_form_id_flag() {
         let error = ensure_destructive_confirmation(None, "TASK-123", "task delete", "id")
             .expect_err("non long-form id flag should fail");
-        assert!(error
-            .to_string()
-            .contains("invalid confirmation id flag for task delete"));
+        assert!(error.to_string().contains("invalid confirmation id flag for task delete"));
     }
 
     #[test]
     fn read_agent_status_reads_scoped_events_and_reports_path() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
@@ -407,8 +363,7 @@ mod tests {
 
         let run_id = "trace-run-status-010";
         let run_id_value = RunId(run_id.to_string());
-        let events_path = run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None)
-            .join("events.jsonl");
+        let events_path = run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None).join("events.jsonl");
 
         let started = serde_json::to_string(&AgentRunEvent::Started {
             run_id: run_id_value.clone(),
@@ -426,53 +381,34 @@ mod tests {
             duration_ms: 42,
         })
         .expect("finished event should serialize");
-        std::fs::create_dir_all(
-            events_path
-                .parent()
-                .expect("events path should include parent directory"),
-        )
-        .expect("events directory should be created");
-        std::fs::write(
-            &events_path,
-            format!("{started}\n{other_started}\n{finished}\n"),
-        )
-        .expect("events file should be written");
+        std::fs::create_dir_all(events_path.parent().expect("events path should include parent directory"))
+            .expect("events directory should be created");
+        std::fs::write(&events_path, format!("{started}\n{other_started}\n{finished}\n"))
+            .expect("events file should be written");
 
         let status = read_agent_status(project_root.to_string_lossy().as_ref(), run_id, None)
             .expect("status should be read from fallback event log");
-        assert_eq!(
-            status.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
+        assert_eq!(status.get("status").and_then(Value::as_str), Some("completed"));
         assert_eq!(status.get("event_count").and_then(Value::as_u64), Some(2));
         assert_eq!(status.get("duration_ms").and_then(Value::as_u64), Some(42));
-        assert_eq!(
-            status.get("events_path").and_then(Value::as_str),
-            Some(events_path.to_string_lossy().as_ref())
-        );
+        assert_eq!(status.get("events_path").and_then(Value::as_str), Some(events_path.to_string_lossy().as_ref()));
     }
 
     #[test]
     fn read_agent_status_keeps_lookup_repo_scoped_under_global_runner_scope() {
-        let _lock = crate::shared::test_env_lock()
-            .lock()
-            .expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
         let override_dir = temp.path().join("override-config");
-        let _ao_config = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(override_dir.to_string_lossy().as_ref()),
-        );
+        let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(override_dir.to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
         std::fs::create_dir_all(&project_root).expect("project dir should be created");
 
         let run_id = "trace-run-status-global-scope";
         let run_id_value = RunId(run_id.to_string());
         let canonical_events_path =
-            run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None)
-                .join("events.jsonl");
+            run_dir(project_root.to_string_lossy().as_ref(), &run_id_value, None).join("events.jsonl");
         let override_events_path = override_dir.join("runs").join(run_id).join("events.jsonl");
 
         let started = serde_json::to_string(&AgentRunEvent::Started {
@@ -486,18 +422,12 @@ mod tests {
             duration_ms: 99,
         })
         .expect("finished event should serialize");
-        std::fs::create_dir_all(
-            canonical_events_path
-                .parent()
-                .expect("events path should include parent directory"),
-        )
-        .expect("canonical events directory should be created");
+        std::fs::create_dir_all(canonical_events_path.parent().expect("events path should include parent directory"))
+            .expect("canonical events directory should be created");
         std::fs::write(&canonical_events_path, format!("{started}\n{finished}\n"))
             .expect("canonical events file should be written");
         std::fs::create_dir_all(
-            override_events_path
-                .parent()
-                .expect("override events path should include parent directory"),
+            override_events_path.parent().expect("override events path should include parent directory"),
         )
         .expect("override events directory should be created");
         std::fs::write(
@@ -515,10 +445,7 @@ mod tests {
 
         let status = read_agent_status(project_root.to_string_lossy().as_ref(), run_id, None)
             .expect("status should resolve from canonical scoped path");
-        assert_eq!(
-            status.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
+        assert_eq!(status.get("status").and_then(Value::as_str), Some("completed"));
         assert_eq!(status.get("event_count").and_then(Value::as_u64), Some(2));
         assert_eq!(
             status.get("events_path").and_then(Value::as_str),
@@ -532,8 +459,7 @@ mod tests {
 
     #[test]
     fn read_agent_status_rejects_unsafe_run_id() {
-        let err = read_agent_status("/tmp/project", "../escape", None)
-            .expect_err("unsafe run id should be rejected");
+        let err = read_agent_status("/tmp/project", "../escape", None).expect_err("unsafe run id should be rejected");
         assert!(err.to_string().contains("invalid run_id"));
     }
 }

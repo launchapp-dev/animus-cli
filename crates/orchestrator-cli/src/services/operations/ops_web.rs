@@ -94,15 +94,10 @@ fn normalize_web_path(path: &str) -> String {
 }
 
 fn open_in_browser(url: &str) -> Result<()> {
-    webbrowser::open(url)
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("failed to open browser: {error}"))
+    webbrowser::open(url).map(|_| ()).map_err(|error| anyhow::anyhow!("failed to open browser: {error}"))
 }
 
-fn validate_page_size_config(
-    default_page_size: usize,
-    max_page_size: usize,
-) -> Result<(usize, usize)> {
+fn validate_page_size_config(default_page_size: usize, max_page_size: usize) -> Result<(usize, usize)> {
     if default_page_size == 0 {
         bail!("page-size-default must be at least 1");
     }
@@ -127,12 +122,9 @@ mod tests {
 
     #[test]
     fn rejects_zero_default_page_size() {
-        let error =
-            validate_page_size_config(0, 200).expect_err("zero default page size should fail");
+        let error = validate_page_size_config(0, 200).expect_err("zero default page size should fail");
         assert!(
-            error
-                .to_string()
-                .contains("page-size-default must be at least 1"),
+            error.to_string().contains("page-size-default must be at least 1"),
             "error should describe invalid default page size"
         );
     }
@@ -141,21 +133,16 @@ mod tests {
     fn rejects_zero_max_page_size() {
         let error = validate_page_size_config(50, 0).expect_err("zero max page size should fail");
         assert!(
-            error
-                .to_string()
-                .contains("page-size-max must be at least 1"),
+            error.to_string().contains("page-size-max must be at least 1"),
             "error should describe invalid max page size"
         );
     }
 
     #[test]
     fn rejects_default_page_size_greater_than_max() {
-        let error = validate_page_size_config(201, 200)
-            .expect_err("default page size greater than max should fail");
+        let error = validate_page_size_config(201, 200).expect_err("default page size greater than max should fail");
         assert!(
-            error
-                .to_string()
-                .contains("page-size-default cannot exceed page-size-max"),
+            error.to_string().contains("page-size-default cannot exceed page-size-max"),
             "error should describe default greater than max"
         );
     }

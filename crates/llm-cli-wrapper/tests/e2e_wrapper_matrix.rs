@@ -9,9 +9,7 @@ use anyhow::{Context, Result};
 use cli_wrapper::cli::opencode::OpenCodeCli;
 use cli_wrapper::cli::CliMetadata;
 use cli_wrapper::tester::TestCase;
-use cli_wrapper::{
-    CliCommand, CliInterface, CliRegistry, CliStatus, CliTester, CliType, TestSuite,
-};
+use cli_wrapper::{CliCommand, CliInterface, CliRegistry, CliStatus, CliTester, CliType, TestSuite};
 use tempfile::TempDir;
 
 fn env_lock() -> &'static Mutex<()> {
@@ -39,11 +37,7 @@ impl MockCliSandbox {
             write_mock_cli(&bin_dir, cli_name)?;
         }
 
-        Ok(Self {
-            _root: root,
-            bin_dir,
-            workspace_dir,
-        })
+        Ok(Self { _root: root, bin_dir, workspace_dir })
     }
 
     fn bin_dir(&self) -> &Path {
@@ -95,22 +89,13 @@ esac
 "#
     );
 
-    fs::write(&script_path, script).with_context(|| {
-        format!(
-            "failed to write mock executable for {} at {}",
-            cli_name,
-            script_path.display()
-        )
-    })?;
+    fs::write(&script_path, script)
+        .with_context(|| format!("failed to write mock executable for {} at {}", cli_name, script_path.display()))?;
 
     let mut perms = fs::metadata(&script_path)?.permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).with_context(|| {
-        format!(
-            "failed to set executable permissions on {}",
-            script_path.display()
-        )
-    })?;
+    fs::set_permissions(&script_path, perms)
+        .with_context(|| format!("failed to set executable permissions on {}", script_path.display()))?;
 
     Ok(())
 }
@@ -124,18 +109,10 @@ async fn e2e_registry_discovers_mock_clis_and_health_is_available() -> Result<()
 
     let mut registry = CliRegistry::new();
     let discovered = registry.discover_clis().await?;
-    assert_eq!(
-        discovered, 4,
-        "expected mock discovery for claude/codex/gemini/opencode"
-    );
+    assert_eq!(discovered, 4, "expected mock discovery for claude/codex/gemini/opencode");
 
     let statuses = registry.check_all_status().await;
-    for cli_type in [
-        CliType::Claude,
-        CliType::Codex,
-        CliType::Gemini,
-        CliType::OpenCode,
-    ] {
+    for cli_type in [CliType::Claude, CliType::Codex, CliType::Gemini, CliType::OpenCode] {
         assert_eq!(
             statuses.get(&cli_type),
             Some(&CliStatus::Available),
@@ -150,24 +127,15 @@ async fn e2e_registry_discovers_mock_clis_and_health_is_available() -> Result<()
 async fn e2e_opencode_model_matrix_supports_glm_and_minimax() -> Result<()> {
     let _lock = env_lock().lock().expect("env lock should not be poisoned");
     let sandbox = MockCliSandbox::new()?;
-    let cli = OpenCodeCli::new(CliMetadata::new(
-        CliType::OpenCode,
-        sandbox.bin_dir().join("opencode"),
-    ));
+    let cli = OpenCodeCli::new(CliMetadata::new(CliType::OpenCode, sandbox.bin_dir().join("opencode")));
 
-    for (model, label) in [
-        ("zai-coding-plan/glm-4.7", "glm"),
-        ("minimax/MiniMax-M2.1", "minimax"),
-    ] {
+    for (model, label) in [("zai-coding-plan/glm-4.7", "glm"), ("minimax/MiniMax-M2.1", "minimax")] {
         let args_log_path = sandbox.workspace_dir().join(format!("{label}.args.log"));
 
         let command = CliCommand::new("implement function add two numbers")
             .with_working_dir(sandbox.workspace_dir().to_path_buf())
             .with_env("OPENCODE_MODEL".to_string(), model.to_string())
-            .with_env(
-                "MOCK_CLI_ARG_LOG".to_string(),
-                args_log_path.to_string_lossy().to_string(),
-            );
+            .with_env("MOCK_CLI_ARG_LOG".to_string(), args_log_path.to_string_lossy().to_string());
         let output = cli.execute(&command).await?;
         assert!(output.is_success(), "model {model} should execute");
         assert!(
@@ -181,10 +149,7 @@ async fn e2e_opencode_model_matrix_supports_glm_and_minimax() -> Result<()> {
             logged_args.contains("-m"),
             "OpenCode invocation should include -m for model {model}; args={logged_args}"
         );
-        assert!(
-            logged_args.contains(model),
-            "OpenCode invocation should include model {model}; args={logged_args}"
-        );
+        assert!(logged_args.contains(model), "OpenCode invocation should include model {model}; args={logged_args}");
     }
 
     Ok(())
@@ -200,9 +165,7 @@ async fn e2e_coding_agent_task_suite_passes_for_opencode() -> Result<()> {
 
     let mut registry = CliRegistry::new();
     registry.discover_clis().await?;
-    let opencode = registry
-        .get(CliType::OpenCode)
-        .context("expected opencode in discovered registry")?;
+    let opencode = registry.get(CliType::OpenCode).context("expected opencode in discovered registry")?;
 
     let expected_output_file = sandbox.workspace_dir().join("output.txt");
     let suite = TestSuite::new("Coding Agent E2E")
@@ -218,9 +181,7 @@ async fn e2e_coding_agent_task_suite_passes_for_opencode() -> Result<()> {
                 .with_timeout(10),
         )
         .add_test(
-            TestCase::new("review_task", "review patch and summarize risks")
-                .expect_output("summary")
-                .with_timeout(10),
+            TestCase::new("review_task", "review patch and summarize risks").expect_output("summary").with_timeout(10),
         )
         .add_test(
             TestCase::new("artifact_task", "write output.txt with fixture content")
@@ -236,31 +197,13 @@ async fn e2e_coding_agent_task_suite_passes_for_opencode() -> Result<()> {
     let failures: Vec<String> = results
         .iter()
         .filter(|result| !result.passed)
-        .map(|result| {
-            format!(
-                "{}: failures={:?} error={:?}",
-                result.test_name, result.failures, result.error
-            )
-        })
+        .map(|result| format!("{}: failures={:?} error={:?}", result.test_name, result.failures, result.error))
         .collect();
-    assert!(
-        failures.is_empty(),
-        "expected coding-agent suite to pass, failures: {failures:?}"
-    );
+    assert!(failures.is_empty(), "expected coding-agent suite to pass, failures: {failures:?}");
 
-    assert!(
-        expected_output_file.exists(),
-        "artifact_task should create {}",
-        expected_output_file.display()
-    );
-    let json_like_outputs = results
-        .iter()
-        .filter(|result| result.output.trim().starts_with('{'))
-        .count();
-    assert!(
-        json_like_outputs >= 3,
-        "expected most suite outputs to be machine-parseable JSON-like lines"
-    );
+    assert!(expected_output_file.exists(), "artifact_task should create {}", expected_output_file.display());
+    let json_like_outputs = results.iter().filter(|result| result.output.trim().starts_with('{')).count();
+    assert!(json_like_outputs >= 3, "expected most suite outputs to be machine-parseable JSON-like lines");
 
     Ok(())
 }

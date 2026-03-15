@@ -3,12 +3,11 @@ use orchestrator_web_api::WebApiService;
 
 use super::gql_err;
 use super::types::{
-    GqlAgentProfile, GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlKeyValue,
-    GqlMcpServer, GqlPhaseCatalogEntry, GqlPhaseOutput, GqlProject, GqlQueueEntry, GqlQueueStats,
-    GqlRequirement, GqlRequirementConnection, GqlSystemInfo, GqlTask, GqlTaskConnection,
-    GqlTaskStats, GqlToolDefinition, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint,
-    GqlSkill, GqlSkillDetail, GqlWorkflowConfig, GqlWorkflowConnection, GqlWorkflowDefinition,
-    GqlWorkflowSchedule, RawRequirement, RawTask, RawWorkflow,
+    GqlAgentProfile, GqlAgentRun, GqlDaemonHealth, GqlDaemonLog, GqlDaemonStatus, GqlKeyValue, GqlMcpServer,
+    GqlPhaseCatalogEntry, GqlPhaseOutput, GqlProject, GqlQueueEntry, GqlQueueStats, GqlRequirement,
+    GqlRequirementConnection, GqlSkill, GqlSkillDetail, GqlSystemInfo, GqlTask, GqlTaskConnection, GqlTaskStats,
+    GqlToolDefinition, GqlVision, GqlWorkflow, GqlWorkflowCheckpoint, GqlWorkflowConfig, GqlWorkflowConnection,
+    GqlWorkflowDefinition, GqlWorkflowSchedule, RawRequirement, RawTask, RawWorkflow,
 };
 
 pub struct QueryRoot;
@@ -25,17 +24,7 @@ impl QueryRoot {
     ) -> Result<Vec<GqlTask>> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
-            .tasks_list(
-                task_type,
-                status,
-                priority,
-                None,
-                None,
-                vec![],
-                None,
-                None,
-                search,
-            )
+            .tasks_list(task_type, status, priority, None, None, vec![], None, None, search)
             .await
             .map_err(gql_err)?;
         let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
@@ -46,9 +35,8 @@ impl QueryRoot {
         let api = ctx.data::<WebApiService>()?;
         match api.tasks_get(&id).await {
             Ok(val) => {
-                let raw: RawTask = serde_json::from_value(val).map_err(|e| {
-                    async_graphql::Error::new(format!("failed to parse task: {e}"))
-                })?;
+                let raw: RawTask = serde_json::from_value(val)
+                    .map_err(|e| async_graphql::Error::new(format!("failed to parse task: {e}")))?;
                 Ok(Some(GqlTask(raw)))
             }
             Err(e) if e.code == "not_found" => Ok(None),
@@ -58,10 +46,7 @@ impl QueryRoot {
 
     async fn tasks_prioritized(&self, ctx: &Context<'_>) -> Result<Vec<GqlTask>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .tasks_prioritized()
-            .await
-            .map_err(gql_err)?;
+        let val = api.tasks_prioritized().await.map_err(gql_err)?;
         let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
         Ok(tasks.into_iter().map(GqlTask).collect())
     }
@@ -70,9 +55,8 @@ impl QueryRoot {
         let api = ctx.data::<WebApiService>()?;
         match api.tasks_next().await {
             Ok(val) => {
-                let raw: RawTask = serde_json::from_value(val).map_err(|e| {
-                    async_graphql::Error::new(format!("failed to parse task: {e}"))
-                })?;
+                let raw: RawTask = serde_json::from_value(val)
+                    .map_err(|e| async_graphql::Error::new(format!("failed to parse task: {e}")))?;
                 Ok(Some(GqlTask(raw)))
             }
             Err(e) if e.code == "not_found" => Ok(None),
@@ -82,19 +66,13 @@ impl QueryRoot {
 
     async fn task_stats(&self, ctx: &Context<'_>) -> Result<GqlTaskStats> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .tasks_stats()
-            .await
-            .map_err(gql_err)?;
+        let val = api.tasks_stats().await.map_err(gql_err)?;
         Ok(GqlTaskStats(val))
     }
 
     async fn requirements(&self, ctx: &Context<'_>) -> Result<Vec<GqlRequirement>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .requirements_list()
-            .await
-            .map_err(gql_err)?;
+        let val = api.requirements_list().await.map_err(gql_err)?;
         let reqs: Vec<RawRequirement> = serde_json::from_value(val).unwrap_or_default();
         Ok(reqs.into_iter().map(GqlRequirement).collect())
     }
@@ -103,9 +81,8 @@ impl QueryRoot {
         let api = ctx.data::<WebApiService>()?;
         match api.requirements_get(&id).await {
             Ok(val) => {
-                let raw: RawRequirement = serde_json::from_value(val).map_err(|e| {
-                    async_graphql::Error::new(format!("failed to parse requirement: {e}"))
-                })?;
+                let raw: RawRequirement = serde_json::from_value(val)
+                    .map_err(|e| async_graphql::Error::new(format!("failed to parse requirement: {e}")))?;
                 Ok(Some(GqlRequirement(raw)))
             }
             Err(e) if e.code == "not_found" => Ok(None),
@@ -113,16 +90,9 @@ impl QueryRoot {
         }
     }
 
-    async fn workflows(
-        &self,
-        ctx: &Context<'_>,
-        status: Option<String>,
-    ) -> Result<Vec<GqlWorkflow>> {
+    async fn workflows(&self, ctx: &Context<'_>, status: Option<String>) -> Result<Vec<GqlWorkflow>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .workflows_list()
-            .await
-            .map_err(gql_err)?;
+        let val = api.workflows_list().await.map_err(gql_err)?;
         let mut workflows: Vec<RawWorkflow> = serde_json::from_value(val).unwrap_or_default();
         if let Some(status_filter) = status {
             workflows.retain(|w| w.status == status_filter);
@@ -134,9 +104,8 @@ impl QueryRoot {
         let api = ctx.data::<WebApiService>()?;
         match api.workflows_get(&id).await {
             Ok(val) => {
-                let raw: RawWorkflow = serde_json::from_value(val).map_err(|e| {
-                    async_graphql::Error::new(format!("failed to parse workflow: {e}"))
-                })?;
+                let raw: RawWorkflow = serde_json::from_value(val)
+                    .map_err(|e| async_graphql::Error::new(format!("failed to parse workflow: {e}")))?;
                 Ok(Some(GqlWorkflow(raw)))
             }
             Err(e) if e.code == "not_found" => Ok(None),
@@ -157,29 +126,14 @@ impl QueryRoot {
     ) -> Result<GqlTaskConnection> {
         let api = ctx.data::<WebApiService>()?;
         let val = api
-            .tasks_list(
-                task_type,
-                status,
-                priority,
-                None,
-                None,
-                vec![],
-                None,
-                None,
-                search,
-            )
+            .tasks_list(task_type, status, priority, None, None, vec![], None, None, search)
             .await
             .map_err(gql_err)?;
         let tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
         let total_count = tasks.len() as i32;
         let offset = (offset.max(0) as usize).min(tasks.len());
         let limit = limit.max(1) as usize;
-        let items: Vec<GqlTask> = tasks
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(GqlTask)
-            .collect();
+        let items: Vec<GqlTask> = tasks.into_iter().skip(offset).take(limit).map(GqlTask).collect();
         Ok(GqlTaskConnection { items, total_count })
     }
 
@@ -190,20 +144,12 @@ impl QueryRoot {
         #[graphql(default = 0)] offset: i32,
     ) -> Result<GqlRequirementConnection> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .requirements_list()
-            .await
-            .map_err(gql_err)?;
+        let val = api.requirements_list().await.map_err(gql_err)?;
         let reqs: Vec<RawRequirement> = serde_json::from_value(val).unwrap_or_default();
         let total_count = reqs.len() as i32;
         let offset = (offset.max(0) as usize).min(reqs.len());
         let limit = limit.max(1) as usize;
-        let items: Vec<GqlRequirement> = reqs
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(GqlRequirement)
-            .collect();
+        let items: Vec<GqlRequirement> = reqs.into_iter().skip(offset).take(limit).map(GqlRequirement).collect();
         Ok(GqlRequirementConnection { items, total_count })
     }
 
@@ -215,10 +161,7 @@ impl QueryRoot {
         #[graphql(default = 0)] offset: i32,
     ) -> Result<GqlWorkflowConnection> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .workflows_list()
-            .await
-            .map_err(gql_err)?;
+        let val = api.workflows_list().await.map_err(gql_err)?;
         let mut workflows: Vec<RawWorkflow> = serde_json::from_value(val).unwrap_or_default();
         if let Some(status_filter) = status {
             workflows.retain(|w| w.status == status_filter);
@@ -226,40 +169,19 @@ impl QueryRoot {
         let total_count = workflows.len() as i32;
         let offset = (offset.max(0) as usize).min(workflows.len());
         let limit = limit.max(1) as usize;
-        let items: Vec<GqlWorkflow> = workflows
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(GqlWorkflow)
-            .collect();
+        let items: Vec<GqlWorkflow> = workflows.into_iter().skip(offset).take(limit).map(GqlWorkflow).collect();
         Ok(GqlWorkflowConnection { items, total_count })
     }
 
-    async fn workflow_checkpoints(
-        &self,
-        ctx: &Context<'_>,
-        workflow_id: ID,
-    ) -> Result<Vec<GqlWorkflowCheckpoint>> {
+    async fn workflow_checkpoints(&self, ctx: &Context<'_>, workflow_id: ID) -> Result<Vec<GqlWorkflowCheckpoint>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .workflows_checkpoints(&workflow_id)
-            .await
-            .map_err(gql_err)?;
-        let checkpoints: Vec<serde_json::Value> =
-            serde_json::from_value(val).unwrap_or_default();
+        let val = api.workflows_checkpoints(&workflow_id).await.map_err(gql_err)?;
+        let checkpoints: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
         Ok(checkpoints
             .into_iter()
             .map(|c| GqlWorkflowCheckpoint {
-                id: c
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                phase: c
-                    .get("phase")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                id: c.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                phase: c.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 timestamp: c.get("timestamp").and_then(|v| v.as_str()).map(String::from),
                 data: c.get("data").map(|v| v.to_string()),
             })
@@ -274,46 +196,20 @@ impl QueryRoot {
         tail: Option<i32>,
     ) -> Result<GqlPhaseOutput> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .workflows_phase_output(&workflow_id, phase_id.as_deref(), tail)
-            .await
-            .map_err(gql_err)?;
+        let val = api.workflows_phase_output(&workflow_id, phase_id.as_deref(), tail).await.map_err(gql_err)?;
         let lines: Vec<String> = val
             .get("lines")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        let resolved_phase_id = val
-            .get("phase_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let has_more = val
-            .get("has_more")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        Ok(GqlPhaseOutput {
-            lines,
-            phase_id: resolved_phase_id,
-            has_more,
-        })
+        let resolved_phase_id = val.get("phase_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let has_more = val.get("has_more").and_then(|v| v.as_bool()).unwrap_or(false);
+        Ok(GqlPhaseOutput { lines, phase_id: resolved_phase_id, has_more })
     }
 
-    async fn ready_tasks(
-        &self,
-        ctx: &Context<'_>,
-        search: Option<String>,
-        limit: Option<i32>,
-    ) -> Result<Vec<GqlTask>> {
+    async fn ready_tasks(&self, ctx: &Context<'_>, search: Option<String>, limit: Option<i32>) -> Result<Vec<GqlTask>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .tasks_list(None, None, None, None, None, vec![], None, None, search)
-            .await
-            .map_err(gql_err)?;
+        let val = api.tasks_list(None, None, None, None, None, vec![], None, None, search).await.map_err(gql_err)?;
         let all_tasks: Vec<RawTask> = serde_json::from_value(val).unwrap_or_default();
         let priority_order = |p: &str| -> u8 {
             match p.to_lowercase().as_str() {
@@ -341,8 +237,7 @@ impl QueryRoot {
         let api = ctx.data::<WebApiService>()?;
         match api.workflow_definitions().await {
             Ok(val) => {
-                let defs: Vec<serde_json::Value> =
-                    serde_json::from_value(val).unwrap_or_default();
+                let defs: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
                 Ok(defs
                     .into_iter()
                     .map(|d| GqlWorkflowDefinition {
@@ -352,11 +247,7 @@ impl QueryRoot {
                         phases: d
                             .get("phases")
                             .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            })
+                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                             .unwrap_or_default(),
                     })
                     .collect())
@@ -381,24 +272,13 @@ impl QueryRoot {
                             args: s
                                 .get("args")
                                 .and_then(|v| v.as_array())
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
+                                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
-                            transport: s
-                                .get("transport")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
+                            transport: s.get("transport").and_then(|v| v.as_str()).map(String::from),
                             tools: s
                                 .get("tools")
                                 .and_then(|v| v.as_array())
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
+                                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
                             env: s
                                 .get("env")
@@ -428,29 +308,13 @@ impl QueryRoot {
                     .filter_map(|p| {
                         Some(GqlPhaseCatalogEntry {
                             id: p.get("id")?.as_str()?.to_string(),
-                            label: p
-                                .get("label")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            description: p
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            category: p
-                                .get("category")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
+                            label: p.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            description: p.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            category: p.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                             tags: p
                                 .get("tags")
                                 .and_then(|v| v.as_array())
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
+                                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
                         })
                     })
@@ -466,23 +330,10 @@ impl QueryRoot {
                     .filter_map(|t| {
                         Some(GqlToolDefinition {
                             name: t.get("name")?.as_str()?.to_string(),
-                            executable: t
-                                .get("executable")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            supports_mcp: t
-                                .get("supportsMcp")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false),
-                            supports_write: t
-                                .get("supportsWrite")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false),
-                            context_window: t
-                                .get("contextWindow")
-                                .and_then(|v| v.as_i64())
-                                .map(|v| v as i32),
+                            executable: t.get("executable").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            supports_mcp: t.get("supportsMcp").and_then(|v| v.as_bool()).unwrap_or(false),
+                            supports_write: t.get("supportsWrite").and_then(|v| v.as_bool()).unwrap_or(false),
+                            context_window: t.get("contextWindow").and_then(|v| v.as_i64()).map(|v| v as i32),
                         })
                     })
                     .collect()
@@ -497,41 +348,20 @@ impl QueryRoot {
                     .filter_map(|a| {
                         Some(GqlAgentProfile {
                             name: a.get("name")?.as_str()?.to_string(),
-                            description: a
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            role: a
-                                .get("role")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
+                            description: a.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            role: a.get("role").and_then(|v| v.as_str()).map(String::from),
                             mcp_servers: a
                                 .get("mcpServers")
                                 .and_then(|v| v.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
                             skills: a
                                 .get("skills")
                                 .and_then(|v| v.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
-                            tool: a
-                                .get("tool")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                            model: a
-                                .get("model")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
+                            tool: a.get("tool").and_then(|v| v.as_str()).map(String::from),
+                            model: a.get("model").and_then(|v| v.as_str()).map(String::from),
                         })
                     })
                     .collect()
@@ -546,36 +376,17 @@ impl QueryRoot {
                     .filter_map(|s| {
                         Some(GqlWorkflowSchedule {
                             id: s.get("id")?.as_str()?.to_string(),
-                            cron: s
-                                .get("cron")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            workflow_ref: s
-                                .get("workflowRef")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                            command: s
-                                .get("command")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
-                            enabled: s
-                                .get("enabled")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(true),
+                            cron: s.get("cron").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            workflow_ref: s.get("workflowRef").and_then(|v| v.as_str()).map(String::from),
+                            command: s.get("command").and_then(|v| v.as_str()).map(String::from),
+                            enabled: s.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
                         })
                     })
                     .collect()
             })
             .unwrap_or_default();
 
-        Ok(GqlWorkflowConfig {
-            mcp_servers,
-            phase_catalog,
-            tools,
-            agent_profiles,
-            schedules,
-        })
+        Ok(GqlWorkflowConfig { mcp_servers, phase_catalog, tools, agent_profiles, schedules })
     }
 
     async fn skills(&self, ctx: &Context<'_>) -> Result<Vec<GqlSkill>> {
@@ -612,56 +423,27 @@ impl QueryRoot {
 
     async fn daemon_health(&self, ctx: &Context<'_>) -> Result<GqlDaemonHealth> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .daemon_health()
-            .await
-            .map_err(gql_err)?;
+        let val = api.daemon_health().await.map_err(gql_err)?;
         let health = serde_json::from_value::<serde_json::Value>(val).unwrap_or_default();
         Ok(GqlDaemonHealth {
             healthy: health.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false),
-            status: health
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string(),
-            runner_connected: health
-                .get("runner_connected")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            runner_pid: health
-                .get("runner_pid")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
-            active_agents: health
-                .get("active_agents")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32,
-            daemon_pid: health
-                .get("daemon_pid")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32),
+            status: health.get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+            runner_connected: health.get("runner_connected").and_then(|v| v.as_bool()).unwrap_or(false),
+            runner_pid: health.get("runner_pid").and_then(|v| v.as_i64()).map(|v| v as i32),
+            active_agents: health.get("active_agents").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            daemon_pid: health.get("daemon_pid").and_then(|v| v.as_i64()).map(|v| v as i32),
         })
     }
 
     async fn daemon_status(&self, ctx: &Context<'_>) -> Result<GqlDaemonStatus> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .daemon_status()
-            .await
-            .map_err(gql_err)?;
+        let val = api.daemon_status().await.map_err(gql_err)?;
         Ok(GqlDaemonStatus(val))
     }
 
-    async fn daemon_logs(
-        &self,
-        ctx: &Context<'_>,
-        limit: Option<i32>,
-    ) -> Result<Vec<GqlDaemonLog>> {
+    async fn daemon_logs(&self, ctx: &Context<'_>, limit: Option<i32>) -> Result<Vec<GqlDaemonLog>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .daemon_logs(limit.map(|l| l as usize))
-            .await
-            .map_err(gql_err)?;
+        let val = api.daemon_logs(limit.map(|l| l as usize)).await.map_err(gql_err)?;
         let logs: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
         Ok(logs
             .into_iter()
@@ -676,10 +458,7 @@ impl QueryRoot {
 
     async fn agent_runs(&self, ctx: &Context<'_>) -> Result<Vec<GqlAgentRun>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .daemon_agents()
-            .await
-            .map_err(gql_err)?;
+        let val = api.daemon_agents().await.map_err(gql_err)?;
         let agents = val.as_array().cloned().unwrap_or_default();
         Ok(agents
             .iter()
@@ -687,27 +466,11 @@ impl QueryRoot {
                 let run_id = a.get("run_id").and_then(|v| v.as_str())?.to_string();
                 Some(GqlAgentRun {
                     run_id,
-                    task_id: a
-                        .get("task_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    task_title: a
-                        .get("task_title")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    workflow_id: a
-                        .get("workflow_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    phase_id: a
-                        .get("phase_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    status: a
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string(),
+                    task_id: a.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    task_title: a.get("task_title").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    workflow_id: a.get("workflow_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    phase_id: a.get("phase_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    status: a.get("status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
                 })
             })
             .collect())
@@ -715,10 +478,7 @@ impl QueryRoot {
 
     async fn projects(&self, ctx: &Context<'_>) -> Result<Vec<GqlProject>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .projects_list()
-            .await
-            .map_err(gql_err)?;
+        let val = api.projects_list().await.map_err(gql_err)?;
         let projects: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
         Ok(projects.into_iter().map(GqlProject).collect())
     }
@@ -734,10 +494,7 @@ impl QueryRoot {
 
     async fn projects_active(&self, ctx: &Context<'_>) -> Result<Vec<GqlProject>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .projects_active()
-            .await
-            .map_err(gql_err)?;
+        let val = api.projects_active().await.map_err(gql_err)?;
         let projects: Vec<serde_json::Value> = serde_json::from_value(val).unwrap_or_default();
         Ok(projects.into_iter().map(GqlProject).collect())
     }
@@ -753,45 +510,27 @@ impl QueryRoot {
 
     async fn queue(&self, ctx: &Context<'_>) -> Result<Vec<GqlQueueEntry>> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .queue_list()
-            .await
-            .map_err(gql_err)?;
-        let entries: Vec<serde_json::Value> = val
-            .get("entries")
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
+        let val = api.queue_list().await.map_err(gql_err)?;
+        let entries: Vec<serde_json::Value> =
+            val.get("entries").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
         Ok(entries.into_iter().map(GqlQueueEntry).collect())
     }
 
     async fn queue_stats(&self, ctx: &Context<'_>) -> Result<GqlQueueStats> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .queue_stats()
-            .await
-            .map_err(gql_err)?;
+        let val = api.queue_stats().await.map_err(gql_err)?;
         Ok(GqlQueueStats(val))
     }
 
     async fn system_info(&self, ctx: &Context<'_>) -> Result<GqlSystemInfo> {
         let api = ctx.data::<WebApiService>()?;
-        let val = api
-            .system_info()
-            .await
-            .map_err(gql_err)?;
+        let val = api.system_info().await.map_err(gql_err)?;
         Ok(GqlSystemInfo {
             platform: val.get("platform").and_then(|v| v.as_str()).map(String::from),
             arch: val.get("arch").and_then(|v| v.as_str()).map(String::from),
             version: val.get("version").and_then(|v| v.as_str()).map(String::from),
-            daemon_status: val
-                .get("daemon_status")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            project_root: val
-                .get("project_root")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            daemon_status: val.get("daemon_status").and_then(|v| v.as_str()).map(String::from),
+            project_root: val.get("project_root").and_then(|v| v.as_str()).map(String::from),
         })
     }
 }

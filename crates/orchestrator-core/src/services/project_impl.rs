@@ -33,10 +33,7 @@ impl ProjectServiceApi for InMemoryServiceHub {
             let mut lock = self.state.write().await;
             project_shared::upsert_project(&mut lock, project, now)
         };
-        self.log(
-            LogLevel::Info,
-            format!("project upserted: {}", project.name),
-        );
+        self.log(LogLevel::Info, format!("project upserted: {}", project.name));
         Ok(project)
     }
 
@@ -113,9 +110,7 @@ impl ProjectServiceApi for FileServiceHub {
     }
 
     async fn load(&self, id: &str) -> Result<OrchestratorProject> {
-        let (project, _) = self
-            .mutate_persistent_state(|state| project_shared::load_project(state, id))
-            .await?;
+        let (project, _) = self.mutate_persistent_state(|state| project_shared::load_project(state, id)).await?;
 
         FileServiceHub::bootstrap_project_base_configs(std::path::Path::new(&project.path))?;
         Ok(project)
@@ -123,23 +118,19 @@ impl ProjectServiceApi for FileServiceHub {
 
     async fn rename(&self, id: &str, new_name: &str) -> Result<OrchestratorProject> {
         let (project, _) = self
-            .mutate_persistent_state(|state| {
-                project_shared::rename_project(state, id, new_name, Utc::now())
-            })
+            .mutate_persistent_state(|state| project_shared::rename_project(state, id, new_name, Utc::now()))
             .await?;
         Ok(project)
     }
 
     async fn archive(&self, id: &str) -> Result<OrchestratorProject> {
-        let (project, _) = self
-            .mutate_persistent_state(|state| project_shared::archive_project(state, id, Utc::now()))
-            .await?;
+        let (project, _) =
+            self.mutate_persistent_state(|state| project_shared::archive_project(state, id, Utc::now())).await?;
         Ok(project)
     }
 
     async fn remove(&self, id: &str) -> Result<()> {
-        self.mutate_persistent_state(|state| project_shared::remove_project(state, id))
-            .await?;
+        self.mutate_persistent_state(|state| project_shared::remove_project(state, id)).await?;
         Ok(())
     }
 }

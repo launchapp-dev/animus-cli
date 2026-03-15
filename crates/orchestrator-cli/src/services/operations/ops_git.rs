@@ -1,7 +1,7 @@
 use super::*;
 use crate::cli_types::{
-    GitCommand, GitCommitArgs, GitConfirmCommand, GitPullArgs, GitPushArgs, GitRepoArgs,
-    GitRepoCommand, GitWorktreeCommand,
+    GitCommand, GitCommitArgs, GitConfirmCommand, GitPullArgs, GitPushArgs, GitRepoArgs, GitRepoCommand,
+    GitWorktreeCommand,
 };
 use crate::print_value;
 use anyhow::Result;
@@ -27,9 +27,7 @@ pub(crate) async fn handle_git(command: GitCommand, project_root: &str, json: bo
         GitCommand::Commit(args) => repo::handle_git_commit(args, project_root, json),
         GitCommand::Push(args) => repo::handle_git_push(args, project_root, json),
         GitCommand::Pull(args) => repo::handle_git_pull(args, project_root, json),
-        GitCommand::Worktree { command } => {
-            worktree::handle_git_worktree(command, project_root, json).await
-        }
+        GitCommand::Worktree { command } => worktree::handle_git_worktree(command, project_root, json).await,
         GitCommand::Confirm { command } => confirm::handle_git_confirm(command, project_root, json),
     }
 }

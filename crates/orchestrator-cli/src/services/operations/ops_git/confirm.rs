@@ -5,11 +5,7 @@ use anyhow::Result;
 use super::model::{GitConfirmationOutcomeCli, GitConfirmationRecordCli};
 use super::store::{load_git_confirmations, save_git_confirmations};
 
-pub(super) fn handle_git_confirm(
-    command: GitConfirmCommand,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(super) fn handle_git_confirm(command: GitConfirmCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         GitConfirmCommand::Request(args) => {
             let context = args
@@ -21,12 +17,7 @@ pub(super) fn handle_git_confirm(
             let operation = args.operation_type.trim().to_ascii_lowercase();
             let required = matches!(
                 operation.as_str(),
-                "force_push"
-                    | "remove_worktree"
-                    | "prune_worktrees"
-                    | "remove_repo"
-                    | "hard_reset"
-                    | "clean_untracked"
+                "force_push" | "remove_worktree" | "prune_worktrees" | "remove_repo" | "hard_reset" | "clean_untracked"
             );
             let blocked = false;
             let reason = if required {
@@ -60,12 +51,7 @@ pub(super) fn handle_git_confirm(
                 .requests
                 .iter_mut()
                 .find(|request| request.id == args.request_id)
-                .ok_or_else(|| {
-                    not_found_error(format!(
-                        "confirmation request not found: {}",
-                        args.request_id
-                    ))
-                })?;
+                .ok_or_else(|| not_found_error(format!("confirmation request not found: {}", args.request_id)))?;
             request.approved = Some(args.approved);
             request.comment = args.comment;
             request.user_id = args.user_id;
@@ -86,20 +72,11 @@ pub(super) fn handle_git_confirm(
                 .requests
                 .iter_mut()
                 .find(|request| request.id == args.request_id)
-                .ok_or_else(|| {
-                    not_found_error(format!(
-                        "confirmation request not found: {}",
-                        args.request_id
-                    ))
-                })?;
+                .ok_or_else(|| not_found_error(format!("confirmation request not found: {}", args.request_id)))?;
             request.outcome = Some(GitConfirmationOutcomeCli {
                 success: args.success,
                 message: args.message,
-                metadata: args
-                    .metadata_json
-                    .as_deref()
-                    .map(serde_json::from_str::<Value>)
-                    .transpose()?,
+                metadata: args.metadata_json.as_deref().map(serde_json::from_str::<Value>).transpose()?,
                 recorded_at: Utc::now().to_rfc3339(),
             });
             let outcome = request.outcome.clone();

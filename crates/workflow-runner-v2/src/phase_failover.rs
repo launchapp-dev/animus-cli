@@ -18,10 +18,7 @@ impl PhaseFailureKind {
     }
 
     pub fn should_failover_target(&self) -> bool {
-        matches!(
-            self,
-            PhaseFailureKind::ProviderExhaustion { .. } | PhaseFailureKind::TargetUnavailable
-        )
+        matches!(self, PhaseFailureKind::ProviderExhaustion { .. } | PhaseFailureKind::TargetUnavailable)
     }
 
     pub fn exhaustion_reason(&self) -> Option<&str> {
@@ -150,46 +147,31 @@ fn parse_numeric_value(value: &Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_i64().map(|number| number as f64))
         .or_else(|| value.as_u64().map(|number| number as f64))
-        .or_else(|| {
-            value
-                .as_str()
-                .and_then(|raw| raw.trim().parse::<f64>().ok())
-        })
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse::<f64>().ok()))
 }
 
 fn provider_exhaustion_reason_from_payload(payload: &Value) -> Option<String> {
-    let secondary_used_percent = payload
-        .pointer("/event_msg/token_count/secondary/used_percent")
-        .and_then(parse_numeric_value);
+    let secondary_used_percent =
+        payload.pointer("/event_msg/token_count/secondary/used_percent").and_then(parse_numeric_value);
     if let Some(used_percent) = secondary_used_percent {
         if used_percent >= 100.0 {
-            return Some(format!(
-                "secondary token budget exhausted ({:.0}% used)",
-                used_percent
-            ));
+            return Some(format!("secondary token budget exhausted ({:.0}% used)", used_percent));
         }
     }
 
-    let has_credits = payload
-        .pointer("/event_msg/token_count/credits/has_credits")
-        .and_then(Value::as_bool);
+    let has_credits = payload.pointer("/event_msg/token_count/credits/has_credits").and_then(Value::as_bool);
     if has_credits == Some(false) {
         return Some("provider credits exhausted".to_string());
     }
 
-    let credit_balance = payload
-        .pointer("/event_msg/token_count/credits/balance")
-        .and_then(parse_numeric_value);
+    let credit_balance = payload.pointer("/event_msg/token_count/credits/balance").and_then(parse_numeric_value);
     if let Some(balance) = credit_balance {
         if balance <= 0.0 {
             return Some("provider credit balance exhausted".to_string());
         }
     }
 
-    let error_code = payload
-        .pointer("/error/code")
-        .and_then(Value::as_str)
-        .map(|value| value.to_ascii_lowercase());
+    let error_code = payload.pointer("/error/code").and_then(Value::as_str).map(|value| value.to_ascii_lowercase());
     if let Some(code) = error_code {
         if code.contains("insufficient_quota")
             || code.contains("quota")
@@ -200,10 +182,7 @@ fn provider_exhaustion_reason_from_payload(payload: &Value) -> Option<String> {
         }
     }
 
-    let error_type = payload
-        .pointer("/error/type")
-        .and_then(Value::as_str)
-        .map(|value| value.to_ascii_lowercase());
+    let error_type = payload.pointer("/error/type").and_then(Value::as_str).map(|value| value.to_ascii_lowercase());
     if let Some(kind) = error_type {
         if kind.contains("insufficient_quota")
             || kind.contains("quota")

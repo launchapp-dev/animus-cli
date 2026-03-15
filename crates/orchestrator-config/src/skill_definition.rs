@@ -128,8 +128,7 @@ pub fn parse_skill_manifest(yaml: &str) -> Result<SkillManifest> {
     let manifest: SkillManifest =
         serde_yaml::from_str(yaml).map_err(|e| anyhow!("Failed to parse skill manifest: {e}"))?;
     for (key, skill) in &manifest.skills {
-        validate_skill_definition(skill)
-            .map_err(|e| anyhow!("Skill '{key}' validation failed: {e}"))?;
+        validate_skill_definition(skill).map_err(|e| anyhow!("Skill '{key}' validation failed: {e}"))?;
     }
     Ok(manifest)
 }
@@ -173,9 +172,7 @@ pub fn apply_skill_for_tool(skill: &SkillDefinition, tool_id: &str) -> SkillAppl
     result.env.extend(skill.env.clone());
     result.mcp_servers.extend(skill.mcp_servers.clone());
     result.tool_policy = skill.tool_policy.clone();
-    result
-        .codex_config_overrides
-        .extend(skill.codex_config_overrides.clone());
+    result.codex_config_overrides.extend(skill.codex_config_overrides.clone());
     result.model = skill.model.preferred.clone();
     result.timeout_secs = skill.timeout_secs;
     result.capabilities.extend(skill.capabilities.clone());
@@ -190,9 +187,7 @@ pub fn apply_skill_for_tool(skill: &SkillDefinition, tool_id: &str) -> SkillAppl
         result.extra_args.extend(adapter.extra_args.clone());
         result.env.extend(adapter.env.clone());
         result.mcp_servers.extend(adapter.mcp_servers.clone());
-        result
-            .codex_config_overrides
-            .extend(adapter.codex_config_overrides.clone());
+        result.codex_config_overrides.extend(adapter.codex_config_overrides.clone());
 
         if let Some(prompt_override) = &adapter.prompt_override {
             result.system_prompt_fragments.clear();
@@ -217,16 +212,12 @@ pub fn merge_skill_applications(results: &[SkillApplicationResult]) -> SkillAppl
     let mut merged = SkillApplicationResult::default();
 
     for r in results {
-        merged
-            .system_prompt_fragments
-            .extend(r.system_prompt_fragments.clone());
+        merged.system_prompt_fragments.extend(r.system_prompt_fragments.clone());
         merged.directives.extend(r.directives.clone());
         merged.extra_args.extend(r.extra_args.clone());
         merged.env.extend(r.env.clone());
         merged.mcp_servers.extend(r.mcp_servers.clone());
-        merged
-            .codex_config_overrides
-            .extend(r.codex_config_overrides.clone());
+        merged.codex_config_overrides.extend(r.codex_config_overrides.clone());
         merged.capabilities.extend(r.capabilities.clone());
         if r.tool_policy.is_some() {
             merged.tool_policy = r.tool_policy.clone();
@@ -317,10 +308,7 @@ adapters:
         assert_eq!(skill.name, "code-review");
         assert_eq!(skill.version.as_deref(), Some("1.0"));
         assert_eq!(skill.category, Some(SkillCategory::Review));
-        assert_eq!(
-            skill.prompt.system.as_deref(),
-            Some("You are a code reviewer.")
-        );
+        assert_eq!(skill.prompt.system.as_deref(), Some("You are a code reviewer."));
         assert_eq!(skill.prompt.directives.len(), 2);
         assert_eq!(skill.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(skill.timeout_secs, Some(300));
@@ -397,10 +385,7 @@ skills:
     fn test_apply_skill_no_adapter() {
         let skill = parse_skill_definition(full_skill_yaml()).unwrap();
         let result = apply_skill_for_tool(&skill, "claude");
-        assert!(result
-            .system_prompt_fragments
-            .iter()
-            .any(|s| s.contains("code reviewer")));
+        assert!(result.system_prompt_fragments.iter().any(|s| s.contains("code reviewer")));
         assert_eq!(result.directives.len(), 2);
         assert_eq!(result.model.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(result.timeout_secs, Some(300));
@@ -439,10 +424,7 @@ adapters:
         let skill = parse_skill_definition(yaml).unwrap();
         let result = apply_skill_for_tool(&skill, "claude");
         assert_eq!(result.system_prompt_fragments.len(), 1);
-        assert_eq!(
-            result.system_prompt_fragments[0],
-            "Overridden system prompt"
-        );
+        assert_eq!(result.system_prompt_fragments[0], "Overridden system prompt");
         assert_eq!(result.directives, vec!["overridden directive"]);
     }
 
@@ -461,10 +443,7 @@ adapters:
             directives: vec!["dir-b".into()],
             model: Some("model-b".into()),
             env: BTreeMap::from([("B".into(), "2".into())]),
-            tool_policy: Some(AgentToolPolicy {
-                allow: vec!["Read".into()],
-                deny: vec![],
-            }),
+            tool_policy: Some(AgentToolPolicy { allow: vec!["Read".into()], deny: vec![] }),
             ..Default::default()
         };
 

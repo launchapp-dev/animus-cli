@@ -36,9 +36,7 @@ where
         .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("failed to open tracker lock at {}", lock_path.display()))?;
-    lock_file
-        .lock_exclusive()
-        .context("failed to acquire exclusive lock on process tracker")?;
+    lock_file.lock_exclusive().context("failed to acquire exclusive lock on process tracker")?;
     let result = f(&tracker_path);
     lock_file.unlock().ok();
     result

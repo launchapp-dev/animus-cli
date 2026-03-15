@@ -1,30 +1,29 @@
 use crate::config_context::RuntimeConfigContext;
 use crate::ipc::{
-    build_runtime_contract_with_resume, collect_json_payload_lines, connect_runner,
-    event_matches_run, runner_config_dir, write_json_line,
+    build_runtime_contract_with_resume, collect_json_payload_lines, connect_runner, event_matches_run,
+    runner_config_dir, write_json_line,
 };
+use crate::payload_traversal::{parse_commit_message_from_text, parse_phase_decision_from_text};
 use crate::phase_command::{
-    build_command_phase_decision, build_command_result_payload,
-    run_workflow_phase_with_command, CommandExecutionContext,
-};
-use crate::phase_prompt::{
-    phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx,
-    PhasePromptInputs, PhaseRenderParams,
-};
-use crate::phase_output::persist_phase_output;
-use crate::runtime_contract::{
-    inject_agent_tool_policy, inject_default_stdio_mcp, inject_project_mcp_servers,
-    inject_read_only_flag, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
-    phase_output_json_schema_for, phase_response_json_schema_for,
+    build_command_phase_decision, build_command_result_payload, run_workflow_phase_with_command,
+    CommandExecutionContext,
 };
 use crate::phase_failover::PhaseFailureClassifier;
-use crate::phase_targets::PhaseTargetPlanner;
 use crate::phase_git::commit_implementation_changes;
-use crate::runtime_support::{
-    inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts,
-    WorkflowPhaseRuntimeSettings,
+use crate::phase_output::persist_phase_output;
+use crate::phase_prompt::{
+    phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx, PhasePromptInputs,
+    PhaseRenderParams,
 };
-use crate::payload_traversal::{parse_phase_decision_from_text, parse_commit_message_from_text};
+use crate::phase_targets::PhaseTargetPlanner;
+use crate::runtime_contract::{
+    inject_agent_tool_policy, inject_default_stdio_mcp, inject_project_mcp_servers, inject_read_only_flag,
+    inject_response_schema_into_launch_args, inject_workflow_mcp_servers, phase_output_json_schema_for,
+    phase_response_json_schema_for,
+};
+use crate::runtime_support::{
+    inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts, WorkflowPhaseRuntimeSettings,
+};
 use crate::skill_dispatch;
 
 use anyhow::{anyhow, Context, Result};
@@ -124,18 +123,10 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             ..
         } = &run_result.outcome
         {
-            commit_message = resolved_commit
-                .clone()
-                .or_else(|| decision.commit_message.clone());
+            commit_message = resolved_commit.clone().or_else(|| decision.commit_message.clone());
         }
 
-        Ok(orchestrator_core::PhaseExecutionResult {
-            exit_code,
-            verdict,
-            output_log,
-            error,
-            commit_message,
-        })
+        Ok(orchestrator_core::PhaseExecutionResult { exit_code, verdict, output_log, error, commit_message })
     }
 }
 
@@ -147,41 +138,26 @@ fn yaml_verdict_target(
     requested_target: Option<&str>,
 ) -> Option<String> {
     let loaded_config = orchestrator_core::load_workflow_config_or_default(Path::new(project_root));
-    let routing = orchestrator_core::resolve_workflow_verdict_routing(
-        &loaded_config.config,
-        Some(workflow_ref),
-    );
-    let transition = routing
-        .iter()
-        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(phase_id))
-        .and_then(|(_, transitions)| {
+    let routing = orchestrator_core::resolve_workflow_verdict_routing(&loaded_config.config, Some(workflow_ref));
+    let transition = routing.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(phase_id)).and_then(
+        |(_, transitions)| {
             transitions
                 .iter()
                 .find(|(candidate, _)| candidate.eq_ignore_ascii_case(verdict))
                 .map(|(_, transition)| transition)
-        })?;
-    let workflow_phases = orchestrator_core::resolve_phase_plan_for_workflow_ref(
-        Some(Path::new(project_root)),
-        Some(workflow_ref),
-    )
-    .ok()?;
-    let requested_target = requested_target
-        .map(str::trim)
-        .filter(|target| !target.is_empty());
+        },
+    )?;
+    let workflow_phases =
+        orchestrator_core::resolve_phase_plan_for_workflow_ref(Some(Path::new(project_root)), Some(workflow_ref))
+            .ok()?;
+    let requested_target = requested_target.map(str::trim).filter(|target| !target.is_empty());
     if transition.allow_agent_target {
         let requested_target = requested_target?;
         if (transition.allowed_targets.is_empty()
-            || transition
-                .allowed_targets
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(requested_target)))
-            && workflow_phases
-                .iter()
-                .any(|phase| phase.eq_ignore_ascii_case(requested_target))
+            || transition.allowed_targets.iter().any(|allowed| allowed.eq_ignore_ascii_case(requested_target)))
+            && workflow_phases.iter().any(|phase| phase.eq_ignore_ascii_case(requested_target))
         {
-            return workflow_phases
-                .into_iter()
-                .find(|phase| phase.eq_ignore_ascii_case(requested_target));
+            return workflow_phases.into_iter().find(|phase| phase.eq_ignore_ascii_case(requested_target));
         }
     }
     let target = transition.target.trim();
@@ -201,9 +177,7 @@ fn phase_execution_result_values(
     match outcome {
         PhaseExecutionOutcome::Completed { phase_decision, .. } => match phase_decision {
             Some(decision) => match decision.verdict {
-                orchestrator_core::PhaseDecisionVerdict::Advance => {
-                    (orchestrator_core::PhaseVerdict::Advance, 0, None)
-                }
+                orchestrator_core::PhaseDecisionVerdict::Advance => (orchestrator_core::PhaseVerdict::Advance, 0, None),
                 orchestrator_core::PhaseDecisionVerdict::Rework => (
                     orchestrator_core::PhaseVerdict::Rework {
                         target_phase: yaml_verdict_target(
@@ -218,66 +192,38 @@ fn phase_execution_result_values(
                     0,
                     None,
                 ),
-                orchestrator_core::PhaseDecisionVerdict::Skip => {
-                    (orchestrator_core::PhaseVerdict::Skip, 0, None)
-                }
+                orchestrator_core::PhaseDecisionVerdict::Skip => (orchestrator_core::PhaseVerdict::Skip, 0, None),
                 orchestrator_core::PhaseDecisionVerdict::Fail => {
                     let reason = if decision.reason.trim().is_empty() {
                         "phase verdict fail".to_string()
                     } else {
                         decision.reason.clone()
                     };
-                    (
-                        orchestrator_core::PhaseVerdict::Failed {
-                            reason: reason.clone(),
-                        },
-                        1,
-                        Some(reason),
-                    )
+                    (orchestrator_core::PhaseVerdict::Failed { reason: reason.clone() }, 1, Some(reason))
                 }
                 orchestrator_core::PhaseDecisionVerdict::Unknown => {
                     let reason = "phase verdict unknown".to_string();
-                    (
-                        orchestrator_core::PhaseVerdict::Failed {
-                            reason: reason.clone(),
-                        },
-                        1,
-                        Some(reason),
-                    )
+                    (orchestrator_core::PhaseVerdict::Failed { reason: reason.clone() }, 1, Some(reason))
                 }
             },
             None => (orchestrator_core::PhaseVerdict::Advance, 0, None),
         },
         PhaseExecutionOutcome::ManualPending { instructions, .. } => {
             let reason = format!("manual review required: {instructions}");
-            (
-                orchestrator_core::PhaseVerdict::Failed {
-                    reason: reason.clone(),
-                },
-                1,
-                Some(reason),
-            )
+            (orchestrator_core::PhaseVerdict::Failed { reason: reason.clone() }, 1, Some(reason))
         }
     }
 }
 
-pub fn load_agent_runtime_config(
-    project_root: &str,
-) -> orchestrator_core::AgentRuntimeConfig {
+pub fn load_agent_runtime_config(project_root: &str) -> orchestrator_core::AgentRuntimeConfig {
     orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root))
 }
 
-fn load_agent_runtime_config_strict(
-    project_root: &str,
-) -> Result<orchestrator_core::LoadedAgentRuntimeConfig> {
-    orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(
-        project_root,
-    ))
+fn load_agent_runtime_config_strict(project_root: &str) -> Result<orchestrator_core::LoadedAgentRuntimeConfig> {
+    orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))
 }
 
-fn load_workflow_config_strict(
-    project_root: &str,
-) -> Result<orchestrator_core::LoadedWorkflowConfig> {
+fn load_workflow_config_strict(project_root: &str) -> Result<orchestrator_core::LoadedWorkflowConfig> {
     orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root))
 }
 
@@ -343,9 +289,7 @@ fn outcome_verdict(outcome: &PhaseExecutionOutcome) -> orchestrator_core::PhaseD
             .as_ref()
             .map(|decision| decision.verdict)
             .unwrap_or(orchestrator_core::PhaseDecisionVerdict::Advance),
-        PhaseExecutionOutcome::ManualPending { .. } => {
-            orchestrator_core::PhaseDecisionVerdict::Advance
-        }
+        PhaseExecutionOutcome::ManualPending { .. } => orchestrator_core::PhaseDecisionVerdict::Advance,
     }
 }
 
@@ -360,51 +304,34 @@ fn routing_complexity(
 }
 
 pub(crate) fn validate_basic_json_schema(instance: &Value, schema: &Value) -> Result<()> {
-    let schema_object = schema
-        .as_object()
-        .ok_or_else(|| anyhow!("schema must be a JSON object"))?;
+    let schema_object = schema.as_object().ok_or_else(|| anyhow!("schema must be a JSON object"))?;
 
     if let Some(required_fields) = schema_object.get("required").and_then(Value::as_array) {
-        let instance_object = instance
-            .as_object()
-            .ok_or_else(|| anyhow!("instance must be a JSON object"))?;
+        let instance_object = instance.as_object().ok_or_else(|| anyhow!("instance must be a JSON object"))?;
         for required in required_fields {
             let Some(field) = required.as_str() else {
                 continue;
             };
             if !instance_object.contains_key(field) {
-                return Err(anyhow!(
-                    "schema validation failed: missing required field '{}'",
-                    field
-                ));
+                return Err(anyhow!("schema validation failed: missing required field '{}'", field));
             }
         }
     }
 
     if let Some(properties) = schema_object.get("properties").and_then(Value::as_object) {
-        let instance_object = instance
-            .as_object()
-            .ok_or_else(|| anyhow!("instance must be a JSON object"))?;
+        let instance_object = instance.as_object().ok_or_else(|| anyhow!("instance must be a JSON object"))?;
         for (key, rule) in properties {
             let Some(value) = instance_object.get(key) else {
                 continue;
             };
             if let Some(expected_type) = rule.get("type").and_then(Value::as_str) {
                 if !validate_schema_type(expected_type, value) {
-                    return Err(anyhow!(
-                        "schema validation failed: field '{}' must be type '{}'",
-                        key,
-                        expected_type
-                    ));
+                    return Err(anyhow!("schema validation failed: field '{}' must be type '{}'", key, expected_type));
                 }
             }
             if let Some(constant) = rule.get("const") {
                 if value != constant {
-                    return Err(anyhow!(
-                        "schema validation failed: field '{}' must equal {}",
-                        key,
-                        constant
-                    ));
+                    return Err(anyhow!("schema validation failed: field '{}' must equal {}", key, constant));
                 }
             }
         }
@@ -435,12 +362,9 @@ pub async fn run_workflow_phase_attempt(
     let ctx = RuntimeConfigContext::load(project_root);
     let parse_commit_message = phase_requires_commit_message_with_ctx(&ctx, phase_id);
     let config_dir = runner_config_dir(Path::new(project_root));
-    let stream = connect_runner(&config_dir).await.with_context(|| {
-        format!(
-            "failed to connect runner for workflow {} phase {}",
-            workflow_id, phase_id
-        )
-    })?;
+    let stream = connect_runner(&config_dir)
+        .await
+        .with_context(|| format!("failed to connect runner for workflow {} phase {}", workflow_id, phase_id))?;
     let (read_half, mut write_half) = tokio::io::split(stream);
     write_json_line(&mut write_half, request).await?;
 
@@ -468,8 +392,7 @@ pub async fn run_workflow_phase_attempt(
         match event {
             AgentRunEvent::OutputChunk { text, .. } => {
                 if provider_exhaustion_reason.is_none() {
-                    provider_exhaustion_reason =
-                        PhaseFailureClassifier::provider_exhaustion_reason_from_text(&text);
+                    provider_exhaustion_reason = PhaseFailureClassifier::provider_exhaustion_reason_from_text(&text);
                 }
                 PhaseFailureClassifier::push_phase_diagnostic_line(&mut diagnostics, &text);
                 if parse_commit_message && pending_commit_message.is_none() {
@@ -494,8 +417,7 @@ pub async fn run_workflow_phase_attempt(
             }
             AgentRunEvent::Thinking { content, .. } => {
                 if provider_exhaustion_reason.is_none() {
-                    provider_exhaustion_reason =
-                        PhaseFailureClassifier::provider_exhaustion_reason_from_text(&content);
+                    provider_exhaustion_reason = PhaseFailureClassifier::provider_exhaustion_reason_from_text(&content);
                 }
                 PhaseFailureClassifier::push_phase_diagnostic_line(&mut diagnostics, &content);
                 if parse_commit_message && pending_commit_message.is_none() {
@@ -520,23 +442,20 @@ pub async fn run_workflow_phase_attempt(
             }
             AgentRunEvent::Error { error, .. } => {
                 PhaseFailureClassifier::push_phase_diagnostic_line(&mut diagnostics, &error);
-                let exhaustion_reason = provider_exhaustion_reason.clone().or_else(|| {
-                    PhaseFailureClassifier::provider_exhaustion_reason_from_text(&error)
-                });
+                let exhaustion_reason = provider_exhaustion_reason
+                    .clone()
+                    .or_else(|| PhaseFailureClassifier::provider_exhaustion_reason_from_text(&error));
                 return Err(anyhow!(
                     "workflow {} phase {} error: {}{}",
                     workflow_id,
                     phase_id,
                     error,
-                    exhaustion_reason
-                        .map(|reason| format!(" (provider_exhausted: {reason})"))
-                        .unwrap_or_default()
+                    exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default()
                 ));
             }
             AgentRunEvent::Finished { exit_code, .. } => {
                 if exit_code.unwrap_or_default() != 0 {
-                    let diagnostics_summary =
-                        PhaseFailureClassifier::summarize_phase_diagnostics(&diagnostics);
+                    let diagnostics_summary = PhaseFailureClassifier::summarize_phase_diagnostics(&diagnostics);
                     let exhaustion_reason = provider_exhaustion_reason.clone().or_else(|| {
                         diagnostics_summary
                             .as_deref()
@@ -547,12 +466,8 @@ pub async fn run_workflow_phase_attempt(
                         workflow_id,
                         phase_id,
                         exit_code,
-                        exhaustion_reason
-                            .map(|reason| format!(" (provider_exhausted: {reason})"))
-                            .unwrap_or_default(),
-                        diagnostics_summary
-                            .map(|summary| format!("; diagnostics: {summary}"))
-                            .unwrap_or_default(),
+                        exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default(),
+                        diagnostics_summary.map(|summary| format!("; diagnostics: {summary}")).unwrap_or_default(),
                     ));
                 }
                 return Ok(PhaseExecutionOutcome::Completed {
@@ -589,14 +504,9 @@ fn parse_result_payload_from_text(text: &str, expected_kind: &str) -> Option<Val
 
 fn parse_result_payload_from_payload(payload: &Value, expected_kind: &str) -> Option<Value> {
     match payload {
-        Value::Array(items) => items
-            .iter()
-            .find_map(|item| parse_result_payload_from_payload(item, expected_kind)),
+        Value::Array(items) => items.iter().find_map(|item| parse_result_payload_from_payload(item, expected_kind)),
         Value::Object(object) => {
-            let kind = object
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let kind = object.get("kind").and_then(Value::as_str).unwrap_or_default();
             if kind.eq_ignore_ascii_case(expected_kind) {
                 return Some(payload.clone());
             }
@@ -632,9 +542,7 @@ fn parse_decision_payload_from_text(text: &str, phase_id: &str) -> Option<Value>
 
 fn parse_decision_payload_from_payload(payload: &Value, _phase_id: &str) -> Option<Value> {
     match payload {
-        Value::Array(items) => items
-            .iter()
-            .find_map(|item| parse_decision_payload_from_payload(item, _phase_id)),
+        Value::Array(items) => items.iter().find_map(|item| parse_decision_payload_from_payload(item, _phase_id)),
         Value::Object(object) => {
             let is_decision = object
                 .get("kind")
@@ -683,9 +591,7 @@ struct PhaseAgentParams<'a> {
     routing: &'a protocol::PhaseRoutingConfig,
 }
 
-async fn run_workflow_phase_with_agent(
-    params: PhaseAgentParams<'_>,
-) -> Result<PhaseExecutionOutcome> {
+async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<PhaseExecutionOutcome> {
     let ctx = params.ctx;
     let project_root = params.project_root;
     let execution_cwd = params.execution_cwd;
@@ -705,9 +611,7 @@ async fn run_workflow_phase_with_agent(
     let agent_tool_override = ctx.phase_tool_override(phase_id);
     let agent_fallback_models = ctx.phase_fallback_models(phase_id);
     let configured_fallback_models = if agent_fallback_models.is_empty() {
-        phase_runtime_settings
-            .map(|settings| settings.fallback_models.clone())
-            .unwrap_or_default()
+        phase_runtime_settings.map(|settings| settings.fallback_models.clone()).unwrap_or_default()
     } else {
         agent_fallback_models
     };
@@ -722,9 +626,7 @@ async fn run_workflow_phase_with_agent(
         params.routing,
     );
     let prompt_inputs = PhasePromptInputs {
-        rework_context: overrides
-            .and_then(|o| o.rework_context.as_deref())
-            .map(ToOwned::to_owned),
+        rework_context: overrides.and_then(|o| o.rework_context.as_deref()).map(ToOwned::to_owned),
         pipeline_vars: pipeline_vars.cloned().unwrap_or_default(),
         dispatch_input: params.dispatch_input.map(ToOwned::to_owned),
         schedule_input: params.schedule_input.map(ToOwned::to_owned),
@@ -743,12 +645,10 @@ async fn run_workflow_phase_with_agent(
         prompt_inputs,
     )
     .final_prompt;
-    let max_attempts = phase_runtime_settings
-        .and_then(|settings| settings.max_attempts)
-        .unwrap_or_else(phase_runner_attempts);
-    let max_continuations = phase_runtime_settings
-        .and_then(|settings| settings.max_continuations)
-        .unwrap_or_else(phase_max_continuations);
+    let max_attempts =
+        phase_runtime_settings.and_then(|settings| settings.max_attempts).unwrap_or_else(phase_runner_attempts);
+    let max_continuations =
+        phase_runtime_settings.and_then(|settings| settings.max_continuations).unwrap_or_else(phase_max_continuations);
     let session_id = Uuid::new_v4().to_string();
     let mut fallover_errors: Vec<String> = Vec::new();
 
@@ -796,10 +696,7 @@ async fn run_workflow_phase_with_agent(
             let phase_output_schema = phase_output_json_schema_for(ctx, phase_id)?;
             let phase_response_schema = phase_response_json_schema_for(ctx, phase_id)?;
             if let Some(mut runtime_contract) = build_runtime_contract_with_resume(
-                context
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or("codex"),
+                context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
                 target_model_id,
                 &effective_prompt,
                 Some(&resume_plan),
@@ -810,58 +707,32 @@ async fn run_workflow_phase_with_agent(
                         "required_result_kind": contract.kind.as_str(),
                         "required_result_fields": contract.required_fields.clone(),
                     });
-                    if let Some(schema) = phase_response_schema
-                        .clone()
-                        .or(phase_output_schema.clone())
-                    {
-                        policy
-                            .as_object_mut()
-                            .expect("json object")
-                            .insert("output_json_schema".to_string(), schema);
+                    if let Some(schema) = phase_response_schema.clone().or(phase_output_schema.clone()) {
+                        policy.as_object_mut().expect("json object").insert("output_json_schema".to_string(), schema);
                     }
-                    runtime_contract
-                        .as_object_mut()
-                        .expect("json object")
-                        .insert("policy".to_string(), policy);
+                    runtime_contract.as_object_mut().expect("json object").insert("policy".to_string(), policy);
                 }
                 if let Some(schema) = phase_response_schema.as_ref() {
-                    inject_response_schema_into_launch_args(
-                        &mut runtime_contract,
-                        schema,
-                        &ctx.agent_runtime_config,
-                    );
+                    inject_response_schema_into_launch_args(&mut runtime_contract, schema, &ctx.agent_runtime_config);
                 }
                 if !caps.writes_files {
                     inject_read_only_flag(&mut runtime_contract, &ctx.agent_runtime_config);
                 }
                 inject_cli_launch_overrides(
                     &mut runtime_contract,
-                    context
-                        .get("tool")
-                        .and_then(Value::as_str)
-                        .unwrap_or("codex"),
+                    context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
                     phase_runtime_settings,
                 );
                 inject_default_stdio_mcp(&mut runtime_contract, project_root);
                 inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
                 inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
                 inject_workflow_mcp_servers(&mut runtime_contract, ctx, phase_id);
-                if let Some(skill_result) = skill_dispatch::resolve_and_apply_phase_skills(
-                    ctx,
-                    project_root,
-                    phase_id,
-                    target_tool_id,
-                ) {
-                    skill_dispatch::inject_skill_overrides(
-                        &mut runtime_contract,
-                        target_tool_id,
-                        &skill_result,
-                    );
+                if let Some(skill_result) =
+                    skill_dispatch::resolve_and_apply_phase_skills(ctx, project_root, phase_id, target_tool_id)
+                {
+                    skill_dispatch::inject_skill_overrides(&mut runtime_contract, target_tool_id, &skill_result);
                 }
-                context
-                    .as_object_mut()
-                    .expect("json object")
-                    .insert("runtime_contract".to_string(), runtime_contract);
+                context.as_object_mut().expect("json object").insert("runtime_contract".to_string(), runtime_contract);
             }
 
             let run_id = RunId(format!(
@@ -874,32 +745,23 @@ async fn run_workflow_phase_with_agent(
                 run_id,
                 model: ModelId(target_model_id.clone()),
                 context,
-                timeout_secs: phase_runtime_settings
-                    .and_then(|settings| settings.timeout_secs),
+                timeout_secs: phase_runtime_settings.and_then(|settings| settings.timeout_secs),
             };
 
             let mut attempt_succeeded = false;
             let mut backoff = Duration::from_millis(200);
             for attempt in 1..=max_attempts {
-                match run_workflow_phase_attempt(project_root, workflow_id, phase_id, &request)
-                    .await
-                {
+                match run_workflow_phase_attempt(project_root, workflow_id, phase_id, &request).await {
                     Ok(mut outcome) => {
                         if phase_requires_commit_message_with_ctx(ctx, phase_id) {
-                            if let PhaseExecutionOutcome::Completed { commit_message, .. } =
-                                &mut outcome
-                            {
-                                let resolved_commit_message =
-                                    commit_message.clone().unwrap_or_else(|| {
-                                        crate::payload_traversal::fallback_implementation_commit_message(
-                                            subject_id,
-                                            subject_title,
-                                        )
-                                    });
-                                commit_implementation_changes(
-                                    execution_cwd,
-                                    &resolved_commit_message,
-                                )?;
+                            if let PhaseExecutionOutcome::Completed { commit_message, .. } = &mut outcome {
+                                let resolved_commit_message = commit_message.clone().unwrap_or_else(|| {
+                                    crate::payload_traversal::fallback_implementation_commit_message(
+                                        subject_id,
+                                        subject_title,
+                                    )
+                                });
+                                commit_implementation_changes(execution_cwd, &resolved_commit_message)?;
                                 *commit_message = Some(resolved_commit_message);
                             }
                         }
@@ -913,19 +775,14 @@ async fn run_workflow_phase_with_agent(
                             && PhaseFailureClassifier::is_transient_runner_error_message(&message);
                         if should_retry {
                             sleep(backoff).await;
-                            backoff =
-                                std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(3));
+                            backoff = std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(3));
                             continue;
                         }
 
                         let has_fallback_target = target_index + 1 < execution_targets.len();
-                        if has_fallback_target
-                            && PhaseFailureClassifier::should_failover_target(&message)
-                        {
-                            fallover_errors.push(format!(
-                                "target {}:{} failed: {}",
-                                target_tool_id, target_model_id, message
-                            ));
+                        if has_fallback_target && PhaseFailureClassifier::should_failover_target(&message) {
+                            fallover_errors
+                                .push(format!("target {}:{} failed: {}", target_tool_id, target_model_id, message));
                             orchestrator_core::record_model_phase_outcome(
                                 std::path::Path::new(project_root),
                                 target_model_id,
@@ -950,11 +807,7 @@ async fn run_workflow_phase_with_agent(
             }
 
             let outcome_is_complete = match &last_outcome {
-                Some(PhaseExecutionOutcome::Completed {
-                    phase_decision,
-                    commit_message,
-                    result_payload,
-                }) => {
+                Some(PhaseExecutionOutcome::Completed { phase_decision, commit_message, result_payload }) => {
                     phase_decision.is_some() || commit_message.is_some() || result_payload.is_some()
                 }
                 Some(PhaseExecutionOutcome::ManualPending { .. }) => true,
@@ -1008,10 +861,7 @@ async fn run_workflow_phase_with_agent(
 }
 
 fn manual_phase_marker_path(project_root: &str) -> std::path::PathBuf {
-    Path::new(project_root)
-        .join(".ao")
-        .join("state")
-        .join("manual-phase-markers.v1.json")
+    Path::new(project_root).join(".ao").join("state").join("manual-phase-markers.v1.json")
 }
 
 fn load_manual_phase_markers(path: &Path) -> BTreeMap<String, bool> {
@@ -1028,9 +878,7 @@ fn write_manual_phase_markers(path: &Path, markers: &BTreeMap<String, bool>) -> 
     let payload = serde_json::to_string_pretty(markers)?;
     let tmp_path = path.with_file_name(format!(
         "{}.{}.tmp",
-        path.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("manual-phase-markers"),
+        path.file_name().and_then(|value| value.to_str()).unwrap_or("manual-phase-markers"),
         Uuid::new_v4()
     ));
     std::fs::write(&tmp_path, payload)?;
@@ -1091,18 +939,14 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
     let schedule_input = params.schedule_input;
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
-    orchestrator_core::validate_workflow_and_runtime_configs(
-        &workflow_config.config,
-        &runtime_loaded.config,
-    )?;
+    orchestrator_core::validate_workflow_and_runtime_configs(&workflow_config.config, &runtime_loaded.config)?;
 
     let mut merged_runtime = runtime_loaded.config.clone();
     for (id, profile) in &workflow_config.config.agent_profiles {
         merged_runtime.agents.insert(id.clone(), profile.clone());
     }
     if !workflow_config.config.tools_allowlist.is_empty() {
-        let mut combined: std::collections::HashSet<String> =
-            merged_runtime.tools_allowlist.iter().cloned().collect();
+        let mut combined: std::collections::HashSet<String> = merged_runtime.tools_allowlist.iter().cloned().collect();
         combined.extend(workflow_config.config.tools_allowlist.iter().cloned());
         merged_runtime.tools_allowlist = combined.into_iter().collect();
         merged_runtime.tools_allowlist.sort();
@@ -1116,17 +960,9 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
     let definition = ctx
         .phase_execution(phase_id)
-        .ok_or_else(|| {
-            anyhow!(
-                "phase '{}' is missing from both workflow config and agent runtime config",
-                phase_id
-            )
-        })?;
+        .ok_or_else(|| anyhow!("phase '{}' is missing from both workflow config and agent runtime config", phase_id))?;
     let agent_id = ctx.phase_agent_id(phase_id);
-    let agent_profile_hash = agent_id
-        .as_deref()
-        .and_then(|id| merged_runtime.agent_profile(id))
-        .map(hash_serializable);
+    let agent_profile_hash = agent_id.as_deref().and_then(|id| merged_runtime.agent_profile(id)).map(hash_serializable);
 
     let mut metadata = PhaseExecutionMetadata {
         phase_id: phase_id.to_string(),
@@ -1165,16 +1001,12 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
             let cli_model_override = overrides.and_then(|o| o.model.as_deref());
 
             let runtime_settings = Some(WorkflowPhaseRuntimeSettings {
-                tool: cli_tool_override
-                    .or_else(|| merged_runtime.phase_tool_override(phase_id))
-                    .map(ToOwned::to_owned),
+                tool: cli_tool_override.or_else(|| merged_runtime.phase_tool_override(phase_id)).map(ToOwned::to_owned),
                 model: cli_model_override
                     .or_else(|| merged_runtime.phase_model_override(phase_id))
                     .map(ToOwned::to_owned),
                 fallback_models: merged_runtime.phase_fallback_models(phase_id),
-                reasoning_effort: merged_runtime
-                    .phase_reasoning_effort(phase_id)
-                    .map(ToOwned::to_owned),
+                reasoning_effort: merged_runtime.phase_reasoning_effort(phase_id).map(ToOwned::to_owned),
                 web_search: merged_runtime.phase_web_search(phase_id),
                 network_access: merged_runtime.phase_network_access(phase_id),
                 timeout_secs: merged_runtime.phase_timeout_secs(phase_id),
@@ -1190,18 +1022,10 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 phase_id,
                 cli_model_override
                     .or_else(|| merged_runtime.phase_model_override(phase_id))
-                    .or_else(|| {
-                        runtime_settings
-                            .as_ref()
-                            .and_then(|settings| settings.model.as_deref())
-                    }),
+                    .or_else(|| runtime_settings.as_ref().and_then(|settings| settings.model.as_deref())),
                 cli_tool_override
                     .or_else(|| merged_runtime.phase_tool_override(phase_id))
-                    .or_else(|| {
-                        runtime_settings
-                            .as_ref()
-                            .and_then(|settings| settings.tool.as_deref())
-                    }),
+                    .or_else(|| runtime_settings.as_ref().and_then(|settings| settings.tool.as_deref())),
                 merged_runtime.phase_fallback_models(phase_id).as_slice(),
                 routing_complexity,
                 Some(project_root),
@@ -1233,21 +1057,12 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
             .await?;
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
-                if let PhaseExecutionOutcome::Completed {
-                    commit_message,
-                    result_payload,
-                    ..
-                } = &outcome
-                {
+                if let PhaseExecutionOutcome::Completed { commit_message, result_payload, .. } = &outcome {
                     if definition
                         .output_contract
                         .as_ref()
                         .is_some_and(|contract| contract.requires_field("commit_message"))
-                        && commit_message
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .is_none()
+                        && commit_message.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none()
                     {
                         signals.push(PhaseExecutionSignal {
                             event_type: "workflow-phase-contract-violation".to_string(),
@@ -1257,10 +1072,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                                 "reason": "commit_message required but missing",
                             }),
                         });
-                        return Err(anyhow!(
-                            "phase '{}' contract violation: commit_message is required",
-                            phase_id
-                        ));
+                        return Err(anyhow!("phase '{}' contract violation: commit_message is required", phase_id));
                     }
 
                     let phase_schema = match phase_response_json_schema_for(&ctx, phase_id)? {
@@ -1287,11 +1099,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                                     "reason": error.to_string(),
                                 }),
                             });
-                            return Err(anyhow!(
-                                "phase '{}' contract violation: {}",
-                                phase_id,
-                                error
-                            ));
+                            return Err(anyhow!("phase '{}' contract violation: {}", phase_id, error));
                         }
                     }
 
@@ -1306,11 +1114,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 }
             }
 
-            Ok(PhaseRunResult {
-                outcome,
-                metadata,
-                signals,
-            })
+            Ok(PhaseRunResult { outcome, metadata, signals })
         }
         orchestrator_core::PhaseExecutionMode::Command => {
             let command = definition
@@ -1331,8 +1135,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 schedule_input,
             };
 
-            let command_result =
-                run_workflow_phase_with_command(&command_context, &merged_runtime, command).await?;
+            let command_result = run_workflow_phase_with_command(&command_context, &merged_runtime, command).await?;
             signals.push(PhaseExecutionSignal {
                 event_type: "workflow-phase-command-executed".to_string(),
                 payload: serde_json::json!({
@@ -1363,10 +1166,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 let result_payload = build_command_result_payload(
                     command,
                     phase_id,
-                    definition
-                        .output_contract
-                        .as_ref()
-                        .map(|contract| contract.kind.as_str()),
+                    definition.output_contract.as_ref().map(|contract| contract.kind.as_str()),
                     &command_result,
                     &decision,
                 );
@@ -1379,11 +1179,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
                 persist_phase_output(project_root, workflow_id, phase_id, &outcome)?;
 
-                return Ok(PhaseRunResult {
-                    outcome,
-                    metadata,
-                    signals,
-                });
+                return Ok(PhaseRunResult { outcome, metadata, signals });
             }
 
             if command.parse_json_output {
@@ -1397,21 +1193,14 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 });
             }
 
-            let decision = command_result.phase_decision.clone().unwrap_or_else(|| {
-                build_command_phase_decision(
-                    command,
-                    phase_id,
-                    command_result.exit_code,
-                    None,
-                )
-            });
+            let decision = command_result
+                .phase_decision
+                .clone()
+                .unwrap_or_else(|| build_command_phase_decision(command, phase_id, command_result.exit_code, None));
             let result_payload = build_command_result_payload(
                 command,
                 phase_id,
-                definition
-                    .output_contract
-                    .as_ref()
-                    .map(|contract| contract.kind.as_str()),
+                definition.output_contract.as_ref().map(|contract| contract.kind.as_str()),
                 &command_result,
                 &decision,
             );

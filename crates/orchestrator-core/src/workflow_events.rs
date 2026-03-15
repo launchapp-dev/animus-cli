@@ -4,37 +4,18 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::{
-    load_agent_runtime_config_or_default, project_task_status, services::ServiceHub,
-    OrchestratorTask, OrchestratorWorkflow, PhaseExecutionMode, PhaseManualDefinition, TaskStatus,
-    WorkflowStatus,
+    load_agent_runtime_config_or_default, project_task_status, services::ServiceHub, OrchestratorTask,
+    OrchestratorWorkflow, PhaseExecutionMode, PhaseManualDefinition, TaskStatus, WorkflowStatus,
 };
 
 #[derive(Debug, Clone)]
 pub enum WorkflowEvent {
-    Pause {
-        workflow_id: String,
-    },
-    Resume {
-        workflow_id: String,
-        feedback: Option<String>,
-    },
-    Cancel {
-        workflow_id: String,
-    },
-    ApproveManualPhase {
-        workflow_id: String,
-        phase_id: String,
-        note: Option<String>,
-    },
-    RejectManualPhase {
-        workflow_id: String,
-        phase_id: String,
-        note: Option<String>,
-    },
-    StaleReset {
-        task_id: String,
-        reason: Option<String>,
-    },
+    Pause { workflow_id: String },
+    Resume { workflow_id: String, feedback: Option<String> },
+    Cancel { workflow_id: String },
+    ApproveManualPhase { workflow_id: String, phase_id: String, note: Option<String> },
+    RejectManualPhase { workflow_id: String, phase_id: String, note: Option<String> },
+    StaleReset { task_id: String, reason: Option<String> },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,53 +33,31 @@ pub async fn dispatch_workflow_event(
     match event {
         WorkflowEvent::Pause { workflow_id } => {
             let workflow = hub.workflows().pause(&workflow_id).await?;
-            Ok(WorkflowEventOutcome {
-                workflow: Some(workflow),
-                ..WorkflowEventOutcome::default()
-            })
+            Ok(WorkflowEventOutcome { workflow: Some(workflow), ..WorkflowEventOutcome::default() })
         }
-        WorkflowEvent::Resume {
-            workflow_id,
-            feedback,
-        } => {
+        WorkflowEvent::Resume { workflow_id, feedback } => {
             if let Some(ref feedback_text) = feedback {
                 if !feedback_text.trim().is_empty() {
-                    hub.workflows()
-                        .record_feedback(&workflow_id, feedback_text.clone())
-                        .await
-                        .ok();
+                    hub.workflows().record_feedback(&workflow_id, feedback_text.clone()).await.ok();
                 }
             }
             let workflow = hub.workflows().resume(&workflow_id).await?;
-            Ok(WorkflowEventOutcome {
-                workflow: Some(workflow),
-                ..WorkflowEventOutcome::default()
-            })
+            Ok(WorkflowEventOutcome { workflow: Some(workflow), ..WorkflowEventOutcome::default() })
         }
         WorkflowEvent::Cancel { workflow_id } => {
             let workflow = hub.workflows().cancel(&workflow_id).await?;
-            Ok(WorkflowEventOutcome {
-                workflow: Some(workflow),
-                ..WorkflowEventOutcome::default()
-            })
+            Ok(WorkflowEventOutcome { workflow: Some(workflow), ..WorkflowEventOutcome::default() })
         }
-        WorkflowEvent::ApproveManualPhase {
-            workflow_id,
-            phase_id,
-            note,
-        } => {
+        WorkflowEvent::ApproveManualPhase { workflow_id, phase_id, note } => {
             let manual = ensure_manual_phase(project_root, &phase_id)?;
             let note = note.unwrap_or_default();
             if manual.approval_note_required && note.trim().is_empty() {
-                return Err(anyhow!(
-                    "phase '{}' requires a non-empty approval note",
-                    phase_id
-                ));
+                return Err(anyhow!("phase '{}' requires a non-empty approval note", phase_id));
             }
 
             let workflow = hub.workflows().get(&workflow_id).await?;
-            let current_phase = current_phase_id(&workflow)
-                .ok_or_else(|| anyhow!("workflow '{}' has no active phase", workflow_id))?;
+            let current_phase =
+                current_phase_id(&workflow).ok_or_else(|| anyhow!("workflow '{}' has no active phase", workflow_id))?;
             if !current_phase.eq_ignore_ascii_case(&phase_id) {
                 return Err(anyhow!(
                     "workflow '{}' active phase is '{}' (requested '{}')",
@@ -129,23 +88,16 @@ pub async fn dispatch_workflow_event(
                 ..WorkflowEventOutcome::default()
             })
         }
-        WorkflowEvent::RejectManualPhase {
-            workflow_id,
-            phase_id,
-            note,
-        } => {
+        WorkflowEvent::RejectManualPhase { workflow_id, phase_id, note } => {
             let manual = ensure_manual_phase(project_root, &phase_id)?;
             let note = note.unwrap_or_default();
             if manual.approval_note_required && note.trim().is_empty() {
-                return Err(anyhow!(
-                    "phase '{}' requires a non-empty rejection note",
-                    phase_id
-                ));
+                return Err(anyhow!("phase '{}' requires a non-empty rejection note", phase_id));
             }
 
             let workflow = hub.workflows().get(&workflow_id).await?;
-            let current_phase = current_phase_id(&workflow)
-                .ok_or_else(|| anyhow!("workflow '{}' has no active phase", workflow_id))?;
+            let current_phase =
+                current_phase_id(&workflow).ok_or_else(|| anyhow!("workflow '{}' has no active phase", workflow_id))?;
             if !current_phase.eq_ignore_ascii_case(&phase_id) {
                 return Err(anyhow!(
                     "workflow '{}' active phase is '{}' (requested '{}')",
@@ -169,51 +121,32 @@ pub async fn dispatch_workflow_event(
                 }
             };
 
-            let failure_reason = if note.trim().is_empty() {
-                "manual approval rejected".to_string()
-            } else {
-                note
-            };
-            let updated = hub
-                .workflows()
-                .fail_current_phase(&workflow_id, failure_reason)
-                .await?;
-            Ok(WorkflowEventOutcome {
-                workflow: Some(updated),
-                ..WorkflowEventOutcome::default()
-            })
+            let failure_reason = if note.trim().is_empty() { "manual approval rejected".to_string() } else { note };
+            let updated = hub.workflows().fail_current_phase(&workflow_id, failure_reason).await?;
+            Ok(WorkflowEventOutcome { workflow: Some(updated), ..WorkflowEventOutcome::default() })
         }
         WorkflowEvent::StaleReset { task_id, reason } => {
             project_task_status(hub.clone(), &task_id, TaskStatus::Ready).await?;
             let task = hub.tasks().get(&task_id).await.ok();
             let _ = reason;
-            Ok(WorkflowEventOutcome {
-                task,
-                ..WorkflowEventOutcome::default()
-            })
+            Ok(WorkflowEventOutcome { task, ..WorkflowEventOutcome::default() })
         }
     }
 }
 
 fn current_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
-    workflow.current_phase.clone().or_else(|| {
-        workflow
-            .phases
-            .get(workflow.current_phase_index)
-            .map(|phase| phase.phase_id.clone())
-    })
+    workflow
+        .current_phase
+        .clone()
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
 }
 
 fn ensure_manual_phase(project_root: &str, phase_id: &str) -> Result<PhaseManualDefinition> {
     let runtime = load_agent_runtime_config_or_default(Path::new(project_root));
-    let definition = runtime
-        .phase_execution(phase_id)
-        .ok_or_else(|| anyhow!("phase '{}' is not configured", phase_id))?;
+    let definition =
+        runtime.phase_execution(phase_id).ok_or_else(|| anyhow!("phase '{}' is not configured", phase_id))?;
     if !matches!(definition.mode, PhaseExecutionMode::Manual) {
         return Err(anyhow!("phase '{}' is not in manual mode", phase_id));
     }
-    definition
-        .manual
-        .clone()
-        .ok_or_else(|| anyhow!("phase '{}' missing manual configuration", phase_id))
+    definition.manual.clone().ok_or_else(|| anyhow!("phase '{}' missing manual configuration", phase_id))
 }

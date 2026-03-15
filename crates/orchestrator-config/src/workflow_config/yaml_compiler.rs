@@ -7,9 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use super::builtins::builtin_workflow_config;
 use super::types::*;
 use super::validation::validate_workflow_config;
-use super::yaml_parser::{
-    parse_yaml_workflow_config_with_base, workflow_config_to_yaml_file,
-};
+use super::yaml_parser::{parse_yaml_workflow_config_with_base, workflow_config_to_yaml_file};
 use super::yaml_types::*;
 
 pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
@@ -23,8 +21,8 @@ pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<Workflo
     let mut yaml_sources: Vec<(PathBuf, String)> = Vec::new();
 
     if single_file.exists() {
-        let content = fs::read_to_string(&single_file)
-            .with_context(|| format!("failed to read {}", single_file.display()))?;
+        let content =
+            fs::read_to_string(&single_file).with_context(|| format!("failed to read {}", single_file.display()))?;
         yaml_sources.push((single_file, content));
     }
 
@@ -32,20 +30,13 @@ pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<Workflo
         let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
             .with_context(|| format!("failed to read directory {}", workflows_dir.display()))?
             .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-            })
+            .filter(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false))
             .collect();
         entries.sort_by_key(|e| e.path());
 
         for entry in entries {
             let path = entry.path();
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
+            let content = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
             yaml_sources.push((path, content));
         }
     }
@@ -73,10 +64,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
     let mut workflows = base.workflows;
 
     for yaml_pipeline in yaml.workflows {
-        if let Some(pos) = workflows
-            .iter()
-            .position(|p| p.id.eq_ignore_ascii_case(&yaml_pipeline.id))
-        {
+        if let Some(pos) = workflows.iter().position(|p| p.id.eq_ignore_ascii_case(&yaml_pipeline.id)) {
             workflows[pos] = yaml_pipeline;
         } else {
             workflows.push(yaml_pipeline);
@@ -117,11 +105,9 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
 
     let mut schedules = base.schedules;
     for overlay_schedule in yaml.schedules {
-        if let Some(pos) = schedules.iter().position(|schedule| {
-            schedule
-                .id
-                .eq_ignore_ascii_case(overlay_schedule.id.as_str())
-        }) {
+        if let Some(pos) =
+            schedules.iter().position(|schedule| schedule.id.eq_ignore_ascii_case(overlay_schedule.id.as_str()))
+        {
             schedules[pos] = overlay_schedule;
         } else {
             schedules.push(overlay_schedule);
@@ -143,13 +129,12 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         (None, Some(overlay)) => Some(overlay),
     };
 
-    let default_workflow_ref = if yaml.default_workflow_ref != base.default_workflow_ref
-        && !yaml.default_workflow_ref.is_empty()
-    {
-        yaml.default_workflow_ref
-    } else {
-        base.default_workflow_ref
-    };
+    let default_workflow_ref =
+        if yaml.default_workflow_ref != base.default_workflow_ref && !yaml.default_workflow_ref.is_empty() {
+            yaml.default_workflow_ref
+        } else {
+            base.default_workflow_ref
+        };
 
     WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
@@ -175,20 +160,14 @@ pub(super) fn write_yaml_workflow_overlay(
     yaml_file: &YamlWorkflowFile,
 ) -> Result<PathBuf> {
     let workflows_dir = yaml_workflows_dir(project_root);
-    fs::create_dir_all(&workflows_dir)
-        .with_context(|| format!("failed to create {}", workflows_dir.display()))?;
+    fs::create_dir_all(&workflows_dir).with_context(|| format!("failed to create {}", workflows_dir.display()))?;
     let path = workflows_dir.join(file_name);
-    let content =
-        serde_yaml::to_string(yaml_file).context("failed to serialize workflow YAML overlay")?;
+    let content = serde_yaml::to_string(yaml_file).context("failed to serialize workflow YAML overlay")?;
     fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)
 }
 
-pub fn write_workflow_yaml_overlay(
-    project_root: &Path,
-    file_name: &str,
-    config: &WorkflowConfig,
-) -> Result<PathBuf> {
+pub fn write_workflow_yaml_overlay(project_root: &Path, file_name: &str, config: &WorkflowConfig) -> Result<PathBuf> {
     let yaml_file = workflow_config_to_yaml_file(config);
     write_yaml_workflow_overlay(project_root, file_name, &yaml_file)
 }
@@ -211,11 +190,7 @@ pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<Co
         if let Ok(entries) = fs::read_dir(&workflows_dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                if path
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-                {
+                if path.extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false) {
                     source_files.push(path);
                 }
             }
@@ -227,19 +202,11 @@ pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<Co
         return Ok(None);
     }
 
-    let yaml_config = compile_yaml_workflow_files(project_root)?
-        .ok_or_else(|| anyhow!("no YAML workflow files found"))?;
+    let yaml_config =
+        compile_yaml_workflow_files(project_root)?.ok_or_else(|| anyhow!("no YAML workflow files found"))?;
     let final_config = merge_yaml_into_config(builtin_workflow_config(), yaml_config);
 
     validate_workflow_config(&final_config)?;
-    let output_path = if single_file.exists() {
-        single_file
-    } else {
-        workflows_dir
-    };
-    Ok(Some(CompileYamlResult {
-        config: final_config,
-        source_files,
-        output_path,
-    }))
+    let output_path = if single_file.exists() { single_file } else { workflows_dir };
+    Ok(Some(CompileYamlResult { config: final_config, source_files, output_path }))
 }

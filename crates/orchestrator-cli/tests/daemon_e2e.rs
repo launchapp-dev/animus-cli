@@ -64,14 +64,8 @@ fn daemon_run_once_sees_ready_task_but_skips_dispatch_when_auto_run_disabled() -
     );
 
     let task_payload = harness.run_json_ok(&["task", "get", "--id", "TASK-001"])?;
-    let status = task_payload
-        .pointer("/data/status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    assert_eq!(
-        status, "ready",
-        "task should remain ready when auto-run is disabled"
-    );
+    let status = task_payload.pointer("/data/status").and_then(Value::as_str).unwrap_or("");
+    assert_eq!(status, "ready", "task should remain ready when auto-run is disabled");
 
     Ok(())
 }
@@ -81,10 +75,7 @@ fn daemon_health_reports_stopped_when_no_daemon_running() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let payload = harness.run_json_ok(&["daemon", "health"])?;
-    let status = payload
-        .pointer("/data/status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let status = payload.pointer("/data/status").and_then(Value::as_str).unwrap_or("");
 
     assert!(
         status == "stopped" || status == "crashed",
@@ -100,10 +91,7 @@ fn daemon_status_reports_stopped_when_no_daemon_running() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let payload = harness.run_json_ok(&["daemon", "status"])?;
-    let status = payload
-        .pointer("/data")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let status = payload.pointer("/data").and_then(Value::as_str).unwrap_or("");
 
     assert!(
         status == "stopped" || status == "crashed",
@@ -118,26 +106,12 @@ fn daemon_status_reports_stopped_when_no_daemon_running() -> Result<()> {
 fn daemon_run_once_reconciles_dependency_gates() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    harness.run_json_ok(&[
-        "task",
-        "create",
-        "--title",
-        "dependency task",
-        "--description",
-        "blocks the other task",
-    ])?;
+    harness.run_json_ok(&["task", "create", "--title", "dependency task", "--description", "blocks the other task"])?;
     harness.run_json_ok(&["task", "status", "--id", "TASK-001", "--status", "ready"])?;
     harness.run_json_ok(&["task", "status", "--id", "TASK-001", "--status", "in-progress"])?;
     harness.run_json_ok(&["task", "status", "--id", "TASK-001", "--status", "done"])?;
 
-    harness.run_json_ok(&[
-        "task",
-        "create",
-        "--title",
-        "dependent task",
-        "--description",
-        "depends on TASK-001",
-    ])?;
+    harness.run_json_ok(&["task", "create", "--title", "dependent task", "--description", "depends on TASK-001"])?;
     harness.run_json_ok(&[
         "task",
         "dependency-add",
@@ -169,14 +143,8 @@ fn daemon_run_once_reconciles_dependency_gates() -> Result<()> {
     );
 
     let task_payload = harness.run_json_ok(&["task", "get", "--id", "TASK-002"])?;
-    let status = task_payload
-        .pointer("/data/status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    assert_eq!(
-        status, "ready",
-        "dependent task should remain ready when dependency is done"
-    );
+    let status = task_payload.pointer("/data/status").and_then(Value::as_str).unwrap_or("");
+    assert_eq!(status, "ready", "dependent task should remain ready when dependency is done");
 
     Ok(())
 }
@@ -186,11 +154,7 @@ fn daemon_events_returns_empty_when_no_events() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let payload = harness.run_json_ok(&["daemon", "events", "--limit", "10"])?;
-    let events = payload
-        .pointer("/data/events")
-        .and_then(Value::as_array)
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let events = payload.pointer("/data/events").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
 
     assert_eq!(events, 0, "should have no daemon events initially");
 
@@ -214,27 +178,13 @@ fn queue_enqueue_dispatch_round_trip() -> Result<()> {
     harness.run_json_ok(&["queue", "enqueue", "--task-id", "TASK-001"])?;
 
     let queue_payload = harness.run_json_ok(&["queue", "list"])?;
-    let entries = queue_payload
-        .pointer("/data/entries")
-        .and_then(Value::as_array)
-        .expect("queue list should have entries array");
+    let entries =
+        queue_payload.pointer("/data/entries").and_then(Value::as_array).expect("queue list should have entries array");
     assert_eq!(entries.len(), 1, "queue should have exactly one entry");
-    let entry_status = entries[0]
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    assert_eq!(
-        entry_status, "pending",
-        "enqueued entry should be pending before daemon tick"
-    );
-    let entry_task_id = entries[0]
-        .get("task_id")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    assert_eq!(
-        entry_task_id, "TASK-001",
-        "enqueued entry should reference the correct task"
-    );
+    let entry_status = entries[0].get("status").and_then(Value::as_str).unwrap_or("");
+    assert_eq!(entry_status, "pending", "enqueued entry should be pending before daemon tick");
+    let entry_task_id = entries[0].get("task_id").and_then(Value::as_str).unwrap_or("");
+    assert_eq!(entry_task_id, "TASK-001", "enqueued entry should reference the correct task");
 
     let output = harness.run_json_output(&[
         "daemon",
@@ -259,14 +209,8 @@ fn queue_enqueue_dispatch_round_trip() -> Result<()> {
         .pointer("/data/entries")
         .and_then(Value::as_array)
         .expect("queue list should have entries array after daemon tick");
-    assert!(
-        !entries_after.is_empty(),
-        "queue entry should still exist after daemon tick"
-    );
-    let post_status = entries_after[0]
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    assert!(!entries_after.is_empty(), "queue entry should still exist after daemon tick");
+    let post_status = entries_after[0].get("status").and_then(Value::as_str).unwrap_or("");
     assert!(
         post_status == "assigned" || post_status == "pending",
         "queue entry should be assigned or remain pending (if runner binary unavailable), got: {}",
@@ -281,10 +225,7 @@ fn workflow_config_validate_passes() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let payload = harness.run_json_ok(&["workflow", "config", "validate"])?;
-    let ok = payload
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
     assert!(ok, "workflow config validate should pass");
 
     Ok(())
@@ -302,14 +243,7 @@ fn daemon_run_once_with_stale_reconciliation_handles_stale_in_progress_tasks() -
         "--description",
         "will become stale in-progress",
     ])?;
-    harness.run_json_ok(&[
-        "task",
-        "status",
-        "--id",
-        "TASK-001",
-        "--status",
-        "in-progress",
-    ])?;
+    harness.run_json_ok(&["task", "status", "--id", "TASK-001", "--status", "in-progress"])?;
 
     let output = harness.run_json_output(&[
         "daemon",

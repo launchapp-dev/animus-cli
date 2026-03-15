@@ -159,17 +159,9 @@ pub(crate) struct WorkflowCheckpointPruneArgs {
         help = "Retain at most this many checkpoints per phase."
     )]
     pub(crate) keep_last_per_phase: usize,
-    #[arg(
-        long,
-        value_name = "HOURS",
-        help = "Additionally prune checkpoints older than this age in hours."
-    )]
+    #[arg(long, value_name = "HOURS", help = "Additionally prune checkpoints older than this age in hours.")]
     pub(crate) max_age_hours: Option<u64>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview prune result without deleting checkpoint files."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview prune result without deleting checkpoint files.")]
     pub(crate) dry_run: bool,
 }
 
@@ -180,32 +172,13 @@ pub(crate) struct WorkflowRunArgs {
         help = "Workflow definition name (e.g. standard, ui-ux, builtin/vision-draft). Defaults to 'standard' when --task-id is provided."
     )]
     pub(crate) pipeline: Option<String>,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task id to run the workflow for."
-    )]
+    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to run the workflow for.")]
     pub(crate) task_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "REQ_ID",
-        group = "subject",
-        help = "Requirement id to run the workflow for."
-    )]
+    #[arg(long, value_name = "REQ_ID", group = "subject", help = "Requirement id to run the workflow for.")]
     pub(crate) requirement_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "TITLE",
-        group = "subject",
-        help = "Custom workflow title for freeform execution."
-    )]
+    #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for freeform execution.")]
     pub(crate) title: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Custom workflow description (used with --title)."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
     pub(crate) description: Option<String>,
     #[arg(
         long,
@@ -219,11 +192,7 @@ pub(crate) struct WorkflowRunArgs {
         help = "Run synchronously in the terminal instead of enqueueing to the daemon."
     )]
     pub(crate) sync: bool,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_ID",
-        help = "Resume an existing workflow from its current phase (sync only)."
-    )]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Resume an existing workflow from its current phase (sync only).")]
     pub(crate) workflow_id: Option<String>,
     #[arg(
         long,
@@ -231,17 +200,9 @@ pub(crate) struct WorkflowRunArgs {
         help = "Run only this specific phase instead of the full pipeline (sync only)."
     )]
     pub(crate) phase: Option<String>,
-    #[arg(
-        long,
-        value_name = "MODEL_ID",
-        help = "Override the model for phase execution."
-    )]
+    #[arg(long, value_name = "MODEL_ID", help = "Override the model for phase execution.")]
     pub(crate) model: Option<String>,
-    #[arg(
-        long,
-        value_name = "TOOL_ID",
-        help = "Override the tool/CLI for phase execution (claude, codex, gemini)."
-    )]
+    #[arg(long, value_name = "TOOL_ID", help = "Override the tool/CLI for phase execution (claude, codex, gemini).")]
     pub(crate) tool: Option<String>,
     #[arg(long, value_name = "SECS", help = "Override phase timeout in seconds.")]
     pub(crate) phase_timeout_secs: Option<u64>,
@@ -264,12 +225,7 @@ pub(crate) struct WorkflowExecuteArgs {
         help = "Existing workflow id to execute from its current phase."
     )]
     pub(crate) workflow_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task id to execute the workflow for."
-    )]
+    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to execute the workflow for.")]
     pub(crate) task_id: Option<String>,
     #[arg(
         long,
@@ -285,43 +241,19 @@ pub(crate) struct WorkflowExecuteArgs {
         help = "Custom workflow title (alternative to --task-id / --requirement-id)."
     )]
     pub(crate) title: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Custom workflow description (used with --title)."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
     pub(crate) description: Option<String>,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_REF",
-        help = "Optional YAML workflow reference override."
-    )]
+    #[arg(long, value_name = "WORKFLOW_REF", help = "Optional YAML workflow reference override.")]
     pub(crate) workflow_ref: Option<String>,
-    #[arg(
-        long,
-        value_name = "PHASE_ID",
-        help = "Run only this specific phase instead of the full workflow."
-    )]
+    #[arg(long, value_name = "PHASE_ID", help = "Run only this specific phase instead of the full workflow.")]
     pub(crate) phase: Option<String>,
-    #[arg(
-        long,
-        value_name = "MODEL_ID",
-        help = "Override the model for phase execution."
-    )]
+    #[arg(long, value_name = "MODEL_ID", help = "Override the model for phase execution.")]
     pub(crate) model: Option<String>,
-    #[arg(
-        long,
-        value_name = "TOOL_ID",
-        help = "Override the tool/CLI for phase execution (claude, codex, gemini)."
-    )]
+    #[arg(long, value_name = "TOOL_ID", help = "Override the tool/CLI for phase execution (claude, codex, gemini).")]
     pub(crate) tool: Option<String>,
     #[arg(long, value_name = "SECS", help = "Override phase timeout in seconds.")]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(
-        long,
-        value_name = "JSON",
-        help = "JSON payload for additional config overrides."
-    )]
+    #[arg(long, value_name = "JSON", help = "JSON payload for additional config overrides.")]
     pub(crate) input_json: Option<String>,
     #[arg(
         long = "var",
@@ -340,12 +272,7 @@ pub(crate) struct WorkflowPromptRenderArgs {
         help = "Existing workflow id to render from persisted workflow state."
     )]
     pub(crate) workflow_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task id for ad-hoc prompt rendering."
-    )]
+    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id for ad-hoc prompt rendering.")]
     pub(crate) task_id: Option<String>,
     #[arg(
         long,
@@ -354,24 +281,11 @@ pub(crate) struct WorkflowPromptRenderArgs {
         help = "Requirement id for ad-hoc prompt rendering (alternative to --task-id)."
     )]
     pub(crate) requirement_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "TITLE",
-        group = "subject",
-        help = "Custom workflow title for ad-hoc prompt rendering."
-    )]
+    #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for ad-hoc prompt rendering.")]
     pub(crate) title: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Custom workflow description (used with --title)."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
     pub(crate) description: Option<String>,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_REF",
-        help = "Optional YAML workflow reference override for ad-hoc rendering."
-    )]
+    #[arg(long, value_name = "WORKFLOW_REF", help = "Optional YAML workflow reference override for ad-hoc rendering.")]
     pub(crate) workflow_ref: Option<String>,
     #[arg(
         long,
@@ -379,19 +293,11 @@ pub(crate) struct WorkflowPromptRenderArgs {
         help = "Specific phase to render. Defaults to the current phase for --workflow-id."
     )]
     pub(crate) phase: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Render every phase in the selected workflow/pipeline."
-    )]
+    #[arg(long, default_value_t = false, help = "Render every phase in the selected workflow/pipeline.")]
     pub(crate) all_phases: bool,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Optional rework/failure context override for ad-hoc rendering."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Optional rework/failure context override for ad-hoc rendering.")]
     pub(crate) rework_context: Option<String>,
     #[arg(
         long = "var",
@@ -405,17 +311,9 @@ pub(crate) struct WorkflowPromptRenderArgs {
 pub(crate) struct WorkflowPauseArgs {
     #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_ID",
-        help = "Confirmation token; must match --id."
-    )]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Confirmation token; must match --id.")]
     pub(crate) confirm: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview pause payload without mutating workflow state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview pause payload without mutating workflow state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -423,17 +321,9 @@ pub(crate) struct WorkflowPauseArgs {
 pub(crate) struct WorkflowCancelArgs {
     #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_ID",
-        help = "Confirmation token; must match --id."
-    )]
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Confirmation token; must match --id.")]
     pub(crate) confirm: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview cancellation payload without mutating workflow state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview cancellation payload without mutating workflow state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -467,11 +357,7 @@ pub(crate) struct WorkflowPhaseGetArgs {
 pub(crate) struct WorkflowPhaseUpsertArgs {
     #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
-    #[arg(
-        long,
-        value_name = "JSON",
-        help = "Phase runtime definition JSON payload."
-    )]
+    #[arg(long, value_name = "JSON", help = "Phase runtime definition JSON payload.")]
     pub(crate) input_json: String,
 }
 
@@ -479,17 +365,9 @@ pub(crate) struct WorkflowPhaseUpsertArgs {
 pub(crate) struct WorkflowPhaseRemoveArgs {
     #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
-    #[arg(
-        long,
-        value_name = "PHASE_ID",
-        help = "Confirmation token; must match --phase."
-    )]
+    #[arg(long, value_name = "PHASE_ID", help = "Confirmation token; must match --phase.")]
     pub(crate) confirm: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview phase removal impact without mutating workflow config."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview phase removal impact without mutating workflow config.")]
     pub(crate) dry_run: bool,
 }
 
@@ -519,20 +397,12 @@ pub(crate) struct WorkflowDefinitionUpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowStateMachineSetArgs {
-    #[arg(
-        long,
-        value_name = "JSON",
-        help = "Workflow state-machine configuration JSON payload."
-    )]
+    #[arg(long, value_name = "JSON", help = "Workflow state-machine configuration JSON payload.")]
     pub(crate) input_json: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
-    #[arg(
-        long,
-        value_name = "JSON",
-        help = "Workflow agent-runtime configuration JSON payload."
-    )]
+    #[arg(long, value_name = "JSON", help = "Workflow agent-runtime configuration JSON payload.")]
     pub(crate) input_json: String,
 }

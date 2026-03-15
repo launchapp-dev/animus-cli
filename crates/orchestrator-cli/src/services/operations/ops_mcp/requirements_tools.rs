@@ -16,11 +16,7 @@ impl AoMcpServer {
             "ao.requirements.list",
             vec!["requirements".to_string(), "list".to_string()],
             input.project_root,
-            ListGuardInput {
-                limit: input.limit,
-                offset: input.offset,
-                max_tokens: input.max_tokens,
-            },
+            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )
         .await
     }
@@ -30,14 +26,10 @@ impl AoMcpServer {
         description = "Get a requirement by its ID. Purpose: View full requirement details including title, description, priority, status, and linked tasks. Prerequisites: None. Example: {\"id\": \"REQ-001\"}. Sequencing: Use after ao.requirements.list to get details, or before ao.task.create to link new tasks.",
         input_schema = ao_schema_for_type::<RequirementGetInput>()
     )]
-    async fn ao_requirements_get(
-        &self,
-        params: Parameters<RequirementGetInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_requirements_get(&self, params: Parameters<RequirementGetInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = build_requirements_get_args(input.id);
-        self.run_tool("ao.requirements.get", args, input.project_root)
-            .await
+        self.run_tool("ao.requirements.get", args, input.project_root).await
     }
 
     #[tool(
@@ -51,8 +43,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = build_requirements_create_args(&input);
-        self.run_tool("ao.requirements.create", args, input.project_root)
-            .await
+        self.run_tool("ao.requirements.create", args, input.project_root).await
     }
 
     #[tool(
@@ -66,8 +57,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = build_requirements_update_args(&input);
-        self.run_tool("ao.requirements.update", args, input.project_root)
-            .await
+        self.run_tool("ao.requirements.update", args, input.project_root).await
     }
 
     #[tool(
@@ -81,8 +71,7 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = build_requirements_delete_args(input.id);
-        self.run_tool("ao.requirements.delete", args, input.project_root)
-            .await
+        self.run_tool("ao.requirements.delete", args, input.project_root).await
     }
 
     #[tool(
@@ -96,7 +85,6 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let args = build_requirements_refine_args(&input);
-        self.run_tool("ao.requirements.refine", args, input.project_root)
-            .await
+        self.run_tool("ao.requirements.refine", args, input.project_root).await
     }
 }

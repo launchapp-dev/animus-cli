@@ -2,8 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use orchestrator_core::{
-    load_daemon_project_config, write_daemon_project_config, DoctorCheckStatus, DoctorReport,
-    FileServiceHub,
+    load_daemon_project_config, write_daemon_project_config, DoctorCheckStatus, DoctorReport, FileServiceHub,
 };
 use serde::Serialize;
 
@@ -50,10 +49,7 @@ pub(crate) async fn handle_doctor(project_root: &str, args: DoctorArgs, json: bo
     )
 }
 
-pub(crate) fn apply_doctor_fixes(
-    project_root: &str,
-    report: &DoctorReport,
-) -> Vec<DoctorFixAction> {
+pub(crate) fn apply_doctor_fixes(project_root: &str, report: &DoctorReport) -> Vec<DoctorFixAction> {
     let mut actions = Vec::new();
     let project_root_path = Path::new(project_root);
 
@@ -66,30 +62,19 @@ pub(crate) fn apply_doctor_fixes(
             Err(error) => actions.push(failed_action("bootstrap_project_state", error.to_string())),
         }
     } else {
-        actions.push(skipped_action(
-            "bootstrap_project_state",
-            "project bootstrap checks already passed",
-        ));
+        actions.push(skipped_action("bootstrap_project_state", "project bootstrap checks already passed"));
     }
 
     if remediation_needed(report, "create_default_daemon_config") {
         let result = load_daemon_project_config(project_root_path)
             .and_then(|config| write_daemon_project_config(project_root_path, &config));
         match result {
-            Ok(_) => actions.push(applied_action(
-                "create_default_daemon_config",
-                "created daemon config with default values",
-            )),
-            Err(error) => actions.push(failed_action(
-                "create_default_daemon_config",
-                error.to_string(),
-            )),
+            Ok(_) => actions
+                .push(applied_action("create_default_daemon_config", "created daemon config with default values")),
+            Err(error) => actions.push(failed_action("create_default_daemon_config", error.to_string())),
         }
     } else {
-        actions.push(skipped_action(
-            "create_default_daemon_config",
-            "daemon config remediation not required",
-        ));
+        actions.push(skipped_action("create_default_daemon_config", "daemon config remediation not required"));
     }
 
     actions
@@ -97,34 +82,20 @@ pub(crate) fn apply_doctor_fixes(
 
 fn remediation_needed(report: &DoctorReport, remediation_id: &str) -> bool {
     report.checks.iter().any(|check| {
-        check.remediation.id == remediation_id
-            && check.remediation.available
-            && check.status != DoctorCheckStatus::Ok
+        check.remediation.id == remediation_id && check.remediation.available && check.status != DoctorCheckStatus::Ok
     })
 }
 
 fn applied_action(id: &str, details: &str) -> DoctorFixAction {
-    DoctorFixAction {
-        id: id.to_string(),
-        status: "applied".to_string(),
-        details: details.to_string(),
-    }
+    DoctorFixAction { id: id.to_string(), status: "applied".to_string(), details: details.to_string() }
 }
 
 fn skipped_action(id: &str, details: &str) -> DoctorFixAction {
-    DoctorFixAction {
-        id: id.to_string(),
-        status: "skipped".to_string(),
-        details: details.to_string(),
-    }
+    DoctorFixAction { id: id.to_string(), status: "skipped".to_string(), details: details.to_string() }
 }
 
 fn failed_action(id: &str, details: String) -> DoctorFixAction {
-    DoctorFixAction {
-        id: id.to_string(),
-        status: "failed".to_string(),
-        details,
-    }
+    DoctorFixAction { id: id.to_string(), status: "failed".to_string(), details }
 }
 
 #[cfg(test)]
@@ -136,9 +107,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let report = DoctorReport::run_for_project(temp.path());
         let actions = apply_doctor_fixes(temp.path().to_string_lossy().as_ref(), &report);
-        assert!(actions.iter().any(
-            |action| action.id == "create_default_daemon_config" && action.status == "applied"
-        ));
+        assert!(actions.iter().any(|action| action.id == "create_default_daemon_config" && action.status == "applied"));
         assert!(temp.path().join(".ao").join("pm-config.json").exists());
     }
 }

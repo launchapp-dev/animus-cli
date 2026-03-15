@@ -5,11 +5,7 @@ use super::*;
 #[derive(Debug, Parser)]
 #[command(name = "ao", about = "Agent Orchestrator CLI", version)]
 pub(crate) struct Cli {
-    #[arg(
-        long,
-        global = true,
-        help = "Emit machine-readable JSON output using the ao.cli.v1 envelope."
-    )]
+    #[arg(long, global = true, help = "Emit machine-readable JSON output using the ao.cli.v1 envelope.")]
     pub(crate) json: bool,
     #[arg(
         long,

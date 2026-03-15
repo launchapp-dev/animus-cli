@@ -45,11 +45,7 @@ impl SessionBackend for CodexSessionBackend {
         start_codex_session(request, false).await
     }
 
-    async fn resume_session(
-        &self,
-        request: SessionRequest,
-        _session_id: &str,
-    ) -> Result<SessionRun> {
+    async fn resume_session(&self, request: SessionRequest, _session_id: &str) -> Result<SessionRun> {
         start_codex_session(request, true).await
     }
 
@@ -89,8 +85,7 @@ mod tests {
             extras: json!({}),
         };
 
-        let invocation =
-            codex_invocation_for_request(&request, false).expect("launch should build");
+        let invocation = codex_invocation_for_request(&request, false).expect("launch should build");
         assert_eq!(invocation.command, "codex");
         assert!(invocation.args.contains(&"exec".to_string()));
         assert!(invocation.args.contains(&"--json".to_string()));
@@ -103,22 +98,9 @@ mod tests {
         let message = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}"#;
         let completed = r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}"#;
 
-        assert_eq!(
-            parse_codex_stdout_line(reasoning),
-            vec![SessionEvent::Thinking {
-                text: "thinking".to_string(),
-            }]
-        );
-        assert_eq!(
-            parse_codex_stdout_line(message),
-            vec![SessionEvent::FinalText {
-                text: "done".to_string(),
-            }]
-        );
-        assert!(matches!(
-            parse_codex_stdout_line(completed).first(),
-            Some(SessionEvent::Metadata { .. })
-        ));
+        assert_eq!(parse_codex_stdout_line(reasoning), vec![SessionEvent::Thinking { text: "thinking".to_string() }]);
+        assert_eq!(parse_codex_stdout_line(message), vec![SessionEvent::FinalText { text: "done".to_string() }]);
+        assert!(matches!(parse_codex_stdout_line(completed).first(), Some(SessionEvent::Metadata { .. })));
     }
 
     #[tokio::test]
@@ -148,10 +130,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         assert_eq!(run.selected_backend, "codex-native");
 
@@ -166,8 +145,7 @@ mod tests {
     #[cfg(unix)]
     async fn codex_backend_emits_thinking_and_final_text_from_fixture() {
         let backend = CodexSessionBackend::new();
-        let fixture =
-            "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl";
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl";
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),
@@ -191,10 +169,7 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         let mut saw_thinking = false;
         let mut saw_final_text = false;

@@ -17,26 +17,18 @@ impl DaemonEventLog {
         protocol::daemon_events_log_path()
     }
 
-    pub fn read_records(
-        limit: Option<usize>,
-        project_root_filter: Option<&str>,
-    ) -> Result<Vec<DaemonEventRecord>> {
+    pub fn read_records(limit: Option<usize>, project_root_filter: Option<&str>) -> Result<Vec<DaemonEventRecord>> {
         let path = Self::log_path();
         let canonical_project_root_filter = normalize_project_root_filter(project_root_filter);
         let events = read_all_nonempty_lines(&path)?
             .into_iter()
             .filter_map(|line| serde_json::from_str::<DaemonEventRecord>(&line).ok())
-            .filter(|record| {
-                matches_project_root_filter(record, canonical_project_root_filter.as_deref())
-            })
+            .filter(|record| matches_project_root_filter(record, canonical_project_root_filter.as_deref()))
             .collect();
         Ok(apply_event_limit(events, limit))
     }
 
-    pub fn poll(
-        limit: Option<usize>,
-        project_root_filter: Option<&str>,
-    ) -> Result<DaemonEventsPollResponse> {
+    pub fn poll(limit: Option<usize>, project_root_filter: Option<&str>) -> Result<DaemonEventsPollResponse> {
         let path = Self::log_path();
         let events = Self::read_records(limit, project_root_filter)?;
         Ok(DaemonEventsPollResponse {
@@ -47,12 +39,7 @@ impl DaemonEventLog {
         })
     }
 
-    pub fn next_event(
-        seq: &mut u64,
-        event_type: &str,
-        project_root: Option<String>,
-        data: Value,
-    ) -> DaemonEventRecord {
+    pub fn next_event(seq: &mut u64, event_type: &str, project_root: Option<String>, data: Value) -> DaemonEventRecord {
         *seq = seq.saturating_add(1);
         DaemonEventRecord {
             schema: "ao.daemon.event.v1".to_string(),
@@ -73,7 +60,6 @@ impl DaemonEventLog {
         rotate_if_needed(&path);
         append_line(&path, &serde_json::to_string(record)?)
     }
-
 }
 
 const MAX_LOG_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
@@ -104,19 +90,11 @@ fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {
     }
 
     let content = std::fs::read_to_string(path)?;
-    Ok(content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    Ok(content.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
 }
 
 fn normalize_project_root_filter(filter: Option<&str>) -> Option<String> {
-    filter
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(canonicalize_lossy)
+    filter.map(str::trim).filter(|value| !value.is_empty()).map(canonicalize_lossy)
 }
 
 fn matches_project_root_filter(record: &DaemonEventRecord, canonical_filter: Option<&str>) -> bool {
@@ -129,10 +107,7 @@ fn matches_project_root_filter(record: &DaemonEventRecord, canonical_filter: Opt
     canonicalize_lossy(record_project_root) == filter
 }
 
-fn apply_event_limit(
-    mut events: Vec<DaemonEventRecord>,
-    limit: Option<usize>,
-) -> Vec<DaemonEventRecord> {
+fn apply_event_limit(mut events: Vec<DaemonEventRecord>, limit: Option<usize>) -> Vec<DaemonEventRecord> {
     if let Some(limit) = limit {
         if limit == 0 {
             return Vec::new();
@@ -146,9 +121,5 @@ fn apply_event_limit(
 
 fn canonicalize_lossy(path: &str) -> String {
     let candidate = PathBuf::from(path);
-    candidate
-        .canonicalize()
-        .unwrap_or(candidate)
-        .to_string_lossy()
-        .to_string()
+    candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }

@@ -56,42 +56,26 @@ fn extract_into(text: &str, tool: &str, out: &mut String) {
 fn claude_real_agent_output() {
     let raw = include_str!("fixtures/claude_real.jsonl");
     let text = extract_all(raw, "claude");
-    assert!(
-        text.contains("PINEAPPLE_42"),
-        "claude: expected PINEAPPLE_42, got: {:?}",
-        text
-    );
+    assert!(text.contains("PINEAPPLE_42"), "claude: expected PINEAPPLE_42, got: {:?}", text);
 }
 
 #[test]
 fn codex_real_agent_output() {
     let raw = include_str!("fixtures/codex_real.jsonl");
     let text = extract_all(raw, "codex");
-    assert!(
-        text.contains("PINEAPPLE_42"),
-        "codex: expected PINEAPPLE_42, got: {:?}",
-        text
-    );
+    assert!(text.contains("PINEAPPLE_42"), "codex: expected PINEAPPLE_42, got: {:?}", text);
 }
 
 #[test]
 fn gemini_real_agent_output() {
     let raw = include_str!("fixtures/gemini_real.jsonl");
     let text = extract_all(raw, "gemini");
-    assert!(
-        text.contains("PINEAPPLE_42"),
-        "gemini: expected PINEAPPLE_42, got: {:?}",
-        text
-    );
+    assert!(text.contains("PINEAPPLE_42"), "gemini: expected PINEAPPLE_42, got: {:?}", text);
 }
 
 #[test]
 fn oai_runner_real_agent_output() {
     let raw = include_str!("fixtures/oai_runner_real.jsonl");
     let text = extract_all(raw, "oai-runner");
-    assert!(
-        text.contains("PINEAPPLE_42"),
-        "oai-runner: expected PINEAPPLE_42, got: {:?}",
-        text
-    );
+    assert!(text.contains("PINEAPPLE_42"), "oai-runner: expected PINEAPPLE_42, got: {:?}", text);
 }

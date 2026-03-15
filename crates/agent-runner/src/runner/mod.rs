@@ -12,8 +12,8 @@ mod supervisor;
 use event_persistence::RunEventPersistence;
 use protocol::{
     AgentRunEvent, AgentRunRequest, AgentStatus, AgentStatusErrorCode, AgentStatusErrorResponse,
-    AgentStatusQueryResponse, AgentStatusRequest, AgentStatusResponse, ModelStatusRequest,
-    ModelStatusResponse, RunId, RunnerStatusResponse, Timestamp, PROTOCOL_VERSION,
+    AgentStatusQueryResponse, AgentStatusRequest, AgentStatusResponse, ModelStatusRequest, ModelStatusResponse, RunId,
+    RunnerStatusResponse, Timestamp, PROTOCOL_VERSION,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,9 +64,7 @@ impl Runner {
     }
 
     pub fn subscribe_to_run(&self, run_id: &RunId) -> Option<broadcast::Receiver<AgentRunEvent>> {
-        self.running_agents
-            .get(run_id)
-            .map(|agent| agent.event_broadcast.subscribe())
+        self.running_agents.get(run_id).map(|agent| agent.event_broadcast.subscribe())
     }
 
     pub fn handle_run_request(
@@ -91,10 +89,7 @@ impl Runner {
                         "Failed to persist run event"
                     );
                 }
-                let is_terminal = matches!(
-                    event,
-                    AgentRunEvent::Finished { .. } | AgentRunEvent::Error { .. }
-                );
+                let is_terminal = matches!(event, AgentRunEvent::Finished { .. } | AgentRunEvent::Error { .. });
                 let _ = broadcast_tx_for_forwarder.send(event);
                 if is_terminal {
                     break;
@@ -108,11 +103,7 @@ impl Runner {
             .running_agents
             .insert(
                 run_id.clone(),
-                RunningAgent {
-                    cancel_tx,
-                    started_at: started_at.clone(),
-                    event_broadcast: broadcast_tx,
-                },
+                RunningAgent { cancel_tx, started_at: started_at.clone(), event_broadcast: broadcast_tx },
             )
             .is_some();
         self.finished_agents.remove(&run_id);
@@ -134,14 +125,7 @@ impl Runner {
         let cleanup_tx = self.cleanup_tx.clone();
         tokio::spawn(async move {
             let terminal_status = supervisor.spawn_agent(req, run_event_tx, cancel_rx).await;
-            if cleanup_tx
-                .send(CleanupMessage {
-                    run_id: run_id.clone(),
-                    terminal_status,
-                })
-                .await
-                .is_err()
-            {
+            if cleanup_tx.send(CleanupMessage { run_id: run_id.clone(), terminal_status }).await.is_err() {
                 warn!(run_id = %run_id.0.as_str(), "Failed to enqueue cleanup for run");
             }
         });
@@ -170,18 +154,11 @@ impl Runner {
     }
 
     pub fn cleanup_agent(&mut self, message: CleanupMessage) {
-        let CleanupMessage {
-            run_id,
-            terminal_status,
-        } = message;
+        let CleanupMessage { run_id, terminal_status } = message;
         if let Some(entry) = self.running_agents.remove(&run_id) {
             let terminal_status = normalize_terminal_status_for_cleanup(terminal_status, &run_id);
             let completed_at = Timestamp::now();
-            let duration_ms = completed_at
-                .0
-                .signed_duration_since(entry.started_at.0)
-                .num_milliseconds()
-                .max(0) as u64;
+            let duration_ms = completed_at.0.signed_duration_since(entry.started_at.0).num_milliseconds().max(0) as u64;
             match terminal_status {
                 AgentStatus::Completed => self.metrics.record_completion(duration_ms),
                 AgentStatus::Terminated => self.metrics.record_cancellation(),
@@ -193,11 +170,7 @@ impl Runner {
             }
             self.finished_agents.insert(
                 run_id.clone(),
-                FinishedAgent {
-                    started_at: entry.started_at,
-                    completed_at,
-                    status: terminal_status,
-                },
+                FinishedAgent { started_at: entry.started_at, completed_at, status: terminal_status },
             );
             info!(
                 run_id = %run_id.0.as_str(),
@@ -214,10 +187,7 @@ impl Runner {
     }
 
     pub async fn handle_model_status(&self, req: ModelStatusRequest) -> ModelStatusResponse {
-        debug!(
-            requested_models = req.models.len(),
-            "Handling model status request"
-        );
+        debug!(requested_models = req.models.len(), "Handling model status request");
         crate::providers::check_model_status(req).await
     }
 
@@ -233,11 +203,7 @@ impl Runner {
     pub fn handle_agent_status(&self, req: AgentStatusRequest) -> AgentStatusQueryResponse {
         if let Some(entry) = self.running_agents.get(&req.run_id) {
             let now = Timestamp::now();
-            let elapsed_ms = now
-                .0
-                .signed_duration_since(entry.started_at.0)
-                .num_milliseconds()
-                .max(0) as u64;
+            let elapsed_ms = now.0.signed_duration_since(entry.started_at.0).num_milliseconds().max(0) as u64;
             return AgentStatusQueryResponse::Status(AgentStatusResponse {
                 run_id: req.run_id,
                 status: AgentStatus::Running,
@@ -248,12 +214,8 @@ impl Runner {
         }
 
         if let Some(entry) = self.finished_agents.get(&req.run_id) {
-            let elapsed_ms = entry
-                .completed_at
-                .0
-                .signed_duration_since(entry.started_at.0)
-                .num_milliseconds()
-                .max(0) as u64;
+            let elapsed_ms =
+                entry.completed_at.0.signed_duration_since(entry.started_at.0).num_milliseconds().max(0) as u64;
             return AgentStatusQueryResponse::Status(AgentStatusResponse {
                 run_id: req.run_id,
                 status: entry.status,
@@ -301,10 +263,7 @@ impl Runner {
 
 fn normalize_terminal_status_for_cleanup(status: AgentStatus, run_id: &RunId) -> AgentStatus {
     match status {
-        AgentStatus::Completed
-        | AgentStatus::Failed
-        | AgentStatus::Timeout
-        | AgentStatus::Terminated => status,
+        AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Timeout | AgentStatus::Terminated => status,
         AgentStatus::Starting | AgentStatus::Running | AgentStatus::Paused => {
             warn!(
                 run_id = %run_id.0.as_str(),
@@ -334,11 +293,7 @@ mod tests {
         let (broadcast_tx, _) = broadcast::channel(16);
         runner.running_agents.insert(
             run_id.clone(),
-            RunningAgent {
-                cancel_tx,
-                started_at: Timestamp::now(),
-                event_broadcast: broadcast_tx,
-            },
+            RunningAgent { cancel_tx, started_at: Timestamp::now(), event_broadcast: broadcast_tx },
         );
     }
 
@@ -348,15 +303,9 @@ mod tests {
         let run_id = RunId("run-cleanup-failed".to_string());
         insert_running_agent(&mut runner, &run_id);
 
-        runner.cleanup_agent(CleanupMessage {
-            run_id: run_id.clone(),
-            terminal_status: AgentStatus::Failed,
-        });
+        runner.cleanup_agent(CleanupMessage { run_id: run_id.clone(), terminal_status: AgentStatus::Failed });
 
-        let finished = runner
-            .finished_agents
-            .get(&run_id)
-            .expect("run should be persisted in finished map");
+        let finished = runner.finished_agents.get(&run_id).expect("run should be persisted in finished map");
         assert_eq!(finished.status, AgentStatus::Failed);
     }
 
@@ -366,14 +315,9 @@ mod tests {
         let run_id = RunId("run-query-failed".to_string());
         insert_running_agent(&mut runner, &run_id);
 
-        runner.cleanup_agent(CleanupMessage {
-            run_id: run_id.clone(),
-            terminal_status: AgentStatus::Failed,
-        });
+        runner.cleanup_agent(CleanupMessage { run_id: run_id.clone(), terminal_status: AgentStatus::Failed });
 
-        let response = runner.handle_agent_status(AgentStatusRequest {
-            run_id: run_id.clone(),
-        });
+        let response = runner.handle_agent_status(AgentStatusRequest { run_id: run_id.clone() });
         match response {
             AgentStatusQueryResponse::Status(status) => {
                 assert_eq!(status.run_id, run_id);
@@ -390,15 +334,9 @@ mod tests {
         let run_id = RunId("run-cleanup-running".to_string());
         insert_running_agent(&mut runner, &run_id);
 
-        runner.cleanup_agent(CleanupMessage {
-            run_id: run_id.clone(),
-            terminal_status: AgentStatus::Running,
-        });
+        runner.cleanup_agent(CleanupMessage { run_id: run_id.clone(), terminal_status: AgentStatus::Running });
 
-        let finished = runner
-            .finished_agents
-            .get(&run_id)
-            .expect("run should be persisted in finished map");
+        let finished = runner.finished_agents.get(&run_id).expect("run should be persisted in finished map");
         assert_eq!(finished.status, AgentStatus::Failed);
     }
 
@@ -409,15 +347,9 @@ mod tests {
         insert_running_agent(&mut runner, &run_id);
 
         assert!(runner.stop_agent(&run_id));
-        runner.cleanup_agent(CleanupMessage {
-            run_id: run_id.clone(),
-            terminal_status: AgentStatus::Completed,
-        });
+        runner.cleanup_agent(CleanupMessage { run_id: run_id.clone(), terminal_status: AgentStatus::Completed });
 
-        let finished = runner
-            .finished_agents
-            .get(&run_id)
-            .expect("terminated run should be persisted in finished map");
+        let finished = runner.finished_agents.get(&run_id).expect("terminated run should be persisted in finished map");
         assert_eq!(finished.status, AgentStatus::Terminated);
     }
 
@@ -425,9 +357,7 @@ mod tests {
     fn handle_agent_status_returns_not_found_for_unknown_run() {
         let runner = make_runner();
         let run_id = RunId("run-missing".to_string());
-        let response = runner.handle_agent_status(AgentStatusRequest {
-            run_id: run_id.clone(),
-        });
+        let response = runner.handle_agent_status(AgentStatusRequest { run_id: run_id.clone() });
 
         match response {
             AgentStatusQueryResponse::Error(error) => {

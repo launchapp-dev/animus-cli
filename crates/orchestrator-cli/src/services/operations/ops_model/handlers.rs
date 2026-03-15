@@ -7,12 +7,8 @@ use orchestrator_core::ServiceHub;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::state::{
-    model_eval_report_path, model_roster_path, ModelEvaluationReportCli, ModelRosterStoreCli,
-};
-use super::status::{
-    default_model_specs, evaluate_model_status, parse_model_specs, summarize_model_statuses,
-};
+use super::state::{model_eval_report_path, model_roster_path, ModelEvaluationReportCli, ModelRosterStoreCli};
+use super::status::{default_model_specs, evaluate_model_status, parse_model_specs, summarize_model_statuses};
 
 pub(crate) async fn handle_model(
     command: ModelCommand,
@@ -31,23 +27,15 @@ pub(crate) async fn handle_model(
         }
         ModelCommand::Status(args) => {
             let spec = format!("{}:{}", args.model_id, args.cli_tool);
-            let (model_id, cli_tool) = parse_model_specs(&[spec])
-                .into_iter()
-                .next()
-                .unwrap_or((args.model_id, args.cli_tool));
+            let (model_id, cli_tool) =
+                parse_model_specs(&[spec]).into_iter().next().unwrap_or((args.model_id, args.cli_tool));
             let status = evaluate_model_status(&model_id, &cli_tool);
             print_value(status, json)
         }
         ModelCommand::Validate(args) => {
-            let specs = if args.model.is_empty() {
-                default_model_specs()
-            } else {
-                parse_model_specs(&args.model)
-            };
-            let statuses: Vec<_> = specs
-                .into_iter()
-                .map(|(model_id, cli_tool)| evaluate_model_status(&model_id, &cli_tool))
-                .collect();
+            let specs = if args.model.is_empty() { default_model_specs() } else { parse_model_specs(&args.model) };
+            let statuses: Vec<_> =
+                specs.into_iter().map(|(model_id, cli_tool)| evaluate_model_status(&model_id, &cli_tool)).collect();
             print_value(
                 serde_json::json!({
                     "task_id": args.task_id,
@@ -62,34 +50,22 @@ pub(crate) async fn handle_model(
                     .into_iter()
                     .map(|(model_id, cli_tool)| evaluate_model_status(&model_id, &cli_tool))
                     .collect();
-                let roster = ModelRosterStoreCli {
-                    refreshed_at: Utc::now().to_rfc3339(),
-                    candidates: statuses.clone(),
-                };
+                let roster =
+                    ModelRosterStoreCli { refreshed_at: Utc::now().to_rfc3339(), candidates: statuses.clone() };
                 write_json_pretty(&model_roster_path(project_root), &roster)?;
                 print_value(roster, json)
             }
             ModelRosterCommand::Get => {
-                let roster =
-                    read_json_or_default::<ModelRosterStoreCli>(&model_roster_path(project_root))?;
+                let roster = read_json_or_default::<ModelRosterStoreCli>(&model_roster_path(project_root))?;
                 print_value(roster, json)
             }
         },
         ModelCommand::Eval { command } => match command {
             ModelEvalCommand::Run(args) => {
-                let specs = if args.model.is_empty() {
-                    default_model_specs()
-                } else {
-                    parse_model_specs(&args.model)
-                };
-                let statuses: Vec<_> = specs
-                    .into_iter()
-                    .map(|(model_id, cli_tool)| evaluate_model_status(&model_id, &cli_tool))
-                    .collect();
-                let available = statuses
-                    .iter()
-                    .filter(|status| status.availability == "available")
-                    .count();
+                let specs = if args.model.is_empty() { default_model_specs() } else { parse_model_specs(&args.model) };
+                let statuses: Vec<_> =
+                    specs.into_iter().map(|(model_id, cli_tool)| evaluate_model_status(&model_id, &cli_tool)).collect();
+                let available = statuses.iter().filter(|status| status.availability == "available").count();
                 let report = ModelEvaluationReportCli {
                     report_id: format!("model-eval-{}", Uuid::new_v4().simple()),
                     generated_at: Utc::now().to_rfc3339(),
@@ -102,9 +78,7 @@ pub(crate) async fn handle_model(
                 print_value(report, json)
             }
             ModelEvalCommand::Report => {
-                let report = read_json_or_default::<ModelEvaluationReportCli>(
-                    &model_eval_report_path(project_root),
-                )?;
+                let report = read_json_or_default::<ModelEvaluationReportCli>(&model_eval_report_path(project_root))?;
                 print_value(report, json)
             }
         },

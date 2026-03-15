@@ -1,15 +1,9 @@
 use anyhow::{bail, Result};
 use std::path::Path;
 
-pub fn read_file(
-    working_dir: &Path,
-    path: &str,
-    offset: Option<usize>,
-    limit: Option<usize>,
-) -> Result<String> {
+pub fn read_file(working_dir: &Path, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String> {
     let full_path = resolve_path(working_dir, path)?;
-    let content = std::fs::read_to_string(&full_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
+    let content = std::fs::read_to_string(&full_path).map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
 
     let lines: Vec<&str> = content.lines().collect();
     let start = offset.unwrap_or(1).saturating_sub(1);
@@ -22,11 +16,8 @@ pub fn read_file(
         return Ok(String::new());
     }
 
-    let selected: Vec<String> = lines[start..end]
-        .iter()
-        .enumerate()
-        .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
-        .collect();
+    let selected: Vec<String> =
+        lines[start..end].iter().enumerate().map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line)).collect();
 
     Ok(selected.join("\n"))
 }
@@ -39,37 +30,24 @@ pub fn write_file(working_dir: &Path, path: &str, content: &str) -> Result<Strin
             .map_err(|e| anyhow::anyhow!("Failed to create directories for {}: {}", path, e))?;
     }
 
-    std::fs::write(&full_path, content)
-        .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path, e))?;
+    std::fs::write(&full_path, content).map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path, e))?;
 
-    Ok(format!(
-        "Successfully wrote {} bytes to {}",
-        content.len(),
-        path
-    ))
+    Ok(format!("Successfully wrote {} bytes to {}", content.len(), path))
 }
 
 pub fn edit_file(working_dir: &Path, path: &str, old_text: &str, new_text: &str) -> Result<String> {
     let full_path = resolve_path(working_dir, path)?;
-    let content = std::fs::read_to_string(&full_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
+    let content = std::fs::read_to_string(&full_path).map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path, e))?;
 
     let count = content.matches(old_text).count();
     if count == 0 {
-        bail!(
-            "old_text not found in {}. Make sure the text matches exactly including whitespace.",
-            path
-        );
+        bail!("old_text not found in {}. Make sure the text matches exactly including whitespace.", path);
     }
 
     let new_content = content.replacen(old_text, new_text, 1);
-    std::fs::write(&full_path, &new_content)
-        .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path, e))?;
+    std::fs::write(&full_path, &new_content).map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path, e))?;
 
-    Ok(format!(
-        "Successfully edited {} ({} occurrence(s) found, replaced first)",
-        path, count
-    ))
+    Ok(format!("Successfully edited {} ({} occurrence(s) found, replaced first)", path, count))
 }
 
 pub fn list_files(working_dir: &Path, pattern: &str, base_path: Option<&str>) -> Result<String> {
@@ -81,9 +59,7 @@ pub fn list_files(working_dir: &Path, pattern: &str, base_path: Option<&str>) ->
     let glob_pattern = base.join(pattern).to_string_lossy().to_string();
     let mut results = Vec::new();
 
-    for entry in glob::glob(&glob_pattern)
-        .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{}': {}", pattern, e))?
-    {
+    for entry in glob::glob(&glob_pattern).map_err(|e| anyhow::anyhow!("Invalid glob pattern '{}': {}", pattern, e))? {
         match entry {
             Ok(path) => {
                 if let Ok(rel) = path.strip_prefix(working_dir) {
@@ -111,27 +87,16 @@ pub fn list_files(working_dir: &Path, pattern: &str, base_path: Option<&str>) ->
 }
 
 fn resolve_path(working_dir: &Path, path: &str) -> Result<std::path::PathBuf> {
-    let resolved = if Path::new(path).is_absolute() {
-        std::path::PathBuf::from(path)
-    } else {
-        working_dir.join(path)
-    };
+    let resolved = if Path::new(path).is_absolute() { std::path::PathBuf::from(path) } else { working_dir.join(path) };
 
-    let canonical_wd = working_dir
-        .canonicalize()
-        .unwrap_or_else(|_| working_dir.to_path_buf());
+    let canonical_wd = working_dir.canonicalize().unwrap_or_else(|_| working_dir.to_path_buf());
     let canonical_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
     if !canonical_resolved.starts_with(&canonical_wd)
-        && resolved
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
-        {
-            bail!(
-                "Path '{}' attempts to escape the working directory. Paths must stay within the project root.",
-                path
-            );
-        }
+        && resolved.components().any(|c| c == std::path::Component::ParentDir)
+    {
+        bail!("Path '{}' attempts to escape the working directory. Paths must stay within the project root.", path);
+    }
 
     Ok(resolved)
 }

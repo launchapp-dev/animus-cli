@@ -3,10 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub fn scoped_state_root(project_root: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    Some(
-        home.join(".ao")
-            .join(repository_scope_for_path(project_root)),
-    )
+    Some(home.join(".ao").join(repository_scope_for_path(project_root)))
 }
 
 pub fn sanitize_identifier(value: &str, fallback: &str) -> String {
@@ -70,10 +67,7 @@ mod tests {
         assert_eq!(sanitize_identifier("Repo Name", "repo"), "repo-name");
         assert_eq!(sanitize_identifier("___", "repo"), "repo");
         assert_eq!(sanitize_identifier("A__B--C", "repo"), "a-b-c");
-        assert_eq!(
-            sanitize_identifier("  __My Repo!! -- 2026__  ", "repo"),
-            "my-repo-2026"
-        );
+        assert_eq!(sanitize_identifier("  __My Repo!! -- 2026__  ", "repo"), "my-repo-2026");
         assert_eq!(sanitize_identifier("日本語", "repo"), "repo");
         assert_eq!(sanitize_identifier("日本語", "task"), "task");
     }

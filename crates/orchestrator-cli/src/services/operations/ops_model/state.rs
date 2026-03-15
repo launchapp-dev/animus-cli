@@ -13,10 +13,7 @@ pub(super) struct ModelRosterStoreCli {
 
 impl Default for ModelRosterStoreCli {
     fn default() -> Self {
-        Self {
-            refreshed_at: Utc::now().to_rfc3339(),
-            candidates: Vec::new(),
-        }
+        Self { refreshed_at: Utc::now().to_rfc3339(), candidates: Vec::new() }
     }
 }
 

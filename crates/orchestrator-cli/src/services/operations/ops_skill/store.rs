@@ -13,16 +13,12 @@ fn skills_lock_path(project_root: &str) -> PathBuf {
 }
 
 pub(super) fn load_skill_registry_state(project_root: &str) -> Result<SkillRegistryStateV1> {
-    let mut state =
-        read_json_or_default::<SkillRegistryStateV1>(&skills_registry_path(project_root))?;
+    let mut state = read_json_or_default::<SkillRegistryStateV1>(&skills_registry_path(project_root))?;
     state.normalize();
     Ok(state)
 }
 
-pub(super) fn save_skill_registry_state_if_changed(
-    project_root: &str,
-    state: &SkillRegistryStateV1,
-) -> Result<bool> {
+pub(super) fn save_skill_registry_state_if_changed(project_root: &str, state: &SkillRegistryStateV1) -> Result<bool> {
     let path = skills_registry_path(project_root);
     let mut next = state.clone();
     next.normalize();
@@ -41,10 +37,7 @@ pub(super) fn load_skill_lock_state(project_root: &str) -> Result<SkillLockState
     Ok(state)
 }
 
-pub(super) fn save_skill_lock_state_if_changed(
-    project_root: &str,
-    state: &SkillLockStateV1,
-) -> Result<bool> {
+pub(super) fn save_skill_lock_state_if_changed(project_root: &str, state: &SkillLockStateV1) -> Result<bool> {
     let path = skills_lock_path(project_root);
     let mut next = state.clone();
     next.normalize();

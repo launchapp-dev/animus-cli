@@ -1,17 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const EXACT_PROHIBITED_PACKAGES: &[&str] = &[
-    "tauri",
-    "tauri-build",
-    "wry",
-    "tao",
-    "gtk",
-    "gtk4",
-    "webkit2gtk",
-    "webview2",
-    "webview2-com",
-];
+const EXACT_PROHIBITED_PACKAGES: &[&str] =
+    &["tauri", "tauri-build", "wry", "tao", "gtk", "gtk4", "webkit2gtk", "webview2", "webview2-com"];
 const PROHIBITED_PREFIXES: &[&str] = &["tauri-plugin-"];
 const DEPENDENCY_SECTIONS: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
@@ -33,8 +24,8 @@ struct DeclaredDependency {
 #[test]
 fn rust_only_dependency_policy() {
     let root = workspace_root();
-    let violations = collect_workspace_policy_violations(&root)
-        .expect("policy scan should succeed for the current workspace");
+    let violations =
+        collect_workspace_policy_violations(&root).expect("policy scan should succeed for the current workspace");
 
     assert!(
         violations.is_empty(),
@@ -74,8 +65,8 @@ native-webkit = { version = "0.1", package = "webkit2gtk" }
 "#,
     );
 
-    let violations = collect_workspace_policy_violations(fixture_root.path())
-        .expect("policy scan should succeed for fixture");
+    let violations =
+        collect_workspace_policy_violations(fixture_root.path()).expect("policy scan should succeed for fixture");
 
     assert_eq!(violations.len(), 2);
     assert!(violations.iter().any(|violation| {
@@ -117,8 +108,8 @@ windows-webview = { version = "0.1", package = "WebView2" }
 "#,
     );
 
-    let violations = collect_workspace_policy_violations(fixture_root.path())
-        .expect("policy scan should succeed for fixture");
+    let violations =
+        collect_workspace_policy_violations(fixture_root.path()).expect("policy scan should succeed for fixture");
 
     assert_eq!(violations.len(), 2);
     assert!(violations.iter().any(|violation| {
@@ -169,8 +160,8 @@ tauri-dev = { version = "2", package = "tauri-build" }
 "#,
     );
 
-    let violations = collect_workspace_policy_violations(fixture_root.path())
-        .expect("policy scan should succeed for fixture");
+    let violations =
+        collect_workspace_policy_violations(fixture_root.path()).expect("policy scan should succeed for fixture");
     let rendered = format_policy_violations(&violations);
 
     let rendered_lines = rendered.lines().collect::<Vec<_>>();
@@ -184,8 +175,7 @@ tauri-dev = { version = "2", package = "tauri-build" }
 #[test]
 fn workspace_axum_dependency_is_pinned_and_consumed_from_workspace() {
     let root = workspace_root();
-    let workspace_manifest =
-        parse_toml(&root.join("Cargo.toml")).expect("workspace manifest should parse");
+    let workspace_manifest = parse_toml(&root.join("Cargo.toml")).expect("workspace manifest should parse");
 
     let workspace_axum_version = workspace_manifest
         .get("workspace")
@@ -195,16 +185,9 @@ fn workspace_axum_dependency_is_pinned_and_consumed_from_workspace() {
         .and_then(|dependencies| dependencies.get("axum"))
         .and_then(dependency_version_string);
 
-    assert_eq!(
-        workspace_axum_version,
-        Some("0.8"),
-        "workspace axum dependency must be pinned to 0.8"
-    );
+    assert_eq!(workspace_axum_version, Some("0.8"), "workspace axum dependency must be pinned to 0.8");
 
-    for manifest_path in [
-        "crates/orchestrator-cli/Cargo.toml",
-        "crates/orchestrator-web-server/Cargo.toml",
-    ] {
+    for manifest_path in ["crates/orchestrator-cli/Cargo.toml", "crates/orchestrator-web-server/Cargo.toml"] {
         let manifest = parse_toml(&root.join(manifest_path))
             .unwrap_or_else(|error| panic!("manifest should parse ({manifest_path}): {error}"));
         let axum_dependency = manifest
@@ -213,28 +196,21 @@ fn workspace_axum_dependency_is_pinned_and_consumed_from_workspace() {
             .and_then(|dependencies| dependencies.get("axum"))
             .unwrap_or_else(|| panic!("{manifest_path} must declare dependencies.axum"));
 
-        assert!(
-            dependency_uses_workspace(axum_dependency),
-            "{manifest_path} must consume axum via workspace = true"
-        );
+        assert!(dependency_uses_workspace(axum_dependency), "{manifest_path} must consume axum via workspace = true");
     }
 }
 
 #[test]
 fn llm_cli_wrapper_manifest_does_not_declare_tokio_process() {
     let manifest_path = workspace_root().join("crates/llm-cli-wrapper/Cargo.toml");
-    let dependencies = parse_manifest_dependencies(&manifest_path)
-        .expect("llm-cli-wrapper manifest dependencies should parse");
+    let dependencies =
+        parse_manifest_dependencies(&manifest_path).expect("llm-cli-wrapper manifest dependencies should parse");
 
     let tokio_process_dependencies = dependencies
         .into_iter()
         .filter(|dependency| {
-            dependency
-                .dependency_key
-                .eq_ignore_ascii_case("tokio-process")
-                || dependency
-                    .resolved_package
-                    .eq_ignore_ascii_case("tokio-process")
+            dependency.dependency_key.eq_ignore_ascii_case("tokio-process")
+                || dependency.resolved_package.eq_ignore_ascii_case("tokio-process")
         })
         .map(|dependency| {
             format!(
@@ -256,26 +232,17 @@ fn llm_cli_wrapper_manifest_does_not_declare_tokio_process() {
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("workspace root should exist")
-        .to_path_buf()
+    manifest_dir.ancestors().nth(2).expect("workspace root should exist").to_path_buf()
 }
 
-fn collect_workspace_policy_violations(
-    workspace_root: &Path,
-) -> Result<Vec<PolicyViolation>, String> {
+fn collect_workspace_policy_violations(workspace_root: &Path) -> Result<Vec<PolicyViolation>, String> {
     let manifest_paths = workspace_member_manifest_paths(workspace_root)?;
     let mut violations = Vec::new();
 
     for manifest_path in manifest_paths {
         let dependencies = parse_manifest_dependencies(&manifest_path)?;
-        let manifest_path_display = manifest_path
-            .strip_prefix(workspace_root)
-            .unwrap_or(&manifest_path)
-            .display()
-            .to_string();
+        let manifest_path_display =
+            manifest_path.strip_prefix(workspace_root).unwrap_or(&manifest_path).display().to_string();
 
         for dependency in dependencies {
             if is_prohibited_package(&dependency.resolved_package) {
@@ -307,18 +274,14 @@ fn workspace_member_manifest_paths(workspace_root: &Path) -> Result<Vec<PathBuf>
 
     let mut manifest_paths = Vec::new();
     for member in members {
-        let member = member
-            .as_str()
-            .ok_or_else(|| "workspace.members entry must be a string".to_string())?;
+        let member = member.as_str().ok_or_else(|| "workspace.members entry must be a string".to_string())?;
 
         if let Some(prefix) = member.strip_suffix("/*") {
             let directory = workspace_root.join(prefix);
-            let entries = fs::read_dir(&directory).map_err(|error| {
-                format!("failed to read directory {}: {error}", directory.display())
-            })?;
+            let entries = fs::read_dir(&directory)
+                .map_err(|error| format!("failed to read directory {}: {error}", directory.display()))?;
             for entry in entries {
-                let entry =
-                    entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+                let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
                 let manifest = entry.path().join("Cargo.toml");
                 if manifest.is_file() {
                     manifest_paths.push(manifest);
@@ -329,10 +292,7 @@ fn workspace_member_manifest_paths(workspace_root: &Path) -> Result<Vec<PathBuf>
 
         let manifest_path = workspace_root.join(member).join("Cargo.toml");
         if !manifest_path.is_file() {
-            return Err(format!(
-                "workspace member manifest does not exist: {}",
-                manifest_path.display()
-            ));
+            return Err(format!("workspace member manifest does not exist: {}", manifest_path.display()));
         }
         manifest_paths.push(manifest_path);
     }
@@ -347,11 +307,7 @@ fn parse_manifest_dependencies(manifest_path: &Path) -> Result<Vec<DeclaredDepen
     let mut dependencies = Vec::new();
 
     for section in DEPENDENCY_SECTIONS {
-        collect_dependency_entries(
-            manifest.get(*section),
-            (*section).to_string(),
-            &mut dependencies,
-        );
+        collect_dependency_entries(manifest.get(*section), (*section).to_string(), &mut dependencies);
     }
 
     if let Some(target_table) = manifest.get("target").and_then(toml::Value::as_table) {
@@ -359,11 +315,7 @@ fn parse_manifest_dependencies(manifest_path: &Path) -> Result<Vec<DeclaredDepen
             if let Some(target_config) = target_value.as_table() {
                 for section in DEPENDENCY_SECTIONS {
                     let target_section = format!("target.{target_name}.{section}");
-                    collect_dependency_entries(
-                        target_config.get(*section),
-                        target_section,
-                        &mut dependencies,
-                    );
+                    collect_dependency_entries(target_config.get(*section), target_section, &mut dependencies);
                 }
             }
         }
@@ -395,26 +347,17 @@ fn resolve_package_name(dependency_key: &str, dependency_value: &toml::Value) ->
         return dependency_key.to_string();
     };
 
-    table
-        .get("package")
-        .and_then(toml::Value::as_str)
-        .unwrap_or(dependency_key)
-        .to_string()
+    table.get("package").and_then(toml::Value::as_str).unwrap_or(dependency_key).to_string()
 }
 
 fn is_prohibited_package(package_name: &str) -> bool {
     let package_name = package_name.to_ascii_lowercase();
     EXACT_PROHIBITED_PACKAGES.contains(&package_name.as_str())
-        || PROHIBITED_PREFIXES
-            .iter()
-            .any(|prefix| package_name.starts_with(prefix))
+        || PROHIBITED_PREFIXES.iter().any(|prefix| package_name.starts_with(prefix))
 }
 
 fn prohibited_package_summary() -> String {
-    let mut prohibited = EXACT_PROHIBITED_PACKAGES
-        .iter()
-        .map(|value| (*value).to_string())
-        .collect::<Vec<_>>();
+    let mut prohibited = EXACT_PROHIBITED_PACKAGES.iter().map(|value| (*value).to_string()).collect::<Vec<_>>();
     prohibited.extend(PROHIBITED_PREFIXES.iter().map(|value| format!("{value}*")));
     prohibited.join(", ")
 }
@@ -429,10 +372,7 @@ fn format_policy_violations(violations: &[PolicyViolation]) -> String {
         .map(|violation| {
             format!(
                 "- {} [{}] key=`{}` resolved_package=`{}`",
-                violation.manifest_path,
-                violation.section,
-                violation.dependency_key,
-                violation.resolved_package
+                violation.manifest_path, violation.section, violation.dependency_key, violation.resolved_package
             )
         })
         .collect::<Vec<_>>()
@@ -440,10 +380,8 @@ fn format_policy_violations(violations: &[PolicyViolation]) -> String {
 }
 
 fn parse_toml(path: &Path) -> Result<toml::Value, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    toml::from_str::<toml::Value>(&content)
-        .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+    let content = fs::read_to_string(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    toml::from_str::<toml::Value>(&content).map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
 fn dependency_version_string(value: &toml::Value) -> Option<&str> {
@@ -451,18 +389,11 @@ fn dependency_version_string(value: &toml::Value) -> Option<&str> {
         return Some(version);
     }
 
-    value
-        .as_table()
-        .and_then(|table| table.get("version"))
-        .and_then(toml::Value::as_str)
+    value.as_table().and_then(|table| table.get("version")).and_then(toml::Value::as_str)
 }
 
 fn dependency_uses_workspace(value: &toml::Value) -> bool {
-    value
-        .as_table()
-        .and_then(|table| table.get("workspace"))
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(false)
+    value.as_table().and_then(|table| table.get("workspace")).and_then(toml::Value::as_bool).unwrap_or(false)
 }
 
 fn write_file(path: &Path, content: &str) {

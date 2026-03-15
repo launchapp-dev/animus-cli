@@ -35,9 +35,7 @@ pub struct WorkflowStateManager {
 
 impl WorkflowStateManager {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
-        Self {
-            project_root: project_root.into(),
-        }
+        Self { project_root: project_root.into() }
     }
 
     pub fn save(&self, workflow: &OrchestratorWorkflow) -> Result<()> {
@@ -113,10 +111,7 @@ impl WorkflowStateManager {
             machine_state: workflow.machine_state,
             status: workflow.status,
         };
-        workflow
-            .checkpoint_metadata
-            .checkpoints
-            .push(checkpoint.clone());
+        workflow.checkpoint_metadata.checkpoints.push(checkpoint.clone());
 
         let checkpoint_path = self.checkpoint_path(&workflow.id, checkpoint.number);
         if let Some(parent) = checkpoint_path.parent() {
@@ -128,12 +123,7 @@ impl WorkflowStateManager {
         self.save(&workflow)?;
 
         if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
-            let _ = self.prune_checkpoints(
-                &workflow.id,
-                DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
-                None,
-                false,
-            );
+            let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
         }
 
         Ok(workflow)
@@ -172,33 +162,23 @@ impl WorkflowStateManager {
         let mut phase_by_checkpoint_number = BTreeMap::<usize, String>::new();
         let mut checkpoints_by_phase = BTreeMap::<String, Vec<WorkflowCheckpoint>>::new();
         for checkpoint in &checkpoints {
-            let phase_bucket = self.resolve_checkpoint_phase_bucket(
-                workflow_id,
-                checkpoint,
-                &mut phase_by_checkpoint_number,
-            );
+            let phase_bucket =
+                self.resolve_checkpoint_phase_bucket(workflow_id, checkpoint, &mut phase_by_checkpoint_number);
             phase_by_checkpoint_number.insert(checkpoint.number, phase_bucket.clone());
-            checkpoints_by_phase
-                .entry(phase_bucket)
-                .or_default()
-                .push(checkpoint.clone());
+            checkpoints_by_phase.entry(phase_bucket).or_default().push(checkpoint.clone());
         }
 
         for phase_checkpoints in checkpoints_by_phase.values_mut() {
             phase_checkpoints.sort_by_key(|checkpoint| checkpoint.number);
             if phase_checkpoints.len() > keep_last_per_phase {
-                for checkpoint in phase_checkpoints
-                    .iter()
-                    .take(phase_checkpoints.len() - keep_last_per_phase)
-                {
+                for checkpoint in phase_checkpoints.iter().take(phase_checkpoints.len() - keep_last_per_phase) {
                     checkpoint_numbers_to_prune.insert(checkpoint.number);
                 }
             }
         }
 
         if let Some(hours) = max_age_hours {
-            let hours_i64 =
-                i64::try_from(hours).context("max_age_hours exceeds supported range")?;
+            let hours_i64 = i64::try_from(hours).context("max_age_hours exceeds supported range")?;
             let cutoff = Utc::now() - Duration::hours(hours_i64);
             for checkpoint in &checkpoints {
                 if checkpoint.timestamp < cutoff {
@@ -249,9 +229,8 @@ impl WorkflowStateManager {
             for checkpoint_num in &pruned_checkpoint_numbers {
                 let path = self.checkpoint_path(workflow_id, *checkpoint_num);
                 if path.exists() {
-                    fs::remove_file(&path).with_context(|| {
-                        format!("failed to remove checkpoint file {}", path.display())
-                    })?;
+                    fs::remove_file(&path)
+                        .with_context(|| format!("failed to remove checkpoint file {}", path.display()))?;
                 }
             }
         }
@@ -315,17 +294,10 @@ impl WorkflowStateManager {
         Ok(checkpoints)
     }
 
-    pub fn load_checkpoint(
-        &self,
-        workflow_id: &str,
-        checkpoint_num: usize,
-    ) -> Result<OrchestratorWorkflow> {
+    pub fn load_checkpoint(&self, workflow_id: &str, checkpoint_num: usize) -> Result<OrchestratorWorkflow> {
         let path = self.checkpoint_path(workflow_id, checkpoint_num);
         if !path.exists() {
-            return Err(anyhow!(
-                "checkpoint not found: {} #{checkpoint_num}",
-                workflow_id
-            ));
+            return Err(anyhow!("checkpoint not found: {} #{checkpoint_num}", workflow_id));
         }
 
         let content = fs::read_to_string(path)?;
@@ -333,8 +305,7 @@ impl WorkflowStateManager {
     }
 
     fn workflows_dir(&self) -> PathBuf {
-        let base = protocol::scoped_state_root(&self.project_root)
-            .unwrap_or_else(|| self.project_root.join(".ao"));
+        let base = protocol::scoped_state_root(&self.project_root).unwrap_or_else(|| self.project_root.join(".ao"));
         base.join("workflow-state")
     }
 
@@ -347,18 +318,15 @@ impl WorkflowStateManager {
     }
 
     fn checkpoint_path(&self, workflow_id: &str, checkpoint_num: usize) -> PathBuf {
-        self.checkpoints_dir(workflow_id)
-            .join(format!("checkpoint-{checkpoint_num:04}.json"))
+        self.checkpoints_dir(workflow_id).join(format!("checkpoint-{checkpoint_num:04}.json"))
     }
 }
 
 fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
-    workflow.current_phase.clone().or_else(|| {
-        workflow
-            .phases
-            .get(workflow.current_phase_index)
-            .map(|phase| phase.phase_id.clone())
-    })
+    workflow
+        .current_phase
+        .clone()
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
 }
 
 fn write_atomic(path: &Path, contents: String) -> Result<()> {
@@ -368,12 +336,7 @@ fn write_atomic(path: &Path, contents: String) -> Result<()> {
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
     }
-    fs::rename(&temp_path, path).with_context(|| {
-        format!(
-            "failed to rename {} to {}",
-            temp_path.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&temp_path, path)
+        .with_context(|| format!("failed to rename {} to {}", temp_path.display(), path.display()))?;
     Ok(())
 }

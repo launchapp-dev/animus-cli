@@ -5,11 +5,7 @@ use orchestrator_core::{services::ServiceHub, ProjectCreateInput};
 
 use crate::{parse_input_json_or, parse_project_type_opt, print_ok, print_value, ProjectCommand};
 
-pub(crate) async fn handle_project(
-    command: ProjectCommand,
-    hub: Arc<dyn ServiceHub>,
-    json: bool,
-) -> Result<()> {
+pub(crate) async fn handle_project(command: ProjectCommand, hub: Arc<dyn ServiceHub>, json: bool) -> Result<()> {
     let projects = hub.projects();
 
     match command {
@@ -30,9 +26,7 @@ pub(crate) async fn handle_project(
             print_value(projects.create(input).await?, json)
         }
         ProjectCommand::Load(args) => print_value(projects.load(&args.id).await?, json),
-        ProjectCommand::Rename(args) => {
-            print_value(projects.rename(&args.id, &args.name).await?, json)
-        }
+        ProjectCommand::Rename(args) => print_value(projects.rename(&args.id, &args.name).await?, json),
         ProjectCommand::Archive(args) => print_value(projects.archive(&args.id).await?, json),
         ProjectCommand::Remove(args) => {
             projects.remove(&args.id).await?;

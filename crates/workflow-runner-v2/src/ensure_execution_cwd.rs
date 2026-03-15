@@ -7,7 +7,5 @@ pub async fn ensure_execution_cwd(
     project_root: &str,
     task: Option<&OrchestratorTask>,
 ) -> Result<String> {
-    hub.project_adapter()
-        .ensure_execution_cwd(project_root, task)
-        .await
+    hub.project_adapter().ensure_execution_cwd(project_root, task).await
 }

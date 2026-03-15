@@ -13,10 +13,7 @@ impl ProjectTickTime {
 
     pub fn from_utc(schedule_at: DateTime<Utc>) -> Self {
         let local_time = schedule_at.with_timezone(&Local).time();
-        Self {
-            schedule_at,
-            local_time,
-        }
+        Self { schedule_at, local_time }
     }
 
     pub fn schedule_at(&self) -> DateTime<Utc> {

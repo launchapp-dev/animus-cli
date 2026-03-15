@@ -70,9 +70,7 @@ fn default_auto_cleanup_worktree_enabled() -> bool {
 }
 
 pub fn daemon_project_config_path(project_root: &Path) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join(DAEMON_PROJECT_CONFIG_FILE_NAME)
+    project_root.join(".ao").join(DAEMON_PROJECT_CONFIG_FILE_NAME)
 }
 
 pub fn load_daemon_project_config(project_root: &Path) -> Result<DaemonProjectConfig> {
@@ -81,20 +79,16 @@ pub fn load_daemon_project_config(project_root: &Path) -> Result<DaemonProjectCo
         return Ok(DaemonProjectConfig::default());
     }
 
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read daemon config at {}", path.display()))?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read daemon config at {}", path.display()))?;
     if content.trim().is_empty() {
         return Ok(DaemonProjectConfig::default());
     }
 
-    serde_json::from_str(&content)
-        .with_context(|| format!("invalid daemon config JSON at {}", path.display()))
+    serde_json::from_str(&content).with_context(|| format!("invalid daemon config JSON at {}", path.display()))
 }
 
-pub fn write_daemon_project_config(
-    project_root: &Path,
-    config: &DaemonProjectConfig,
-) -> Result<()> {
+pub fn write_daemon_project_config(project_root: &Path, config: &DaemonProjectConfig) -> Result<()> {
     let path = daemon_project_config_path(project_root);
     crate::domain_state::write_json_pretty(&path, config)
 }
@@ -138,8 +132,7 @@ mod tests {
     #[test]
     fn load_daemon_project_config_defaults_when_missing() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
-        let loaded =
-            load_daemon_project_config(temp.path()).expect("missing daemon config should default");
+        let loaded = load_daemon_project_config(temp.path()).expect("missing daemon config should default");
         assert_eq!(loaded, DaemonProjectConfig::default());
     }
 
@@ -164,21 +157,14 @@ mod tests {
             auto_pr_enabled: None,
             auto_commit_before_merge: None,
         };
-        let (updated, changed) =
-            update_daemon_project_config(temp.path(), &patch).expect("config should update");
+        let (updated, changed) = update_daemon_project_config(temp.path(), &patch).expect("config should update");
         assert!(changed);
         assert!(updated.auto_merge_enabled);
-        assert_eq!(
-            updated.extra.get("custom_key").and_then(Value::as_str),
-            Some("keep-me")
-        );
+        assert_eq!(updated.extra.get("custom_key").and_then(Value::as_str), Some("keep-me"));
 
         let content = std::fs::read_to_string(config_path).expect("updated config should be read");
         let parsed: Value = serde_json::from_str(&content).expect("updated config should parse");
-        assert_eq!(
-            parsed.get("custom_key").and_then(Value::as_str),
-            Some("keep-me")
-        );
+        assert_eq!(parsed.get("custom_key").and_then(Value::as_str), Some("keep-me"));
     }
 
     #[test]
@@ -190,8 +176,8 @@ mod tests {
             auto_commit_before_merge: Some(false),
         };
 
-        let (_, changed) = update_daemon_project_config(temp.path(), &patch)
-            .expect("initial config update should succeed");
+        let (_, changed) =
+            update_daemon_project_config(temp.path(), &patch).expect("initial config update should succeed");
         assert!(!changed);
     }
 }

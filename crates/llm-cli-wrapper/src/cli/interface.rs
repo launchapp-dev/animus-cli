@@ -66,10 +66,7 @@ impl CliCommand {
             }
         }
 
-        self.env_vars
-            .iter()
-            .find(|(k, _)| k == "CLI_MODEL")
-            .map(|(_, value)| value.as_str())
+        self.env_vars.iter().find(|(k, _)| k == "CLI_MODEL").map(|(_, value)| value.as_str())
     }
 }
 
@@ -115,10 +112,7 @@ pub trait CliInterface: Send + Sync {
         if output.is_success() {
             Ok(())
         } else {
-            Err(Error::TestFailed(format!(
-                "Basic test failed with exit code: {:?}",
-                output.exit_code
-            )))
+            Err(Error::TestFailed(format!("Basic test failed with exit code: {:?}", output.exit_code)))
         }
     }
 
@@ -133,11 +127,7 @@ pub trait CliInterface: Send + Sync {
         let start = std::time::Instant::now();
         let metadata = self.metadata();
 
-        debug!(
-            "Running {} with args: {:?}",
-            metadata.cli_type.display_name(),
-            args
-        );
+        debug!("Running {} with args: {:?}", metadata.cli_type.display_name(), args);
         debug!("Executable path: {:?}", metadata.executable_path);
 
         // Verify executable exists before spawning
@@ -154,10 +144,7 @@ pub trait CliInterface: Send + Sync {
         if let Some(dir) = working_dir {
             debug!("Setting working directory to: {:?}", dir);
             if !dir.exists() {
-                return Err(Error::ExecutionFailed(format!(
-                    "Working directory does not exist: {:?}",
-                    dir
-                )));
+                return Err(Error::ExecutionFailed(format!("Working directory does not exist: {:?}", dir)));
             }
             cmd.current_dir(dir);
         }
@@ -174,20 +161,10 @@ pub trait CliInterface: Send + Sync {
         debug!("Spawn successful!");
 
         let output = if let Some(timeout) = timeout_secs {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(timeout),
-                child.wait_with_output(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout), child.wait_with_output()).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => return Err(Error::ExecutionFailed(e.to_string())),
-                Err(_) => {
-                    return Err(Error::ExecutionFailed(format!(
-                        "Command timed out after {} seconds",
-                        timeout
-                    )))
-                }
+                Err(_) => return Err(Error::ExecutionFailed(format!("Command timed out after {} seconds", timeout))),
             }
         } else {
             child.wait_with_output().await?
@@ -221,10 +198,8 @@ mod tests {
 
     #[test]
     fn test_model_for_cli_uses_generic_fallback() {
-        let fallback_model =
-            default_model_for_tool("codex").expect("default model for codex should be configured");
-        let cmd =
-            CliCommand::new("test").with_env("CLI_MODEL".to_string(), fallback_model.to_string());
+        let fallback_model = default_model_for_tool("codex").expect("default model for codex should be configured");
+        let cmd = CliCommand::new("test").with_env("CLI_MODEL".to_string(), fallback_model.to_string());
 
         assert_eq!(cmd.model_for_cli("codex"), Some(fallback_model));
     }

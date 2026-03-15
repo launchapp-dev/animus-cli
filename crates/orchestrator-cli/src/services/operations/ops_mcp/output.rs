@@ -11,10 +11,7 @@ use anyhow::Result;
 use protocol::RunId;
 use serde_json::{json, Value};
 
-pub(super) fn build_output_tail_result(
-    default_project_root: &str,
-    input: OutputTailInput,
-) -> Result<Value> {
+pub(super) fn build_output_tail_result(default_project_root: &str, input: OutputTailInput) -> Result<Value> {
     let project_root = resolve_daemon_events_project_root(default_project_root, input.project_root);
     let run_id = normalize_non_empty(input.run_id);
     let task_id = normalize_non_empty(input.task_id);
@@ -48,16 +45,11 @@ fn output_tail_limit(limit: Option<usize>) -> usize {
 fn parse_output_tail_event_types(raw: Option<Vec<String>>) -> Result<Vec<OutputTailEventType>> {
     let values = match raw {
         Some(values) if values.is_empty() => {
-            return Err(invalid_input_error(
-                "event_types must include at least one of: output|error|thinking",
-            ));
+            return Err(invalid_input_error("event_types must include at least one of: output|error|thinking"));
         }
         Some(values) => values,
         None => {
-            return Ok(vec![
-                OutputTailEventType::Output,
-                OutputTailEventType::Thinking,
-            ]);
+            return Ok(vec![OutputTailEventType::Output, OutputTailEventType::Thinking]);
         }
     };
 

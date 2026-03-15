@@ -79,18 +79,16 @@ async fn main() -> Result<()> {
             session_id,
             prompt,
         } => {
-            let working_dir = working_dir
-                .or_else(|| std::env::current_dir().ok())
-                .unwrap_or_else(|| PathBuf::from("."));
+            let working_dir =
+                working_dir.or_else(|| std::env::current_dir().ok()).unwrap_or_else(|| PathBuf::from("."));
 
             let json_mode = format.as_deref() == Some("json");
 
             let resolved_config = config::resolve_config(&model, api_base, api_key)?;
 
             let system = match system_prompt {
-                Some(path) => std::fs::read_to_string(&path).map_err(|e| {
-                    anyhow::anyhow!("Failed to read system prompt {}: {}", path.display(), e)
-                })?,
+                Some(path) => std::fs::read_to_string(&path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read system prompt {}: {}", path.display(), e))?,
                 None => String::new(),
             };
 
@@ -103,11 +101,7 @@ async fn main() -> Result<()> {
                 None => None,
             };
 
-            let client = api::client::ApiClient::new(
-                resolved_config.api_base,
-                resolved_config.api_key,
-                idle_timeout,
-            );
+            let client = api::client::ApiClient::new(resolved_config.api_base, resolved_config.api_key, idle_timeout);
 
             let native_tools = if read_only {
                 tools::definitions::read_only_tool_definitions()
@@ -116,13 +110,13 @@ async fn main() -> Result<()> {
             };
 
             let mcp_configs: Vec<tools::mcp_client::McpServerConfig> = match &mcp_config {
-                Some(json_str) => serde_json::from_str(json_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid --mcp-config JSON: {}", e))?,
+                Some(json_str) => {
+                    serde_json::from_str(json_str).map_err(|e| anyhow::anyhow!("Invalid --mcp-config JSON: {}", e))?
+                }
                 None => vec![],
             };
             let mut mcp_clients = tools::mcp_client::connect_all(&mcp_configs).await?;
-            let mcp_tool_defs =
-                tools::mcp_client::fetch_all_tool_definitions(&mut mcp_clients).await?;
+            let mcp_tool_defs = tools::mcp_client::fetch_all_tool_definitions(&mut mcp_clients).await?;
             let all_tools = tools::definitions::merge_tools(native_tools, mcp_tool_defs);
 
             let mut output = runner::output::OutputFormatter::new(json_mode);

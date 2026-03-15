@@ -1,10 +1,8 @@
 use anyhow::{bail, Context, Result};
-use cli_wrapper::{
-    is_ai_cli_tool, LaunchInvocation, SessionBackendResolver, SessionEvent, SessionRequest,
-};
+use cli_wrapper::{is_ai_cli_tool, LaunchInvocation, SessionBackendResolver, SessionEvent, SessionRequest};
 use protocol::{
-    AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage,
-    ToolCallInfo, ToolResultInfo,
+    AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage, ToolCallInfo,
+    ToolResultInfo,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -23,10 +21,7 @@ pub(super) fn use_native_session_backend(tool: &str, _runtime_contract: Option<&
     )
 }
 
-pub(super) fn require_native_session_backend(
-    tool: &str,
-    runtime_contract: Option<&Value>,
-) -> Result<()> {
+pub(super) fn require_native_session_backend(tool: &str, runtime_contract: Option<&Value>) -> Result<()> {
     if !is_ai_cli_tool(tool) {
         return Ok(());
     }
@@ -35,10 +30,7 @@ pub(super) fn require_native_session_backend(
         return Ok(());
     }
 
-    bail!(
-        "native session backend is required for AI tool '{}' but is not available",
-        tool
-    );
+    bail!("native session backend is required for AI tool '{}' but is not available", tool);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -58,30 +50,13 @@ pub(super) async fn spawn_session_process(
     let mut env = env;
     let enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
-    apply_native_mcp_policy(
-        &mut invocation,
-        &enforcement,
-        &mut env,
-        run_id,
-        &mut temp_cleanup,
-    )?;
-    let session_request = build_session_request(
-        tool,
-        model,
-        prompt,
-        runtime_contract,
-        cwd,
-        env,
-        timeout_secs,
-        invocation,
-    )?;
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, run_id, &mut temp_cleanup)?;
+    let session_request =
+        build_session_request(tool, model, prompt, runtime_contract, cwd, env, timeout_secs, invocation)?;
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, timeout_secs, runtime_contract);
     let resolver = SessionBackendResolver::new();
     let backend = resolver.resolve(&session_request);
-    let mut run = backend
-        .start_session(session_request)
-        .await
-        .context("failed to start native session backend")?;
+    let mut run = backend.start_session(session_request).await.context("failed to start native session backend")?;
     let run_session_id = run.session_id.clone();
     let run_started_at = Instant::now();
     let mut last_activity_at = run_started_at;
@@ -165,11 +140,7 @@ fn build_session_request(
         merged_contract = json!({});
     }
 
-    if merged_contract
-        .get("cli")
-        .and_then(Value::as_object)
-        .is_none()
-    {
+    if merged_contract.get("cli").and_then(Value::as_object).is_none() {
         merged_contract["cli"] = json!({});
     }
     merged_contract["cli"]["name"] = Value::String(tool.to_string());
@@ -185,10 +156,7 @@ fn build_session_request(
         prompt: prompt.to_string(),
         cwd: std::path::PathBuf::from(cwd),
         project_root: None,
-        mcp_endpoint: merged_contract
-            .pointer("/mcp/endpoint")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        mcp_endpoint: merged_contract.pointer("/mcp/endpoint").and_then(Value::as_str).map(ToString::to_string),
         permission_mode: None,
         timeout_secs,
         env_vars: env.into_iter().collect(),
@@ -204,10 +172,7 @@ async fn forward_session_event(
     event_tx: &mpsc::Sender<AgentRunEvent>,
 ) -> Option<i32> {
     match event {
-        SessionEvent::Started {
-            backend,
-            session_id,
-        } => {
+        SessionEvent::Started { backend, session_id } => {
             debug!(
                 run_id = %run_id.0.as_str(),
                 backend,
@@ -226,11 +191,7 @@ async fn forward_session_event(
                 .await;
             None
         }
-        SessionEvent::ToolCall {
-            tool_name,
-            arguments,
-            server,
-        } => {
+        SessionEvent::ToolCall { tool_name, arguments, server } => {
             let mut parameters = arguments.clone();
             if let Some(server_name) = server {
                 if let Some(obj) = parameters.as_object_mut() {
@@ -240,20 +201,12 @@ async fn forward_session_event(
             let _ = event_tx
                 .send(AgentRunEvent::ToolCall {
                     run_id: run_id.clone(),
-                    tool_info: ToolCallInfo {
-                        tool_name: tool_name.clone(),
-                        parameters,
-                        timestamp: Timestamp::now(),
-                    },
+                    tool_info: ToolCallInfo { tool_name: tool_name.clone(), parameters, timestamp: Timestamp::now() },
                 })
                 .await;
             None
         }
-        SessionEvent::ToolResult {
-            tool_name,
-            output,
-            success,
-        } => {
+        SessionEvent::ToolResult { tool_name, output, success } => {
             let _ = event_tx
                 .send(AgentRunEvent::ToolResult {
                     run_id: run_id.clone(),
@@ -268,33 +221,19 @@ async fn forward_session_event(
             None
         }
         SessionEvent::Thinking { text } => {
-            let _ = event_tx
-                .send(AgentRunEvent::Thinking {
-                    run_id: run_id.clone(),
-                    content: text.clone(),
-                })
-                .await;
+            let _ = event_tx.send(AgentRunEvent::Thinking { run_id: run_id.clone(), content: text.clone() }).await;
             None
         }
-        SessionEvent::Artifact {
-            artifact_id,
-            metadata,
-        } => {
+        SessionEvent::Artifact { artifact_id, metadata } => {
             let _ = event_tx
                 .send(AgentRunEvent::Artifact {
                     run_id: run_id.clone(),
                     artifact_info: ArtifactInfo {
                         artifact_id: artifact_id.clone(),
                         artifact_type: ArtifactType::Other,
-                        file_path: metadata
-                            .get("file_path")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string),
+                        file_path: metadata.get("file_path").and_then(Value::as_str).map(ToString::to_string),
                         size_bytes: metadata.get("size_bytes").and_then(Value::as_u64),
-                        mime_type: metadata
-                            .get("mime_type")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string),
+                        mime_type: metadata.get("mime_type").and_then(Value::as_str).map(ToString::to_string),
                     },
                 })
                 .await;
@@ -303,20 +242,11 @@ async fn forward_session_event(
         SessionEvent::Metadata { metadata } => {
             let tokens = tokens_from_metadata(metadata);
             if tokens.is_some() {
-                let _ = event_tx
-                    .send(AgentRunEvent::Metadata {
-                        run_id: run_id.clone(),
-                        cost: None,
-                        tokens,
-                    })
-                    .await;
+                let _ = event_tx.send(AgentRunEvent::Metadata { run_id: run_id.clone(), cost: None, tokens }).await;
             }
             None
         }
-        SessionEvent::Error {
-            message,
-            recoverable,
-        } => {
+        SessionEvent::Error { message, recoverable } => {
             if *recoverable {
                 let _ = event_tx
                     .send(AgentRunEvent::OutputChunk {
@@ -326,12 +256,7 @@ async fn forward_session_event(
                     })
                     .await;
             } else {
-                let _ = event_tx
-                    .send(AgentRunEvent::Error {
-                        run_id: run_id.clone(),
-                        error: message.clone(),
-                    })
-                    .await;
+                let _ = event_tx.send(AgentRunEvent::Error { run_id: run_id.clone(), error: message.clone() }).await;
             }
             None
         }
@@ -352,10 +277,7 @@ fn tokens_from_metadata(metadata: &Value) -> Option<TokenUsage> {
                     .or_else(|| usage.get("cached_input_tokens"))
                     .and_then(Value::as_u64)
                     .map(|value| value as u32),
-                cache_write: usage
-                    .get("cache_creation_input_tokens")
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
+                cache_write: usage.get("cache_creation_input_tokens").and_then(Value::as_u64).map(|value| value as u32),
             })
         }
         Some("codex_usage") => {
@@ -364,10 +286,7 @@ fn tokens_from_metadata(metadata: &Value) -> Option<TokenUsage> {
                 input: usage.get("input_tokens")?.as_u64()? as u32,
                 output: usage.get("output_tokens")?.as_u64()? as u32,
                 reasoning: None,
-                cache_read: usage
-                    .get("cached_input_tokens")
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
+                cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).map(|value| value as u32),
                 cache_write: None,
             })
         }
@@ -379,18 +298,9 @@ fn tokens_from_metadata(metadata: &Value) -> Option<TokenUsage> {
                 .and_then(|model| model.pointer("/tokens"))?;
             Some(TokenUsage {
                 input: tokens.get("input")?.as_u64()? as u32,
-                output: tokens
-                    .get("candidates")
-                    .or_else(|| tokens.get("output"))
-                    .and_then(Value::as_u64)? as u32,
-                reasoning: tokens
-                    .get("thoughts")
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
-                cache_read: tokens
-                    .get("cached")
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
+                output: tokens.get("candidates").or_else(|| tokens.get("output")).and_then(Value::as_u64)? as u32,
+                reasoning: tokens.get("thoughts").and_then(Value::as_u64).map(|value| value as u32),
+                cache_read: tokens.get("cached").and_then(Value::as_u64).map(|value| value as u32),
                 cache_write: None,
             })
         }
@@ -407,19 +317,12 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     fn unique_test_dir(label: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be valid")
-            .as_nanos();
+        let suffix = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock should be valid").as_nanos();
         std::env::temp_dir().join(format!("ao-agent-runner-{label}-{suffix}"))
     }
 
     #[cfg(unix)]
-    fn write_capture_cli_shim(
-        dir: &Path,
-        binary_name: &str,
-        fixture_path: &str,
-    ) -> std::io::Result<PathBuf> {
+    fn write_capture_cli_shim(dir: &Path, binary_name: &str, fixture_path: &str) -> std::io::Result<PathBuf> {
         let script_path = dir.join(binary_name);
         let script = format!(
             "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > \"$AO_TEST_ARGS_CAPTURE\"\nenv | sort > \"$AO_TEST_ENV_CAPTURE\"\ncat \"{}\"\n",
@@ -437,11 +340,7 @@ mod tests {
     }
 
     fn read_capture_lines(path: &Path) -> Vec<String> {
-        fs::read_to_string(path)
-            .expect("capture file should exist")
-            .lines()
-            .map(ToString::to_string)
-            .collect()
+        fs::read_to_string(path).expect("capture file should exist").lines().map(ToString::to_string).collect()
     }
 
     #[test]
@@ -479,8 +378,7 @@ mod tests {
             }
         });
 
-        require_native_session_backend("claude", Some(&contract))
-            .expect("MCP-only AI run should stay on native path");
+        require_native_session_backend("claude", Some(&contract)).expect("MCP-only AI run should stay on native path");
     }
 
     #[tokio::test]
@@ -537,18 +435,8 @@ mod tests {
     #[cfg(unix)]
     async fn spawn_session_process_bridges_codex_gemini_and_oai_runner_events() {
         for (tool, fixture, expect_metadata, expect_thinking) in [
-            (
-                "codex",
-                "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl",
-                true,
-                true,
-            ),
-            (
-                "gemini",
-                "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl",
-                true,
-                false,
-            ),
+            ("codex", "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl", true, true),
+            ("gemini", "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl", true, false),
             (
                 "oai-runner",
                 "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl",
@@ -603,10 +491,7 @@ mod tests {
             assert_eq!(exit_code, 0, "expected successful exit for {tool}");
             assert_eq!(saw_metadata, expect_metadata, "unexpected metadata for {tool}");
             assert!(saw_output, "expected output for {tool}");
-            assert_eq!(
-                saw_thinking, expect_thinking,
-                "unexpected thinking signal for {tool}"
-            );
+            assert_eq!(saw_thinking, expect_thinking, "unexpected thinking signal for {tool}");
         }
     }
 
@@ -663,8 +548,7 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let args_capture = temp_dir.join("gemini.args");
         let env_capture = temp_dir.join("gemini.env");
-        let fixture =
-            "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
         write_capture_cli_shim(&temp_dir, "gemini", fixture).expect("gemini shim should exist");
 
         let run_id = RunId("run-gemini-mcp".to_string());
@@ -689,18 +573,9 @@ mod tests {
         });
         let mut env = HashMap::new();
         let original_path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{original_path}", temp_dir.display()),
-        );
-        env.insert(
-            "AO_TEST_ARGS_CAPTURE".to_string(),
-            args_capture.to_string_lossy().to_string(),
-        );
-        env.insert(
-            "AO_TEST_ENV_CAPTURE".to_string(),
-            env_capture.to_string_lossy().to_string(),
-        );
+        env.insert("PATH".to_string(), format!("{}:{original_path}", temp_dir.display()));
+        env.insert("AO_TEST_ARGS_CAPTURE".to_string(), args_capture.to_string_lossy().to_string());
+        env.insert("AO_TEST_ENV_CAPTURE".to_string(), env_capture.to_string_lossy().to_string());
         let (event_tx, mut event_rx) = mpsc::channel(64);
         let (_cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -733,14 +608,11 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(saw_output, "expected gemini fixture output");
         assert!(
-            args.windows(2)
-                .any(|pair| pair[0] == "--allowed-mcp-server-names" && pair[1] == "ao"),
+            args.windows(2).any(|pair| pair[0] == "--allowed-mcp-server-names" && pair[1] == "ao"),
             "expected gemini launch args to include MCP allowlist, got: {args:?}"
         );
         assert!(
-            env_lines
-                .iter()
-                .any(|line| line.starts_with("GEMINI_CLI_SYSTEM_SETTINGS_PATH=")),
+            env_lines.iter().any(|line| line.starts_with("GEMINI_CLI_SYSTEM_SETTINGS_PATH=")),
             "expected gemini launch env to include settings path, got: {env_lines:?}"
         );
     }
@@ -752,10 +624,8 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let args_capture = temp_dir.join("oai-runner.args");
         let env_capture = temp_dir.join("oai-runner.env");
-        let fixture =
-            "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl";
-        write_capture_cli_shim(&temp_dir, "ao-oai-runner", fixture)
-            .expect("oai-runner shim should exist");
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl";
+        write_capture_cli_shim(&temp_dir, "ao-oai-runner", fixture).expect("oai-runner shim should exist");
 
         let run_id = RunId("run-oai-runner-mcp".to_string());
         let runtime_contract = json!({
@@ -779,18 +649,9 @@ mod tests {
         });
         let mut env = HashMap::new();
         let original_path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{original_path}", temp_dir.display()),
-        );
-        env.insert(
-            "AO_TEST_ARGS_CAPTURE".to_string(),
-            args_capture.to_string_lossy().to_string(),
-        );
-        env.insert(
-            "AO_TEST_ENV_CAPTURE".to_string(),
-            env_capture.to_string_lossy().to_string(),
-        );
+        env.insert("PATH".to_string(), format!("{}:{original_path}", temp_dir.display()));
+        env.insert("AO_TEST_ARGS_CAPTURE".to_string(), args_capture.to_string_lossy().to_string());
+        env.insert("AO_TEST_ENV_CAPTURE".to_string(), env_capture.to_string_lossy().to_string());
         let (event_tx, mut event_rx) = mpsc::channel(64);
         let (_cancel_tx, cancel_rx) = oneshot::channel();
 
@@ -822,10 +683,8 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(saw_output, "expected oai-runner fixture output");
         assert_eq!(args.first().map(String::as_str), Some("run"));
-        let mcp_idx = args
-            .iter()
-            .position(|arg| arg == "--mcp-config")
-            .expect("oai-runner launch should include mcp config");
+        let mcp_idx =
+            args.iter().position(|arg| arg == "--mcp-config").expect("oai-runner launch should include mcp config");
         assert_eq!(mcp_idx, 1, "expected mcp flag immediately after run");
     }
 }

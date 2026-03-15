@@ -1,10 +1,9 @@
 use clap::{Args, Subcommand};
 
 use super::{
-    parse_percentage_u8, parse_positive_u64, parse_positive_usize, IdArgs,
-    DEPENDENCY_TYPE_HELP, INPUT_JSON_PRECEDENCE_HELP, TASK_PRIORITY_FILTER_HELP,
-    TASK_PRIORITY_HELP, TASK_RISK_FILTER_HELP, TASK_STATUS_FILTER_HELP, TASK_STATUS_HELP,
-    TASK_TYPE_FILTER_HELP, TASK_TYPE_HELP,
+    parse_percentage_u8, parse_positive_u64, parse_positive_usize, IdArgs, DEPENDENCY_TYPE_HELP,
+    INPUT_JSON_PRECEDENCE_HELP, TASK_PRIORITY_FILTER_HELP, TASK_PRIORITY_HELP, TASK_RISK_FILTER_HELP,
+    TASK_STATUS_FILTER_HELP, TASK_STATUS_HELP, TASK_TYPE_FILTER_HELP, TASK_TYPE_HELP,
 };
 
 #[derive(Debug, Subcommand)]
@@ -59,17 +58,9 @@ pub(crate) enum TaskCommand {
 pub(crate) struct TaskCancelArgs {
     #[arg(short, long, visible_alias = "task-id", value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        help = "Confirmation token; must match --id."
-    )]
+    #[arg(long, value_name = "TASK_ID", help = "Confirmation token; must match --id.")]
     pub(crate) confirm: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview cancellation payload without mutating task state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview cancellation payload without mutating task state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -77,11 +68,7 @@ pub(crate) struct TaskCancelArgs {
 pub(crate) struct TaskReopenArgs {
     #[arg(short, long, visible_alias = "task-id", value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        help = "Confirmation token; must match --id."
-    )]
+    #[arg(long, value_name = "TASK_ID", help = "Confirmation token; must match --id.")]
     pub(crate) confirm: Option<String>,
 }
 
@@ -97,11 +84,7 @@ pub(crate) struct TaskSetPriorityArgs {
 pub(crate) struct TaskSetDeadlineArgs {
     #[arg(short, long, visible_alias = "task-id", value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "RFC3339",
-        help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z."
-    )]
+    #[arg(long, value_name = "RFC3339", help = "Deadline timestamp (RFC 3339), for example 2026-03-01T09:30:00Z.")]
     pub(crate) deadline: Option<String>,
 }
 
@@ -133,11 +116,7 @@ pub(crate) struct TaskRebalancePriorityArgs {
         help = "Apply planned priority changes. Without this flag, command runs in dry-run mode."
     )]
     pub(crate) apply: bool,
-    #[arg(
-        long,
-        value_name = "TOKEN",
-        help = "Confirmation token required with --apply. Use 'apply'."
-    )]
+    #[arg(long, value_name = "TOKEN", help = "Confirmation token required with --apply. Use 'apply'.")]
     pub(crate) confirm: Option<String>,
 }
 
@@ -163,11 +142,7 @@ pub(crate) struct TaskListArgs {
     pub(crate) priority: Option<String>,
     #[arg(long, value_name = "RISK", help = TASK_RISK_FILTER_HELP)]
     pub(crate) risk: Option<String>,
-    #[arg(
-        long,
-        value_name = "ASSIGNEE_TYPE",
-        help = "Assignee type filter: agent|human|unassigned."
-    )]
+    #[arg(long, value_name = "ASSIGNEE_TYPE", help = "Assignee type filter: agent|human|unassigned.")]
     pub(crate) assignee_type: Option<String>,
     #[arg(
         long,
@@ -175,23 +150,11 @@ pub(crate) struct TaskListArgs {
         help = "Match tasks that include all provided tags. Repeat to require multiple tags."
     )]
     pub(crate) tag: Vec<String>,
-    #[arg(
-        long,
-        value_name = "REQ_ID",
-        help = "Filter tasks linked to a requirement id."
-    )]
+    #[arg(long, value_name = "REQ_ID", help = "Filter tasks linked to a requirement id.")]
     pub(crate) linked_requirement: Option<String>,
-    #[arg(
-        long,
-        value_name = "ENTITY_ID",
-        help = "Filter tasks linked to an architecture entity id."
-    )]
+    #[arg(long, value_name = "ENTITY_ID", help = "Filter tasks linked to an architecture entity id.")]
     pub(crate) linked_architecture_entity: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Case-insensitive text search over task title and description."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Case-insensitive text search over task title and description.")]
     pub(crate) search: Option<String>,
     #[arg(
         long,
@@ -200,12 +163,7 @@ pub(crate) struct TaskListArgs {
         help = "Maximum number of tasks to return."
     )]
     pub(crate) limit: Option<usize>,
-    #[arg(
-        long,
-        value_name = "COUNT",
-        default_value_t = 0,
-        help = "Number of tasks to skip before returning results."
-    )]
+    #[arg(long, value_name = "COUNT", default_value_t = 0, help = "Number of tasks to skip before returning results.")]
     pub(crate) offset: usize,
 }
 
@@ -215,17 +173,9 @@ pub(crate) struct TaskPrioritizedArgs {
     pub(crate) status: Option<String>,
     #[arg(long, value_name = "PRIORITY", help = TASK_PRIORITY_FILTER_HELP)]
     pub(crate) priority: Option<String>,
-    #[arg(
-        long,
-        value_name = "ASSIGNEE_TYPE",
-        help = "Assignee type filter: agent|human|unassigned."
-    )]
+    #[arg(long, value_name = "ASSIGNEE_TYPE", help = "Assignee type filter: agent|human|unassigned.")]
     pub(crate) assignee_type: Option<String>,
-    #[arg(
-        long,
-        value_name = "TEXT",
-        help = "Case-insensitive text search over task title and description."
-    )]
+    #[arg(long, value_name = "TEXT", help = "Case-insensitive text search over task title and description.")]
     pub(crate) search: Option<String>,
     #[arg(
         long,
@@ -234,12 +184,7 @@ pub(crate) struct TaskPrioritizedArgs {
         help = "Maximum number of tasks to return."
     )]
     pub(crate) limit: Option<usize>,
-    #[arg(
-        long,
-        value_name = "COUNT",
-        default_value_t = 0,
-        help = "Number of tasks to skip before returning results."
-    )]
+    #[arg(long, value_name = "COUNT", default_value_t = 0, help = "Number of tasks to skip before returning results.")]
     pub(crate) offset: usize,
 }
 
@@ -281,11 +226,7 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) priority: Option<String>,
     #[arg(long, value_name = "STATUS", help = TASK_STATUS_HELP)]
     pub(crate) status: Option<String>,
-    #[arg(
-        long,
-        value_name = "ASSIGNEE",
-        help = "Updated assignee value for the task."
-    )]
+    #[arg(long, value_name = "ASSIGNEE", help = "Updated assignee value for the task.")]
     pub(crate) assignee: Option<String>,
     #[arg(
         long = "linked-architecture-entity",
@@ -307,17 +248,9 @@ pub(crate) struct TaskUpdateArgs {
 pub(crate) struct TaskDeleteArgs {
     #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        help = "Confirmation token; must match --id."
-    )]
+    #[arg(long, value_name = "TASK_ID", help = "Confirmation token; must match --id.")]
     pub(crate) confirm: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Preview deletion payload without mutating task state."
-    )]
+    #[arg(long, default_value_t = false, help = "Preview deletion payload without mutating task state.")]
     pub(crate) dry_run: bool,
 }
 
@@ -325,29 +258,13 @@ pub(crate) struct TaskDeleteArgs {
 pub(crate) struct TaskAssignArgs {
     #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "ASSIGNEE",
-        help = "Assignee identifier (user id or agent role)."
-    )]
+    #[arg(long, value_name = "ASSIGNEE", help = "Assignee identifier (user id or agent role).")]
     pub(crate) assignee: String,
-    #[arg(
-        long = "type",
-        value_name = "TYPE",
-        help = "Assignee type: agent|human."
-    )]
+    #[arg(long = "type", value_name = "TYPE", help = "Assignee type: agent|human.")]
     pub(crate) assignee_type: Option<String>,
-    #[arg(
-        long = "agent-role",
-        value_name = "ROLE",
-        help = "Agent role identifier."
-    )]
+    #[arg(long = "agent-role", value_name = "ROLE", help = "Agent role identifier.")]
     pub(crate) agent_role: Option<String>,
-    #[arg(
-        long,
-        value_name = "MODEL",
-        help = "Optional model override (agent only)."
-    )]
+    #[arg(long, value_name = "MODEL", help = "Optional model override (agent only).")]
     pub(crate) model: Option<String>,
     #[arg(
         long,
@@ -394,11 +311,7 @@ pub(crate) struct TaskChecklistUpdateArgs {
 pub(crate) struct TaskDependencyAddArgs {
     #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "DEPENDENCY_ID",
-        help = "Dependency task identifier."
-    )]
+    #[arg(long, value_name = "DEPENDENCY_ID", help = "Dependency task identifier.")]
     pub(crate) dependency_id: String,
     #[arg(long, value_name = "TYPE", help = DEPENDENCY_TYPE_HELP)]
     pub(crate) dependency_type: String,
@@ -415,11 +328,7 @@ pub(crate) struct TaskDependencyAddArgs {
 pub(crate) struct TaskDependencyRemoveArgs {
     #[arg(long, value_name = "TASK_ID", help = "Task identifier.")]
     pub(crate) id: String,
-    #[arg(
-        long,
-        value_name = "DEPENDENCY_ID",
-        help = "Dependency task identifier."
-    )]
+    #[arg(long, value_name = "DEPENDENCY_ID", help = "Dependency task identifier.")]
     pub(crate) dependency_id: String,
     #[arg(
         long,

@@ -33,19 +33,13 @@ impl WebApiService {
             metadata: request.metadata,
         };
         let project = self.context.hub.projects().create(input).await?;
-        self.publish_event(
-            "project-create",
-            json!({ "project_id": project.id, "project_name": project.name }),
-        );
+        self.publish_event("project-create", json!({ "project_id": project.id, "project_name": project.name }));
         Ok(json!(project))
     }
 
     pub async fn projects_load(&self, id: &str) -> Result<Value, WebApiError> {
         let project = self.context.hub.projects().load(id).await?;
-        self.publish_event(
-            "project-load",
-            json!({ "project_id": project.id, "project_name": project.name }),
-        );
+        self.publish_event("project-load", json!({ "project_id": project.id, "project_name": project.name }));
         Ok(json!(project))
     }
 
@@ -55,24 +49,16 @@ impl WebApiService {
             .name
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                WebApiError::new("invalid_input", "projects patch requires non-empty name", 2)
-            })?;
+            .ok_or_else(|| WebApiError::new("invalid_input", "projects patch requires non-empty name", 2))?;
 
         let project = self.context.hub.projects().rename(id, &name).await?;
-        self.publish_event(
-            "project-rename",
-            json!({ "project_id": project.id, "project_name": project.name }),
-        );
+        self.publish_event("project-rename", json!({ "project_id": project.id, "project_name": project.name }));
         Ok(json!(project))
     }
 
     pub async fn projects_archive(&self, id: &str) -> Result<Value, WebApiError> {
         let project = self.context.hub.projects().archive(id).await?;
-        self.publish_event(
-            "project-archive",
-            json!({ "project_id": project.id, "project_name": project.name }),
-        );
+        self.publish_event("project-archive", json!({ "project_id": project.id, "project_name": project.name }));
         Ok(json!(project))
     }
 
@@ -99,10 +85,7 @@ impl WebApiService {
         Ok(self.project_requirements_snapshot(&project).await)
     }
 
-    async fn project_requirements_snapshot(
-        &self,
-        project: &orchestrator_core::OrchestratorProject,
-    ) -> Value {
+    async fn project_requirements_snapshot(&self, project: &orchestrator_core::OrchestratorProject) -> Value {
         let mut snapshot = json!({
             "project_id": project.id,
             "project_name": project.name,
@@ -138,11 +121,7 @@ impl WebApiService {
             let status_key = requirement.status.to_string();
             *by_status.entry(status_key.clone()).or_default() += 1;
             let updated_at = requirement.updated_at.to_rfc3339();
-            if latest_updated_at
-                .as_ref()
-                .map(|current| updated_at > *current)
-                .unwrap_or(true)
-            {
+            if latest_updated_at.as_ref().map(|current| updated_at > *current).unwrap_or(true) {
                 latest_updated_at = Some(updated_at.clone());
             }
 

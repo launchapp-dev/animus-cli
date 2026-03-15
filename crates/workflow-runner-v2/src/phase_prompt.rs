@@ -29,10 +29,8 @@ pub struct PhaseRenderParams<'a> {
     pub phase_id: &'a str,
 }
 
-pub(crate) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/runtime/workflow_phase.prompt"
-));
+pub(crate) const WORKFLOW_PHASE_PROMPT_TEMPLATE: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/runtime/workflow_phase.prompt"));
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PhasePromptInputs {
@@ -99,10 +97,7 @@ pub fn build_phase_prompt(params: &PhasePromptParams<'_>) -> String {
     .final_prompt
 }
 
-pub fn render_phase_prompt(
-    params: &PhaseRenderParams<'_>,
-    inputs: PhasePromptInputs,
-) -> RenderedPhasePrompt {
+pub fn render_phase_prompt(params: &PhaseRenderParams<'_>, inputs: PhasePromptInputs) -> RenderedPhasePrompt {
     let ctx = RuntimeConfigContext::load(params.project_root);
     render_phase_prompt_with_ctx(&ctx, params, inputs)
 }
@@ -135,35 +130,20 @@ pub fn render_phase_prompt_with_ctx(
     };
     let phase_directive = ctx.phase_directive(phase_id);
     let phase_safety_rules = phase_safety_rules(&caps);
-    let decision_extra_field_rule = phase_decision_contract
-        .as_ref()
-        .map(phase_decision_extra_field_rule)
-        .unwrap_or_default();
-    let result_field_description_rule = phase_contract
-        .as_ref()
-        .map(phase_output_field_rule)
-        .unwrap_or_default();
+    let decision_extra_field_rule =
+        phase_decision_contract.as_ref().map(phase_decision_extra_field_rule).unwrap_or_default();
+    let result_field_description_rule = phase_contract.as_ref().map(phase_output_field_rule).unwrap_or_default();
     let structured_result_rule = match (phase_contract.as_ref(), phase_decision_contract.as_ref()) {
         (Some(contract), Some(_)) => {
             let required_fields = if contract.required_fields.is_empty() {
-                "- The top-level result object has no extra required fields beyond its kind."
-                    .to_string()
+                "- The top-level result object has no extra required fields beyond its kind.".to_string()
             } else {
                 format!(
                     "- The top-level result object must include these required fields: {}.",
-                    contract
-                        .required_fields
-                        .iter()
-                        .map(|field| format!("`{field}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    contract.required_fields.iter().map(|field| format!("`{field}`")).collect::<Vec<_>>().join(", ")
                 )
             };
-            let result_example = phase_result_example_for_prompt(
-                contract,
-                phase_id,
-                phase_decision_contract.as_ref(),
-            );
+            let result_example = phase_result_example_for_prompt(contract, phase_id, phase_decision_contract.as_ref());
             format!(
                 "- Before finishing, emit one JSON line as the FINAL line of output with your phase result and nested phase decision:\n  {}\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.",
                 result_example,
@@ -188,12 +168,7 @@ pub fn render_phase_prompt_with_ctx(
             } else {
                 format!(
                     "\n- Include these required result fields: {}.",
-                    contract
-                        .required_fields
-                        .iter()
-                        .map(|field| format!("`{field}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    contract.required_fields.iter().map(|field| format!("`{field}`")).collect::<Vec<_>>().join(", ")
                 )
             };
             format!("{result_rule}{required_fields}\n{result_field_description_rule}")
@@ -218,8 +193,7 @@ pub fn render_phase_prompt_with_ctx(
                 contract
                     .required_evidence
                     .iter()
-                    .map(|kind| serde_json::to_string(kind)
-                        .unwrap_or_else(|_| "\"custom\"".to_string()))
+                    .map(|kind| serde_json::to_string(kind).unwrap_or_else(|_| "\"custom\"".to_string()))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -243,15 +217,10 @@ pub fn render_phase_prompt_with_ctx(
         String::new()
     };
 
-    let (pipeline_context, phase_order) =
-        build_workflow_pipeline_context(project_root, workflow_id, phase_id);
+    let (pipeline_context, phase_order) = build_workflow_pipeline_context(project_root, workflow_id, phase_id);
     let prior_outputs = load_prior_phase_outputs(project_root, workflow_id, phase_id, &phase_order);
     let prior_phase_context = format_prior_phase_outputs(&prior_outputs);
-    let rework_context = inputs
-        .rework_context
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let rework_context = inputs.rework_context.as_deref().map(str::trim).filter(|value| !value.is_empty());
     let mut prior_context = prior_phase_context;
     if let Some(context) = rework_context {
         prior_context.push_str("\n\nFailure context:\n");
@@ -271,27 +240,18 @@ pub fn render_phase_prompt_with_ctx(
         .replace("__PRODUCT_CHANGE_RULE__", product_change_rule)
         .replace("__PHASE_SAFETY_RULES__", phase_safety_rules)
         .replace("__PHASE_DECISION_RULE__", &phase_decision_rule)
-        .replace(
-            "__IMPLEMENTATION_COMMIT_RULE__",
-            structured_result_rule.as_str(),
-        )
+        .replace("__IMPLEMENTATION_COMMIT_RULE__", structured_result_rule.as_str())
         .replace("__WORKFLOW_PIPELINE_CONTEXT__", &pipeline_context)
         .replace("__PRIOR_PHASE_OUTPUTS__", &prior_context);
 
     if !inputs.pipeline_vars.is_empty() {
-        phase_prompt = orchestrator_core::workflow_config::expand_variables(
-            &phase_prompt,
-            &inputs.pipeline_vars,
-        );
+        phase_prompt = orchestrator_core::workflow_config::expand_variables(&phase_prompt, &inputs.pipeline_vars);
     }
 
-    if let Some(dispatch_input) = inputs.dispatch_input.as_deref().filter(|value| !value.is_empty())
-    {
+    if let Some(dispatch_input) = inputs.dispatch_input.as_deref().filter(|value| !value.is_empty()) {
         phase_prompt.push_str("\n\nDispatch input:\n");
         phase_prompt.push_str(dispatch_input);
-    } else if let Some(schedule_input) =
-        inputs.schedule_input.as_deref().filter(|value| !value.is_empty())
-    {
+    } else if let Some(schedule_input) = inputs.schedule_input.as_deref().filter(|value| !value.is_empty()) {
         phase_prompt.push_str("\n\nSchedule trigger input:\n");
         phase_prompt.push_str(schedule_input);
     }
@@ -303,10 +263,7 @@ pub fn render_phase_prompt_with_ctx(
         } else if inputs.pipeline_vars.is_empty() {
             Some(prompt)
         } else {
-            Some(orchestrator_core::workflow_config::expand_variables(
-                &prompt,
-                &inputs.pipeline_vars,
-            ))
+            Some(orchestrator_core::workflow_config::expand_variables(&prompt, &inputs.pipeline_vars))
         }
     });
     let final_prompt = match system_prompt.as_deref() {
@@ -345,20 +302,11 @@ fn phase_decision_example_for_prompt(
     contract: Option<&orchestrator_core::PhaseDecisionContract>,
 ) -> String {
     let mut object = Map::new();
-    object.insert(
-        "kind".to_string(),
-        Value::String("phase_decision".to_string()),
-    );
+    object.insert("kind".to_string(), Value::String("phase_decision".to_string()));
     object.insert("phase_id".to_string(), Value::String(phase_id.to_string()));
-    object.insert(
-        "verdict".to_string(),
-        Value::String("advance|rework|fail|skip".to_string()),
-    );
+    object.insert("verdict".to_string(), Value::String("advance|rework|fail|skip".to_string()));
     object.insert("confidence".to_string(), serde_json::json!(0.95));
-    object.insert(
-        "risk".to_string(),
-        Value::String("low|medium|high".to_string()),
-    );
+    object.insert("risk".to_string(), Value::String("low|medium|high".to_string()));
     object.insert("reason".to_string(), Value::String("...".to_string()));
     object.insert(
         "evidence".to_string(),
@@ -369,14 +317,10 @@ fn phase_decision_example_for_prompt(
     );
     if let Some(contract) = contract {
         for (field_name, field) in &contract.fields {
-            object.insert(
-                field_name.clone(),
-                phase_field_placeholder(field_name, field),
-            );
+            object.insert(field_name.clone(), phase_field_placeholder(field_name, field));
         }
     }
-    serde_json::to_string(&Value::Object(object))
-        .unwrap_or_else(|_| "{\"kind\":\"phase_decision\"}".to_string())
+    serde_json::to_string(&Value::Object(object)).unwrap_or_else(|_| "{\"kind\":\"phase_decision\"}".to_string())
 }
 
 fn phase_result_example_for_prompt(
@@ -387,30 +331,18 @@ fn phase_result_example_for_prompt(
     let mut object = Map::new();
     object.insert("kind".to_string(), Value::String(contract.kind.clone()));
     for field_name in &contract.required_fields {
-        object.insert(
-            field_name.clone(),
-            Value::String(format!("<{}>", field_name.replace('_', " "))),
-        );
+        object.insert(field_name.clone(), Value::String(format!("<{}>", field_name.replace('_', " "))));
     }
     for (field_name, field) in &contract.fields {
-        object.insert(
-            field_name.clone(),
-            phase_field_placeholder(field_name, field),
-        );
+        object.insert(field_name.clone(), phase_field_placeholder(field_name, field));
     }
     object.insert(
         "phase_decision".to_string(),
-        serde_json::from_str::<Value>(&phase_decision_example_for_prompt(
-            phase_id,
-            decision_contract,
-        ))
-        .unwrap_or_else(|_| Value::Object(Map::new())),
+        serde_json::from_str::<Value>(&phase_decision_example_for_prompt(phase_id, decision_contract))
+            .unwrap_or_else(|_| Value::Object(Map::new())),
     );
     serde_json::to_string(&Value::Object(object)).unwrap_or_else(|_| {
-        format!(
-            "{{\"kind\":\"{}\",\"phase_decision\":{{\"kind\":\"phase_decision\"}}}}",
-            contract.kind
-        )
+        format!("{{\"kind\":\"{}\",\"phase_decision\":{{\"kind\":\"phase_decision\"}}}}", contract.kind)
     })
 }
 
@@ -435,10 +367,7 @@ fn phase_field_placeholder(
         "object" => {
             let mut map = Map::new();
             for (nested_name, nested_field) in &field.fields {
-                map.insert(
-                    nested_name.clone(),
-                    phase_field_placeholder(nested_name, nested_field),
-                );
+                map.insert(nested_name.clone(), phase_field_placeholder(nested_name, nested_field));
             }
             Value::Object(map)
         }
@@ -451,18 +380,13 @@ fn phase_output_field_rule(contract: &orchestrator_core::PhaseOutputContract) ->
         return String::new();
     }
 
-    let mut lines =
-        vec!["- The top-level result object may include these config-defined fields:".to_string()];
+    let mut lines = vec!["- The top-level result object may include these config-defined fields:".to_string()];
     for (field_name, field) in &contract.fields {
         lines.push(format!(
             "  - `{field_name}` ({}){}{}",
             field.field_type,
             if field.required { ", required" } else { "" },
-            field
-                .description
-                .as_deref()
-                .map(|value| format!(": {value}"))
-                .unwrap_or_default()
+            field.description.as_deref().map(|value| format!(": {value}")).unwrap_or_default()
         ));
     }
 
@@ -474,31 +398,16 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
     let mut required_fields = contract
         .fields
         .iter()
-        .filter_map(|(field_name, field)| {
-            if field.required {
-                Some(field_name.clone())
-            } else {
-                None
-            }
-        })
+        .filter_map(|(field_name, field)| if field.required { Some(field_name.clone()) } else { None })
         .collect::<Vec<_>>();
     if let Some(schema) = contract.extra_json_schema.as_ref() {
         let extra_required = schema
             .get("required")
             .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
+            .map(|items| items.iter().filter_map(serde_json::Value::as_str).map(ToOwned::to_owned).collect::<Vec<_>>())
             .unwrap_or_default();
         for field_name in extra_required {
-            if !required_fields
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(&field_name))
-            {
+            if !required_fields.iter().any(|existing| existing.eq_ignore_ascii_case(&field_name)) {
                 required_fields.push(field_name);
             }
         }
@@ -507,11 +416,7 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
     if !required_fields.is_empty() {
         lines.push(format!(
             "- The `phase_decision` object must also include these config-required fields: {}.",
-            required_fields
-                .iter()
-                .map(|field| format!("`{field}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            required_fields.iter().map(|field| format!("`{field}`")).collect::<Vec<_>>().join(", ")
         ));
     }
 
@@ -528,12 +433,8 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
             .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         for field_name in property_names {
-            if !required_fields
-                .iter()
-                .any(|required| required == &field_name)
-                && !optional_fields
-                    .iter()
-                    .any(|existing| existing == &field_name)
+            if !required_fields.iter().any(|required| required == &field_name)
+                && !optional_fields.iter().any(|existing| existing == &field_name)
             {
                 optional_fields.push(field_name);
             }
@@ -543,21 +444,14 @@ fn phase_decision_extra_field_rule(contract: &orchestrator_core::PhaseDecisionCo
     if !optional_fields.is_empty() {
         lines.push(format!(
             "- The `phase_decision` object may include these additional config-defined fields when relevant: {}.",
-            optional_fields
-                .iter()
-                .map(|field| format!("`{field}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            optional_fields.iter().map(|field| format!("`{field}`")).collect::<Vec<_>>().join(", ")
         ));
     }
 
     if !contract.fields.is_empty() {
         lines.push("- Decision field descriptions:".to_string());
         for (field_name, field) in &contract.fields {
-            let detail = field
-                .description
-                .as_deref()
-                .unwrap_or("No description provided.");
+            let detail = field.description.as_deref().unwrap_or("No description provided.");
             lines.push(format!(
                 "  - `{field_name}` ({}){}: {}",
                 field.field_type,

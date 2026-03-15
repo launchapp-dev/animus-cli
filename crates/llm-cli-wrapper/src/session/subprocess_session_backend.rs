@@ -7,17 +7,15 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::cli::{
-    ensure_machine_json_output, parse_cli_type, parse_launch_from_runtime_contract, CliType,
-    LaunchInvocation,
+    ensure_machine_json_output, parse_cli_type, parse_launch_from_runtime_contract, CliType, LaunchInvocation,
 };
 use crate::error::{Error, Result};
 use crate::parser::{extract_text_from_line, NormalizedTextEvent};
 
 use super::{
     session_backend::SessionBackend, session_backend_info::SessionBackendInfo,
-    session_backend_kind::SessionBackendKind, session_capabilities::SessionCapabilities,
-    session_event::SessionEvent, session_request::SessionRequest, session_run::SessionRun,
-    session_stability::SessionStability,
+    session_backend_kind::SessionBackendKind, session_capabilities::SessionCapabilities, session_event::SessionEvent,
+    session_request::SessionRequest, session_run::SessionRun, session_stability::SessionStability,
 };
 
 pub struct SubprocessSessionBackend;
@@ -62,39 +60,21 @@ impl SessionBackend for SubprocessSessionBackend {
         let session_id = Uuid::new_v4().to_string();
         let session_id_for_run = session_id.clone();
         let invocation = launch_invocation_for_request(&request)?;
-        let backend_label = request
-            .extras
-            .get("backend_label")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("subprocess")
-            .to_string();
+        let backend_label =
+            request.extras.get("backend_label").and_then(serde_json::Value::as_str).unwrap_or("subprocess").to_string();
         let started_backend_label = backend_label.clone();
-        let fallback_reason = request
-            .extras
-            .get("fallback_reason")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned);
+        let fallback_reason =
+            request.extras.get("fallback_reason").and_then(serde_json::Value::as_str).map(ToOwned::to_owned);
         let (event_tx, event_rx) = mpsc::channel(128);
 
         tokio::spawn(async move {
             let _ = event_tx
-                .send(SessionEvent::Started {
-                    backend: started_backend_label.clone(),
-                    session_id: Some(session_id),
-                })
+                .send(SessionEvent::Started { backend: started_backend_label.clone(), session_id: Some(session_id) })
                 .await;
 
-            if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone()).await
-            {
-                let _ = event_tx
-                    .send(SessionEvent::Error {
-                        message: error.to_string(),
-                        recoverable: false,
-                    })
-                    .await;
-                let _ = event_tx
-                    .send(SessionEvent::Finished { exit_code: Some(1) })
-                    .await;
+            if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone()).await {
+                let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
+                let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
             }
         });
 
@@ -106,15 +86,8 @@ impl SessionBackend for SubprocessSessionBackend {
         })
     }
 
-    async fn resume_session(
-        &self,
-        _request: SessionRequest,
-        session_id: &str,
-    ) -> Result<SessionRun> {
-        Err(Error::ExecutionFailed(format!(
-            "subprocess backend does not support resume for session '{}'",
-            session_id
-        )))
+    async fn resume_session(&self, _request: SessionRequest, session_id: &str) -> Result<SessionRun> {
+        Err(Error::ExecutionFailed(format!("subprocess backend does not support resume for session '{}'", session_id)))
     }
 
     async fn terminate_session(&self, session_id: &str) -> Result<()> {
@@ -151,14 +124,10 @@ async fn run_subprocess_session(
         drop(stdin);
     }
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture child stdout".to_string()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| Error::ExecutionFailed("failed to capture child stderr".to_string()))?;
+    let stdout =
+        child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture child stdout".to_string()))?;
+    let stderr =
+        child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture child stderr".to_string()))?;
 
     let stdout_tool = request.tool.clone();
     let stdout_tx = event_tx.clone();
@@ -183,12 +152,7 @@ async fn run_subprocess_session(
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = stderr_tx
-                .send(SessionEvent::Error {
-                    message: line,
-                    recoverable: true,
-                })
-                .await;
+            let _ = stderr_tx.send(SessionEvent::Error { message: line, recoverable: true }).await;
         }
     });
 
@@ -197,19 +161,13 @@ async fn run_subprocess_session(
     let _ = stdout_task.await;
     let _ = stderr_task.await;
 
-    let _ = event_tx
-        .send(SessionEvent::Finished {
-            exit_code: status.code(),
-        })
-        .await;
+    let _ = event_tx.send(SessionEvent::Finished { exit_code: status.code() }).await;
 
     Ok(())
 }
 
 fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvocation> {
-    if let Some(invocation) =
-        parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))?
-    {
+    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
         return Ok(invocation);
     }
 
@@ -221,11 +179,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation {
-                command: "claude".to_string(),
-                args,
-                prompt_via_stdin: false,
-            }
+            LaunchInvocation { command: "claude".to_string(), args, prompt_via_stdin: false }
         }
         Some(CliType::Codex) => {
             let mut args = vec!["exec".to_string(), "--skip-git-repo-check".to_string()];
@@ -234,11 +188,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation {
-                command: "codex".to_string(),
-                args,
-                prompt_via_stdin: false,
-            }
+            LaunchInvocation { command: "codex".to_string(), args, prompt_via_stdin: false }
         }
         Some(CliType::Gemini) => {
             let mut args = Vec::new();
@@ -248,11 +198,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
             }
             args.push("-p".to_string());
             args.push(request.prompt.clone());
-            LaunchInvocation {
-                command: "gemini".to_string(),
-                args,
-                prompt_via_stdin: false,
-            }
+            LaunchInvocation { command: "gemini".to_string(), args, prompt_via_stdin: false }
         }
         Some(CliType::OpenCode) => LaunchInvocation {
             command: "opencode".to_string(),
@@ -266,11 +212,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation {
-                command: "ao-oai-runner".to_string(),
-                args,
-                prompt_via_stdin: false,
-            }
+            LaunchInvocation { command: "ao-oai-runner".to_string(), args, prompt_via_stdin: false }
         }
         _ => LaunchInvocation {
             command: request.tool.clone(),
@@ -319,21 +261,13 @@ mod tests {
             }),
         };
 
-        let mut run = backend
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = backend.start_session(request).await.expect("session should start");
 
         let started = run.events.recv().await.expect("started event");
         assert!(matches!(started, SessionEvent::Started { .. }));
 
         let text = run.events.recv().await.expect("text event");
-        assert_eq!(
-            text,
-            SessionEvent::TextDelta {
-                text: "hello".to_string()
-            }
-        );
+        assert_eq!(text, SessionEvent::TextDelta { text: "hello".to_string() });
 
         let finished = run.events.recv().await.expect("finished event");
         assert_eq!(finished, SessionEvent::Finished { exit_code: Some(0) });

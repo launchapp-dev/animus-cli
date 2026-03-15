@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use super::{
     claude::ClaudeSessionBackend, codex::CodexSessionBackend, gemini::GeminiSessionBackend,
-    oai_runner::OaiRunnerSessionBackend, opencode::OpenCodeSessionBackend,
-    session_backend::SessionBackend, session_request::SessionRequest, session_run::SessionRun,
-    subprocess_session_backend::SubprocessSessionBackend,
+    oai_runner::OaiRunnerSessionBackend, opencode::OpenCodeSessionBackend, session_backend::SessionBackend,
+    session_request::SessionRequest, session_run::SessionRun, subprocess_session_backend::SubprocessSessionBackend,
 };
 use crate::error::Result;
 
@@ -40,10 +39,7 @@ impl SessionBackendResolver {
             return None;
         }
 
-        Some(format!(
-            "native backend not implemented for tool '{}'; using subprocess backend",
-            request.tool
-        ))
+        Some(format!("native backend not implemented for tool '{}'; using subprocess backend", request.tool))
     }
 
     pub fn resolve(&self, request: &SessionRequest) -> Arc<dyn SessionBackend> {
@@ -59,9 +55,7 @@ impl SessionBackendResolver {
         if request.tool.eq_ignore_ascii_case("opencode") {
             return self.opencode.clone();
         }
-        if request.tool.eq_ignore_ascii_case("oai-runner")
-            || request.tool.eq_ignore_ascii_case("ao-oai-runner")
-        {
+        if request.tool.eq_ignore_ascii_case("oai-runner") || request.tool.eq_ignore_ascii_case("ao-oai-runner") {
             return self.oai_runner.clone();
         }
 
@@ -71,10 +65,7 @@ impl SessionBackendResolver {
     pub async fn start_session(&self, mut request: SessionRequest) -> Result<SessionRun> {
         if let Some(reason) = self.fallback_reason(&request) {
             if let Some(extras) = request.extras.as_object_mut() {
-                extras.insert(
-                    "fallback_reason".to_string(),
-                    serde_json::Value::String(reason),
-                );
+                extras.insert("fallback_reason".to_string(), serde_json::Value::String(reason));
             }
         }
 
@@ -112,9 +103,7 @@ mod tests {
             extras: json!({}),
         };
 
-        let reason = resolver
-            .fallback_reason(&request)
-            .expect("fallback reason should exist");
+        let reason = resolver.fallback_reason(&request).expect("fallback reason should exist");
         assert!(reason.contains("using subprocess backend"));
     }
 
@@ -215,10 +204,7 @@ mod tests {
         };
 
         assert!(resolver.fallback_reason(&request).is_none());
-        assert_eq!(
-            resolver.resolve(&request).info().provider_tool,
-            "oai-runner"
-        );
+        assert_eq!(resolver.resolve(&request).info().provider_tool, "oai-runner");
     }
 
     #[tokio::test]
@@ -248,24 +234,13 @@ mod tests {
             }),
         };
 
-        let mut run = resolver
-            .start_session(request)
-            .await
-            .expect("session should start");
+        let mut run = resolver.start_session(request).await.expect("session should start");
 
         assert_eq!(run.selected_backend, "subprocess");
-        assert!(run
-            .fallback_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("using subprocess backend")));
+        assert!(run.fallback_reason.as_deref().is_some_and(|reason| reason.contains("using subprocess backend")));
 
         let _ = run.events.recv().await.expect("started event");
         let text = run.events.recv().await.expect("text event");
-        assert_eq!(
-            text,
-            SessionEvent::TextDelta {
-                text: "resolver".to_string()
-            }
-        );
+        assert_eq!(text, SessionEvent::TextDelta { text: "resolver".to_string() });
     }
 }

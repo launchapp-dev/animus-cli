@@ -64,7 +64,6 @@ pub struct PhaseOverride {
     pub fallback_models: Vec<String>,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRoutingComplexity {
     Low,
@@ -98,29 +97,20 @@ pub fn canonical_model_id(model_id: &str) -> String {
     }
 
     match trimmed.to_ascii_lowercase().as_str() {
-        "sonnet" | "claude-sonnet" | "claude-sonnet-latest" | "claude-sonnet-4" => {
-            "claude-sonnet-4-6".to_string()
-        }
+        "sonnet" | "claude-sonnet" | "claude-sonnet-latest" | "claude-sonnet-4" => "claude-sonnet-4-6".to_string(),
         "claude-sonnet-4.5" | "claude-sonnet-4-5" | "claude-4.5-sonnet" | "claude-4-5-sonnet" => {
             "claude-sonnet-4-5".to_string()
         }
         "claude-sonnet-4.6" | "claude-sonnet-4-6" | "claude-4.6-sonnet" | "claude-4-6-sonnet" => {
             "claude-sonnet-4-6".to_string()
         }
-        "opus" | "claude-opus" | "claude-opus-latest" | "claude-opus-4" => {
-            "claude-opus-4-6".to_string()
+        "opus" | "claude-opus" | "claude-opus-latest" | "claude-opus-4" => "claude-opus-4-6".to_string(),
+        "claude-opus-4.1" | "claude-opus-4-1" | "claude-4.1-opus" | "claude-4-1-opus" => "claude-opus-4-1".to_string(),
+        "claude-opus-4.6" | "claude-opus-4-6" | "claude-4.6-opus" | "claude-4-6-opus" => "claude-opus-4-6".to_string(),
+        "claude-opus-4.5" | "claude-opus-4-5" | "claude-4.5-opus" | "claude-4-5-opus" => "claude-opus-4-5".to_string(),
+        "gpt-5.3-codex" | "gpt-5-3-codex" | "gpt5.3-codex" | "gpt5-3-codex" | "gpt_5.3_codex" | "gpt_5_3_codex" => {
+            "gpt-5.3-codex".to_string()
         }
-        "claude-opus-4.1" | "claude-opus-4-1" | "claude-4.1-opus" | "claude-4-1-opus" => {
-            "claude-opus-4-1".to_string()
-        }
-        "claude-opus-4.6" | "claude-opus-4-6" | "claude-4.6-opus" | "claude-4-6-opus" => {
-            "claude-opus-4-6".to_string()
-        }
-        "claude-opus-4.5" | "claude-opus-4-5" | "claude-4.5-opus" | "claude-4-5-opus" => {
-            "claude-opus-4-5".to_string()
-        }
-        "gpt-5.3-codex" | "gpt-5-3-codex" | "gpt5.3-codex" | "gpt5-3-codex" | "gpt_5.3_codex"
-        | "gpt_5_3_codex" => "gpt-5.3-codex".to_string(),
         "gpt-5.3-codex-spark"
         | "gpt-5-3-codex-spark"
         | "gpt5.3-codex-spark"
@@ -132,15 +122,10 @@ pub fn canonical_model_id(model_id: &str) -> String {
             "gemini-2.5-pro".to_string()
         }
         "gemini-2.5-flash-latest" | "gemini-flash-2.5" => "gemini-2.5-flash".to_string(),
-        "gemini-3" | "gemini-3.0-pro" | "gemini-3-pro-latest" | "gemini-pro-3" => {
-            "gemini-3-pro".to_string()
+        "gemini-3" | "gemini-3.0-pro" | "gemini-3-pro-latest" | "gemini-pro-3" => "gemini-3-pro".to_string(),
+        "glm-5" | "glm5" | "zai/glm-5" | "z-ai/glm-5" | "zai-coding-plan-glm-5" | "zai-coding-plan/glm-5" => {
+            "zai-coding-plan/glm-5".to_string()
         }
-        "glm-5"
-        | "glm5"
-        | "zai/glm-5"
-        | "z-ai/glm-5"
-        | "zai-coding-plan-glm-5"
-        | "zai-coding-plan/glm-5" => "zai-coding-plan/glm-5".to_string(),
         "minimax-m2.5"
         | "minimax-m2-5"
         | "minimax/m2.5"
@@ -193,10 +178,7 @@ pub fn tool_for_model_id(model_id: &str) -> &'static str {
 }
 
 pub fn tool_supports_repository_writes(tool_id: &str) -> bool {
-    matches!(
-        normalize_tool_id(tool_id).as_str(),
-        "codex" | "claude" | "opencode" | "oai-runner"
-    )
+    matches!(normalize_tool_id(tool_id).as_str(), "codex" | "claude" | "opencode" | "oai-runner")
 }
 
 pub fn required_api_keys_for_tool(_tool_id: &str) -> &'static [&'static str] {
@@ -215,10 +197,7 @@ pub fn default_model_specs() -> Vec<(String, String)> {
         ("gemini-3-pro".to_string(), "gemini".to_string()),
         ("gemini-3.1-pro-preview".to_string(), "gemini".to_string()),
         ("minimax/MiniMax-M2.5".to_string(), "oai-runner".to_string()),
-        (
-            "zai-coding-plan/glm-5".to_string(),
-            "oai-runner".to_string(),
-        ),
+        ("zai-coding-plan/glm-5".to_string(), "oai-runner".to_string()),
     ]
 }
 
@@ -258,42 +237,18 @@ pub struct PhaseCapabilities {
 impl PhaseCapabilities {
     pub fn defaults_for_phase(phase_id: &str) -> Self {
         match phase_id {
-            "implementation" => Self {
-                writes_files: true,
-                requires_commit: true,
-                enforce_product_changes: true,
-                ..Default::default()
-            },
-            "wireframe" | "design" => Self {
-                writes_files: true,
-                is_ui_ux: true,
-                ..Default::default()
-            },
-            "ux-research" | "mockup-review" | "ui-design" | "ux-design" => Self {
-                is_ui_ux: true,
-                ..Default::default()
-            },
-            "design-review" => Self {
-                is_ui_ux: true,
-                is_review: true,
-                ..Default::default()
-            },
-            "research" => Self {
-                is_research: true,
-                ..Default::default()
-            },
-            "code-review" | "review" | "architecture" => Self {
-                is_review: true,
-                ..Default::default()
-            },
-            "requirements" => Self {
-                is_requirements: true,
-                ..Default::default()
-            },
-            "testing" | "test" | "qa" => Self {
-                is_testing: true,
-                ..Default::default()
-            },
+            "implementation" => {
+                Self { writes_files: true, requires_commit: true, enforce_product_changes: true, ..Default::default() }
+            }
+            "wireframe" | "design" => Self { writes_files: true, is_ui_ux: true, ..Default::default() },
+            "ux-research" | "mockup-review" | "ui-design" | "ux-design" => {
+                Self { is_ui_ux: true, ..Default::default() }
+            }
+            "design-review" => Self { is_ui_ux: true, is_review: true, ..Default::default() },
+            "research" => Self { is_research: true, ..Default::default() },
+            "code-review" | "review" | "architecture" => Self { is_review: true, ..Default::default() },
+            "requirements" => Self { is_requirements: true, ..Default::default() },
+            "testing" | "test" | "qa" => Self { is_testing: true, ..Default::default() },
             _ => Self::default(),
         }
     }
@@ -303,8 +258,7 @@ impl PhaseCapabilities {
         Self {
             writes_files: self.writes_files || defaults.writes_files,
             requires_commit: self.requires_commit || defaults.requires_commit,
-            enforce_product_changes: self.enforce_product_changes
-                || defaults.enforce_product_changes,
+            enforce_product_changes: self.enforce_product_changes || defaults.enforce_product_changes,
             is_research: self.is_research || defaults.is_research,
             is_ui_ux: self.is_ui_ux || defaults.is_ui_ux,
             is_review: self.is_review || defaults.is_review,
@@ -383,18 +337,12 @@ pub fn default_fallback_models_for_phase(
     }
 
     match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
-        ModelRoutingComplexity::Low => vec![
-            "minimax/MiniMax-M2.5",
-            "claude-sonnet-4-6",
-            "gemini-3.1-pro-preview",
-            "gpt-5.3-codex",
-        ],
-        ModelRoutingComplexity::Medium => vec![
-            "zai-coding-plan/glm-5",
-            "minimax/MiniMax-M2.5",
-            "gemini-3.1-pro-preview",
-            "gpt-5.3-codex",
-        ],
+        ModelRoutingComplexity::Low => {
+            vec!["minimax/MiniMax-M2.5", "claude-sonnet-4-6", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+        }
+        ModelRoutingComplexity::Medium => {
+            vec!["zai-coding-plan/glm-5", "minimax/MiniMax-M2.5", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+        }
         ModelRoutingComplexity::High => vec![
             "claude-opus-4-6",
             "zai-coding-plan/glm-5",
@@ -434,10 +382,7 @@ mod tests {
     fn tool_routing_detects_claude_opencode_and_gemini_families() {
         assert_eq!(tool_for_model_id("claude-sonnet-4-6"), "claude");
         assert_eq!(tool_for_model_id("claude-opus-4-6"), "claude");
-        assert_eq!(
-            tool_for_model_id("openrouter/anthropic/claude-sonnet"),
-            "claude"
-        );
+        assert_eq!(tool_for_model_id("openrouter/anthropic/claude-sonnet"), "claude");
         assert_eq!(tool_for_model_id("zai-coding-plan/glm-5"), "oai-runner");
         assert_eq!(tool_for_model_id("minimax/MiniMax-M2.5"), "oai-runner");
         assert_eq!(tool_for_model_id("gemini-2.5-pro"), "gemini");
@@ -447,14 +392,8 @@ mod tests {
     #[test]
     fn complexity_policy_uses_opus_for_high_complexity_review() {
         let caps = PhaseCapabilities::defaults_for_phase("code-review");
-        assert_eq!(
-            default_primary_model_for_phase(Some(ModelRoutingComplexity::High), &caps),
-            "claude-opus-4-6"
-        );
-        assert_eq!(
-            default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &caps),
-            "claude-sonnet-4-6"
-        );
+        assert_eq!(default_primary_model_for_phase(Some(ModelRoutingComplexity::High), &caps), "claude-opus-4-6");
+        assert_eq!(default_primary_model_for_phase(Some(ModelRoutingComplexity::Medium), &caps), "claude-sonnet-4-6");
     }
 
     #[test]
@@ -522,10 +461,7 @@ mod tests {
 
     #[test]
     fn merge_with_defaults_ors_config_with_phase_defaults() {
-        let custom = PhaseCapabilities {
-            writes_files: true,
-            ..Default::default()
-        };
+        let custom = PhaseCapabilities { writes_files: true, ..Default::default() };
         let merged = custom.merge_with_defaults("research");
         assert!(merged.writes_files);
         assert!(merged.is_research);
@@ -536,14 +472,8 @@ mod tests {
         assert_eq!(default_model_for_tool("claude"), Some("claude-sonnet-4-6"));
         assert_eq!(default_model_for_tool("codex"), Some("gpt-5.3-codex"));
         assert_eq!(default_model_for_tool("gemini"), Some("gemini-2.5-pro"));
-        assert_eq!(
-            default_model_for_tool("opencode"),
-            Some("zai-coding-plan/glm-5")
-        );
-        assert_eq!(
-            default_model_for_tool("oai-runner"),
-            Some("minimax/MiniMax-M2.5")
-        );
+        assert_eq!(default_model_for_tool("opencode"), Some("zai-coding-plan/glm-5"));
+        assert_eq!(default_model_for_tool("oai-runner"), Some("minimax/MiniMax-M2.5"));
         assert_eq!(default_model_for_tool("unknown"), None);
     }
 

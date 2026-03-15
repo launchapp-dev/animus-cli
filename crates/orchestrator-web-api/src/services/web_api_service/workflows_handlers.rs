@@ -1,10 +1,9 @@
 use orchestrator_config::workflow_config::{
-    load_workflow_config_or_default, write_workflow_config, WorkflowPhaseConfig,
-    WorkflowPhaseEntry, WorkflowVariable,
+    load_workflow_config_or_default, write_workflow_config, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowVariable,
 };
 use orchestrator_core::{
-    dispatch_workflow_event, workflow_ref_for_task, FileServiceHub, ServiceHub, WorkflowDefinition,
-    WorkflowEvent, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    dispatch_workflow_event, workflow_ref_for_task, FileServiceHub, ServiceHub, WorkflowDefinition, WorkflowEvent,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use protocol::orchestrator::{WorkflowRunInput, WorkflowSubject};
 use serde_json::{json, Value};
@@ -17,14 +16,7 @@ async fn resolve_workflow_run_dispatch(
     project_root: &str,
     request: WorkflowRunRequest,
 ) -> Result<protocol::SubjectDispatch, WebApiError> {
-    let WorkflowRunRequest {
-        task_id,
-        requirement_id,
-        title,
-        description,
-        workflow_ref,
-        input,
-    } = request;
+    let WorkflowRunRequest { task_id, requirement_id, title, description, workflow_ref, input } = request;
     match (task_id, requirement_id, title) {
         (Some(task_id), None, None) => {
             let task = hub.tasks().get(&task_id).await.map_err(WebApiError::from)?;
@@ -37,21 +29,14 @@ async fn resolve_workflow_run_dispatch(
             .with_input(input))
         }
         (None, Some(requirement_id), None) => {
-            hub.planning()
-                .get_requirement(&requirement_id)
-                .await
-                .map_err(WebApiError::from)?;
+            hub.planning().get_requirement(&requirement_id).await.map_err(WebApiError::from)?;
             let workflow_ref = match workflow_ref {
                 Some(workflow_ref) => workflow_ref,
                 None => resolve_requirement_workflow_ref(project_root)
                     .map_err(|message| WebApiError::new("invalid_input", message, 2))?,
             };
-            Ok(protocol::SubjectDispatch::for_requirement(
-                requirement_id,
-                workflow_ref,
-                "web-api-run",
-            )
-            .with_input(input))
+            Ok(protocol::SubjectDispatch::for_requirement(requirement_id, workflow_ref, "web-api-run")
+                .with_input(input))
         }
         (None, None, Some(title)) => Ok(protocol::SubjectDispatch::for_custom(
             title,
@@ -78,12 +63,7 @@ async fn resolve_workflow_run_dispatch_from_input(
     project_root: &str,
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch, WebApiError> {
-    let WorkflowRunInput {
-        subject,
-        workflow_ref,
-        input,
-        ..
-    } = input;
+    let WorkflowRunInput { subject, workflow_ref, input, .. } = input;
     match subject {
         WorkflowSubject::Task { id } => {
             let task = hub.tasks().get(&id).await.map_err(WebApiError::from)?;
@@ -96,29 +76,21 @@ async fn resolve_workflow_run_dispatch_from_input(
             .with_input(input))
         }
         WorkflowSubject::Requirement { id } => {
-            hub.planning()
-                .get_requirement(&id)
-                .await
-                .map_err(WebApiError::from)?;
+            hub.planning().get_requirement(&id).await.map_err(WebApiError::from)?;
             let workflow_ref = match workflow_ref {
                 Some(workflow_ref) => workflow_ref,
                 None => resolve_requirement_workflow_ref(project_root)
                     .map_err(|message| WebApiError::new("invalid_input", message, 2))?,
             };
-            Ok(
-                protocol::SubjectDispatch::for_requirement(id, workflow_ref, "web-api-run")
-                    .with_input(input),
-            )
+            Ok(protocol::SubjectDispatch::for_requirement(id, workflow_ref, "web-api-run").with_input(input))
         }
-        WorkflowSubject::Custom { title, description } => {
-            Ok(protocol::SubjectDispatch::for_custom(
-                title,
-                description,
-                workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
-                input,
-                "web-api-run",
-            ))
-        }
+        WorkflowSubject::Custom { title, description } => Ok(protocol::SubjectDispatch::for_custom(
+            title,
+            description,
+            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+            input,
+            "web-api-run",
+        )),
     }
 }
 
@@ -140,16 +112,11 @@ async fn resolve_workflow_run_dispatch_from_body(
 fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String, String> {
     let root = std::path::Path::new(project_root);
     orchestrator_core::ensure_workflow_config_compiled(root).map_err(|error| error.to_string())?;
-    let workflow_config =
-        orchestrator_core::load_workflow_config(root).map_err(|error| error.to_string())?;
+    let workflow_config = orchestrator_core::load_workflow_config(root).map_err(|error| error.to_string())?;
     workflow_config
         .workflows
         .iter()
-        .any(|workflow| {
-            workflow
-                .id
-                .eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
-        })
+        .any(|workflow| workflow.id.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF))
         .then(|| REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string())
         .ok_or_else(|| {
             format!(
@@ -173,11 +140,7 @@ impl WebApiService {
             .mcp_servers
             .iter()
             .map(|(name, def)| {
-                let env: Vec<Value> = def
-                    .env
-                    .iter()
-                    .map(|(k, v)| json!({ "key": k, "value": v }))
-                    .collect();
+                let env: Vec<Value> = def.env.iter().map(|(k, v)| json!({ "key": k, "value": v })).collect();
                 json!({
                     "name": name,
                     "command": def.command,
@@ -295,38 +258,18 @@ impl WebApiService {
     }
 
     pub async fn workflows_checkpoints(&self, id: &str) -> Result<Value, WebApiError> {
-        Ok(json!(
-            self.context.hub.workflows().list_checkpoints(id).await?
-        ))
+        Ok(json!(self.context.hub.workflows().list_checkpoints(id).await?))
     }
 
-    pub async fn workflows_get_checkpoint(
-        &self,
-        id: &str,
-        checkpoint: usize,
-    ) -> Result<Value, WebApiError> {
-        Ok(json!(
-            self.context
-                .hub
-                .workflows()
-                .get_checkpoint(id, checkpoint)
-                .await?
-        ))
+    pub async fn workflows_get_checkpoint(&self, id: &str, checkpoint: usize) -> Result<Value, WebApiError> {
+        Ok(json!(self.context.hub.workflows().get_checkpoint(id, checkpoint).await?))
     }
 
     pub async fn workflows_run(&self, body: Value) -> Result<Value, WebApiError> {
-        let dispatch = resolve_workflow_run_dispatch_from_body(
-            self.context.hub.as_ref(),
-            &self.context.project_root,
-            body,
-        )
-        .await?;
-        let workflow = self
-            .context
-            .hub
-            .workflows()
-            .run(dispatch.to_workflow_run_input())
-            .await?;
+        let dispatch =
+            resolve_workflow_run_dispatch_from_body(self.context.hub.as_ref(), &self.context.project_root, body)
+                .await?;
+        let workflow = self.context.hub.workflows().run(dispatch.to_workflow_run_input()).await?;
         let subject_id = match &workflow.subject {
             WorkflowSubject::Task { id } | WorkflowSubject::Requirement { id } => id.clone(),
             WorkflowSubject::Custom { title, .. } => title.clone(),
@@ -342,27 +285,16 @@ impl WebApiService {
         Ok(json!(workflow))
     }
 
-    pub async fn workflows_resume(
-        &self,
-        id: &str,
-        feedback: Option<String>,
-    ) -> Result<Value, WebApiError> {
+    pub async fn workflows_resume(&self, id: &str, feedback: Option<String>) -> Result<Value, WebApiError> {
         let outcome = dispatch_workflow_event(
             self.context.hub.clone(),
             &self.context.project_root,
-            WorkflowEvent::Resume {
-                workflow_id: id.to_string(),
-                feedback,
-            },
+            WorkflowEvent::Resume { workflow_id: id.to_string(), feedback },
         )
         .await?;
-        let workflow = outcome
-            .workflow
-            .ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
-        self.publish_event(
-            "workflow-resume",
-            json!({ "workflow_id": workflow.id, "status": workflow.status }),
-        );
+        let workflow =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        self.publish_event("workflow-resume", json!({ "workflow_id": workflow.id, "status": workflow.status }));
         Ok(json!(workflow))
     }
 
@@ -370,18 +302,12 @@ impl WebApiService {
         let outcome = dispatch_workflow_event(
             self.context.hub.clone(),
             &self.context.project_root,
-            WorkflowEvent::Pause {
-                workflow_id: id.to_string(),
-            },
+            WorkflowEvent::Pause { workflow_id: id.to_string() },
         )
         .await?;
-        let workflow = outcome
-            .workflow
-            .ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
-        self.publish_event(
-            "workflow-pause",
-            json!({ "workflow_id": workflow.id, "status": workflow.status }),
-        );
+        let workflow =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        self.publish_event("workflow-pause", json!({ "workflow_id": workflow.id, "status": workflow.status }));
         Ok(json!(workflow))
     }
 
@@ -389,18 +315,12 @@ impl WebApiService {
         let outcome = dispatch_workflow_event(
             self.context.hub.clone(),
             &self.context.project_root,
-            WorkflowEvent::Cancel {
-                workflow_id: id.to_string(),
-            },
+            WorkflowEvent::Cancel { workflow_id: id.to_string() },
         )
         .await?;
-        let workflow = outcome
-            .workflow
-            .ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
-        self.publish_event(
-            "workflow-cancel",
-            json!({ "workflow_id": workflow.id, "status": workflow.status }),
-        );
+        let workflow =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        self.publish_event("workflow-cancel", json!({ "workflow_id": workflow.id, "status": workflow.status }));
         Ok(json!(workflow))
     }
 
@@ -420,9 +340,8 @@ impl WebApiService {
             },
         )
         .await?;
-        let workflow = outcome
-            .workflow
-            .ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        let workflow =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
         self.publish_event(
             "workflow-phase-approve",
             json!({ "workflow_id": workflow.id, "phase_id": phase_id, "status": workflow.status }),
@@ -431,14 +350,11 @@ impl WebApiService {
     }
 
     pub async fn save_workflow_config(&self, config_json: &str) -> Result<(), WebApiError> {
-        let config: orchestrator_config::workflow_config::WorkflowConfig =
-            serde_json::from_str(config_json).map_err(|e| {
-                WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2)
-            })?;
+        let config: orchestrator_config::workflow_config::WorkflowConfig = serde_json::from_str(config_json)
+            .map_err(|e| WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2))?;
         let project_root = std::path::Path::new(&self.context.project_root);
-        write_workflow_config(project_root, &config).map_err(|e| {
-            WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1)
-        })?;
+        write_workflow_config(project_root, &config)
+            .map_err(|e| WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1))?;
         Ok(())
     }
 
@@ -454,9 +370,8 @@ impl WebApiService {
         let loaded = load_workflow_config_or_default(project_root);
         let mut config = loaded.config;
 
-        let phase_values: Vec<Value> = serde_json::from_str(&phases_json).map_err(|e| {
-            WebApiError::new("invalid_input", format!("invalid phases JSON: {e}"), 2)
-        })?;
+        let phase_values: Vec<Value> = serde_json::from_str(&phases_json)
+            .map_err(|e| WebApiError::new("invalid_input", format!("invalid phases JSON: {e}"), 2))?;
 
         let phases: Vec<WorkflowPhaseEntry> = phase_values
             .into_iter()
@@ -464,24 +379,14 @@ impl WebApiService {
                 if let Some(s) = v.as_str() {
                     return Ok(WorkflowPhaseEntry::Simple(s.to_string()));
                 }
-                let obj = v
-                    .as_object()
-                    .ok_or_else(|| {
-                        WebApiError::new(
-                            "invalid_input",
-                            "each phase must be a string or object".to_string(),
-                            2,
-                        )
-                    })?;
+                let obj = v.as_object().ok_or_else(|| {
+                    WebApiError::new("invalid_input", "each phase must be a string or object".to_string(), 2)
+                })?;
                 let phase_id = obj
                     .get("id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        WebApiError::new(
-                            "invalid_input",
-                            "phase object must have an 'id' field".to_string(),
-                            2,
-                        )
+                        WebApiError::new("invalid_input", "phase object must have an 'id' field".to_string(), 2)
                     })?
                     .to_string();
                 let has_extra_fields = obj.contains_key("on_verdict")
@@ -490,18 +395,11 @@ impl WebApiService {
                 if !has_extra_fields {
                     return Ok(WorkflowPhaseEntry::Simple(phase_id));
                 }
-                let max_rework_attempts = obj
-                    .get("max_rework_attempts")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(3) as u32;
-                let skip_if: Vec<String> = obj
-                    .get("skip_if")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default();
-                let on_verdict: HashMap<String, orchestrator_config::workflow_config::PhaseTransitionConfig> = obj
-                    .get("on_verdict")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default();
+                let max_rework_attempts = obj.get("max_rework_attempts").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+                let skip_if: Vec<String> =
+                    obj.get("skip_if").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+                let on_verdict: HashMap<String, orchestrator_config::workflow_config::PhaseTransitionConfig> =
+                    obj.get("on_verdict").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
                 Ok(WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
                     id: phase_id,
                     max_rework_attempts,
@@ -512,9 +410,8 @@ impl WebApiService {
             .collect::<Result<Vec<_>, WebApiError>>()?;
 
         let variables: Vec<WorkflowVariable> = match variables_json {
-            Some(vj) => serde_json::from_str(&vj).map_err(|e| {
-                WebApiError::new("invalid_input", format!("invalid variables JSON: {e}"), 2)
-            })?,
+            Some(vj) => serde_json::from_str(&vj)
+                .map_err(|e| WebApiError::new("invalid_input", format!("invalid variables JSON: {e}"), 2))?,
             None => Vec::new(),
         };
 
@@ -533,9 +430,8 @@ impl WebApiService {
             config.workflows.push(definition);
         }
 
-        write_workflow_config(project_root, &config).map_err(|e| {
-            WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1)
-        })?;
+        write_workflow_config(project_root, &config)
+            .map_err(|e| WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1))?;
 
         Ok(true)
     }
@@ -549,16 +445,11 @@ impl WebApiService {
         config.workflows.retain(|w| w.id != id);
 
         if config.workflows.len() == original_len {
-            return Err(WebApiError::new(
-                "not_found",
-                format!("workflow definition '{id}' not found"),
-                3,
-            ));
+            return Err(WebApiError::new("not_found", format!("workflow definition '{id}' not found"), 3));
         }
 
-        write_workflow_config(project_root, &config).map_err(|e| {
-            WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1)
-        })?;
+        write_workflow_config(project_root, &config)
+            .map_err(|e| WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1))?;
 
         Ok(true)
     }
@@ -574,41 +465,24 @@ impl WebApiService {
             || workflow_id.contains('\\')
             || workflow_id.contains("..")
         {
-            return Err(WebApiError::new(
-                "invalid_input",
-                "workflow id contains unsafe path segments".to_string(),
-                2,
-            ));
+            return Err(WebApiError::new("invalid_input", "workflow id contains unsafe path segments".to_string(), 2));
         }
         if let Some(pid) = phase_id {
             if pid.contains('/') || pid.contains('\\') || pid.contains("..") {
-                return Err(WebApiError::new(
-                    "invalid_input",
-                    "phase id contains unsafe path segments".to_string(),
-                    2,
-                ));
+                return Err(WebApiError::new("invalid_input", "phase id contains unsafe path segments".to_string(), 2));
             }
         }
 
         let project_root = std::path::Path::new(&self.context.project_root);
-        let state_base = protocol::scoped_state_root(project_root)
-            .unwrap_or_else(|| project_root.join(".ao"));
-        let output_dir = state_base
-            .join("state")
-            .join("workflows")
-            .join(workflow_id)
-            .join("phase-outputs");
+        let state_base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+        let output_dir = state_base.join("state").join("workflows").join(workflow_id).join("phase-outputs");
 
         let resolved_phase_id = match phase_id {
             Some(pid) => pid.to_string(),
             None => {
                 let workflow = self.context.hub.workflows().get(workflow_id).await?;
                 workflow.current_phase.unwrap_or_else(|| {
-                    workflow
-                        .phases
-                        .last()
-                        .map(|p| p.phase_id.clone())
-                        .unwrap_or_else(|| "unknown".to_string())
+                    workflow.phases.last().map(|p| p.phase_id.clone()).unwrap_or_else(|| "unknown".to_string())
                 })
             }
         };
@@ -622,18 +496,13 @@ impl WebApiService {
             }));
         }
 
-        let content = std::fs::read_to_string(&file_path).map_err(|e| {
-            WebApiError::new("internal", format!("failed to read phase output: {e}"), 1)
-        })?;
+        let content = std::fs::read_to_string(&file_path)
+            .map_err(|e| WebApiError::new("internal", format!("failed to read phase output: {e}"), 1))?;
 
         let all_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         let tail_count = tail.unwrap_or(50).max(1) as usize;
         let has_more = all_lines.len() > tail_count;
-        let lines: Vec<String> = if has_more {
-            all_lines[all_lines.len() - tail_count..].to_vec()
-        } else {
-            all_lines
-        };
+        let lines: Vec<String> = if has_more { all_lines[all_lines.len() - tail_count..].to_vec() } else { all_lines };
 
         Ok(json!({
             "lines": lines,
@@ -648,10 +517,9 @@ mod tests {
     use std::sync::Arc;
 
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config,
-        write_workflow_config, InMemoryServiceHub, RequirementItem, RequirementLinks,
-        RequirementPriority, RequirementStatus, WorkflowDefinition,
-        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
+        WorkflowDefinition, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
     };
 
     use super::*;
@@ -715,8 +583,7 @@ mod tests {
             variables: Vec::new(),
         });
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config())
-            .expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
         let now = chrono::Utc::now();
@@ -759,10 +626,7 @@ mod tests {
         .await
         .expect("dispatch should resolve");
 
-        assert_eq!(
-            dispatch.workflow_ref,
-            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF
-        );
+        assert_eq!(dispatch.workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
         assert_eq!(dispatch.input, Some(json!({"scope":"shared-ingress"})));
     }
 }
