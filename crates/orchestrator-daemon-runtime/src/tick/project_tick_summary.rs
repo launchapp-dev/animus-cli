@@ -31,7 +31,7 @@ pub struct ProjectTickSummary {
     pub workflows_failed: usize,
     pub resumed_workflows: usize,
     pub cleaned_stale_workflows: usize,
-    pub reconciled_stale_tasks: usize,
+    pub reconciled_workflows: usize,
     pub started_ready_workflows: usize,
     pub executed_workflow_phases: usize,
     pub failed_workflow_phases: usize,

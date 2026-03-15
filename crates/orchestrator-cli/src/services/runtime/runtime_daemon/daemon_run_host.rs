@@ -112,7 +112,7 @@ impl DefaultDaemonRunHost {
             json!({
                 "resumed_workflows": summary.resumed_workflows,
                 "cleaned_stale_workflows": summary.cleaned_stale_workflows,
-                "reconciled_stale_tasks": summary.reconciled_stale_tasks,
+                "reconciled_workflows": summary.reconciled_workflows,
                 "executed_workflow_phases": summary.executed_workflow_phases,
                 "failed_workflow_phases": summary.failed_workflow_phases,
             }),

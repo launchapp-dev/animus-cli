@@ -38,11 +38,11 @@ where
 
     let snapshot = hooks.capture_snapshot(root).await?;
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
-    let reconciled_stale_tasks = hooks.reconcile_manual_timeouts(root).await?;
+    let reconciled_workflows = hooks.reconcile_manual_timeouts(root).await?;
     let (executed_workflow_phases, failed_workflow_phases) = hooks.reconcile_completed_processes(root).await?;
     let reconciled_zombie_workflows = hooks.reconcile_zombie_workflows(root).await?;
     let mut execution_outcome = ProjectTickExecutionOutcome {
-        reconciled_stale_tasks: reconciled_stale_tasks + reconciled_zombie_workflows,
+        reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
         executed_workflow_phases,
         failed_workflow_phases,
         ..Default::default()
