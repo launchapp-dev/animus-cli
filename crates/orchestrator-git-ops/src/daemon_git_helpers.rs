@@ -280,26 +280,3 @@ pub fn is_branch_merged(project_root: &str, branch_name: &str) -> Result<Option<
     Ok(if saw_false { Some(false) } else { None })
 }
 
-fn git_has_pending_changes(cwd: &str) -> Result<bool> {
-    ::workflow_runner_v2::git_has_pending_changes(cwd)
-}
-
-fn ensure_git_identity(cwd: &str) -> Result<()> {
-    ::workflow_runner_v2::ensure_git_identity(cwd)
-}
-
-pub(crate) fn auto_commit_pending_source_changes(cwd: &str, task_id: &str) -> Result<()> {
-    if !git_has_pending_changes(cwd)? {
-        return Ok(());
-    }
-
-    ensure_git_identity(cwd)?;
-    git_status(cwd, &["add", "-A"], "stage pending source branch changes")?;
-    let commit_message = format!("chore(ao): auto-commit {task_id} before merge");
-    git_status(
-        cwd,
-        &["commit", "-m", commit_message.as_str()],
-        "auto-commit source branch changes before merge",
-    )?;
-    Ok(())
-}

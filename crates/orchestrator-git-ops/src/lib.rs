@@ -8,8 +8,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
-use uuid::Uuid;
-
 #[path = "daemon_git_helpers.rs"]
 mod git_helpers;
 
@@ -19,13 +17,10 @@ mod git_worktree;
 #[path = "daemon_git_merge.rs"]
 mod git_merge;
 
-#[path = "daemon_git_integration.rs"]
-mod git_integration;
 #[path = "daemon_git_runtime_refresh.rs"]
 mod git_runtime_refresh;
 
 pub use git_helpers::*;
-use git_integration::*;
 pub use git_merge::*;
 pub use git_runtime_refresh::*;
 pub use git_worktree::*;

@@ -291,30 +291,3 @@ pub(crate) fn remove_worktree_path(project_root: &str, worktree_path: &str) {
     }
 }
 
-pub(crate) fn is_branch_checked_out_in_any_worktree(
-    project_root: &str,
-    branch_name: &str,
-) -> Result<bool> {
-    let output = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["worktree", "list", "--porcelain"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .with_context(|| format!("failed to inspect git worktrees in {}", project_root))?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-
-    let target = format!("refs/heads/{}", branch_name.trim());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some(value) = line.strip_prefix("branch ") {
-            if value.trim() == target {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}

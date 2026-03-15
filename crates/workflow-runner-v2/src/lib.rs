@@ -34,7 +34,7 @@ pub use phase_prompt::{
 pub use phase_git::{is_git_repo, git_has_pending_changes, ensure_git_identity, commit_implementation_changes};
 pub use workflow_merge_recovery::MergeConflictContext;
 pub use workflow_helpers::{
-    PhaseExecutionEvent, AiRecoveryAction, AiRecoverySubtask,
+    PhaseExecutionEvent,
     task_requires_research, workflow_has_completed_research, workflow_has_active_research,
 };
 pub use payload_traversal::{

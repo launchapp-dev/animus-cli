@@ -2,9 +2,9 @@ use crate::ipc::{
     build_runtime_contract, collect_json_payload_lines, connect_runner, event_matches_run,
     runner_config_dir, write_json_line,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use protocol::{
-    default_primary_model_for_phase, tool_for_model_id, AgentRunEvent, AgentRunRequest, ModelId,
+    AgentRunEvent, AgentRunRequest, ModelId,
     RunId, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
@@ -162,50 +162,6 @@ pub async fn run_merge_conflict_recovery_prompt_against_runner(
     }
 
     Ok(transcript)
-}
-
-pub async fn attempt_ai_merge_conflict_recovery(
-    project_root: &str,
-    task: &orchestrator_core::OrchestratorTask,
-    context: &MergeConflictContext,
-) -> Result<()> {
-    let impl_caps = protocol::PhaseCapabilities::defaults_for_phase("implementation");
-    let model = default_primary_model_for_phase(None, &impl_caps).to_string();
-    let tool = tool_for_model_id(&model).to_string();
-    let prompt = build_merge_conflict_recovery_prompt(task, context);
-    let transcript = run_merge_conflict_recovery_prompt_against_runner(
-        project_root,
-        context.merge_worktree_path.as_str(),
-        &prompt,
-        &model,
-        &tool,
-        MERGE_CONFLICT_RECOVERY_TIMEOUT_SECS,
-    )
-    .await?;
-
-    let response = parse_merge_conflict_recovery_response(&transcript)
-        .ok_or_else(|| anyhow!("merge conflict recovery output was not parseable JSON"))?;
-
-    let status = merge_conflict_recovery_status(response.status.as_str())
-        .ok_or_else(|| anyhow!("merge conflict recovery output has invalid status"))?;
-
-    match status {
-        "resolved" => {
-            if response.commit_message.trim().is_empty() {
-                anyhow::bail!("merge conflict recovery output is missing non-empty commit_message");
-            }
-            run_cargo_check(context.merge_worktree_path.as_str())?;
-            Ok(())
-        }
-        "failed" => {
-            let reason = response.reason.trim();
-            if reason.is_empty() {
-                anyhow::bail!("merge conflict recovery agent reported failure");
-            }
-            anyhow::bail!("merge conflict recovery agent reported failure: {reason}");
-        }
-        _ => anyhow::bail!("merge conflict recovery output has invalid status"),
-    }
 }
 
 pub fn merge_conflict_recovery_status(status: &str) -> Option<&'static str> {

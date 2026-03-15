@@ -803,20 +803,6 @@ impl AgentRuntimeConfig {
             || normalized.contains("audit")
     }
 
-    pub fn structured_output_allowed_tools(&self) -> Vec<String> {
-        if self.tools_allowlist.is_empty() {
-            return vec!["claude".to_string(), "codex".to_string()];
-        }
-
-        self.tools_allowlist
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_ascii_lowercase())
-            .collect()
-    }
-
 }
 
 pub fn builtin_agent_runtime_config() -> AgentRuntimeConfig {
