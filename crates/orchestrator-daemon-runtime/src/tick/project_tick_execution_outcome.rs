@@ -6,7 +6,7 @@ use crate::DispatchWorkflowStartSummary;
 pub struct ProjectTickExecutionOutcome {
     pub cleaned_stale_workflows: usize,
     pub resumed_workflows: usize,
-    pub reconciled_stale_tasks: usize,
+    pub reconciled_workflows: usize,
     pub reconciled_dependency_tasks: usize,
     pub reconciled_merge_tasks: usize,
     pub ready_workflow_starts: DispatchWorkflowStartSummary,

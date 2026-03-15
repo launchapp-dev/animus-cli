@@ -27,7 +27,7 @@ impl ProjectTickSnapshot {
             tasks_before: self.tasks_before,
             resumed_workflows: execution_outcome.resumed_workflows,
             cleaned_stale_workflows: execution_outcome.cleaned_stale_workflows,
-            reconciled_stale_tasks: execution_outcome.reconciled_stale_tasks,
+            reconciled_workflows: execution_outcome.reconciled_workflows,
             reconciled_dependency_tasks: execution_outcome.reconciled_dependency_tasks,
             reconciled_merge_tasks: execution_outcome.reconciled_merge_tasks,
             ready_started_count: execution_outcome.ready_workflow_starts.started,
