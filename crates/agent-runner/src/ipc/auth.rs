@@ -85,6 +85,15 @@ mod tests {
         dir.to_string_lossy().to_string()
     }
 
+    fn write_config_with_token(config_dir: &str, token: Option<&str>) {
+        let config = match token {
+            Some(t) => serde_json::json!({ "agent_runner_token": t }),
+            None => serde_json::json!({}),
+        };
+        let config_path = std::path::Path::new(config_dir).join("config.json");
+        std::fs::write(config_path, config.to_string()).expect("write config.json");
+    }
+
     #[test]
     fn validate_payload_accepts_matching_token() {
         let _lock = env_lock().lock().expect("env lock");
@@ -92,7 +101,8 @@ mod tests {
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
         let _legacy_config_dir =
             EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
-        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", Some("runner-secret"));
+        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+        write_config_with_token(&config_dir, Some("runner-secret"));
 
         let payload = r#"{"kind":"ipc_auth","token":"runner-secret"}"#;
         assert!(validate_payload(payload).is_ok());
@@ -105,7 +115,8 @@ mod tests {
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
         let _legacy_config_dir =
             EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
-        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", Some("runner-secret"));
+        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+        write_config_with_token(&config_dir, Some("runner-secret"));
 
         let payload = r#"{"run_id":"run-123"}"#;
         let error = validate_payload(payload).expect_err("payload should be rejected");
@@ -119,7 +130,8 @@ mod tests {
         let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", Some(&config_dir));
         let _legacy_config_dir =
             EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
-        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", Some("runner-secret"));
+        let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+        write_config_with_token(&config_dir, Some("runner-secret"));
 
         let payload = r#"{"kind":"ipc_auth","token":"wrong-token"}"#;
         let error = validate_payload(payload).expect_err("token mismatch should be rejected");
@@ -134,6 +146,7 @@ mod tests {
         let _legacy_config_dir =
             EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&config_dir));
         let _token = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
+        write_config_with_token(&config_dir, None);
 
         let payload = r#"{"kind":"ipc_auth","token":"runner-secret"}"#;
         let error = validate_payload(payload).expect_err("missing token should fail closed");

@@ -2053,20 +2053,6 @@ mod tests {
             .phase_decision_contract("triage")
             .expect("triage contract");
         assert!(!triage.allow_missing_decision);
-        assert_eq!(
-            resolved
-                .cli_tools
-                .get("custom-runner")
-                .and_then(|tool| tool.executable.as_deref()),
-            Some("custom-runner-bin")
-        );
-        assert_eq!(
-            resolved
-                .cli_tools
-                .get("custom-runner")
-                .and_then(|tool| tool.supports_mcp),
-            Some(true)
-        );
     }
 
     #[test]

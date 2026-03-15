@@ -237,40 +237,18 @@ fn test_ipc_auth_result_failure_roundtrip() {
 }
 
 #[test]
-fn test_config_get_token_uses_env_over_config() {
-    let _lock = env_lock().lock().expect("env lock");
-    let _env = EnvVarGuard::set("AGENT_RUNNER_TOKEN", Some("env-token"));
+fn test_config_get_token_returns_config_value() {
     let config = Config {
         agent_runner_token: Some("config-token".to_string()),
         mcp_servers: BTreeMap::new(),
     };
 
-    let token = config.get_token().expect("env token should resolve");
-    assert_eq!(token, "env-token");
-}
-
-#[test]
-fn test_config_get_token_rejects_blank_env_value() {
-    let _lock = env_lock().lock().expect("env lock");
-    let _env = EnvVarGuard::set("AGENT_RUNNER_TOKEN", Some("   "));
-    let config = Config {
-        agent_runner_token: Some("config-token".to_string()),
-        mcp_servers: BTreeMap::new(),
-    };
-
-    let error = config
-        .get_token()
-        .expect_err("blank env token should fail closed");
-    assert!(
-        error.to_string().contains("AGENT_RUNNER_TOKEN"),
-        "error should mention env token source"
-    );
+    let token = config.get_token().expect("config token should resolve");
+    assert_eq!(token, "config-token");
 }
 
 #[test]
 fn test_config_get_token_rejects_blank_config_value() {
-    let _lock = env_lock().lock().expect("env lock");
-    let _env = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
     let config = Config {
         agent_runner_token: Some("   ".to_string()),
         mcp_servers: BTreeMap::new(),
@@ -287,8 +265,6 @@ fn test_config_get_token_rejects_blank_config_value() {
 
 #[test]
 fn test_config_get_token_rejects_missing_token() {
-    let _lock = env_lock().lock().expect("env lock");
-    let _env = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
     let config = Config {
         agent_runner_token: None,
         mcp_servers: BTreeMap::new(),
