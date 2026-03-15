@@ -160,6 +160,13 @@ struct AoMcpServer {
     tool_router: ToolRouter<Self>,
 }
 
+impl AoMcpServer {
+    fn scoped_state_root(&self) -> std::path::PathBuf {
+        protocol::scoped_state_root(std::path::Path::new(&self.default_project_root))
+            .unwrap_or_else(|| std::path::PathBuf::from(&self.default_project_root).join(".ao"))
+    }
+}
+
 fn push_opt(args: &mut Vec<String>, flag: &str, value: Option<String>) {
     if let Some(value) = value {
         args.push(flag.to_string());
@@ -265,7 +272,7 @@ impl ServerHandler for AoMcpServer {
 
         match resource_uri.as_str() {
             "ao://project/tasks" => {
-                let path = PathBuf::from(&self.default_project_root).join(".ao/tasks/index.json");
+                let path = self.scoped_state_root().join("tasks").join("index.json");
                 let (content, _modified) = read_file_with_mtime(&path).map_err(|e| {
                     McpError::new(ErrorCode::INTERNAL_ERROR, format!("failed to read tasks: {}", e), None)
                 })?;
@@ -274,7 +281,7 @@ impl ServerHandler for AoMcpServer {
                 ]))
             }
             "ao://project/requirements" => {
-                let path = PathBuf::from(&self.default_project_root).join(".ao/requirements/index.json");
+                let path = self.scoped_state_root().join("requirements").join("index.json");
                 let (content, _modified) = read_file_with_mtime(&path).map_err(|e| {
                     McpError::new(ErrorCode::INTERNAL_ERROR, format!("failed to read requirements: {}", e), None)
                 })?;
