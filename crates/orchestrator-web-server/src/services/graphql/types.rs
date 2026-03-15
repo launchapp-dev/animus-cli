@@ -366,18 +366,33 @@ pub struct GqlWorkflowCheckpoint {
 pub struct GqlTaskConnection {
     pub items: Vec<GqlTask>,
     pub total_count: i32,
+    pub limit: i32,
+    pub offset: i32,
+    pub returned: i32,
+    pub has_more: bool,
+    pub next_offset: Option<i32>,
 }
 
 #[derive(SimpleObject)]
 pub struct GqlRequirementConnection {
     pub items: Vec<GqlRequirement>,
     pub total_count: i32,
+    pub limit: i32,
+    pub offset: i32,
+    pub returned: i32,
+    pub has_more: bool,
+    pub next_offset: Option<i32>,
 }
 
 #[derive(SimpleObject)]
 pub struct GqlWorkflowConnection {
     pub items: Vec<GqlWorkflow>,
     pub total_count: i32,
+    pub limit: i32,
+    pub offset: i32,
+    pub returned: i32,
+    pub has_more: bool,
+    pub next_offset: Option<i32>,
 }
 
 #[derive(SimpleObject, Debug, Clone)]

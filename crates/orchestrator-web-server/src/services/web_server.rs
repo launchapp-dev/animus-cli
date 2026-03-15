@@ -1135,8 +1135,9 @@ mod tests {
     use axum::body::{to_bytes, Body};
     use axum::http::header::{CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
     use axum::http::Request;
+    use axum::response::Response;
     use axum::Router;
-    use orchestrator_core::{InMemoryServiceHub, ServiceHub, TaskCreateInput};
+    use orchestrator_core::{InMemoryServiceHub, Priority, ServiceHub, TaskCreateInput, TaskStatus, TaskType};
     use orchestrator_web_api::WebApiContext;
     use serde_json::Value;
     use tower::util::ServiceExt;
@@ -1232,6 +1233,24 @@ mod tests {
                 "workflow seed request should succeed at index {index}"
             );
         }
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
+        serde_json::from_slice(&body).expect("response should be valid json")
+    }
+
+    fn response_header(response: &Response, name: &str) -> Option<String> {
+        response.headers().get(name).and_then(|value| value.to_str().ok()).map(ToOwned::to_owned)
+    }
+
+    fn data_ids(payload: &Value) -> Vec<String> {
+        payload["data"]
+            .as_array()
+            .expect("response payload should contain data array")
+            .iter()
+            .map(|item| item["id"].as_str().expect("array item should contain id").to_string())
+            .collect()
     }
 
     #[test]
@@ -1341,6 +1360,447 @@ mod tests {
                 .len(),
             2
         );
+        assert_eq!(payload["data"]["tasksPaginated"]["limit"], Value::from(2));
+        assert_eq!(payload["data"]["tasksPaginated"]["offset"], Value::from(1));
+        assert_eq!(payload["data"]["tasksPaginated"]["returned"], Value::from(2));
+        assert_eq!(payload["data"]["tasksPaginated"]["hasMore"], Value::from(false));
+        assert_eq!(payload["data"]["tasksPaginated"]["nextOffset"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn tasks_rest_and_graphql_share_filter_sort_and_pagination_semantics() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub.clone(), true, 50, 200);
+
+        let noise = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "Noise task".to_string(),
+                description: "does not match".to_string(),
+                task_type: Some(TaskType::Bugfix),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: vec!["ops".to_string()],
+                linked_requirements: vec!["REQ-999".to_string()],
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("noise task should be created");
+        hub.tasks().set_status(&noise.id, TaskStatus::Ready, false).await.expect("noise task should be ready");
+
+        let first = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "API query parity one".to_string(),
+                description: "critical path".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: vec!["api".to_string()],
+                linked_requirements: vec!["REQ-100".to_string()],
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("first task should be created");
+        hub.tasks().set_status(&first.id, TaskStatus::Ready, false).await.expect("first task should be ready");
+
+        let second = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "API query parity two".to_string(),
+                description: "critical path".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: vec!["api".to_string()],
+                linked_requirements: vec!["REQ-100".to_string()],
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("second task should be created");
+        hub.tasks().set_status(&second.id, TaskStatus::Ready, false).await.expect("second task should be ready");
+
+        let rest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/tasks?task_type=feature&status=ready&priority=high&tag=api&linked_requirement=REQ-100&search=critical&sort=updated_at&page_size=1",
+                    )
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("rest request should succeed");
+        let rest_status = rest_response.status();
+        let rest_total = response_header(&rest_response, HEADER_TOTAL_COUNT);
+        let rest_page_size = response_header(&rest_response, HEADER_PAGE_SIZE);
+        let rest_has_more = response_header(&rest_response, HEADER_HAS_MORE);
+        let rest_next_cursor = response_header(&rest_response, HEADER_NEXT_CURSOR);
+        let rest_payload = response_json(rest_response).await;
+        assert_eq!(rest_status, axum::http::StatusCode::OK, "rest task parity query should succeed: {rest_payload}");
+        let rest_total = rest_total.expect("rest total count header");
+        let rest_page_size = rest_page_size.expect("rest page size header");
+        let rest_has_more = rest_has_more.expect("rest has more header");
+        let rest_next_cursor = rest_next_cursor.expect("rest next cursor header");
+
+        let graphql_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "query": "{ tasksPaginated(taskType: \"feature\", status: \"ready\", priority: \"high\", tags: [\"api\"], linkedRequirement: \"REQ-100\", search: \"critical\", sort: \"updated_at\", limit: 1, offset: 0) { totalCount limit offset returned hasMore nextOffset items { id } } }"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("graphql request should succeed");
+        let graphql_status = graphql_response.status();
+        let graphql_payload = response_json(graphql_response).await;
+        assert_eq!(
+            graphql_status,
+            axum::http::StatusCode::OK,
+            "graphql task parity query should succeed: {graphql_payload}"
+        );
+
+        assert_eq!(data_ids(&rest_payload), vec![second.id.clone()]);
+        assert_eq!(
+            graphql_payload["data"]["tasksPaginated"]["items"]
+                .as_array()
+                .expect("graphql items should be present")
+                .iter()
+                .map(|item| item["id"].as_str().expect("graphql item id").to_string())
+                .collect::<Vec<_>>(),
+            vec![second.id]
+        );
+        assert_eq!(rest_total, graphql_payload["data"]["tasksPaginated"]["totalCount"].to_string());
+        assert_eq!(rest_page_size, graphql_payload["data"]["tasksPaginated"]["limit"].to_string());
+        assert_eq!(rest_has_more, graphql_payload["data"]["tasksPaginated"]["hasMore"].to_string());
+        assert_eq!(rest_next_cursor, graphql_payload["data"]["tasksPaginated"]["nextOffset"].to_string());
+    }
+
+    #[tokio::test]
+    async fn requirements_rest_and_graphql_share_filter_sort_and_pagination_semantics() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        for requirement in [
+            serde_json::json!({
+                "title": "Noise requirement",
+                "description": "ignore me",
+                "status": "draft",
+                "priority": "must",
+                "category": "ops",
+                "type": "technical",
+                "tags": ["ops"],
+                "linked_task_ids": ["TASK-999"]
+            }),
+            serde_json::json!({
+                "title": "Requirements query parity one",
+                "description": "shared query behavior",
+                "status": "draft",
+                "priority": "must",
+                "category": "runtime",
+                "type": "technical",
+                "tags": ["backend"],
+                "linked_task_ids": ["TASK-123"]
+            }),
+            serde_json::json!({
+                "title": "Requirements query parity two",
+                "description": "shared query behavior",
+                "status": "draft",
+                "priority": "must",
+                "category": "runtime",
+                "type": "technical",
+                "tags": ["backend"],
+                "linked_task_ids": ["TASK-123"]
+            }),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/requirements")
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(requirement.to_string()))
+                        .expect("request should be built"),
+                )
+                .await
+                .expect("seed request should succeed");
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+
+        let rest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/requirements?status=draft&priority=must&category=runtime&type=technical&tag=backend&linked_task_id=TASK-123&search=query&sort=updated_at&page_size=1",
+                    )
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("rest request should succeed");
+        let rest_status = rest_response.status();
+        let rest_total = response_header(&rest_response, HEADER_TOTAL_COUNT);
+        let rest_page_size = response_header(&rest_response, HEADER_PAGE_SIZE);
+        let rest_has_more = response_header(&rest_response, HEADER_HAS_MORE);
+        let rest_next_cursor = response_header(&rest_response, HEADER_NEXT_CURSOR);
+        let rest_payload = response_json(rest_response).await;
+        assert_eq!(
+            rest_status,
+            axum::http::StatusCode::OK,
+            "rest requirement parity query should succeed: {rest_payload}"
+        );
+        let rest_total = rest_total.expect("rest total count header");
+        let rest_page_size = rest_page_size.expect("rest page size header");
+        let rest_has_more = rest_has_more.expect("rest has more header");
+        let rest_next_cursor = rest_next_cursor.expect("rest next cursor header");
+        let rest_ids = data_ids(&rest_payload);
+
+        let graphql_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "query": "{ requirementsPaginated(status: \"draft\", priority: \"must\", category: \"runtime\", requirementType: \"technical\", tags: [\"backend\"], linkedTaskId: \"TASK-123\", search: \"query\", sort: \"updated_at\", limit: 1, offset: 0) { totalCount limit offset returned hasMore nextOffset items { id } } }"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("graphql request should succeed");
+        let graphql_status = graphql_response.status();
+        let graphql_payload = response_json(graphql_response).await;
+        assert_eq!(
+            graphql_status,
+            axum::http::StatusCode::OK,
+            "graphql requirement parity query should succeed: {graphql_payload}"
+        );
+        let graphql_ids = graphql_payload["data"]["requirementsPaginated"]["items"]
+            .as_array()
+            .expect("graphql items should be present")
+            .iter()
+            .map(|item| item["id"].as_str().expect("graphql item id").to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rest_ids, graphql_ids);
+        assert_eq!(rest_total, graphql_payload["data"]["requirementsPaginated"]["totalCount"].to_string());
+        assert_eq!(rest_page_size, graphql_payload["data"]["requirementsPaginated"]["limit"].to_string());
+        assert_eq!(rest_has_more, graphql_payload["data"]["requirementsPaginated"]["hasMore"].to_string());
+        assert_eq!(rest_next_cursor, graphql_payload["data"]["requirementsPaginated"]["nextOffset"].to_string());
+    }
+
+    #[tokio::test]
+    async fn workflows_rest_and_graphql_share_filter_sort_and_pagination_semantics() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub.clone(), true, 50, 200);
+
+        let task_a = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "Workflow parity A".to_string(),
+                description: "seed".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task a should be created");
+        let task_b = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "Workflow parity B".to_string(),
+                description: "seed".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task b should be created");
+        let task_c = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "Workflow noise".to_string(),
+                description: "seed".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task c should be created");
+
+        let mut workflow_ids = Vec::new();
+        for task_id in [task_a.id.clone(), task_b.id.clone(), task_c.id.clone()] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/workflows/run")
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "task_id": task_id,
+                                "workflow_ref": "query-parity"
+                            })
+                            .to_string(),
+                        ))
+                        .expect("request should be built"),
+                )
+                .await
+                .expect("workflow run should succeed");
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let payload = response_json(response).await;
+            workflow_ids.push(payload["data"]["id"].as_str().expect("workflow response should include id").to_string());
+        }
+
+        hub.workflows().pause(&workflow_ids[0]).await.expect("first workflow should pause");
+        hub.workflows().pause(&workflow_ids[1]).await.expect("second workflow should pause");
+        hub.workflows().cancel(&workflow_ids[2]).await.expect("third workflow should cancel");
+
+        let rest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(
+                        "/api/v1/workflows?status=paused&workflow_ref=query-parity&search=query-parity&sort=id&page_size=1",
+                    )
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("rest request should succeed");
+        assert_eq!(rest_response.status(), axum::http::StatusCode::OK);
+        let rest_total = response_header(&rest_response, HEADER_TOTAL_COUNT).expect("rest total count header");
+        let rest_page_size = response_header(&rest_response, HEADER_PAGE_SIZE).expect("rest page size header");
+        let rest_has_more = response_header(&rest_response, HEADER_HAS_MORE).expect("rest has more header");
+        let rest_next_cursor = response_header(&rest_response, HEADER_NEXT_CURSOR).expect("rest next cursor header");
+        let rest_payload = response_json(rest_response).await;
+        let rest_ids = data_ids(&rest_payload);
+
+        let graphql_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "query": "{ workflowsPaginated(status: \"paused\", workflowRef: \"query-parity\", search: \"query-parity\", sort: \"id\", limit: 1, offset: 0) { totalCount limit offset returned hasMore nextOffset items { id } } }"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("graphql request should succeed");
+        assert_eq!(graphql_response.status(), axum::http::StatusCode::OK);
+        let graphql_payload = response_json(graphql_response).await;
+        let graphql_ids = graphql_payload["data"]["workflowsPaginated"]["items"]
+            .as_array()
+            .expect("graphql items should be present")
+            .iter()
+            .map(|item| item["id"].as_str().expect("graphql item id").to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rest_ids, graphql_ids);
+        assert_eq!(rest_total, graphql_payload["data"]["workflowsPaginated"]["totalCount"].to_string());
+        assert_eq!(rest_page_size, graphql_payload["data"]["workflowsPaginated"]["limit"].to_string());
+        assert_eq!(rest_has_more, graphql_payload["data"]["workflowsPaginated"]["hasMore"].to_string());
+        assert_eq!(rest_next_cursor, graphql_payload["data"]["workflowsPaginated"]["nextOffset"].to_string());
+    }
+
+    #[tokio::test]
+    async fn graphql_task_nested_requirements_resolves_linked_requirement_ids() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub.clone(), true, 50, 200);
+
+        let requirement_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/requirements")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": "Nested requirement parity",
+                            "description": "resolve linked requirement ids"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("requirement request should succeed");
+        assert_eq!(requirement_response.status(), axum::http::StatusCode::OK);
+        let requirement_payload = response_json(requirement_response).await;
+        let requirement_id =
+            requirement_payload["data"]["id"].as_str().expect("requirement response should include id").to_string();
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "Task with linked requirement".to_string(),
+                description: "nested graphql".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: vec![requirement_id.clone()],
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+
+        let graphql_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "query": format!("{{ task(id: \"{}\") {{ linkedRequirementIds requirements {{ id }} }} }}", task.id)
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("graphql request should succeed");
+        assert_eq!(graphql_response.status(), axum::http::StatusCode::OK);
+        let graphql_payload = response_json(graphql_response).await;
+
+        assert_eq!(
+            graphql_payload["data"]["task"]["linkedRequirementIds"],
+            Value::Array(vec![Value::String(requirement_id.clone())])
+        );
+        assert_eq!(graphql_payload["data"]["task"]["requirements"][0]["id"], Value::String(requirement_id));
     }
 
     #[tokio::test]

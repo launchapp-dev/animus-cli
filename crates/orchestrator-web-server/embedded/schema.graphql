@@ -180,6 +180,11 @@ type GqlRequirement {
 type GqlRequirementConnection {
 	items: [GqlRequirement!]!
 	totalCount: Int!
+	limit: Int
+	offset: Int!
+	returned: Int!
+	hasMore: Boolean!
+	nextOffset: Int
 }
 
 enum GqlRequirementPriority {
@@ -271,6 +276,11 @@ type GqlTask {
 type GqlTaskConnection {
 	items: [GqlTask!]!
 	totalCount: Int!
+	limit: Int
+	offset: Int!
+	returned: Int!
+	hasMore: Boolean!
+	nextOffset: Int
 }
 
 type GqlTaskStats {
@@ -350,6 +360,11 @@ type GqlWorkflowConfig {
 type GqlWorkflowConnection {
 	items: [GqlWorkflow!]!
 	totalCount: Int!
+	limit: Int
+	offset: Int!
+	returned: Int!
+	hasMore: Boolean!
+	nextOffset: Int
 }
 
 type GqlWorkflowDefinition {
@@ -420,18 +435,18 @@ type MutationRoot {
 }
 
 type QueryRoot {
-	tasks(status: String, taskType: String, priority: String, search: String): [GqlTask!]!
+	tasks(status: String, taskType: String, priority: String, risk: String, assigneeType: String, tags: [String!], linkedRequirement: String, linkedArchitectureEntity: String, search: String, sort: String): [GqlTask!]!
 	task(id: ID!): GqlTask
 	tasksPrioritized: [GqlTask!]!
 	tasksNext: GqlTask
 	taskStats: GqlTaskStats!
-	requirements: [GqlRequirement!]!
+	requirements(status: String, priority: String, category: String, requirementType: String, tags: [String!], linkedTaskId: String, search: String, sort: String): [GqlRequirement!]!
 	requirement(id: ID!): GqlRequirement
-	workflows(status: String): [GqlWorkflow!]!
+	workflows(status: String, workflowRef: String, taskId: String, phaseId: String, search: String, sort: String): [GqlWorkflow!]!
 	workflow(id: ID!): GqlWorkflow
-	tasksPaginated(status: String, taskType: String, priority: String, search: String, limit: Int! = 50, offset: Int! = 0): GqlTaskConnection!
-	requirementsPaginated(limit: Int! = 50, offset: Int! = 0): GqlRequirementConnection!
-	workflowsPaginated(status: String, limit: Int! = 50, offset: Int! = 0): GqlWorkflowConnection!
+	tasksPaginated(status: String, taskType: String, priority: String, risk: String, assigneeType: String, tags: [String!], linkedRequirement: String, linkedArchitectureEntity: String, search: String, sort: String, limit: Int! = 50, offset: Int! = 0): GqlTaskConnection!
+	requirementsPaginated(status: String, priority: String, category: String, requirementType: String, tags: [String!], linkedTaskId: String, search: String, sort: String, limit: Int! = 50, offset: Int! = 0): GqlRequirementConnection!
+	workflowsPaginated(status: String, workflowRef: String, taskId: String, phaseId: String, search: String, sort: String, limit: Int! = 50, offset: Int! = 0): GqlWorkflowConnection!
 	workflowCheckpoints(workflowId: ID!): [GqlWorkflowCheckpoint!]!
 	phaseOutput(workflowId: ID!, phaseId: String, tail: Int): GqlPhaseOutput!
 	readyTasks(search: String, limit: Int): [GqlTask!]!

@@ -8,7 +8,8 @@ const WORKFLOW_RUNNER_DIR: &str = "workflow-runner-pids";
 const PID_FILE_EXT: &str = "pid";
 
 fn workflow_runner_pid_dir(project_root: &Path) -> PathBuf {
-    project_root.join(".ao").join("state").join(WORKFLOW_RUNNER_DIR)
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    base.join("state").join(WORKFLOW_RUNNER_DIR)
 }
 
 fn workflow_runner_pid_path(project_root: &Path, workflow_id: &str) -> PathBuf {

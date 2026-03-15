@@ -64,7 +64,8 @@ fn handoff_max_depth() -> usize {
 }
 
 fn workflow_runtime_config_path(project_root: &Path) -> PathBuf {
-    project_root.join(".ao").join("state").join("workflow-config.json")
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    base.join("state").join("workflow-config.json")
 }
 
 fn load_workflow_runtime_config(project_root: &Path) -> WorkflowRuntimeConfigLite {

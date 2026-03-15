@@ -4,159 +4,200 @@ Operator and contributor guide for AO (`ao` CLI).
 
 ## Mission
 
-Use AO to build AO. Requirements and tasks in this repo are the planning source
-of truth, and this workspace stays Rust-only without desktop-wrapper dependencies.
+Use AO to build AO. Requirements, tasks, workflows, queue entries, and review state
+in this repo are AO-managed data, and this workspace remains Rust-only.
+
+## Source Of Truth
+
+When prose and code disagree, trust the code and generated references:
+
+- `Cargo.toml` for current workspace members
+- `docs/reference/cli/index.md` for the current CLI tree
+- `docs/reference/mcp-tools.md` and `docs/guides/agents.md` for MCP surface docs
+- `crates/orchestrator-cli/src/cli_types/root_types.rs` for visible and hidden top-level commands
+- `crates/orchestrator-core/src/config.rs` for project-root resolution
+- `crates/orchestrator-core/src/services.rs` for bootstrap and state persistence
+- `crates/orchestrator-web-server/web-ui/package.json` and `web-ui/src/app/router.tsx` for web UI stack and routes
+
+Do not keep outdated counts or removed crates alive in docs.
 
 ## Workspace
 
-10-crate Rust workspace. Main binary: `ao` (`crates/orchestrator-cli`).
+16-crate Rust workspace. Main binary: `ao` (`crates/orchestrator-cli`).
 
-```
+```text
 crates/
-├── orchestrator-cli/        # Main `ao` binary (clap CLI, 24 commands, ~130+ subcommands)
-├── orchestrator-core/       # Domain logic, state management, FileServiceHub DI
-├── orchestrator-web-api/    # Web API business logic (WebApiService)
-├── orchestrator-web-server/ # Axum web server + embedded static assets
-├── orchestrator-web-contracts/ # Shared web types
-├── protocol/                # Wire protocol types shared across all crates
-├── agent-runner/            # Standalone daemon managing LLM CLI processes via IPC
-├── llm-cli-wrapper/         # Abstraction over AI CLI tools (claude, codex, gemini, etc.)
-├── oai-runner/              # OpenAI-compatible streaming API client
-└── llm-mcp-server/          # MCP server for external agent bridging
+├── agent-runner/                # Runner process that launches and supervises AI CLIs
+├── llm-cli-wrapper/             # Claude/Codex/Gemini CLI integration layer
+├── oai-runner/                  # OpenAI-compatible runner implementation
+├── orchestrator-cli/            # Main `ao` binary
+├── orchestrator-config/         # Workflow and agent-runtime config loading/compilation
+├── orchestrator-core/           # Domain services, bootstrap, state mutation APIs
+├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
+├── orchestrator-git-ops/        # Git/worktree automation helpers
+├── orchestrator-notifications/  # Notification/runtime integration support
+├── orchestrator-providers/      # Built-in provider integrations and routing
+├── orchestrator-store/          # Shared state/storage path helpers
+├── orchestrator-web-api/        # Web API business logic
+├── orchestrator-web-contracts/  # Shared web/API contract types
+├── orchestrator-web-server/     # Axum server + embedded web UI
+├── protocol/                    # Shared protocol/config/runtime types
+└── workflow-runner-v2/          # Workflow execution runtime and phase output persistence
 ```
 
-Supporting runtime crates must remain healthy:
-`agent-runner`, `llm-cli-wrapper`, `llm-mcp-server`, `oai-runner`.
+Runtime-critical binaries and supporting crates must stay healthy:
 
-Do not add or depend on desktop shell frameworks.
+- `orchestrator-cli`
+- `agent-runner`
+- `llm-cli-wrapper`
+- `oai-runner`
+- `workflow-runner-v2`
+- `orchestrator-daemon-runtime`
 
-## How `ao` Works
+Do not add desktop shell frameworks or their transitive equivalents.
+
+## Runtime Model
 
 Startup flow:
 
-1. Parse CLI args (`--json`, `--project-root`, subcommand).
-2. Resolve project root with precedence:
+1. Parse global flags and the selected top-level command.
+2. Resolve project root with this precedence:
    1. `--project-root`
-   2. `PROJECT_ROOT` env var
-   3. Registry fallback `~/.config/agent-orchestrator/last-project-root`
-   4. Current working directory
-3. Construct `FileServiceHub` for that root.
-4. Dispatch subcommands into runtime and operations handlers.
+   2. Git common root for the current working directory or linked worktree
+   3. Current working directory
+3. Bootstrap project-local `.ao/` files and scoped runtime state under `~/.ao/<repo-scope>/`.
+4. Construct `FileServiceHub`.
+5. Dispatch into CLI operations, daemon runtime, agent runtime, or web services.
 
-`FileServiceHub` bootstrap: ensures project root exists, initializes git repo if missing, creates `.ao/` base structure and core state/config files.
+Key implementation files:
 
-## Data Layout
+- `crates/orchestrator-cli/src/main.rs`
+- `crates/orchestrator-cli/src/cli_types/root_types.rs`
+- `crates/orchestrator-cli/src/shared/output.rs`
+- `crates/orchestrator-core/src/config.rs`
+- `crates/orchestrator-core/src/services.rs`
+- `crates/orchestrator-config/src/workflow_config/`
+- `crates/protocol/src/config.rs`
+- `crates/protocol/src/repository_scope.rs`
 
-Repo-local state (`.ao/`):
+## State Layout
 
-- `core-state.json`, `config.json`, `resume-config.json`
-- `docs/{vision,requirements,tasks,architecture}.json`
-- `requirements/index.json` and `requirements/generated/*.json`
-- `tasks/index.json` and `tasks/TASK-*.json`
-- `state/{workflow-config.v2,agent-runtime-config.v2,state-machines.v1}.json`
-- `state/{reviews,handoffs,history,errors,qa-results,qa-review-approvals}.json`
-- `runs/<run_id>/events.jsonl`
-- `artifacts/<execution_id>/...`
+AO now splits project-local config from scoped runtime state.
 
-Global files (`protocol::Config::global_config_dir()`, overridable by `AO_CONFIG_DIR`):
+Project-local config in `<project>/.ao/`:
 
-- `projects.json`, `daemon-events.jsonl`, runner/global config
+- `config.json`
+- `pm-config.json`
+- `workflows.yaml`
+- `workflows/*.yaml`
 
-## Worktree Model
+Scoped runtime state in `~/.ao/<repo-scope>/`:
 
-Daemon-managed task worktrees: `~/.ao/<repo-scope>/worktrees/`
+- `core-state.json`
+- `resume-config.json`
+- `docs/`
+- `requirements/`
+- `tasks/`
+- `index/`
+- `state/`
+- `runs/`
+- `artifacts/`
 
-- `<repo-scope>` = `<sanitized-repo-name>-<12 hex SHA256(canonical root)>`
-- Task defaults: worktree `task-<sanitized-task-id>`, branch `ao/<sanitized-task-id>`
+Global config in `protocol::Config::global_config_dir()`:
 
-## Runner and Agent Execution
+- `config.json`
+- `credentials.json`
+- `daemon-events.jsonl`
+- `cli-tracker.json`
+- runner socket and runner config files
 
-1. `ao agent run` builds runtime context (tool/model/prompt/cwd/runtime_contract)
-2. CWD canonicalized, must stay inside project root
-3. CLI connects to `agent-runner` via unix socket (TCP on non-unix)
-4. Runner executes CLI launch from runtime contract
-5. `llm-cli-wrapper` enforces machine-readable JSON flags per AI CLI
-6. Events stream back, optionally persisted in `.ao/runs/<run_id>/events.jsonl`
+Repository scope format:
 
-Runner config precedence: `AO_RUNNER_CONFIG_DIR` > `AO_CONFIG_DIR` > `AGENT_ORCHESTRATOR_CONFIG_DIR` > scope-based default.
+- `<repo-scope>` = `<sanitized-repo-name>-<12 hex sha256(canonical-root)>`
+- managed task worktrees live under `~/.ao/<repo-scope>/worktrees/`
 
-## Output and Error Contract
+Legacy fallback readers still check some repo-local run/artifact paths. Do not depend on
+those fallback locations for new features unless you are intentionally preserving compatibility.
 
-With `--json`, envelope schema `ao.cli.v1`:
+## Command Surface
 
-- Success: `{ "schema": "ao.cli.v1", "ok": true, "data": ... }`
-- Error: `{ "schema": "ao.cli.v1", "ok": false, "error": { "code", "message", "exit_code" } }`
+Visible top-level commands:
 
-Exit codes: 1=internal, 2=invalid_input, 3=not_found, 4=conflict, 5=unavailable
+- `version`
+- `daemon`
+- `agent`
+- `project`
+- `queue`
+- `task`
+- `workflow`
+- `vision`
+- `requirements`
+- `architecture`
+- `history`
+- `errors`
+- `git`
+- `skill`
+- `model`
+- `runner`
+- `status`
+- `output`
+- `mcp`
+- `web`
+- `setup`
+- `tui`
+- `doctor`
 
-## CLI Command Surface
+Hidden/internal top-level commands:
 
-Full reference: `docs/cli-command-surface.md`
+- `review`
+- `qa`
 
-| Group | Commands | Purpose |
-|---|---|---|
-| **Core** | `task`, `workflow`, `daemon`, `agent` | Task CRUD, workflow execution, daemon lifecycle, agent runs |
-| **Planning** | `vision`, `requirements`, `execute`, `architecture` | Vision drafting, requirements, execution planning, architecture graph |
-| **Operations** | `runner`, `output`, `errors`, `history` | Runner health, run output, error tracking, history |
-| **Infrastructure** | `git`, `model`, `skill`, `mcp`, `web` | Git ops, model routing, skill packages, MCP server, web UI |
-| **UX** | `status`, `setup`, `doctor`, `tui`, `workflow-monitor` | Dashboard, onboarding, diagnostics, TUI |
-| **Review/QA** | `review`, `qa` | Review decisions, QA gates |
-| **Facade** | `planning` | Mirrors vision + requirements (legacy alias) |
+Use these reference docs instead of hand-maintained summaries:
 
-## Key Implementation Files
+- `docs/reference/cli/index.md`
+- `docs/reference/mcp-tools.md`
+- `docs/guides/agents.md`
 
-- CLI dispatch: `crates/orchestrator-cli/src/main.rs`
-- CLI type definitions: `crates/orchestrator-cli/src/cli_types/` (modularized per domain)
-- Error classification: `crates/orchestrator-cli/src/shared/output.rs`
-- Runner IPC: `crates/orchestrator-cli/src/shared/runner.rs`
-- Core state: `crates/orchestrator-core/src/services.rs`
-- Protocol types: `crates/protocol/src/lib.rs`
-- Model routing: `crates/protocol/src/model_routing.rs`
+## Mutation Policy
 
-## Accepted Value Sets
+- Treat `~/.ao/<repo-scope>/` and `.ao/*.json` as AO-managed state.
+- Use `ao project`, `ao queue`, `ao task`, `ao workflow`, `ao requirements`, `ao review`, and `ao qa` commands for mutations.
+- Do not hand-edit generated state JSON unless the task is explicitly about persistence or migrations.
+- Supported exception: project-local workflow YAML overlays in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`.
+- In scripts and automation, always pass `--project-root "$(pwd)"`.
 
-| Field | Values |
-|---|---|
-| Task status | `backlog`, `todo`, `ready`, `in-progress`, `blocked`, `on-hold`, `done`, `cancelled` |
-| Task type | `feature`, `bugfix`, `hotfix`, `refactor`, `docs`, `test`, `chore`, `experiment` |
-| Task priority | `critical`, `high`, `medium`, `low` |
-| Requirement priority | `must`, `should`, `could`, `wont` |
-| Requirement status | `draft`, `refined`, `planned`, `in-progress`, `done` |
+## Contributor Rules
 
-## `.ao/` Mutation Policy
+- Keep the workspace Rust-only. Do not introduce `tauri`, `wry`, `tao`, `gtk`, `webkit*`, `webview*`, or similar desktop shell dependencies.
+- If you change CLI surface, update `docs/reference/cli/index.md` in the same change.
+- If you change MCP tools, update both `docs/reference/mcp-tools.md` and `docs/guides/agents.md`.
+- If you change workflow config loading, verify both project-local YAML overlays and compiled scoped state behavior.
+- Prefer source files over prose for command counts, crate counts, routes, or runtime paths.
 
-`.ao/` is repository state managed exclusively through `ao` commands.
-
-- Use `ao vision/requirements/task/workflow ...` for all state changes
-- Never hand-edit `.ao/*.json` files
-- Exception: migration tooling or persistence changes that are the subject of the task
-- In scripts: always pass `--project-root "$(pwd)"`
-
-## Agent Task Policy
-
-1. **Before work**: create/claim task, link to requirement, set status `in-progress`
-2. **During work**: update status at state changes, record blockers in metadata
-3. **After work**: set status `done`, run review/QA if gated
-4. **Parallel work**: use workflow phases, not competing manual agents on same workspace
-
-## Self-Hosting Workflow
+## Useful Commands
 
 ```bash
-ao requirements list                              # View backlog
-ao task prioritized                               # View prioritized tasks
-ao task next                                      # Get next task
-ao task status --id TASK-XXX --status in-progress # Start
-ao task status --id TASK-XXX --status done        # Complete
+cargo ao-fmt
+cargo ao-lint
+cargo ao-bin-check
+cargo test -p orchestrator-cli
+cargo test --workspace
+
+ao status
+ao project list
+ao task prioritized
+ao task next
+ao queue list
+ao daemon health
+ao workflow list
 ```
 
-## Daemon Operations
+## Self-Hosting Flow
 
 ```bash
-ao daemon start --pool-size 5                     # Start with 5 agent slots
-ao daemon health                                  # Check capacity
-ao daemon events --limit 50                       # Recent events
-ao runner health                                  # Runner process health
-ao workflow list                                  # Active workflows
+ao task next
+ao task status --id TASK-XXX --status in-progress
+ao workflow run --task-id TASK-XXX
+ao output monitor --run-id <run-id>
+ao task status --id TASK-XXX --status done
 ```
-
-Diagnostics: `ao daemon health --json`, `ao runner health --json`, `ao daemon events --limit 50 --follow false --json`
