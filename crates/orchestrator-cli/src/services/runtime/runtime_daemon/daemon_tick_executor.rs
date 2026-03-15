@@ -38,6 +38,15 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         Ok(reconcile_completed_processes(hub, root, completed_processes).await)
     }
 
+    async fn reconcile_zombie_workflows(
+        &mut self,
+        hub: Arc<dyn ServiceHub>,
+        root: &str,
+        active_subject_ids: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        Ok(super::daemon_reconciliation::recover_orphaned_running_workflows(hub, root, active_subject_ids).await)
+    }
+
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {
         reconcile_manual_phase_timeouts(hub, root).await
     }

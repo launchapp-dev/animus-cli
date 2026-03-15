@@ -39,6 +39,15 @@ pub trait DefaultProjectTickServices {
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<(usize, usize)>;
 
+    async fn reconcile_zombie_workflows(
+        &mut self,
+        _hub: Arc<dyn ServiceHub>,
+        _root: &str,
+        _active_subject_ids: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn reconcile_manual_timeouts(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
         Ok(0)
     }
@@ -176,6 +185,12 @@ where
         let completed_processes = self.process_manager.check_running().await;
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.reconcile_completed_processes(hub, root, completed_processes).await
+    }
+
+    async fn reconcile_zombie_workflows(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        let active_subject_ids = self.process_manager.active_subject_ids();
+        self.services.reconcile_zombie_workflows(hub, root, &active_subject_ids).await
     }
 
     async fn reconcile_manual_timeouts(&mut self, root: &str) -> Result<usize> {
