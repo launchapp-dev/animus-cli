@@ -4,6 +4,7 @@ use anyhow::Result;
 use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
+use orchestrator_core::services::DaemonStartConfig;
 use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
 use std::sync::Arc;
 
@@ -51,12 +52,14 @@ impl Drop for EnvOverrideGuard {
 
 struct CliDaemonRunHost {
     inner: DefaultDaemonRunHost,
+    pool_size: Option<usize>,
 }
 
 impl CliDaemonRunHost {
-    fn new(project_root: &str, json: bool) -> Self {
+    fn new(project_root: &str, json: bool, pool_size: Option<usize>) -> Self {
         Self {
             inner: DefaultDaemonRunHost::new(project_root, json),
+            pool_size,
         }
     }
 }
@@ -74,7 +77,11 @@ impl DaemonRunHooks for CliDaemonRunHost {
 
     async fn start_daemon(&mut self, project_root: &str) -> Result<()> {
         let hub = FileServiceHub::new(project_root)?;
-        hub.daemon().start(Default::default()).await.or_else(|error| {
+        let config = DaemonStartConfig {
+            pool_size: self.pool_size,
+            ..Default::default()
+        };
+        hub.daemon().start(config).await.or_else(|error| {
             let skip = std::env::var("AO_SKIP_RUNNER_START")
                 .ok()
                 .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -122,7 +129,7 @@ pub(super) async fn handle_daemon_run(
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager);
-    let mut host = CliDaemonRunHost::new(project_root, json);
+    let mut host = CliDaemonRunHost::new(project_root, json, runtime_options.pool_size);
 
     let run_result = run_daemon(
         project_root,
