@@ -191,6 +191,8 @@ pub enum SkillCapabilityKey {
 
 pub fn parse_skill_capability_key(name: &str) -> Option<SkillCapabilityKey> {
     match name.trim().to_ascii_lowercase().as_str() {
+        // Accept the legacy spellings we already emit in bundled skills and tests, but
+        // reject typo-prone variants like `write_file` so bad config still fails loudly.
         "writes_files" | "write_files" | "file_write" | "file_writes" | "can_write" => {
             Some(SkillCapabilityKey::WritesFiles)
         }

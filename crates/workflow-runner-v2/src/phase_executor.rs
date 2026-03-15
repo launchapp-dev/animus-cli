@@ -624,16 +624,19 @@ fn resolve_phase_skill_target(
     routing_complexity: Option<protocol::ModelRoutingComplexity>,
     routing: &protocol::PhaseRoutingConfig,
 ) -> Result<(String, String, protocol::PhaseCapabilities, skill_dispatch::AppliedPhaseSkills)> {
+    const MAX_SKILL_TARGET_RESOLUTION_PASSES: usize = 3;
+
     let initial_tool_id = target_tool_id.to_string();
     let initial_model_id = canonical_model_id(target_model_id);
     let mut tool_id = target_tool_id.to_string();
     let mut model_id = canonical_model_id(target_model_id);
+    let mut exhausted_iteration_budget = false;
     let explicit_tool_override =
         explicit_tool_override.map(protocol::normalize_tool_id).filter(|value| !value.trim().is_empty());
     let explicit_model_override =
         explicit_model_override.map(canonical_model_id).filter(|value| !value.trim().is_empty());
 
-    for _ in 0..3 {
+    for iteration in 0..MAX_SKILL_TARGET_RESOLUTION_PASSES {
         let applied_skills = skill_dispatch::apply_phase_skills(resolved_phase_skills, &tool_id, &model_id);
         let effective_caps =
             skill_dispatch::apply_skill_capability_overrides(base_caps, &applied_skills.application.capabilities);
@@ -675,19 +678,22 @@ fn resolve_phase_skill_target(
 
         tool_id = next_tool;
         model_id = next_model;
+        exhausted_iteration_budget = iteration + 1 == MAX_SKILL_TARGET_RESOLUTION_PASSES;
     }
 
     let applied_skills = skill_dispatch::apply_phase_skills(resolved_phase_skills, &tool_id, &model_id);
     let effective_caps =
         skill_dispatch::apply_skill_capability_overrides(base_caps, &applied_skills.application.capabilities);
-    warn!(
-        phase_id,
-        initial_tool = %initial_tool_id,
-        initial_model = %initial_model_id,
-        final_tool = %tool_id,
-        final_model = %model_id,
-        "phase skill target resolution exhausted iteration budget without convergence"
-    );
+    if exhausted_iteration_budget {
+        warn!(
+            phase_id,
+            initial_tool = %initial_tool_id,
+            initial_model = %initial_model_id,
+            final_tool = %tool_id,
+            final_model = %model_id,
+            "phase skill target resolution exhausted iteration budget without convergence"
+        );
+    }
     Ok((tool_id, model_id, effective_caps, applied_skills))
 }
 
