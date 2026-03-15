@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use cli_wrapper::{is_ai_cli_tool, parse_launch_from_runtime_contract, LaunchInvocation};
+use std::collections::HashMap;
 use tracing::{debug, warn};
 
 pub(super) fn resolve_idle_timeout_secs(
@@ -40,6 +41,16 @@ fn parse_prompt_as_args(prompt: &str) -> Vec<String> {
 
 fn is_command_on_path(command: &str) -> bool {
     cli_wrapper::is_binary_on_path(command)
+}
+
+pub(super) fn merge_launch_env(env: &mut HashMap<String, String>, invocation: &LaunchInvocation) {
+    for (key, value) in &invocation.env {
+        if env.contains_key(key) {
+            warn!(env_key = %key, "Ignoring CLI launch env override for existing environment variable");
+            continue;
+        }
+        env.insert(key.clone(), value.clone());
+    }
 }
 
 pub(super) async fn build_cli_invocation(
@@ -111,6 +122,7 @@ fn parse_contract_launch(runtime_contract: Option<&serde_json::Value>) -> Result
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::{BTreeMap, HashMap};
 
     #[test]
     fn parses_runtime_contract_launch() {
@@ -169,5 +181,27 @@ mod tests {
             .await
             .expect_err("missing launch contract should fail");
         assert!(err.to_string().contains("Missing runtime contract launch for AI CLI"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn merge_launch_env_preserves_existing_values() {
+        let mut env = HashMap::from([
+            ("OPENAI_API_KEY".to_string(), "caller-key".to_string()),
+            ("PATH".to_string(), "/usr/bin".to_string()),
+        ]);
+        let invocation = LaunchInvocation {
+            command: "codex".to_string(),
+            args: vec!["exec".to_string()],
+            env: BTreeMap::from([
+                ("OPENAI_API_KEY".to_string(), "skill-key".to_string()),
+                ("SKILL_MODE".to_string(), "review".to_string()),
+            ]),
+            prompt_via_stdin: false,
+        };
+
+        merge_launch_env(&mut env, &invocation);
+
+        assert_eq!(env.get("OPENAI_API_KEY").map(String::as_str), Some("caller-key"));
+        assert_eq!(env.get("SKILL_MODE").map(String::as_str), Some("review"));
     }
 }

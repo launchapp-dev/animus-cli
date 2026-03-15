@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::skill_resolution::{resolve_skill, resolve_skills_for_project};
+use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
 use crate::skill_scoping::load_builtin_skills;
 
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
@@ -1584,23 +1584,26 @@ fn validate_phase_definition(
 }
 
 fn validate_skill_references(field_path: &str, skills: &[String], project_root: Option<&Path>) -> Result<()> {
+    let mut requested_skills = Vec::with_capacity(skills.len());
     for skill_name in skills {
         let trimmed = skill_name.trim();
         if trimmed.is_empty() {
             return Err(anyhow!("{field_path} must not contain empty values"));
         }
-
-        if let Some(project_root) = project_root {
-            resolve_skills_for_project(&[trimmed.to_string()], project_root)
-                .map(|_| ())
-                .map_err(|error| anyhow!("{field_path} references unknown skill '{}': {}", trimmed, error))?;
-        } else {
-            let builtin = load_builtin_skills()?;
-            resolve_skill(trimmed, &[builtin])
-                .map(|_| ())
-                .map_err(|error| anyhow!("{field_path} references unknown skill '{}': {}", trimmed, error))?;
-        }
+        requested_skills.push(trimmed.to_string());
     }
+
+    let result = if let Some(project_root) = project_root {
+        resolve_skills_for_project(&requested_skills, project_root).map(|_| ())
+    } else {
+        let builtin = load_builtin_skills()?;
+        resolve_skills(&requested_skills, &[builtin]).map(|_| ())
+    };
+
+    if let Err(error) = result {
+        return Err(anyhow!("{field_path} validation failed: {error}"));
+    }
+
     Ok(())
 }
 

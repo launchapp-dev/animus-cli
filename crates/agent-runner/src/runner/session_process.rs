@@ -12,7 +12,7 @@ use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info};
 
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
-use super::process_builder::{build_cli_invocation, resolve_idle_timeout_secs};
+use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 
 pub(super) fn use_native_session_backend(tool: &str, _runtime_contract: Option<&Value>) -> bool {
     matches!(
@@ -48,9 +48,7 @@ pub(super) async fn spawn_session_process(
 ) -> Result<i32> {
     let mut invocation = build_cli_invocation(tool, model, prompt, runtime_contract).await?;
     let mut env = env;
-    for (key, value) in &invocation.env {
-        env.insert(key.clone(), value.clone());
-    }
+    merge_launch_env(&mut env, &invocation);
     let enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
     apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, run_id, &mut temp_cleanup)?;
@@ -143,9 +141,7 @@ fn build_session_request(
         merged_contract = json!({});
     }
     let mut merged_env = env;
-    for (key, value) in &invocation.env {
-        merged_env.insert(key.clone(), value.clone());
-    }
+    merge_launch_env(&mut merged_env, &invocation);
 
     if merged_contract.get("cli").and_then(Value::as_object).is_none() {
         merged_contract["cli"] = json!({});

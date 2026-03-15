@@ -1,5 +1,7 @@
 use orchestrator_config::SkillDefinition;
+use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 
 fn default_registry_available() -> bool {
     true
@@ -16,7 +18,7 @@ pub(super) struct SkillRegistrySourceConfig {
     pub(super) url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct SkillVersionRecord {
     pub(super) name: String,
     pub(super) version: String,
@@ -28,21 +30,7 @@ pub(super) struct SkillVersionRecord {
     pub(super) definition: Option<SkillDefinition>,
 }
 
-impl PartialEq for SkillVersionRecord {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.version == other.version
-            && self.source == other.source
-            && self.registry == other.registry
-            && self.integrity == other.integrity
-            && self.artifact == other.artifact
-            && serialized_skill_definition(&self.definition) == serialized_skill_definition(&other.definition)
-    }
-}
-
-impl Eq for SkillVersionRecord {}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct ResolvedSkillEntry {
     pub(super) name: String,
     pub(super) version: String,
@@ -54,19 +42,14 @@ pub(super) struct ResolvedSkillEntry {
     pub(super) definition: Option<SkillDefinition>,
 }
 
-impl PartialEq for ResolvedSkillEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.version == other.version
-            && self.source == other.source
-            && self.registry == other.registry
-            && self.integrity == other.integrity
-            && self.artifact == other.artifact
-            && serialized_skill_definition(&self.definition) == serialized_skill_definition(&other.definition)
+fn compare_versions_desc(left: &str, right: &str) -> Ordering {
+    match (Version::parse(left), Version::parse(right)) {
+        (Ok(left), Ok(right)) => right.cmp(&left),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => right.cmp(left),
     }
 }
-
-impl Eq for ResolvedSkillEntry {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct SkillProjectConstraint {
@@ -118,7 +101,8 @@ impl SkillRegistryStateV1 {
                 .cmp(&b.name)
                 .then_with(|| a.source.cmp(&b.source))
                 .then_with(|| a.registry.cmp(&b.registry))
-                .then_with(|| a.version.cmp(&b.version))
+                .then_with(|| compare_versions_desc(&a.version, &b.version))
+                .then_with(|| b.version.cmp(&a.version))
         });
         self.installed.dedup_by(|a, b| a.name == b.name && a.source == b.source);
 
@@ -156,8 +140,4 @@ impl SkillLockStateV1 {
         });
         self.entries.dedup_by(|a, b| a.name == b.name && a.source == b.source);
     }
-}
-
-fn serialized_skill_definition(definition: &Option<SkillDefinition>) -> Option<String> {
-    definition.as_ref().and_then(|value| serde_json::to_string(value).ok())
 }

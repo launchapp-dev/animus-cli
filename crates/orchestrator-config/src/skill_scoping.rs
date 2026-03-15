@@ -1,8 +1,10 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::skill_definition::{parse_skill_manifest, SkillDefinition};
@@ -100,6 +102,15 @@ fn installed_skills_registry_path(project_root: &Path) -> PathBuf {
     scoped_root.join("state").join("skills-registry.v1.json")
 }
 
+fn compare_installed_versions_desc(left: &str, right: &str) -> Ordering {
+    match (Version::parse(left), Version::parse(right)) {
+        (Ok(left), Ok(right)) => right.cmp(&left),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => right.cmp(left),
+    }
+}
+
 pub fn load_installed_skill_entries(project_root: &Path) -> Result<Vec<InstalledSkillRecord>> {
     let path = installed_skills_registry_path(project_root);
     if !path.exists() {
@@ -112,8 +123,11 @@ pub fn load_installed_skill_entries(project_root: &Path) -> Result<Vec<Installed
         left.name
             .cmp(&right.name)
             .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| compare_installed_versions_desc(&left.version, &right.version))
             .then_with(|| left.registry.cmp(&right.registry))
-            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| right.version.cmp(&left.version))
+            .then_with(|| left.integrity.cmp(&right.integrity))
+            .then_with(|| left.artifact.cmp(&right.artifact))
     });
     state.installed.dedup_by(|left, right| left.name == right.name && left.source == right.source);
     Ok(state.installed)
@@ -181,6 +195,7 @@ const BUILTIN_SKILL_YAMLS: &[(&str, &str)] = &[
     ("debugging", include_str!("../config/skills/debugging.yaml")),
     ("refactoring", include_str!("../config/skills/refactoring.yaml")),
     ("unit-testing", include_str!("../config/skills/unit-testing.yaml")),
+    // These aliases keep existing persona/task references valid until dedicated skill content exists.
     ("testing", include_str!("../config/skills/unit-testing.yaml")),
     ("code-review", include_str!("../config/skills/code-review.yaml")),
     ("deep-search", include_str!("../config/skills/deep-search.yaml")),
@@ -395,5 +410,41 @@ description: Project skill
             .expect("installed source should be present");
         assert!(installed.skills.contains_key("registry-review"));
         assert_eq!(installed.skills["registry-review"].name, "registry-review");
+    }
+
+    #[test]
+    fn test_load_installed_skill_entries_prefers_semver_latest() {
+        let tmp = TempDir::new().unwrap();
+        let state_dir = protocol::scoped_state_root(tmp.path()).unwrap_or_else(|| tmp.path().join(".ao")).join("state");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join("skills-registry.v1.json"),
+            serde_json::json!({
+                "installed": [
+                    {
+                        "name": "registry-review",
+                        "version": "9.0.0",
+                        "source": "acme",
+                        "registry": "project",
+                        "integrity": "sha256:old",
+                        "artifact": "registry-review-9.0.0.tgz"
+                    },
+                    {
+                        "name": "registry-review",
+                        "version": "10.0.0",
+                        "source": "acme",
+                        "registry": "project",
+                        "integrity": "sha256:new",
+                        "artifact": "registry-review-10.0.0.tgz"
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let installed = load_installed_skill_entries(tmp.path()).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].version, "10.0.0");
     }
 }

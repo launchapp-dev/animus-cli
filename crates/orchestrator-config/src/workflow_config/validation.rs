@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 use crate::agent_runtime_config::{AgentRuntimeConfig, PhaseExecutionMode};
-use crate::skill_resolution::{resolve_skill, resolve_skills_for_project};
+use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
 use crate::skill_scoping::load_builtin_skills;
 
 use super::types::*;
@@ -71,22 +71,24 @@ fn validate_skill_references(
     project_root: Option<&Path>,
     errors: &mut Vec<String>,
 ) {
+    let mut requested_skills = Vec::with_capacity(skills.len());
     for skill_name in skills {
         let trimmed = skill_name.trim();
         if trimmed.is_empty() {
             errors.push(format!("{field_path} must not contain empty values"));
-            continue;
+            return;
         }
+        requested_skills.push(trimmed.to_string());
+    }
 
-        let result = if let Some(project_root) = project_root {
-            resolve_skills_for_project(&[trimmed.to_string()], project_root).map(|_| ())
-        } else {
-            load_builtin_skills().and_then(|builtin| resolve_skill(trimmed, &[builtin]).map(|_| ()))
-        };
+    let result = if let Some(project_root) = project_root {
+        resolve_skills_for_project(&requested_skills, project_root).map(|_| ())
+    } else {
+        load_builtin_skills().and_then(|builtin| resolve_skills(&requested_skills, &[builtin]).map(|_| ()))
+    };
 
-        if let Err(error) = result {
-            errors.push(format!("{field_path} references unknown skill '{}': {}", trimmed, error));
-        }
+    if let Err(error) = result {
+        errors.push(format!("{field_path} validation failed: {error}"));
     }
 }
 

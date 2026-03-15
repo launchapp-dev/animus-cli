@@ -2,13 +2,14 @@ use std::path::Path;
 
 use anyhow::Result;
 use orchestrator_config::{
-    apply_skill_for_execution, merge_skill_applications,
+    apply_skill_for_execution, merge_skill_applications, parse_skill_capability_key, preview_skill_application,
     skill_resolution::{resolve_skills_for_project, ResolvedSkill},
-    SkillApplicationResult,
+    SkillApplicationResult, SkillCapabilityKey,
 };
 use protocol::PhaseCapabilities;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::config_context::RuntimeConfigContext;
 
@@ -82,8 +83,7 @@ pub fn preview_phase_capabilities(base: &PhaseCapabilities, resolved: &ResolvedP
     let preview_results = resolved
         .resolved_skills
         .iter()
-        .filter(|skill| skill.definition.activation.is_empty())
-        .filter_map(|skill| apply_skill_for_execution(&skill.definition, "__preview__", None))
+        .filter_map(|skill| preview_skill_application(&skill.definition))
         .collect::<Vec<_>>();
     if preview_results.is_empty() {
         return base.clone();
@@ -118,32 +118,18 @@ pub fn apply_skill_capability_overrides(
 ) -> PhaseCapabilities {
     let mut caps = base.clone();
     for (name, enabled) in overrides {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "writes_files" | "write_files" | "file_write" | "file_writes" | "can_write" => {
-                caps.writes_files = *enabled;
+        match parse_skill_capability_key(name) {
+            Some(SkillCapabilityKey::WritesFiles) => caps.writes_files = *enabled,
+            Some(SkillCapabilityKey::RequiresCommit) => caps.requires_commit = *enabled,
+            Some(SkillCapabilityKey::EnforceProductChanges) => caps.enforce_product_changes = *enabled,
+            Some(SkillCapabilityKey::IsResearch) => caps.is_research = *enabled,
+            Some(SkillCapabilityKey::IsUiUx) => caps.is_ui_ux = *enabled,
+            Some(SkillCapabilityKey::IsReview) => caps.is_review = *enabled,
+            Some(SkillCapabilityKey::IsTesting) => caps.is_testing = *enabled,
+            Some(SkillCapabilityKey::IsRequirements) => caps.is_requirements = *enabled,
+            None => {
+                warn!(capability = %name, "Ignoring unknown skill capability override");
             }
-            "requires_commit" | "require_commit" => {
-                caps.requires_commit = *enabled;
-            }
-            "enforce_product_changes" | "product_changes" => {
-                caps.enforce_product_changes = *enabled;
-            }
-            "is_research" | "research" => {
-                caps.is_research = *enabled;
-            }
-            "is_ui_ux" | "ui_ux" | "ui-ux" => {
-                caps.is_ui_ux = *enabled;
-            }
-            "is_review" | "review" => {
-                caps.is_review = *enabled;
-            }
-            "is_testing" | "testing" => {
-                caps.is_testing = *enabled;
-            }
-            "is_requirements" | "requirements" => {
-                caps.is_requirements = *enabled;
-            }
-            _ => {}
         }
     }
     caps

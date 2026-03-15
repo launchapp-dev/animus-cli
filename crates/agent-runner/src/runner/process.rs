@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 
 use super::lifecycle::spawn_wait_task;
 use super::mcp_policy::{apply_native_mcp_policy, is_tool_call_allowed, resolve_mcp_tool_enforcement, TempPathCleanup};
-use super::process_builder::{build_cli_invocation, resolve_idle_timeout_secs};
+use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 use super::process_signals::{terminate_and_untrack, untrack_after_completion, untrack_after_error};
 use super::stream_bridge::spawn_stream_forwarders;
 use crate::cleanup::track_process;
@@ -43,9 +43,7 @@ pub async fn spawn_cli_process(
 ) -> Result<i32> {
     let mut invocation = build_cli_invocation(tool, model, prompt, runtime_contract).await?;
     let mut env = env;
-    for (key, value) in &invocation.env {
-        env.insert(key.clone(), value.clone());
-    }
+    merge_launch_env(&mut env, &invocation);
     let hard_timeout_secs = timeout_secs.filter(|value| *value > 0);
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, hard_timeout_secs, runtime_contract);
     let mcp_tool_enforcement = resolve_mcp_tool_enforcement(runtime_contract);

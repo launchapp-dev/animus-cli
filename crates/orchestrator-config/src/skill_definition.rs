@@ -17,7 +17,7 @@ pub enum SkillCategory {
     Planning,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillPrompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
@@ -29,7 +29,7 @@ pub struct SkillPrompt {
     pub directives: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillActivation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
@@ -60,7 +60,7 @@ impl SkillActivation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillModelPreference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred: Option<String>,
@@ -68,7 +68,7 @@ pub struct SkillModelPreference {
     pub fallback: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillToolAdapter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -86,7 +86,7 @@ pub struct SkillToolAdapter {
     pub prompt_override: Option<SkillPrompt>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillDefinition {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,7 +133,7 @@ pub struct SkillDefinition {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillApplicationResult {
     pub system_prompt_fragments: Vec<String>,
     pub prompt_prefixes: Vec<String>,
@@ -177,6 +177,34 @@ fn default_manifest_schema() -> String {
     "ao.skills.v1".to_string()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillCapabilityKey {
+    WritesFiles,
+    RequiresCommit,
+    EnforceProductChanges,
+    IsResearch,
+    IsUiUx,
+    IsReview,
+    IsTesting,
+    IsRequirements,
+}
+
+pub fn parse_skill_capability_key(name: &str) -> Option<SkillCapabilityKey> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "writes_files" | "write_files" | "file_write" | "file_writes" | "can_write" => {
+            Some(SkillCapabilityKey::WritesFiles)
+        }
+        "requires_commit" | "require_commit" => Some(SkillCapabilityKey::RequiresCommit),
+        "enforce_product_changes" | "product_changes" => Some(SkillCapabilityKey::EnforceProductChanges),
+        "is_research" | "research" => Some(SkillCapabilityKey::IsResearch),
+        "is_ui_ux" | "ui_ux" | "ui-ux" => Some(SkillCapabilityKey::IsUiUx),
+        "is_review" | "review" => Some(SkillCapabilityKey::IsReview),
+        "is_testing" | "testing" => Some(SkillCapabilityKey::IsTesting),
+        "is_requirements" | "requirements" => Some(SkillCapabilityKey::IsRequirements),
+        _ => None,
+    }
+}
+
 pub fn parse_skill_manifest(yaml: &str) -> Result<SkillManifest> {
     let manifest: SkillManifest =
         serde_yaml::from_str(yaml).map_err(|e| anyhow!("Failed to parse skill manifest: {e}"))?;
@@ -211,6 +239,15 @@ pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<()> {
     if skill.activation.models.iter().any(|value| value.trim().is_empty()) {
         return Err(anyhow!("activation.models must not contain empty values"));
     }
+    for capability in skill.capabilities.keys() {
+        let trimmed = capability.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("capabilities must not contain empty keys"));
+        }
+        if parse_skill_capability_key(trimmed).is_none() {
+            return Err(anyhow!("unsupported capability override '{}'", trimmed));
+        }
+    }
     Ok(())
 }
 
@@ -222,15 +259,7 @@ fn find_tool_adapter<'a>(skill: &'a SkillDefinition, tool_id: &str) -> Option<&'
         .map(|(_, adapter)| adapter)
 }
 
-pub fn apply_skill_for_execution(
-    skill: &SkillDefinition,
-    tool_id: &str,
-    model_id: Option<&str>,
-) -> Option<SkillApplicationResult> {
-    if !skill.activation.matches(tool_id, model_id) {
-        return None;
-    }
-
+fn build_skill_application(skill: &SkillDefinition, tool_id: Option<&str>) -> SkillApplicationResult {
     let mut result = SkillApplicationResult::default();
 
     if let Some(system) = &skill.prompt.system {
@@ -252,37 +281,59 @@ pub fn apply_skill_for_execution(
     result.timeout_secs = skill.timeout_secs;
     result.capabilities.extend(skill.capabilities.clone());
 
-    if let Some(adapter) = find_tool_adapter(skill, tool_id) {
-        if let Some(model) = &adapter.model {
-            result.model = Some(model.clone());
-        }
-        if let Some(policy) = &adapter.tool_policy {
-            result.tool_policy = Some(policy.clone());
-        }
-        result.extra_args.extend(adapter.extra_args.clone());
-        result.env.extend(adapter.env.clone());
-        result.mcp_servers.extend(adapter.mcp_servers.clone());
-        result.codex_config_overrides.extend(adapter.codex_config_overrides.clone());
+    if let Some(tool_id) = tool_id {
+        if let Some(adapter) = find_tool_adapter(skill, tool_id) {
+            if let Some(model) = &adapter.model {
+                result.model = Some(model.clone());
+            }
+            if let Some(policy) = &adapter.tool_policy {
+                result.tool_policy = Some(policy.clone());
+            }
+            result.extra_args.extend(adapter.extra_args.clone());
+            result.env.extend(adapter.env.clone());
+            result.mcp_servers.extend(adapter.mcp_servers.clone());
+            result.codex_config_overrides.extend(adapter.codex_config_overrides.clone());
 
-        if let Some(prompt_override) = &adapter.prompt_override {
-            result.system_prompt_fragments.clear();
-            result.prompt_prefixes.clear();
-            result.prompt_suffixes.clear();
-            result.directives.clear();
-            if let Some(system) = &prompt_override.system {
-                result.system_prompt_fragments.push(system.clone());
+            if let Some(prompt_override) = &adapter.prompt_override {
+                result.system_prompt_fragments.clear();
+                result.prompt_prefixes.clear();
+                result.prompt_suffixes.clear();
+                result.directives.clear();
+                if let Some(system) = &prompt_override.system {
+                    result.system_prompt_fragments.push(system.clone());
+                }
+                if let Some(prefix) = &prompt_override.prefix {
+                    result.prompt_prefixes.push(prefix.clone());
+                }
+                if let Some(suffix) = &prompt_override.suffix {
+                    result.prompt_suffixes.push(suffix.clone());
+                }
+                result.directives.extend(prompt_override.directives.clone());
             }
-            if let Some(prefix) = &prompt_override.prefix {
-                result.prompt_prefixes.push(prefix.clone());
-            }
-            if let Some(suffix) = &prompt_override.suffix {
-                result.prompt_suffixes.push(suffix.clone());
-            }
-            result.directives.extend(prompt_override.directives.clone());
         }
     }
 
-    Some(result)
+    result
+}
+
+pub fn apply_skill_for_execution(
+    skill: &SkillDefinition,
+    tool_id: &str,
+    model_id: Option<&str>,
+) -> Option<SkillApplicationResult> {
+    if !skill.activation.matches(tool_id, model_id) {
+        return None;
+    }
+
+    Some(build_skill_application(skill, Some(tool_id)))
+}
+
+pub fn preview_skill_application(skill: &SkillDefinition) -> Option<SkillApplicationResult> {
+    if !skill.activation.is_empty() {
+        return None;
+    }
+
+    Some(build_skill_application(skill, None))
 }
 
 pub fn apply_skill_for_tool(skill: &SkillDefinition, tool_id: &str) -> SkillApplicationResult {
@@ -354,7 +405,7 @@ mcp_servers:
   - ao
 timeout_secs: 300
 capabilities:
-  web_search: true
+  is_review: true
   file_write: false
 extra_args:
   - "--verbose"
@@ -399,7 +450,7 @@ adapters:
         assert_eq!(skill.prompt.directives.len(), 2);
         assert_eq!(skill.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(skill.timeout_secs, Some(300));
-        assert_eq!(skill.capabilities.get("web_search"), Some(&true));
+        assert_eq!(skill.capabilities.get("is_review"), Some(&true));
         assert_eq!(skill.capabilities.get("file_write"), Some(&false));
         assert!(skill.adapters.contains_key("gemini"));
         assert_eq!(skill.tags, vec!["review", "quality"]);
@@ -456,6 +507,13 @@ skills:
         let yaml = "name: x\ntimeout_secs: 0\n";
         let err = parse_skill_definition(yaml).unwrap_err();
         assert!(err.to_string().contains("timeout_secs"));
+    }
+
+    #[test]
+    fn test_validate_unknown_capability_override() {
+        let yaml = "name: x\ncapabilities:\n  write_file: true\n";
+        let err = parse_skill_definition(yaml).unwrap_err();
+        assert!(err.to_string().contains("unsupported capability override"));
     }
 
     #[test]

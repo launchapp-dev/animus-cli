@@ -2372,6 +2372,7 @@ dependencies = [
  "anyhow",
  "croner",
  "protocol",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -5063,6 +5064,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
