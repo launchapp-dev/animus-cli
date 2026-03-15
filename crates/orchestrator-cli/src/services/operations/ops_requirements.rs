@@ -120,8 +120,6 @@ fn build_requirements_execute_args(
         tool: None,
         phase_timeout_secs: None,
         input_json,
-        quiet: false,
-        verbose: false,
         vars: Vec::new(),
     })
 }

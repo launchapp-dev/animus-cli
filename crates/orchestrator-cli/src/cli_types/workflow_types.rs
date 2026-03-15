@@ -248,20 +248,6 @@ pub(crate) struct WorkflowRunArgs {
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
     #[arg(
-        short,
-        long,
-        default_value_t = false,
-        help = "Suppress agent output streaming; only show phase summaries (sync only)."
-    )]
-    pub(crate) quiet: bool,
-    #[arg(
-        short,
-        long,
-        default_value_t = false,
-        help = "Show all agent output including thinking blocks (sync only)."
-    )]
-    pub(crate) verbose: bool,
-    #[arg(
         long = "var",
         value_name = "KEY=VALUE",
         help = "Workflow variable in KEY=VALUE format. Repeat for multiple variables."
@@ -337,20 +323,6 @@ pub(crate) struct WorkflowExecuteArgs {
         help = "JSON payload for additional config overrides."
     )]
     pub(crate) input_json: Option<String>,
-    #[arg(
-        short,
-        long,
-        default_value_t = false,
-        help = "Suppress agent output streaming; only show phase summaries."
-    )]
-    pub(crate) quiet: bool,
-    #[arg(
-        short,
-        long,
-        default_value_t = false,
-        help = "Show all agent output including thinking blocks and raw JSON."
-    )]
-    pub(crate) verbose: bool,
     #[arg(
         long = "var",
         value_name = "KEY=VALUE",

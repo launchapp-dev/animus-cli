@@ -245,7 +245,8 @@ impl AoMcpServer {
         let input = params.0;
         let mut args = vec![
             "workflow".to_string(),
-            "execute".to_string(),
+            "run".to_string(),
+            "--sync".to_string(),
             "--task-id".to_string(),
             input.task_id,
         ];

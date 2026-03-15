@@ -335,8 +335,6 @@ pub(crate) async fn handle_workflow(
                     tool: args.tool,
                     phase_timeout_secs: args.phase_timeout_secs,
                     input_json: args.input_json,
-                    quiet: args.quiet,
-                    verbose: args.verbose,
                     vars: args.vars,
                 };
                 execute::handle_workflow_execute(execute_args, hub, project_root, json).await?;

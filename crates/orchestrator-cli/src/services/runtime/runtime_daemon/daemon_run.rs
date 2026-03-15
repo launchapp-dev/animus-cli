@@ -5,6 +5,7 @@ use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
 use orchestrator_core::services::DaemonStartConfig;
+use orchestrator_core::{load_daemon_project_config, write_daemon_project_config};
 use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
 use std::sync::Arc;
 
@@ -75,11 +76,47 @@ impl DaemonRunHooks for CliDaemonRunHost {
     }
 }
 
+fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &str) {
+    let project_path = std::path::Path::new(project_root);
+    let mut config = load_daemon_project_config(project_path).unwrap_or_default();
+    let mut changed = false;
+
+    if let Some(value) = args.scheduler.auto_merge {
+        if config.auto_merge_enabled != value {
+            config.auto_merge_enabled = value;
+            changed = true;
+        }
+    }
+    if let Some(value) = args.scheduler.auto_pr {
+        if config.auto_pr_enabled != value {
+            config.auto_pr_enabled = value;
+            changed = true;
+        }
+    }
+    if let Some(value) = args.scheduler.auto_commit_before_merge {
+        if config.auto_commit_before_merge != value {
+            config.auto_commit_before_merge = value;
+            changed = true;
+        }
+    }
+    if let Some(value) = args.scheduler.auto_prune_worktrees_after_merge {
+        if config.auto_prune_worktrees_after_merge != value {
+            config.auto_prune_worktrees_after_merge = value;
+            changed = true;
+        }
+    }
+
+    if changed {
+        let _ = write_daemon_project_config(project_path, &config);
+    }
+}
+
 pub(super) async fn handle_daemon_run(
     args: DaemonRunArgs,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    apply_scheduler_overrides_to_pm_config(&args, project_root);
     let runtime_options = runtime_options_from_cli(&args);
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
     let daemon_config = workflow_config.config.daemon.as_ref();
