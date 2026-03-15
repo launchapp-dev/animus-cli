@@ -57,7 +57,7 @@ pub(crate) struct AgentRunArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Persist run event logs under .ao/runs."
+        help = "Persist run event logs under the scoped runtime directory."
     )]
     pub(crate) save_jsonl: bool,
     #[arg(long, value_name = "PATH", help = "Override the base directory used for persisted run logs.")]
