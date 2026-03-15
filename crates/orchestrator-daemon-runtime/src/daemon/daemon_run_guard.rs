@@ -76,7 +76,11 @@ fn canonicalize_lossy(path: &str) -> String {
 }
 
 fn daemon_lock_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("daemon.lock")
+    let canonical = PathBuf::from(canonicalize_lossy(project_root));
+    let base = protocol::scoped_state_root(&canonical)
+        .map(|root| root.join("daemon"))
+        .unwrap_or_else(|| canonical.join(".ao"));
+    base.join("daemon.lock")
 }
 
 fn read_daemon_lock_pid(lock_path: &PathBuf) -> Option<u32> {

@@ -70,12 +70,19 @@ fn canonicalize_lossy(path: &str) -> String {
     candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }
 
+fn scoped_daemon_dir(project_root: &str) -> PathBuf {
+    let canonical = PathBuf::from(canonicalize_lossy(project_root));
+    protocol::scoped_state_root(&canonical)
+        .map(|root| root.join("daemon"))
+        .unwrap_or_else(|| canonical.join(".ao"))
+}
+
 fn daemon_runtime_state_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("daemon-state.json")
+    scoped_daemon_dir(project_root).join("daemon-state.json")
 }
 
 fn daemon_pid_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("daemon.pid")
+    scoped_daemon_dir(project_root).join("daemon.pid")
 }
 
 fn load_daemon_runtime_state(project_root: &str) -> Result<DaemonRuntimeStateRecord> {

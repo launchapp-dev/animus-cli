@@ -400,7 +400,7 @@ async fn requirements_rest_and_graphql_share_filter_sort_and_pagination_semantic
             "status": "draft",
             "priority": "must",
             "category": "ops",
-            "type": "technical",
+            "requirement_type": "technical",
             "tags": ["ops"],
             "linked_task_ids": ["TASK-999"]
         }),
@@ -410,7 +410,7 @@ async fn requirements_rest_and_graphql_share_filter_sort_and_pagination_semantic
             "status": "draft",
             "priority": "must",
             "category": "runtime",
-            "type": "technical",
+            "requirement_type": "technical",
             "tags": ["backend"],
             "linked_task_ids": ["TASK-123"]
         }),
@@ -420,7 +420,7 @@ async fn requirements_rest_and_graphql_share_filter_sort_and_pagination_semantic
             "status": "draft",
             "priority": "must",
             "category": "runtime",
-            "type": "technical",
+            "requirement_type": "technical",
             "tags": ["backend"],
             "linked_task_ids": ["TASK-123"]
         }),
