@@ -10,14 +10,13 @@ use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
 use orchestrator_daemon_runtime::DaemonRuntimeState;
 use orchestrator_notifications::{
-    clear_notification_config, parse_notification_config_value,
-    read_notification_config_from_pm_config, serialize_notification_config,
-    NOTIFICATION_CONFIG_SCHEMA,
+    clear_notification_config, parse_notification_config_value, read_notification_config_from_pm_config,
+    serialize_notification_config, NOTIFICATION_CONFIG_SCHEMA,
 };
 
 use crate::{
-    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs,
-    DaemonStopArgs, RunnerScopeArg,
+    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs, DaemonStopArgs,
+    RunnerScopeArg,
 };
 
 mod daemon_events;
@@ -54,11 +53,7 @@ fn runner_scope_value(scope: &RunnerScopeArg) -> &'static str {
 
 pub(crate) fn canonicalize_lossy(path: &str) -> String {
     let candidate = PathBuf::from(path);
-    candidate
-        .canonicalize()
-        .unwrap_or(candidate)
-        .to_string_lossy()
-        .to_string()
+    candidate.canonicalize().unwrap_or(candidate).to_string_lossy().to_string()
 }
 
 pub(super) fn get_daemon_pid(project_root: &str) -> Result<Option<u32>> {
@@ -73,18 +68,12 @@ pub(super) fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()>
     DaemonRuntimeState::set_runtime_paused(project_root, paused)
 }
 
-pub(super) fn set_shutdown_requested(
-    project_root: &str,
-    requested: bool,
-    timeout_secs: Option<u64>,
-) -> Result<()> {
+pub(super) fn set_shutdown_requested(project_root: &str, requested: bool, timeout_secs: Option<u64>) -> Result<()> {
     DaemonRuntimeState::set_shutdown_requested(project_root, requested, timeout_secs)
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root))
-        .join(".ao")
-        .join("pm-config.json")
+    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("pm-config.json")
 }
 
 fn write_daemon_pid(project_root: &str, pid: u32) {
@@ -101,27 +90,16 @@ fn read_daemon_pid(project_root: &str) -> Option<u32> {
 
 pub(crate) fn autonomous_daemon_log_path(project_root: &str) -> PathBuf {
     let canonical_root = PathBuf::from(canonicalize_lossy(project_root));
-    let scoped_runtime_root = dirs::home_dir().map(|home| {
-        home.join(".ao")
-            .join(protocol::repository_scope_for_path(&canonical_root))
-    });
+    let scoped_runtime_root =
+        dirs::home_dir().map(|home| home.join(".ao").join(protocol::repository_scope_for_path(&canonical_root)));
 
-    scoped_runtime_root
-        .unwrap_or_else(|| canonical_root.join(".ao"))
-        .join("daemon")
-        .join("daemon.log")
+    scoped_runtime_root.unwrap_or_else(|| canonical_root.join(".ao")).join("daemon").join("daemon.log")
 }
 
-async fn wait_for_autonomous_startup_probe(
-    child: &mut Child,
-    probe_window: Duration,
-) -> Result<Option<ExitStatus>> {
+async fn wait_for_autonomous_startup_probe(child: &mut Child, probe_window: Duration) -> Result<Option<ExitStatus>> {
     let deadline = tokio::time::Instant::now() + probe_window;
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .context("failed to check autonomous daemon process state")?
-        {
+        if let Some(status) = child.try_wait().context("failed to check autonomous daemon process state")? {
             return Ok(Some(status));
         }
 
@@ -150,10 +128,8 @@ fn read_autonomous_startup_log_tail(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    let file_len = file
-        .metadata()
-        .with_context(|| format!("failed to read log metadata for {}", log_path.display()))?
-        .len();
+    let file_len =
+        file.metadata().with_context(|| format!("failed to read log metadata for {}", log_path.display()))?.len();
     if file_len <= startup_log_offset {
         return Ok(None);
     }
@@ -165,8 +141,7 @@ fn read_autonomous_startup_log_tail(
     file.seek(SeekFrom::Start(read_start))
         .with_context(|| format!("failed to seek startup log {}", log_path.display()))?;
     let mut bytes = Vec::with_capacity(read_bytes as usize);
-    file.read_to_end(&mut bytes)
-        .with_context(|| format!("failed to read startup log {}", log_path.display()))?;
+    file.read_to_end(&mut bytes).with_context(|| format!("failed to read startup log {}", log_path.display()))?;
 
     let mut content = String::from_utf8_lossy(&bytes).into_owned();
     if read_start > startup_log_offset {
@@ -175,11 +150,7 @@ fn read_autonomous_startup_log_tail(
         }
     }
 
-    let mut lines = content
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
+    let mut lines = content.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect::<Vec<_>>();
 
     if lines.len() > max_lines {
         lines = lines.split_off(lines.len() - max_lines);
@@ -198,19 +169,12 @@ fn truncate_from_end(value: &str, max_chars: usize) -> String {
         return value.to_string();
     }
 
-    let suffix = value
-        .chars()
-        .skip(char_count.saturating_sub(max_chars))
-        .collect::<String>();
+    let suffix = value.chars().skip(char_count.saturating_sub(max_chars)).collect::<String>();
     format!("...[truncated]\n{suffix}")
 }
 
 fn autonomous_startup_log_diagnostics(log_path: &Path, startup_log_offset: u64) -> String {
-    match read_autonomous_startup_log_tail(
-        log_path,
-        startup_log_offset,
-        AUTONOMOUS_STARTUP_LOG_TAIL_LINES,
-    ) {
+    match read_autonomous_startup_log_tail(log_path, startup_log_offset, AUTONOMOUS_STARTUP_LOG_TAIL_LINES) {
         Ok(Some(tail)) => format!(
             "startup log tail (last {} lines):\n{}",
             AUTONOMOUS_STARTUP_LOG_TAIL_LINES,
@@ -232,13 +196,9 @@ fn autonomous_startup_failure_error(
         .unwrap_or_else(|| "process was not alive after startup probe completed".to_string());
     let diagnostics = autonomous_startup_log_diagnostics(log_path, startup_log_offset);
 
-    let log_tail = read_autonomous_startup_log_tail(
-        log_path,
-        startup_log_offset,
-        AUTONOMOUS_STARTUP_LOG_TAIL_LINES,
-    )
-    .ok()
-    .flatten();
+    let log_tail = read_autonomous_startup_log_tail(log_path, startup_log_offset, AUTONOMOUS_STARTUP_LOG_TAIL_LINES)
+        .ok()
+        .flatten();
 
     let message = format!(
         "autonomous daemon failed startup validation for pid {daemon_pid}: {status_detail}. startup log path: {}.\n{diagnostics}",
@@ -250,18 +210,14 @@ fn autonomous_startup_failure_error(
         "log_path": log_path.display().to_string(),
     });
     if let Some(tail) = log_tail {
-        details["startup_log_tail"] = serde_json::Value::String(truncate_from_end(
-            &tail,
-            AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS,
-        ));
+        details["startup_log_tail"] =
+            serde_json::Value::String(truncate_from_end(&tail, AUTONOMOUS_STARTUP_LOG_TAIL_MAX_CHARS));
     }
     if let Some(status) = exit_status {
         details["exit_code"] = serde_json::json!(status.code());
     }
 
-    crate::CliError::new(crate::CliErrorKind::Internal, message)
-        .with_details(details)
-        .into()
+    crate::CliError::new(crate::CliErrorKind::Internal, message).with_details(details).into()
 }
 
 fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
@@ -270,14 +226,13 @@ fn load_pm_config(project_root: &str) -> Result<serde_json::Value> {
         return Ok(serde_json::json!({}));
     }
 
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read daemon config at {}", path.display()))?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read daemon config at {}", path.display()))?;
     if content.trim().is_empty() {
         return Ok(serde_json::json!({}));
     }
 
-    serde_json::from_str(&content)
-        .with_context(|| format!("invalid daemon config JSON at {}", path.display()))
+    serde_json::from_str(&content).with_context(|| format!("invalid daemon config JSON at {}", path.display()))
 }
 
 fn save_pm_config(project_root: &str, value: &serde_json::Value) -> Result<()> {
@@ -286,8 +241,7 @@ fn save_pm_config(project_root: &str, value: &serde_json::Value) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
     }
-    let content =
-        serde_json::to_string_pretty(value).context("failed to serialize daemon config JSON")?;
+    let content = serde_json::to_string_pretty(value).context("failed to serialize daemon config JSON")?;
     fs::write(&path, format!("{content}\n"))
         .with_context(|| format!("failed to write daemon config at {}", path.display()))?;
     Ok(())
@@ -299,9 +253,7 @@ fn daemon_config_bool(config: &serde_json::Value, key: &str) -> Option<bool> {
 
 fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) -> Result<()> {
     if args.notification_config_json.is_some() && args.notification_config_file.is_some() {
-        anyhow::bail!(
-            "--notification-config-json and --notification-config-file cannot be used together"
-        );
+        anyhow::bail!("--notification-config-json and --notification-config-file cannot be used together");
     }
 
     let mut config = load_pm_config(project_root)?;
@@ -341,19 +293,10 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     }
 
     if let Some(config_path) = args.notification_config_file.as_deref() {
-        let raw_json = fs::read_to_string(config_path).with_context(|| {
-            format!(
-                "failed to read daemon notification config file at {}",
-                config_path
-            )
-        })?;
-        let value: serde_json::Value =
-            serde_json::from_str(raw_json.as_str()).with_context(|| {
-                format!(
-                    "failed to parse daemon notification config file at {}",
-                    config_path
-                )
-            })?;
+        let raw_json = fs::read_to_string(config_path)
+            .with_context(|| format!("failed to read daemon notification config file at {}", config_path))?;
+        let value: serde_json::Value = serde_json::from_str(raw_json.as_str())
+            .with_context(|| format!("failed to parse daemon notification config file at {}", config_path))?;
         let notification_config = parse_notification_config_value(&value)?;
         config["notification_config"] = serialize_notification_config(&notification_config)?;
         updated = true;
@@ -380,45 +323,25 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     )
 }
 
-fn spawn_autonomous_daemon_run(
-    project_root: &str,
-    args: &DaemonStartArgs,
-) -> Result<AutonomousDaemonSpawn> {
+fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Result<AutonomousDaemonSpawn> {
     let current_exe = std::env::current_exe().context("failed to resolve current ao binary")?;
     let log_path = autonomous_daemon_log_path(project_root);
     if let Some(parent) = log_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create autonomous daemon log directory {}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create autonomous daemon log directory {}", parent.display()))?;
     }
     let stdout_log = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
-        .with_context(|| {
-            format!(
-                "failed to open autonomous daemon log file {}",
-                log_path.display()
-            )
-        })?;
+        .with_context(|| format!("failed to open autonomous daemon log file {}", log_path.display()))?;
     let startup_log_offset = stdout_log
         .metadata()
-        .with_context(|| {
-            format!(
-                "failed to read autonomous daemon log metadata {}",
-                log_path.display()
-            )
-        })?
+        .with_context(|| format!("failed to read autonomous daemon log metadata {}", log_path.display()))?
         .len();
-    let stderr_log = stdout_log.try_clone().with_context(|| {
-        format!(
-            "failed to clone autonomous daemon log handle {}",
-            log_path.display()
-        )
-    })?;
+    let stderr_log = stdout_log
+        .try_clone()
+        .with_context(|| format!("failed to clone autonomous daemon log handle {}", log_path.display()))?;
 
     let mut command = ProcessCommand::new(current_exe);
     command
@@ -443,10 +366,7 @@ fn spawn_autonomous_daemon_run(
     if let Some(pool_size) = args.scheduler.pool_size {
         command.arg("--pool-size").arg(pool_size.to_string());
     }
-    command
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(stderr_log))
-        .stdin(Stdio::null());
+    command.stdout(Stdio::from(stdout_log)).stderr(Stdio::from(stderr_log)).stdin(Stdio::null());
     if let Some(auto_merge) = args.scheduler.auto_merge {
         command.arg("--auto-merge").arg(auto_merge.to_string());
     }
@@ -454,46 +374,30 @@ fn spawn_autonomous_daemon_run(
         command.arg("--auto-pr").arg(auto_pr.to_string());
     }
     if let Some(auto_commit_before_merge) = args.scheduler.auto_commit_before_merge {
-        command
-            .arg("--auto-commit-before-merge")
-            .arg(auto_commit_before_merge.to_string());
+        command.arg("--auto-commit-before-merge").arg(auto_commit_before_merge.to_string());
     }
-    if let Some(auto_prune_worktrees_after_merge) =
-        args.scheduler.auto_prune_worktrees_after_merge
-    {
-        command
-            .arg("--auto-prune-worktrees-after-merge")
-            .arg(auto_prune_worktrees_after_merge.to_string());
+    if let Some(auto_prune_worktrees_after_merge) = args.scheduler.auto_prune_worktrees_after_merge {
+        command.arg("--auto-prune-worktrees-after-merge").arg(auto_prune_worktrees_after_merge.to_string());
     }
     if let Some(phase_timeout_secs) = args.scheduler.phase_timeout_secs {
-        command
-            .arg("--phase-timeout-secs")
-            .arg(phase_timeout_secs.to_string());
+        command.arg("--phase-timeout-secs").arg(phase_timeout_secs.to_string());
     }
     if let Some(idle_timeout_secs) = args.scheduler.idle_timeout_secs {
-        command
-            .arg("--idle-timeout-secs")
-            .arg(idle_timeout_secs.to_string());
+        command.arg("--idle-timeout-secs").arg(idle_timeout_secs.to_string());
     }
 
     if args.skip_runner {
-        command.env("AO_SKIP_RUNNER_START", "1");
+        command.arg("--skip-runner");
     }
     if let Some(scope) = args.runner_scope.as_ref() {
-        command.env("AO_RUNNER_SCOPE", runner_scope_value(scope));
+        command.arg("--runner-scope").arg(runner_scope_value(scope));
     }
 
     command.env_remove("CLAUDECODE");
     command.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
-    let child = command
-        .spawn()
-        .context("failed to spawn autonomous daemon run")?;
-    Ok(AutonomousDaemonSpawn {
-        child,
-        log_path,
-        startup_log_offset,
-    })
+    let child = command.spawn().context("failed to spawn autonomous daemon run")?;
+    Ok(AutonomousDaemonSpawn { child, log_path, startup_log_offset })
 }
 
 pub(crate) async fn handle_daemon(
@@ -581,28 +485,14 @@ pub(crate) async fn handle_daemon(
                 );
             }
 
-            if args.skip_runner {
-                std::env::set_var("AO_SKIP_RUNNER_START", "1");
-            } else {
-                std::env::remove_var("AO_SKIP_RUNNER_START");
-            }
-
-            if let Some(scope) = args.runner_scope {
-                let scope = match scope {
-                    RunnerScopeArg::Project => "project",
-                    RunnerScopeArg::Global => "global",
-                };
-                std::env::set_var("AO_RUNNER_SCOPE", scope);
-            } else {
-                std::env::remove_var("AO_RUNNER_SCOPE");
-            }
-
-            let result = daemon.start(orchestrator_core::services::DaemonStartConfig {
-                pool_size: args.scheduler.pool_size,
-                ..Default::default()
-            }).await;
-            std::env::remove_var("AO_SKIP_RUNNER_START");
-            std::env::remove_var("AO_RUNNER_SCOPE");
+            let result = daemon
+                .start(orchestrator_core::services::DaemonStartConfig {
+                    pool_size: args.scheduler.pool_size,
+                    skip_runner: args.skip_runner,
+                    runner_scope: args.runner_scope.as_ref().map(|scope| runner_scope_value(scope).to_string()),
+                    ..Default::default()
+                })
+                .await;
             if result.is_ok() {
                 let _ = set_daemon_pid(project_root, None);
                 let _ = set_runtime_paused(project_root, false);
@@ -660,13 +550,8 @@ pub(crate) async fn handle_daemon(
             }
             print_value(health, json)
         }
-        DaemonCommand::Logs(args) => {
-            handle_daemon_logs(args.limit, args.search, project_root, json)
-        }
-        DaemonCommand::ClearLogs => daemon
-            .clear_logs()
-            .await
-            .map(|_| print_ok("daemon logs cleared", json)),
+        DaemonCommand::Logs(args) => handle_daemon_logs(args.limit, args.search, project_root, json),
+        DaemonCommand::ClearLogs => daemon.clear_logs().await.map(|_| print_ok("daemon logs cleared", json)),
         DaemonCommand::Agents => {
             let active_agents = daemon.active_agents().await?;
             print_value(serde_json::json!({ "active_agents": active_agents }), json)
@@ -688,8 +573,7 @@ async fn handle_daemon_stop(
         if is_process_alive(pid) {
             let _ = set_shutdown_requested(project_root, true, Some(args.shutdown_timeout_secs));
 
-            let deadline =
-                tokio::time::Instant::now() + Duration::from_secs(args.shutdown_timeout_secs);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(args.shutdown_timeout_secs);
 
             loop {
                 if !is_process_alive(pid) {
@@ -716,9 +600,7 @@ async fn handle_daemon_stop(
     }
     result?;
 
-    let graceful = existing_pid
-        .map(|pid| !is_process_alive(pid))
-        .unwrap_or(true);
+    let graceful = existing_pid.map(|pid| !is_process_alive(pid)).unwrap_or(true);
 
     print_value(
         serde_json::json!({
@@ -732,12 +614,7 @@ async fn handle_daemon_stop(
 
 const DEFAULT_DAEMON_LOG_LINES: usize = 100;
 
-fn handle_daemon_logs(
-    limit: Option<usize>,
-    search: Option<String>,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+fn handle_daemon_logs(limit: Option<usize>, search: Option<String>, project_root: &str, json: bool) -> Result<()> {
     let log_path = autonomous_daemon_log_path(project_root);
     let limit = limit.unwrap_or(DEFAULT_DAEMON_LOG_LINES);
 
@@ -759,11 +636,7 @@ fn handle_daemon_logs(
             return Ok(());
         }
         Err(err) => {
-            return Err(anyhow!(
-                "failed to read daemon log at {}: {}",
-                log_path.display(),
-                err
-            ));
+            return Err(anyhow!("failed to read daemon log at {}: {}", log_path.display(), err));
         }
     };
 
@@ -811,8 +684,7 @@ mod tests {
     fn read_autonomous_startup_log_tail_returns_last_nonempty_lines() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let log_path = temp.path().join("daemon.log");
-        fs::write(&log_path, "line-1\n\nline-2\nline-3\nline-4\n")
-            .expect("log file should be written");
+        fs::write(&log_path, "line-1\n\nline-2\nline-3\nline-4\n").expect("log file should be written");
 
         let tail = read_autonomous_startup_log_tail(log_path.as_path(), 0, 2)
             .expect("log tail should be readable")
@@ -824,8 +696,7 @@ mod tests {
     fn read_autonomous_startup_log_tail_returns_none_when_log_missing() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let log_path = temp.path().join("missing.log");
-        let tail = read_autonomous_startup_log_tail(log_path.as_path(), 0, 10)
-            .expect("missing log should be handled");
+        let tail = read_autonomous_startup_log_tail(log_path.as_path(), 0, 10).expect("missing log should be handled");
         assert!(tail.is_none());
     }
 
@@ -834,11 +705,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let log_path = temp.path().join("daemon.log");
         fs::write(&log_path, "old-1\nold-2\n").expect("old log content should be written");
-        let startup_log_offset = fs::metadata(&log_path)
-            .expect("log metadata should be readable")
-            .len();
-        fs::write(&log_path, "old-1\nold-2\nnew-1\nnew-2\n")
-            .expect("new log content should be written");
+        let startup_log_offset = fs::metadata(&log_path).expect("log metadata should be readable").len();
+        fs::write(&log_path, "old-1\nold-2\nnew-1\nnew-2\n").expect("new log content should be written");
 
         let tail = read_autonomous_startup_log_tail(log_path.as_path(), startup_log_offset, 10)
             .expect("log tail should be readable")
@@ -867,18 +735,9 @@ mod tests {
         fs::write(&log_path, "startup line\nerror: crashed\n").expect("log file should be written");
 
         let error = autonomous_startup_failure_error(9999, None, log_path.as_path(), 0);
-        let details =
-            crate::extract_cli_error_details(&error).expect("structured details should be present");
-        assert_eq!(
-            details
-                .get("daemon_pid")
-                .and_then(serde_json::Value::as_u64),
-            Some(9999)
-        );
-        assert!(details
-            .get("log_path")
-            .and_then(serde_json::Value::as_str)
-            .is_some());
+        let details = crate::extract_cli_error_details(&error).expect("structured details should be present");
+        assert_eq!(details.get("daemon_pid").and_then(serde_json::Value::as_u64), Some(9999));
+        assert!(details.get("log_path").and_then(serde_json::Value::as_str).is_some());
         let tail = details
             .get("startup_log_tail")
             .and_then(serde_json::Value::as_str)
@@ -889,10 +748,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn autonomous_startup_probe_reports_running_process_as_alive() {
-        let mut child = Command::new("sh")
-            .args(["-c", "sleep 2"])
-            .spawn()
-            .expect("sleep process should spawn");
+        let mut child = Command::new("sh").args(["-c", "sleep 2"]).spawn().expect("sleep process should spawn");
 
         let status = wait_for_autonomous_startup_probe(&mut child, Duration::from_millis(50))
             .await
@@ -906,10 +762,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn autonomous_startup_probe_reports_early_exit() {
-        let mut child = Command::new("sh")
-            .args(["-c", "exit 9"])
-            .spawn()
-            .expect("shell process should spawn");
+        let mut child = Command::new("sh").args(["-c", "exit 9"]).spawn().expect("shell process should spawn");
 
         let status = wait_for_autonomous_startup_probe(&mut child, Duration::from_millis(50))
             .await

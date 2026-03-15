@@ -1,9 +1,13 @@
 use super::*;
 
-async fn ensure_runner_started(project_root: &Path) -> Result<Option<u32>> {
+async fn ensure_runner_started(project_root: &Path, config: &DaemonStartConfig) -> Result<Option<u32>> {
     #[cfg(test)]
     if let Some(result) = take_test_ensure_result() {
         return result;
+    }
+
+    if config.skip_runner {
+        return Ok(None);
     }
 
     ensure_agent_runner_running(project_root).await
@@ -45,10 +49,7 @@ fn runner_process_alive_for_status(pid: u32) -> bool {
     is_runner_process_alive(pid)
 }
 
-async fn mutate_daemon_state<T>(
-    hub: &FileServiceHub,
-    mutator: impl FnOnce(&mut CoreState) -> Result<T>,
-) -> Result<T> {
+async fn mutate_daemon_state<T>(hub: &FileServiceHub, mutator: impl FnOnce(&mut CoreState) -> Result<T>) -> Result<T> {
     #[cfg(test)]
     if test_skip_persist_override() {
         let mut lock = hub.state.write().await;
@@ -92,11 +93,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
     async fn pause(&self) -> Result<()> {
         let mut lock = self.state.write().await;
         lock.daemon_status = DaemonStatus::Paused;
-        lock.logs.push(LogEntry {
-            timestamp: Utc::now(),
-            level: LogLevel::Info,
-            message: "daemon paused".to_string(),
-        });
+        lock.logs.push(LogEntry { timestamp: Utc::now(), level: LogLevel::Info, message: "daemon paused".to_string() });
         Ok(())
     }
 
@@ -118,10 +115,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
     async fn health(&self) -> Result<DaemonHealth> {
         let lock = self.state.read().await;
         Ok(DaemonHealth {
-            healthy: matches!(
-                lock.daemon_status,
-                DaemonStatus::Running | DaemonStatus::Paused
-            ),
+            healthy: matches!(lock.daemon_status, DaemonStatus::Running | DaemonStatus::Paused),
             status: lock.daemon_status,
             runner_connected: lock.runner_pid.is_some(),
             runner_pid: lock.runner_pid,
@@ -163,13 +157,13 @@ impl DaemonServiceApi for InMemoryServiceHub {
 impl DaemonServiceApi for FileServiceHub {
     async fn start(&self, config: DaemonStartConfig) -> Result<()> {
         let pool_size = config.pool_size;
-        let runner_pid = match ensure_runner_started(&self.project_root).await {
+        let runner_pid = match ensure_runner_started(&self.project_root, &config).await {
             Ok(pid) => pid,
             Err(first_error) => {
                 // Self-heal once: terminate any partial/stale runner process
                 // and retry startup before surfacing an error.
                 let _ = stop_runner_for_retry(&self.project_root).await;
-                ensure_runner_started(&self.project_root)
+                ensure_runner_started(&self.project_root, &config)
                     .await
                     .with_context(|| format!("runner start retry failed after: {first_error}"))?
             }
@@ -197,9 +191,7 @@ impl DaemonServiceApi for FileServiceHub {
     }
 
     async fn stop(&self) -> Result<()> {
-        let stopped_runner = stop_agent_runner_process(&self.project_root)
-            .await
-            .unwrap_or(false);
+        let stopped_runner = stop_agent_runner_process(&self.project_root).await.unwrap_or(false);
         mutate_daemon_state(self, |state| {
             state.daemon_status = DaemonStatus::Stopped;
             state.runner_pid = None;
@@ -257,13 +249,9 @@ impl DaemonServiceApi for FileServiceHub {
             if lock.runner_pid.is_none() {
                 lock.runner_pid = runner_pid;
             }
-            let runner_alive = runner_pid
-                .map(runner_process_alive_for_status)
-                .unwrap_or(false);
-            let should_mark_crashed = matches!(
-                lock.daemon_status,
-                DaemonStatus::Running | DaemonStatus::Paused
-            ) && runner_pid.is_some()
+            let runner_alive = runner_pid.map(runner_process_alive_for_status).unwrap_or(false);
+            let should_mark_crashed = matches!(lock.daemon_status, DaemonStatus::Running | DaemonStatus::Paused)
+                && runner_pid.is_some()
                 && !runner_ready
                 && !runner_alive;
             (lock.daemon_status, should_mark_crashed, runner_alive)
@@ -274,10 +262,8 @@ impl DaemonServiceApi for FileServiceHub {
                 if state.runner_pid.is_none() {
                     state.runner_pid = runner_pid_from_lock;
                 }
-                if matches!(
-                    state.daemon_status,
-                    DaemonStatus::Running | DaemonStatus::Paused
-                ) && state.runner_pid.is_some()
+                if matches!(state.daemon_status, DaemonStatus::Running | DaemonStatus::Paused)
+                    && state.runner_pid.is_some()
                     && !runner_ready
                     && !runner_alive
                 {
@@ -285,8 +271,7 @@ impl DaemonServiceApi for FileServiceHub {
                     state.logs.push(LogEntry {
                         timestamp: Utc::now(),
                         level: LogLevel::Error,
-                        message: "agent-runner health check failed while daemon was active"
-                            .to_string(),
+                        message: "agent-runner health check failed while daemon was active".to_string(),
                     });
                 }
                 Ok(state.daemon_status)
@@ -302,30 +287,17 @@ impl DaemonServiceApi for FileServiceHub {
         let config_dir = runner_config_dir(&self.project_root);
         let runner_connected = is_agent_runner_ready(&config_dir).await;
         let active_agents = if runner_connected {
-            query_runner_status(&config_dir)
-                .await
-                .map(|status| status.active_agents)
-                .unwrap_or(0)
+            query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0)
         } else {
             0
         };
         let lock = self.state.read().await;
-        let pool_utilization_percent = lock.daemon_pool_size.map(|ps| {
-            if ps == 0 {
-                0.0
-            } else {
-                (active_agents as f64 / ps as f64) * 100.0
-            }
-        });
-        let queued_tasks = lock
-            .tasks
-            .values()
-            .filter(|t| t.status == TaskStatus::Ready)
-            .count() as u32;
+        let pool_utilization_percent =
+            lock.daemon_pool_size.map(|ps| if ps == 0 { 0.0 } else { (active_agents as f64 / ps as f64) * 100.0 });
+        let queued_tasks = lock.tasks.values().filter(|t| t.status == TaskStatus::Ready).count() as u32;
 
         Ok(DaemonHealth {
-            healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused)
-                && runner_connected,
+            healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused) && runner_connected,
             status,
             runner_connected,
             runner_pid: lock.runner_pid,
@@ -366,10 +338,7 @@ impl DaemonServiceApi for FileServiceHub {
         if !is_agent_runner_ready(&config_dir).await {
             return Ok(0);
         }
-        Ok(query_runner_status(&config_dir)
-            .await
-            .map(|status| status.active_agents)
-            .unwrap_or(0))
+        Ok(query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0))
     }
 }
 
@@ -387,8 +356,7 @@ struct RunnerLifecycleTestHooks {
 
 #[cfg(test)]
 fn runner_lifecycle_test_hooks() -> &'static std::sync::Mutex<RunnerLifecycleTestHooks> {
-    static HOOKS: std::sync::OnceLock<std::sync::Mutex<RunnerLifecycleTestHooks>> =
-        std::sync::OnceLock::new();
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<RunnerLifecycleTestHooks>> = std::sync::OnceLock::new();
     HOOKS.get_or_init(|| std::sync::Mutex::new(RunnerLifecycleTestHooks::default()))
 }
 
@@ -400,9 +368,7 @@ fn runner_lifecycle_test_lock() -> &'static std::sync::Mutex<()> {
 
 #[cfg(test)]
 fn with_runner_lifecycle_test_hooks<T>(f: impl FnOnce(&mut RunnerLifecycleTestHooks) -> T) -> T {
-    let mut hooks = runner_lifecycle_test_hooks()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut hooks = runner_lifecycle_test_hooks().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&mut hooks)
 }
 
@@ -455,9 +421,7 @@ struct RunnerLifecycleHooksGuard {
 #[cfg(test)]
 impl RunnerLifecycleHooksGuard {
     fn new() -> Self {
-        let lock = runner_lifecycle_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lock = runner_lifecycle_test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         reset_runner_lifecycle_test_hooks();
         Self { _lock: lock }
     }
@@ -478,12 +442,8 @@ mod tests {
 
     fn new_file_hub(temp: &TempDir) -> FileServiceHub {
         let state_file = temp.path().join(".ao").join("core-state.json");
-        std::fs::create_dir_all(
-            state_file
-                .parent()
-                .expect("state file should have a parent directory"),
-        )
-        .expect("state dir should exist");
+        std::fs::create_dir_all(state_file.parent().expect("state file should have a parent directory"))
+            .expect("state dir should exist");
         FileServiceHub {
             state: std::sync::Arc::new(tokio::sync::RwLock::new(CoreState::default_with_stopped())),
             state_file,
@@ -502,9 +462,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub, Default::default())
-            .await
-            .expect("daemon start should succeed");
+        DaemonServiceApi::start(&hub, Default::default()).await.expect("daemon start should succeed");
 
         let state = hub.state.read().await;
         assert_eq!(state.daemon_status, DaemonStatus::Running);
@@ -516,22 +474,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_hub_start_skips_runner_start_when_requested() {
+        let _guard = RunnerLifecycleHooksGuard::new();
+        with_runner_lifecycle_test_hooks(|hooks| {
+            hooks.ensure_results = std::collections::VecDeque::from([Err(anyhow!("runner start should be skipped"))]);
+            hooks.skip_persist = true;
+        });
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hub = new_file_hub(&temp);
+        DaemonServiceApi::start(&hub, DaemonStartConfig { skip_runner: true, ..Default::default() })
+            .await
+            .expect("daemon start should succeed without starting runner");
+
+        let state = hub.state.read().await;
+        assert_eq!(state.daemon_status, DaemonStatus::Running);
+        assert_eq!(state.runner_pid, None);
+    }
+
+    #[tokio::test]
     async fn file_hub_start_retries_runner_once_after_initial_failure() {
         let _guard = RunnerLifecycleHooksGuard::new();
         with_runner_lifecycle_test_hooks(|hooks| {
-            hooks.ensure_results = std::collections::VecDeque::from([
-                Err(anyhow!("first start failure")),
-                Ok(Some(7002)),
-            ]);
+            hooks.ensure_results =
+                std::collections::VecDeque::from([Err(anyhow!("first start failure")), Ok(Some(7002))]);
             hooks.stop_results = std::collections::VecDeque::from([Ok(true)]);
             hooks.skip_persist = true;
         });
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub, Default::default())
-            .await
-            .expect("daemon start should succeed after retry");
+        DaemonServiceApi::start(&hub, Default::default()).await.expect("daemon start should succeed after retry");
 
         let state = hub.state.read().await;
         assert_eq!(state.daemon_status, DaemonStatus::Running);
@@ -546,10 +519,8 @@ mod tests {
     async fn file_hub_start_retries_even_when_cleanup_stop_fails() {
         let _guard = RunnerLifecycleHooksGuard::new();
         with_runner_lifecycle_test_hooks(|hooks| {
-            hooks.ensure_results = std::collections::VecDeque::from([
-                Err(anyhow!("first start failure")),
-                Ok(Some(7003)),
-            ]);
+            hooks.ensure_results =
+                std::collections::VecDeque::from([Err(anyhow!("first start failure")), Ok(Some(7003))]);
             hooks.stop_results = std::collections::VecDeque::from([Err(anyhow!("stop failed"))]);
             hooks.skip_persist = true;
         });

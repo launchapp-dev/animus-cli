@@ -136,23 +136,11 @@ pub(crate) struct DaemonSchedulerArgs {
 pub(crate) struct DaemonStartArgs {
     #[command(flatten)]
     pub(crate) scheduler: DaemonSchedulerArgs,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Do not auto-start the runner process."
-    )]
+    #[arg(long, default_value_t = false, help = "Do not auto-start the runner process.")]
     pub(crate) skip_runner: bool,
-    #[arg(
-        long,
-        value_name = "SCOPE",
-        help = "Runner config scope: project or global."
-    )]
+    #[arg(long, value_name = "SCOPE", help = "Runner config scope: project or global.")]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Run daemon in detached/background mode."
-    )]
+    #[arg(long, default_value_t = false, help = "Run daemon in detached/background mode.")]
     pub(crate) autonomous: bool,
 }
 
@@ -160,11 +148,11 @@ pub(crate) struct DaemonStartArgs {
 pub(crate) struct DaemonRunArgs {
     #[command(flatten)]
     pub(crate) scheduler: DaemonSchedulerArgs,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Run one scheduler tick and exit."
-    )]
+    #[arg(long, hide = true, default_value_t = false)]
+    pub(crate) skip_runner: bool,
+    #[arg(long, hide = true)]
+    pub(crate) runner_scope: Option<RunnerScopeArg>,
+    #[arg(long, default_value_t = false, help = "Run one scheduler tick and exit.")]
     pub(crate) once: bool,
 }
 

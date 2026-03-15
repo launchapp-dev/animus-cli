@@ -1,10 +1,10 @@
 use crate::cli_types::DaemonRunArgs;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
 use anyhow::Result;
+use orchestrator_core::services::DaemonStartConfig;
 use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
-use orchestrator_core::services::DaemonStartConfig;
 use orchestrator_core::{load_daemon_project_config, write_daemon_project_config};
 use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
 use std::sync::Arc;
@@ -12,21 +12,16 @@ use std::sync::Arc;
 #[cfg(test)]
 use super::canonicalize_lossy;
 use super::daemon_run_host::DefaultDaemonRunHost;
-use super::daemon_scheduler::{
-    runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver,
-};
+use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
 
 struct CliDaemonRunHost {
     inner: DefaultDaemonRunHost,
-    pool_size: Option<usize>,
+    start_config: DaemonStartConfig,
 }
 
 impl CliDaemonRunHost {
-    fn new(project_root: &str, json: bool, pool_size: Option<usize>) -> Self {
-        Self {
-            inner: DefaultDaemonRunHost::new(project_root, json),
-            pool_size,
-        }
+    fn new(project_root: &str, json: bool, start_config: DaemonStartConfig) -> Self {
+        Self { inner: DefaultDaemonRunHost::new(project_root, json), start_config }
     }
 }
 
@@ -43,17 +38,7 @@ impl DaemonRunHooks for CliDaemonRunHost {
 
     async fn start_daemon(&mut self, project_root: &str) -> Result<()> {
         let hub = FileServiceHub::new(project_root)?;
-        let config = DaemonStartConfig {
-            pool_size: self.pool_size,
-            ..Default::default()
-        };
-        hub.daemon().start(config).await.or_else(|error| {
-            let skip = std::env::var("AO_SKIP_RUNNER_START")
-                .ok()
-                .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
-                .unwrap_or(false);
-            if skip { Ok(()) } else { Err(error) }
-        })
+        hub.daemon().start(self.start_config.clone()).await
     }
 
     async fn stop_daemon(&mut self, project_root: &str) -> Result<()> {
@@ -111,30 +96,25 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
     }
 }
 
-pub(super) async fn handle_daemon_run(
-    args: DaemonRunArgs,
-    project_root: &str,
-    json: bool,
-) -> Result<()> {
+pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, json: bool) -> Result<()> {
     apply_scheduler_overrides_to_pm_config(&args, project_root);
     let runtime_options = runtime_options_from_cli(&args);
+    let start_config = DaemonStartConfig {
+        pool_size: runtime_options.pool_size,
+        skip_runner: args.skip_runner,
+        runner_scope: args.runner_scope.as_ref().map(super::runner_scope_value).map(str::to_string),
+    };
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
     let daemon_config = workflow_config.config.daemon.as_ref();
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
-    let mut driver: SlimProjectTickDriver<'_> =
-        slim_project_tick_driver(&runtime_options, &mut process_manager);
-    let mut host = CliDaemonRunHost::new(project_root, json, runtime_options.pool_size);
+    let mut driver: SlimProjectTickDriver<'_> = slim_project_tick_driver(&runtime_options, &mut process_manager);
+    let mut host = CliDaemonRunHost::new(project_root, json, start_config);
 
-    let run_result = run_daemon(
-        project_root,
-        &runtime_options,
-        &mut driver,
-        &mut host,
-        |driver| driver.active_process_count(),
-    )
-    .await;
+    let run_result =
+        run_daemon(project_root, &runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
+            .await;
 
     run_result
 }
@@ -142,16 +122,14 @@ pub(super) async fn handle_daemon_run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DaemonSchedulerArgs;
     use crate::services::runtime::runtime_daemon::{daemon_events_log_path, DaemonEventRecord};
+    use crate::DaemonSchedulerArgs;
     use std::path::PathBuf;
     use std::sync::MutexGuard;
     use tempfile::TempDir;
 
     fn lock_env() -> MutexGuard<'static, ()> {
-        crate::shared::test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     use protocol::test_utils::EnvVarGuard;
@@ -162,14 +140,9 @@ mod tests {
 
         let config_root = TempDir::new().expect("config temp dir");
         let home_root = TempDir::new().expect("home temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
 
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
@@ -192,15 +165,14 @@ mod tests {
                 phase_timeout_secs: None,
                 idle_timeout_secs: None,
             },
+            skip_runner: true,
+            runner_scope: None,
             once: true,
         };
-        handle_daemon_run(args, &primary_root, true)
-            .await
-            .expect("daemon run should succeed");
+        handle_daemon_run(args, &primary_root, true).await.expect("daemon run should succeed");
 
         let events_path = daemon_events_log_path();
-        let events_content =
-            std::fs::read_to_string(events_path).expect("daemon events log should exist");
+        let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
         let events: Vec<DaemonEventRecord> = events_content
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -211,8 +183,7 @@ mod tests {
             .iter()
             .find(|event| {
                 event.event_type == "queue"
-                    && event.project_root.as_deref()
-                        == Some(canonicalize_lossy(&primary_root).as_str())
+                    && event.project_root.as_deref() == Some(canonicalize_lossy(&primary_root).as_str())
             })
             .expect("queue event for primary project should exist");
         for field in [
@@ -223,20 +194,12 @@ mod tests {
             "failed_workflow_phases",
         ] {
             assert!(
-                queue_event
-                    .data
-                    .get(field)
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some(),
+                queue_event.data.get(field).and_then(serde_json::Value::as_u64).is_some(),
                 "queue event field `{field}` should be present as an integer"
             );
         }
         assert!(
-            queue_event
-                .data
-                .get("stale_in_progress_task_ids")
-                .and_then(serde_json::Value::as_array)
-                .is_some(),
+            queue_event.data.get("stale_in_progress_task_ids").and_then(serde_json::Value::as_array).is_some(),
             "queue event field `stale_in_progress_task_ids` should be present as an array"
         );
     }
@@ -247,14 +210,9 @@ mod tests {
 
         let config_root = TempDir::new().expect("config temp dir");
         let home_root = TempDir::new().expect("home temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
 
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
@@ -277,26 +235,17 @@ mod tests {
 
         let mut workflow = primary_hub
             .workflows()
-            .run(orchestrator_core::WorkflowRunInput::for_task(
-                task.id.clone(),
-                None,
-            ))
+            .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), None))
             .await
             .expect("workflow should run");
         for _ in 0..12 {
             if workflow.status == orchestrator_core::WorkflowStatus::Completed {
                 break;
             }
-            workflow = primary_hub
-                .workflows()
-                .complete_current_phase(&workflow.id)
-                .await
-                .expect("phase should complete");
+            workflow =
+                primary_hub.workflows().complete_current_phase(&workflow.id).await.expect("phase should complete");
         }
-        assert_eq!(
-            workflow.status,
-            orchestrator_core::WorkflowStatus::Completed
-        );
+        assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Completed);
 
         primary_hub
             .tasks()
@@ -322,15 +271,14 @@ mod tests {
                 phase_timeout_secs: None,
                 idle_timeout_secs: None,
             },
+            skip_runner: true,
+            runner_scope: None,
             once: true,
         };
-        handle_daemon_run(args, &primary_root, true)
-            .await
-            .expect("daemon run should emit transition event");
+        handle_daemon_run(args, &primary_root, true).await.expect("daemon run should emit transition event");
 
         let events_path = daemon_events_log_path();
-        let events_content =
-            std::fs::read_to_string(events_path).expect("daemon events log should exist");
+        let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
         let events: Vec<DaemonEventRecord> = events_content
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -341,29 +289,12 @@ mod tests {
             .iter()
             .find(|event| {
                 event.event_type == "task-state-change"
-                    && event.project_root.as_deref()
-                        == Some(canonicalize_lossy(&primary_root).as_str())
-                    && event
-                        .data
-                        .get("task_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(task.id.as_str())
+                    && event.project_root.as_deref() == Some(canonicalize_lossy(&primary_root).as_str())
+                    && event.data.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
             })
             .expect("task-state-change event should be emitted");
-        assert_eq!(
-            transition_event
-                .data
-                .get("from_status")
-                .and_then(serde_json::Value::as_str),
-            Some("in-progress")
-        );
-        assert_eq!(
-            transition_event
-                .data
-                .get("to_status")
-                .and_then(serde_json::Value::as_str),
-            Some("done")
-        );
+        assert_eq!(transition_event.data.get("from_status").and_then(serde_json::Value::as_str), Some("in-progress"));
+        assert_eq!(transition_event.data.get("to_status").and_then(serde_json::Value::as_str), Some("done"));
         assert!(transition_event
             .data
             .get("changed_at")
@@ -378,14 +309,9 @@ mod tests {
 
         let config_root = TempDir::new().expect("config temp dir");
         let home_root = TempDir::new().expect("home temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
 
         let test_bin_dir = std::env::current_exe()
             .ok()
@@ -442,15 +368,14 @@ mod tests {
                 phase_timeout_secs: None,
                 idle_timeout_secs: None,
             },
+            skip_runner: true,
+            runner_scope: None,
             once: true,
         };
-        handle_daemon_run(args, &primary_root, true)
-            .await
-            .expect("daemon run should emit selection source transition");
+        handle_daemon_run(args, &primary_root, true).await.expect("daemon run should emit selection source transition");
 
         let events_path = daemon_events_log_path();
-        let events_content =
-            std::fs::read_to_string(events_path).expect("daemon events log should exist");
+        let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
         let events: Vec<DaemonEventRecord> = events_content
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -461,28 +386,13 @@ mod tests {
             .iter()
             .find(|event| {
                 event.event_type == "task-state-change"
-                    && event.project_root.as_deref()
-                        == Some(canonicalize_lossy(&primary_root).as_str())
-                    && event
-                        .data
-                        .get("task_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(task.id.as_str())
-                    && event
-                        .data
-                        .get("selection_source")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some()
+                    && event.project_root.as_deref() == Some(canonicalize_lossy(&primary_root).as_str())
+                    && event.data.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
+                    && event.data.get("selection_source").and_then(serde_json::Value::as_str).is_some()
             })
             .expect("task-state-change event with selection source should be emitted");
 
-        assert_eq!(
-            selection_event
-                .data
-                .get("selection_source")
-                .and_then(serde_json::Value::as_str),
-            Some("queue")
-        );
+        assert_eq!(selection_event.data.get("selection_source").and_then(serde_json::Value::as_str), Some("queue"));
     }
 
     #[tokio::test]
@@ -491,28 +401,17 @@ mod tests {
 
         let config_root = TempDir::new().expect("config temp dir");
         let home_root = TempDir::new().expect("home temp dir");
-        let _config_guard = EnvVarGuard::set(
-            "AO_CONFIG_DIR",
-            Some(config_root.path().to_string_lossy().as_ref()),
-        );
-        let _home_guard =
-            EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _skip_runner = EnvVarGuard::set("AO_SKIP_RUNNER_START", Some("1"));
         let _missing_url = EnvVarGuard::set("AO_NOTIFY_MISSING_URL", None);
 
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
 
-        let pm_config_path = PathBuf::from(&primary_root)
-            .join(".ao")
-            .join("pm-config.json");
-        std::fs::create_dir_all(
-            pm_config_path
-                .parent()
-                .expect("pm-config path should have parent"),
-        )
-        .expect(".ao directory should be created");
+        let pm_config_path = PathBuf::from(&primary_root).join(".ao").join("pm-config.json");
+        std::fs::create_dir_all(pm_config_path.parent().expect("pm-config path should have parent"))
+            .expect(".ao directory should be created");
         let pm_config = serde_json::json!({
             "notification_config": {
                 "schema": "ao.daemon-notification-config.v1",
@@ -543,10 +442,7 @@ mod tests {
         });
         std::fs::write(
             &pm_config_path,
-            format!(
-                "{}\n",
-                serde_json::to_string_pretty(&pm_config).expect("serialize config")
-            ),
+            format!("{}\n", serde_json::to_string_pretty(&pm_config).expect("serialize config")),
         )
         .expect("pm-config should be written");
 
@@ -568,6 +464,8 @@ mod tests {
                 phase_timeout_secs: None,
                 idle_timeout_secs: None,
             },
+            skip_runner: true,
+            runner_scope: None,
             once: true,
         };
         handle_daemon_run(args, &primary_root, true)
@@ -575,16 +473,13 @@ mod tests {
             .expect("daemon run should succeed even when notification delivery fails");
 
         let events_path = daemon_events_log_path();
-        let events_content =
-            std::fs::read_to_string(events_path).expect("daemon events log should exist");
+        let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
         let events: Vec<DaemonEventRecord> = events_content
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
             .collect();
 
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == "notification-delivery-dead-lettered"));
+        assert!(events.iter().any(|event| event.event_type == "notification-delivery-dead-lettered"));
     }
 }
