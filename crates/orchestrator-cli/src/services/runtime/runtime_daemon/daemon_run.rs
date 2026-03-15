@@ -15,41 +15,6 @@ use super::daemon_scheduler::{
     runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver,
 };
 
-struct EnvOverrideGuard {
-    key: &'static str,
-    original: Option<String>,
-}
-
-impl EnvOverrideGuard {
-    fn set(key: &'static str, value: String) -> Self {
-        let original = std::env::var(key).ok();
-        std::env::set_var(key, value);
-        Self { key, original }
-    }
-
-    fn set_bool(key: &'static str, enabled: bool) -> Self {
-        Self::set(key, if enabled { "1".to_string() } else { "0".to_string() })
-    }
-
-    fn set_if(key: &'static str, value: Option<impl ToString>) -> Option<Self> {
-        value.map(|v| Self::set(key, v.to_string()))
-    }
-
-    fn set_bool_if(key: &'static str, value: Option<bool>) -> Option<Self> {
-        value.map(|v| Self::set_bool(key, v))
-    }
-}
-
-impl Drop for EnvOverrideGuard {
-    fn drop(&mut self) {
-        if let Some(value) = &self.original {
-            std::env::set_var(self.key, value);
-        } else {
-            std::env::remove_var(self.key);
-        }
-    }
-}
-
 struct CliDaemonRunHost {
     inner: DefaultDaemonRunHost,
     pool_size: Option<usize>,
@@ -115,12 +80,6 @@ pub(super) async fn handle_daemon_run(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let _auto_merge_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_MERGE_ENABLED", args.scheduler.auto_merge);
-    let _auto_pr_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_PR_ENABLED", args.scheduler.auto_pr);
-    let _auto_commit_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_COMMIT_BEFORE_MERGE", args.scheduler.auto_commit_before_merge);
-    let _auto_prune_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE", args.scheduler.auto_prune_worktrees_after_merge);
-    let _phase_timeout_guard = EnvOverrideGuard::set_if("AO_PHASE_TIMEOUT_SECS", args.scheduler.phase_timeout_secs);
-
     let runtime_options = runtime_options_from_cli(&args);
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
     let daemon_config = workflow_config.config.daemon.as_ref();

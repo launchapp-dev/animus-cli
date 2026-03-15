@@ -476,9 +476,6 @@ fn spawn_autonomous_daemon_run(
             .arg(idle_timeout_secs.to_string());
     }
 
-    if let Some(pool_size) = args.scheduler.pool_size {
-        command.env("AO_POOL_SIZE", pool_size.to_string());
-    }
     if args.skip_runner {
         command.env("AO_SKIP_RUNNER_START", "1");
     }
@@ -584,12 +581,6 @@ pub(crate) async fn handle_daemon(
                 );
             }
 
-            if let Some(pool_size) = args.scheduler.pool_size {
-                std::env::set_var("AO_POOL_SIZE", pool_size.to_string());
-            } else {
-                std::env::remove_var("AO_POOL_SIZE");
-            }
-
             if args.skip_runner {
                 std::env::set_var("AO_SKIP_RUNNER_START", "1");
             } else {
@@ -607,7 +598,6 @@ pub(crate) async fn handle_daemon(
             }
 
             let result = daemon.start(Default::default()).await;
-            std::env::remove_var("AO_POOL_SIZE");
             std::env::remove_var("AO_SKIP_RUNNER_START");
             std::env::remove_var("AO_RUNNER_SCOPE");
             if result.is_ok() {
