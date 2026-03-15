@@ -5,12 +5,15 @@ use sha2::{Digest, Sha256};
 
 use super::builtins::{builtin_workflow_config, builtin_workflow_yaml_overlays, bundled_kernel_workflow_config_base};
 use super::types::*;
-use super::validation::validate_workflow_config;
+use super::validation::validate_workflow_config_with_project_root;
 use super::yaml_compiler::{merge_yaml_into_config, yaml_workflows_dir};
 use super::yaml_parser::parse_yaml_workflow_config_with_base;
 use super::yaml_scaffold::ensure_workflow_yaml_scaffold;
 use super::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
-use crate::{load_pack_workflow_overlay, machine_installed_packs_dir, resolve_pack_registry, PackRegistrySource};
+use crate::{
+    load_pack_workflow_overlay, machine_installed_packs_dir, resolve_pack_registry, validate_active_pack_configuration,
+    PackRegistrySource,
+};
 
 pub fn workflow_config_path(project_root: &Path) -> PathBuf {
     let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
@@ -46,6 +49,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     let yaml_sources = super::collect_project_yaml_workflow_sources(project_root)?;
     let registry = resolve_pack_registry(project_root)?;
     if !yaml_sources.is_empty() || registry.has_pack_overlays() {
+        validate_active_pack_configuration(&registry)?;
         let (mut config, mut path) = build_pack_aware_builtin_workflow_config(project_root, &registry)?;
 
         for entry in registry.entries_for_source(PackRegistrySource::Installed) {
@@ -75,7 +79,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             }
         }
 
-        validate_workflow_config(&config)?;
+        validate_workflow_config_with_project_root(&config, Some(project_root))?;
 
         let source = if yaml_sources.is_empty() && !registry.has_external_packs() {
             WorkflowConfigSource::Builtin
@@ -134,7 +138,7 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
 }
 
 pub fn write_workflow_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
-    validate_workflow_config(config)?;
+    validate_workflow_config_with_project_root(config, Some(project_root))?;
     super::yaml_compiler::write_workflow_yaml_overlay(project_root, GENERATED_WORKFLOW_OVERLAY_FILE_NAME, config)
         .map(|_| ())
 }

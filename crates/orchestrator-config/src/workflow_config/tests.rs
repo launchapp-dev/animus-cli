@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 
 use crate::agent_runtime_config::{CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode};
+use crate::test_support::env_lock;
 use crate::PhaseExecutionDefinition;
 
 use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
@@ -58,6 +59,7 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
 
 #[test]
 fn missing_v2_file_reports_actionable_error() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let config = load_workflow_config(temp.path()).expect("bundled pack defaults should load");
     assert_eq!(config.default_workflow_ref, "ao.task/standard");
@@ -566,7 +568,58 @@ workflows:
 }
 
 #[test]
+fn yaml_compile_resolves_project_scoped_skills() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join(".ao").join("config").join("skill_definitions");
+    fs::create_dir_all(&skills_dir).expect("create project skills dir");
+    fs::write(
+        skills_dir.join("project-skill.yaml"),
+        r#"
+name: project-skill
+description: Project local validation fixture
+"#,
+    )
+    .expect("write project skill");
+
+    let ao_dir = temp.path().join(".ao");
+    fs::create_dir_all(&ao_dir).expect("create .ao dir");
+    fs::write(
+        ao_dir.join("workflows.yaml"),
+        r#"
+phase_catalog:
+  project-phase:
+    label: Project Phase
+    category: verification
+phases:
+  project-phase:
+    mode: agent
+    agent_id: project-agent
+agents:
+  project-agent:
+    description: Project agent
+    system_prompt: Project prompt
+    skills:
+      - project-skill
+workflows:
+  - id: project-skill-test
+    name: Project Skill Test
+    phases:
+      - project-phase
+"#,
+    )
+    .expect("write workflow yaml");
+
+    let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+    let config = result.expect("should have config");
+    assert!(
+        config.agent_profiles.get("project-agent").is_some_and(|profile| profile.skills == vec!["project-skill"]),
+        "project-local skill reference should remain intact"
+    );
+}
+
+#[test]
 fn yaml_compile_and_write_validates_and_writes() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let state_dir = temp.path().join(".ao").join("state");
     fs::create_dir_all(&state_dir).expect("create state dir");

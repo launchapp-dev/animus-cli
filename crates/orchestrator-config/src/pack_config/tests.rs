@@ -1,5 +1,6 @@
 use std::fs;
 
+use crate::test_support::{env_lock, EnvVarGuard};
 use crate::workflow_config::builtin_workflow_config;
 
 use super::{
@@ -105,13 +106,15 @@ fn parse_pack_manifest_accepts_valid_manifest() {
 #[test]
 fn validate_pack_manifest_rejects_invalid_semver_and_export_prefix() {
     let mut manifest: PackManifest = toml::from_str(valid_manifest_toml()).expect("deserialize manifest");
+    manifest.id = "-bad-pack".to_string();
     manifest.version = "not-semver".to_string();
     manifest.workflows.exports[0] = "builtin/requirements-execute".to_string();
 
     let error = validate_pack_manifest(&manifest).expect_err("invalid manifest should fail");
     let message = error.to_string();
+    assert!(message.contains("id '-bad-pack' must use lowercase letters, numbers, '.', '-' or '_'"));
     assert!(message.contains("version 'not-semver' is not valid semver"));
-    assert!(message.contains("must be prefixed with 'ao.requirements/'"));
+    assert!(message.contains("must be prefixed with '-bad-pack/'"));
 }
 
 #[test]
@@ -124,6 +127,15 @@ fn validate_pack_manifest_rejects_bad_subject_kind_and_duplicate_runtime() {
     let message = error.to_string();
     assert!(message.contains("contains invalid subject kind 'Bad Subject'"));
     assert!(message.contains("duplicate 'python' runtime declaration"));
+}
+
+#[test]
+fn validate_pack_manifest_rejects_runtime_binary_paths() {
+    let mut manifest: PackManifest = toml::from_str(valid_manifest_toml()).expect("deserialize manifest");
+    manifest.runtime.requirements[0].binary = Some("./bin/python3".to_string());
+
+    let error = validate_pack_manifest(&manifest).expect_err("path-like runtime binary should fail");
+    assert!(error.to_string().contains("must be a simple executable name, not a path"));
 }
 
 #[test]
@@ -258,8 +270,10 @@ fn ensure_pack_runtime_requirements_rejects_missing_required_runtime() {
 #[cfg(unix)]
 #[test]
 fn activate_pack_mcp_overlay_validates_runtimes_before_merging() {
+    let _lock = env_lock().lock().expect("env lock should not be poisoned");
     let temp = tempfile::tempdir().expect("tempdir");
     write_valid_pack_fixture(temp.path());
+    let _secret_guard = EnvVarGuard::set("OPENAI_API_KEY", "fixture-secret");
 
     let probe = temp.path().join("python-probe.sh");
     write_probe_script(&probe, "Python 3.11.8");
@@ -277,4 +291,18 @@ fn activate_pack_mcp_overlay_validates_runtimes_before_merging() {
     let report = activate_pack_mcp_overlay(&mut workflow, &loaded).expect("activate overlay");
     assert_eq!(report.checks[0].status, PackRuntimeCheckStatus::Satisfied);
     assert!(workflow.mcp_servers.contains_key("ao.requirements/ao"));
+}
+
+#[cfg(unix)]
+#[test]
+fn activate_pack_mcp_overlay_requires_declared_secrets_at_activation_time() {
+    let _lock = env_lock().lock().expect("env lock should not be poisoned");
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_valid_pack_fixture(temp.path());
+    let _secret_guard = EnvVarGuard::unset("OPENAI_API_KEY");
+
+    let loaded = load_pack_manifest(temp.path()).expect("load pack");
+    let mut workflow = builtin_workflow_config();
+    let error = activate_pack_mcp_overlay(&mut workflow, &loaded).expect_err("missing required secret should fail");
+    assert!(error.to_string().contains("requires secret 'OPENAI_API_KEY'"));
 }

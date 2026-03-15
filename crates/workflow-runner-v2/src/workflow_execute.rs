@@ -7,7 +7,10 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
 
-use orchestrator_config::workflow_config::MergeStrategy;
+use orchestrator_config::{
+    ensure_pack_execution_requirements, resolve_active_pack_for_workflow_ref, resolve_pack_registry,
+    workflow_config::MergeStrategy,
+};
 use orchestrator_core::{
     dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
     project_requirement_workflow_status,
@@ -177,6 +180,19 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
     ensure_workflow_config_compiled(Path::new(&params.project_root))?;
     let workflow_config = load_workflow_config(Path::new(&params.project_root))?;
     let workflow_ref = workflow.workflow_ref.clone().unwrap_or_else(|| workflow_config.default_workflow_ref.clone());
+    let pack_registry = resolve_pack_registry(Path::new(&params.project_root))?;
+    if let Some(entry) = resolve_active_pack_for_workflow_ref(&pack_registry, &workflow_ref) {
+        if let Some(pack) = entry.loaded_manifest() {
+            ensure_pack_execution_requirements(pack).with_context(|| {
+                format!(
+                    "workflow '{}' cannot activate pack '{}' from {}",
+                    workflow_ref,
+                    pack.manifest.id,
+                    pack.pack_root.display()
+                )
+            })?;
+        }
+    }
     let phase_inputs = workflow_phase_inputs(&workflow);
     let workflow_vars = workflow.vars.clone();
     let mut rework_context: Option<String> = None;
@@ -1420,6 +1436,12 @@ mod plugin_pack_fixture_tests {
             env::set_var(key, value);
             Self { key, original }
         }
+
+        fn set_raw(key: &'static str, value: &str) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -1466,7 +1488,6 @@ mod plugin_pack_fixture_tests {
         }
 
         let runtime_binary = root.join("bin").join(runtime_binary_name);
-        let runtime_binary_display = runtime_binary.display().to_string();
         write_executable(
             &runtime_binary,
             &format!(
@@ -1515,7 +1536,7 @@ workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
 
 [[runtime.requirements]]
 runtime = "{runtime_kind}"
-binary = "{runtime_binary}"
+binary = "{runtime_binary_name}"
 version = ">=0.0.1"
 optional = false
 reason = "Fixture pack validates external runtime probing."
@@ -1535,7 +1556,6 @@ tools = "mcp/tools.toml"
             },
             mcp_permissions =
                 if include_mcp_overlay { format!(r#"mcp_namespaces = ["{pack_id}"]"#) } else { String::new() },
-            runtime_binary = runtime_binary_display,
         );
         fs::write(root.join(orchestrator_config::PACK_MANIFEST_FILE_NAME), manifest)
             .expect("pack manifest should write");
@@ -1589,10 +1609,9 @@ workflows:
                 format!(
                     r#"[[server]]
 id = "runtime"
-command = "{runtime_binary}"
+command = "{runtime_binary_name}"
 args = ["mcp-server.js"]
 "#,
-                    runtime_binary = runtime_binary_display
                 ),
             )
             .expect("mcp servers should write");
@@ -1630,6 +1649,8 @@ servers = ["runtime"]
         write_project_runtime_scripts(project.path());
 
         let pack_root = machine_installed_packs_dir().join("ao.node-fixture").join("0.1.0");
+        let path = env::var("PATH").unwrap_or_default();
+        let _path_guard = EnvVarGuard::set_raw("PATH", &format!("{}:{}", pack_root.join("bin").display(), path));
         write_runtime_pack_fixture(
             &pack_root,
             "ao.node-fixture",
@@ -1702,6 +1723,68 @@ servers = ["runtime"]
     }
 
     #[tokio::test]
+    async fn execute_workflow_defers_pack_runtime_checks_until_execution() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        write_project_runtime_scripts(project.path());
+
+        let pack_root = machine_installed_packs_dir().join("ao.node-fixture").join("0.1.0");
+        write_runtime_pack_fixture(
+            &pack_root,
+            "ao.node-fixture",
+            "node",
+            "v20.11.1",
+            "node-fixture-runtime",
+            "node-command",
+            "ao.node-fixture/run",
+            "scripts/node-fixture.js",
+            "node-pack-output.txt",
+            false,
+        );
+
+        let loaded = load_workflow_config_with_metadata(project.path()).expect("workflow config should load");
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.node-fixture/run"),
+            "fixture workflow should be discoverable before execution"
+        );
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project.path().display().to_string(),
+            workflow_id: None,
+            task_id: None,
+            requirement_id: None,
+            title: Some("node-fixture-subject".to_string()),
+            description: Some("node fixture workflow".to_string()),
+            workflow_ref: Some("ao.node-fixture/run".to_string()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: None,
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await;
+        let error = match result {
+            Ok(_) => panic!("execution should fail when runtime requirement is unavailable"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("cannot activate pack 'ao.node-fixture'"),
+            "unexpected execution error: {error}"
+        );
+        assert!(
+            error.chain().any(|cause| cause.to_string().contains("requires runtime 'node'")),
+            "runtime requirement failure should remain in the error chain: {error:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn execute_workflow_runs_python_pack_fixture_with_external_runtime() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
@@ -1710,6 +1793,8 @@ servers = ["runtime"]
         write_project_runtime_scripts(project.path());
 
         let pack_root = machine_installed_packs_dir().join("ao.python-fixture").join("0.1.0");
+        let path = env::var("PATH").unwrap_or_default();
+        let _path_guard = EnvVarGuard::set_raw("PATH", &format!("{}:{}", pack_root.join("bin").display(), path));
         write_runtime_pack_fixture(
             &pack_root,
             "ao.python-fixture",

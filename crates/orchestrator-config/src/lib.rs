@@ -7,6 +7,8 @@ pub mod pack_selection;
 pub mod skill_definition;
 pub mod skill_resolution;
 pub mod skill_scoping;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod workflow_config;
 
 pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 3;
@@ -35,10 +37,11 @@ pub use pack_config::{
     PackWorkflows, PACK_MANIFEST_FILE_NAME, PACK_MANIFEST_SCHEMA_ID,
 };
 pub use pack_registry::{
-    load_pack_agent_runtime_overlay, load_pack_inventory, load_pack_workflow_overlay, machine_installed_packs_dir,
-    project_pack_overrides_dir, resolve_pack_registry, PackInventory, PackInventoryEntry, PackRegistrySource,
-    ResolvedPackRegistry, ResolvedPackRegistryEntry, BUNDLED_BUILTIN_PACK_ID, BUNDLED_BUILTIN_PACK_VERSION,
-    MACHINE_PACKS_DIR_NAME, PROJECT_PACKS_DIR_NAME,
+    ensure_pack_execution_requirements, load_pack_agent_runtime_overlay, load_pack_inventory,
+    load_pack_workflow_overlay, machine_installed_packs_dir, project_pack_overrides_dir,
+    resolve_active_pack_for_workflow_ref, resolve_pack_registry, validate_active_pack_configuration, PackInventory,
+    PackInventoryEntry, PackRegistrySource, ResolvedPackRegistry, ResolvedPackRegistryEntry, BUNDLED_BUILTIN_PACK_ID,
+    BUNDLED_BUILTIN_PACK_VERSION, MACHINE_PACKS_DIR_NAME, PROJECT_PACKS_DIR_NAME,
 };
 pub use pack_selection::{
     load_pack_selection_state, pack_selection_path, save_pack_selection_state, PackSelectionEntry, PackSelectionSource,

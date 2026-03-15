@@ -8,7 +8,7 @@ use semver::{Version, VersionReq};
 use crate::agent_runtime_config::{AgentRuntimeOverlay, CliToolConfig, PhaseExecutionDefinition};
 use crate::bundled_packs::discover_bundled_pack_manifests;
 use crate::pack_config::{load_pack_manifest, LoadedPackManifest};
-use crate::pack_selection::{load_pack_selection_state, PackSelectionEntry};
+use crate::pack_selection::{load_pack_selection_state, PackSelectionEntry, PackSelectionState};
 use crate::workflow_config::{compile_yaml_sources_with_base, WorkflowConfig};
 
 pub const PROJECT_PACKS_DIR_NAME: &str = "plugins";
@@ -174,15 +174,26 @@ pub fn machine_installed_packs_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".ao").join(MACHINE_PACKS_DIR_NAME)
 }
 
-pub fn resolve_pack_registry(project_root: &Path) -> Result<ResolvedPackRegistry> {
-    let selection_state = load_pack_selection_state(project_root)?;
-    let bundled_packs = discover_bundled_pack_manifests()?;
-    let installed_versions = discover_installed_pack_versions()?;
-    let project_overrides = discover_project_override_packs(project_root)?;
+struct PackRegistryInputs {
+    selection_state: PackSelectionState,
+    bundled_packs: Vec<LoadedPackManifest>,
+    installed_versions: Vec<LoadedPackManifest>,
+    project_overrides: Vec<LoadedPackManifest>,
+}
 
-    let bundled_by_id = map_bundled_packs_by_id(bundled_packs)?;
-    let installed_by_id = group_installed_packs_by_id(installed_versions)?;
-    let overrides_by_id = map_project_overrides_by_id(project_overrides)?;
+fn discover_pack_registry_inputs(project_root: &Path) -> Result<PackRegistryInputs> {
+    Ok(PackRegistryInputs {
+        selection_state: load_pack_selection_state(project_root)?,
+        bundled_packs: discover_bundled_pack_manifests()?,
+        installed_versions: discover_installed_pack_versions()?,
+        project_overrides: discover_project_override_packs(project_root)?,
+    })
+}
+
+fn resolve_pack_registry_from_inputs(inputs: &PackRegistryInputs) -> Result<ResolvedPackRegistry> {
+    let bundled_by_id = map_bundled_packs_by_id(inputs.bundled_packs.clone())?;
+    let installed_by_id = group_installed_packs_by_id(inputs.installed_versions.clone())?;
+    let overrides_by_id = map_project_overrides_by_id(inputs.project_overrides.clone())?;
 
     let mut entries = vec![ResolvedPackRegistryEntry::bundled_builtin()];
     let mut pack_ids = installed_by_id
@@ -194,7 +205,7 @@ pub fn resolve_pack_registry(project_root: &Path) -> Result<ResolvedPackRegistry
     pack_ids.remove(BUNDLED_BUILTIN_PACK_ID);
 
     for pack_id in pack_ids {
-        let selection = selection_state.selection_for(&pack_id);
+        let selection = inputs.selection_state.selection_for(&pack_id);
         if selection.is_some_and(|entry| !entry.enabled) {
             continue;
         }
@@ -211,16 +222,17 @@ pub fn resolve_pack_registry(project_root: &Path) -> Result<ResolvedPackRegistry
         }
     }
 
-    enforce_active_pack_policies(&entries)?;
     Ok(ResolvedPackRegistry { entries })
 }
 
+pub fn resolve_pack_registry(project_root: &Path) -> Result<ResolvedPackRegistry> {
+    resolve_pack_registry_from_inputs(&discover_pack_registry_inputs(project_root)?)
+}
+
 pub fn load_pack_inventory(project_root: &Path) -> Result<PackInventory> {
-    let selection_state = load_pack_selection_state(project_root)?;
-    let resolved = resolve_pack_registry(project_root)?;
-    let bundled_packs = discover_bundled_pack_manifests()?;
-    let installed_versions = discover_installed_pack_versions()?;
-    let project_overrides = discover_project_override_packs(project_root)?;
+    let inputs = discover_pack_registry_inputs(project_root)?;
+    let resolved = resolve_pack_registry_from_inputs(&inputs)?;
+    let PackRegistryInputs { selection_state, bundled_packs, installed_versions, project_overrides } = inputs;
 
     let mut entries = vec![PackInventoryEntry::bundled_builtin(resolved.resolve(BUNDLED_BUILTIN_PACK_ID).is_some())];
 
@@ -504,27 +516,48 @@ fn resolved_entry_matches_manifest(
     })
 }
 
-fn enforce_active_pack_policies(entries: &[ResolvedPackRegistryEntry]) -> Result<()> {
+pub fn validate_active_pack_configuration(registry: &ResolvedPackRegistry) -> Result<()> {
     let mut active_by_id = BTreeMap::new();
-    for entry in entries {
+    for entry in &registry.entries {
         active_by_id.insert(entry.pack_id.to_ascii_lowercase(), entry);
     }
 
-    for entry in entries {
+    for entry in &registry.entries {
         let Some(pack) = entry.loaded_manifest() else {
             continue;
         };
 
-        enforce_pack_dependency_policy(pack, &active_by_id)?;
-        crate::ensure_pack_runtime_requirements(pack)?;
-        enforce_pack_permission_policy(pack)?;
-        enforce_pack_secret_policy(pack)?;
+        validate_pack_dependency_policy(pack, &active_by_id)?;
+        validate_pack_permission_policy(pack)?;
+        validate_pack_secret_policy(pack)?;
     }
 
     Ok(())
 }
 
-fn enforce_pack_dependency_policy(
+pub fn resolve_active_pack_for_workflow_ref<'a>(
+    registry: &'a ResolvedPackRegistry,
+    workflow_ref: &str,
+) -> Option<&'a ResolvedPackRegistryEntry> {
+    let trimmed = workflow_ref.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    registry.entries.iter().find(|entry| {
+        entry.loaded_manifest().is_some_and(|pack| {
+            pack.manifest.workflows.exports.iter().any(|export| export.eq_ignore_ascii_case(trimmed))
+        })
+    })
+}
+
+pub fn ensure_pack_execution_requirements(pack: &LoadedPackManifest) -> Result<crate::PackRuntimeReport> {
+    let report = crate::ensure_pack_runtime_requirements(pack)?;
+    ensure_pack_secrets_available(pack)?;
+    Ok(report)
+}
+
+fn validate_pack_dependency_policy(
     pack: &LoadedPackManifest,
     active_by_id: &BTreeMap<String, &ResolvedPackRegistryEntry>,
 ) -> Result<()> {
@@ -574,7 +607,7 @@ fn enforce_pack_dependency_policy(
     Ok(())
 }
 
-fn enforce_pack_permission_policy(pack: &LoadedPackManifest) -> Result<()> {
+fn validate_pack_permission_policy(pack: &LoadedPackManifest) -> Result<()> {
     let declared_tools = pack
         .manifest
         .permissions
@@ -647,7 +680,7 @@ fn enforce_pack_permission_policy(pack: &LoadedPackManifest) -> Result<()> {
     Ok(())
 }
 
-fn enforce_pack_secret_policy(pack: &LoadedPackManifest) -> Result<()> {
+fn validate_pack_secret_policy(pack: &LoadedPackManifest) -> Result<()> {
     let declared_required = pack
         .manifest
         .secrets
@@ -680,29 +713,30 @@ fn enforce_pack_secret_policy(pack: &LoadedPackManifest) -> Result<()> {
                     secret_name
                 ));
             }
-            if std::env::var_os(secret_name).is_none() {
-                return Err(anyhow!(
-                    "pack '{}' requires secret '{}' but it is not available in the environment",
-                    pack.manifest.id,
-                    secret_name
-                ));
-            }
-        }
-    }
-
-    for secret_name in &declared_required {
-        if std::env::var_os(secret_name).is_none() {
-            return Err(anyhow!(
-                "pack '{}' requires secret '{}' but it is not available in the environment",
-                pack.manifest.id,
-                secret_name
-            ));
         }
     }
 
     for secret_name in &declared_optional {
         if secret_name.is_empty() {
             return Err(anyhow!("pack '{}' declares an empty optional secret", pack.manifest.id));
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_pack_secrets_available(pack: &LoadedPackManifest) -> Result<()> {
+    for secret_name in &pack.manifest.secrets.required {
+        let secret_name = secret_name.trim();
+        if secret_name.is_empty() {
+            continue;
+        }
+        if std::env::var_os(secret_name).is_none() {
+            return Err(anyhow!(
+                "pack '{}' requires secret '{}' but it is not available in the environment",
+                pack.manifest.id,
+                secret_name
+            ));
         }
     }
 
@@ -817,8 +851,10 @@ fn resolve_pack_asset_path(pack: &LoadedPackManifest, raw: &str, field: &str) ->
         return Err(anyhow!("{} path '{}' is missing from pack '{}'", field, raw, pack.manifest.id));
     }
 
-    let canonical_pack_root = fs::canonicalize(&pack.pack_root).unwrap_or_else(|_| pack.pack_root.clone());
-    let canonical = fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+    let canonical_pack_root = fs::canonicalize(&pack.pack_root)
+        .with_context(|| format!("failed to canonicalize pack root {}", pack.pack_root.display()))?;
+    let canonical =
+        fs::canonicalize(&resolved).with_context(|| format!("failed to canonicalize {} path '{}'", field, raw))?;
     if !canonical.starts_with(&canonical_pack_root) {
         return Err(anyhow!("{} path '{}' escapes pack root", field, raw));
     }
@@ -846,37 +882,8 @@ fn read_child_directories(root: &Path) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::sync::{Mutex, OnceLock};
-
     use super::*;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &std::path::Path) -> Self {
-            let original = env::var(key).ok();
-            env::set_var(key, value);
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
+    use crate::test_support::{env_lock, EnvVarGuard};
 
     fn write_pack_fixture(root: &Path, pack_id: &str, version: &str, description: &str, extra_workflow: &str) {
         fs::create_dir_all(root.join("workflows")).expect("create workflows");
@@ -1185,6 +1192,47 @@ workflows:
     }
 
     #[test]
+    fn workflow_loading_prefers_project_yaml_over_installed_pack_definitions() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        write_pack_fixture(
+            &machine_installed_packs_dir().join("ao.task").join("1.0.0"),
+            "ao.task",
+            "1.0.0",
+            "installed task",
+            "task-installed",
+        );
+
+        fs::create_dir_all(project.path().join(".ao")).expect("create project .ao");
+        fs::write(
+            project.path().join(".ao").join("workflows.yaml"),
+            r#"
+workflows:
+  - id: standard
+    name: Standard
+    description: "project ad hoc"
+    phases:
+      - requirements
+      - testing
+"#,
+        )
+        .expect("write project workflows");
+
+        let loaded = crate::load_workflow_config_with_metadata(project.path()).expect("load effective workflow config");
+        let standard = loaded
+            .config
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == "standard")
+            .expect("standard workflow should exist");
+
+        assert_eq!(standard.description, "project ad hoc");
+    }
+
+    #[test]
     fn load_pack_workflow_overlay_resolves_pack_relative_command_assets() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_pack_with_command_assets(temp.path(), "ao.review", "0.2.0");
@@ -1206,7 +1254,7 @@ workflows:
     }
 
     #[test]
-    fn resolve_pack_registry_rejects_missing_required_dependencies() {
+    fn load_workflow_config_rejects_missing_required_dependencies() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let project = tempfile::tempdir().expect("project tempdir");
@@ -1254,12 +1302,13 @@ version = ">=1.0.0"
         )
         .expect("write workflow overlay");
 
-        let error = resolve_pack_registry(project.path()).expect_err("missing dependency should fail");
+        let error =
+            crate::load_workflow_config_with_metadata(project.path()).expect_err("missing dependency should fail");
         assert!(error.to_string().contains("requires dependency 'ao.missing'"));
     }
 
     #[test]
-    fn resolve_pack_registry_rejects_undeclared_tool_permissions() {
+    fn load_workflow_config_rejects_undeclared_tool_permissions() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let project = tempfile::tempdir().expect("project tempdir");
@@ -1307,18 +1356,18 @@ tools = ["cargo"]
         )
         .expect("write workflow overlay");
 
-        let error = resolve_pack_registry(project.path()).expect_err("undeclared tool permission should fail");
+        let error = crate::load_workflow_config_with_metadata(project.path())
+            .expect_err("undeclared tool permission should fail");
         assert!(error.to_string().contains("without declaring it in permissions.tools"));
     }
 
     #[test]
-    fn resolve_pack_registry_rejects_missing_required_secrets() {
+    fn resolve_pack_registry_allows_missing_required_secrets_until_activation() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let project = tempfile::tempdir().expect("project tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
-        let _secret_guard = EnvVarGuard::set("PACK_SECRET_TOKEN", project.path());
-        env::remove_var("PACK_SECRET_TOKEN");
+        let _secret_guard = EnvVarGuard::unset("PACK_SECRET_TOKEN");
 
         let pack_root = machine_installed_packs_dir().join("ao.secret").join("0.2.0");
         write_pack_manifest(
@@ -1371,7 +1420,74 @@ required_env = ["PACK_SECRET_TOKEN"]
         )
         .expect("write mcp servers");
 
-        let error = resolve_pack_registry(project.path()).expect_err("missing required secret should fail");
-        assert!(error.to_string().contains("requires secret 'PACK_SECRET_TOKEN'"));
+        let registry = resolve_pack_registry(project.path()).expect("registry resolution should not require secrets");
+        assert!(registry.resolve("ao.secret").is_some(), "secret pack should still be active");
+        crate::load_workflow_config_with_metadata(project.path())
+            .expect("workflow config loading should not require secrets");
+    }
+
+    #[test]
+    fn resolve_pack_registry_allows_missing_required_runtime_until_execution() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let pack_root = machine_installed_packs_dir().join("ao.runtime").join("0.2.0");
+        write_pack_manifest(
+            &pack_root,
+            r#"
+schema = "ao.pack.v1"
+id = "ao.runtime"
+version = "0.2.0"
+kind = "domain-pack"
+title = "Runtime"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+ao_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["custom"]
+default_kind = "custom"
+
+[workflows]
+root = "workflows"
+exports = ["ao.runtime/run"]
+
+[runtime]
+workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
+
+[[runtime.requirements]]
+runtime = "node"
+binary = "missing-node-binary"
+optional = false
+"#,
+        );
+        fs::write(
+            pack_root.join("runtime/workflow-runtime.overlay.yaml"),
+            r#"
+phase_catalog:
+  runtime-check:
+    label: Runtime Check
+    category: verification
+workflows:
+  - id: ao.runtime/run
+    name: Runtime Run
+    phases:
+      - runtime-check
+"#,
+        )
+        .expect("write workflow overlay");
+
+        let registry = resolve_pack_registry(project.path()).expect("registry resolution should not probe runtimes");
+        assert!(registry.resolve("ao.runtime").is_some(), "runtime pack should still be active");
+        crate::load_workflow_config_with_metadata(project.path())
+            .expect("workflow config loading should not probe runtimes");
     }
 }

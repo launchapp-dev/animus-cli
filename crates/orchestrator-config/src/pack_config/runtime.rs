@@ -83,7 +83,7 @@ pub fn activate_pack_mcp_overlay(
     workflow: &mut WorkflowConfig,
     pack: &LoadedPackManifest,
 ) -> Result<PackRuntimeReport> {
-    let report = ensure_pack_runtime_requirements(pack)?;
+    let report = crate::ensure_pack_execution_requirements(pack)?;
     apply_pack_mcp_overlay(workflow, pack)?;
     Ok(report)
 }

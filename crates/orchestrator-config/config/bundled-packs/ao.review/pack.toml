@@ -13,6 +13,10 @@ ao_core = ">=0.1.0"
 workflow_schema = "v2"
 subject_schema = "v2"
 
+[subjects]
+kinds = ["ao.task"]
+default_kind = "ao.task"
+
 [workflows]
 root = "workflows"
 exports = ["ao.review/cycle"]

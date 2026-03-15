@@ -157,10 +157,17 @@ fn validate_runtime_requirements(requirements: &[PackRuntimeRequirement], errors
         }
 
         if let Some(binary) = requirement.binary.as_deref() {
-            if binary.trim().is_empty() {
+            let trimmed = binary.trim();
+            if trimmed.is_empty() {
                 errors.push(format!(
                     "runtime.requirements['{}'].binary must not be empty",
                     requirement.runtime.binary_name()
+                ));
+            } else if !is_simple_binary_name(trimmed) {
+                errors.push(format!(
+                    "runtime.requirements['{}'].binary '{}' must be a simple executable name, not a path",
+                    requirement.runtime.binary_name(),
+                    trimmed
                 ));
             }
         }
@@ -190,6 +197,11 @@ fn validate_runtime_requirements(requirements: &[PackRuntimeRequirement], errors
             }
         }
     }
+}
+
+fn is_simple_binary_name(value: &str) -> bool {
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 fn validate_mcp(mcp: &PackMcp, errors: &mut Vec<String>) {
@@ -404,7 +416,7 @@ fn validate_version_req(raw: &str, field: &str, errors: &mut Vec<String>) {
 }
 
 fn is_identifier(value: &str, allow_dot: bool, allow_uppercase: bool) -> bool {
-    if value.chars().next().is_none_or(|ch| !is_identifier_char(ch, allow_dot, allow_uppercase)) {
+    if value.chars().next().is_none_or(|ch| !ch.is_ascii_alphanumeric()) {
         return false;
     }
 

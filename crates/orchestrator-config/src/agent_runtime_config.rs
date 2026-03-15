@@ -1735,36 +1735,8 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+    use crate::test_support::{env_lock, EnvVarGuard};
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &std::path::Path) -> Self {
-            let original = env::var(key).ok();
-            env::set_var(key, value);
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
 
     fn write_pack_agent_overlay_fixture(root: &std::path::Path, pack_id: &str, version: &str) {
         fs::create_dir_all(root.join("workflows")).expect("create workflows");
@@ -1921,6 +1893,7 @@ cli_tools:
         let builtin = builtin_agent_runtime_config();
         let mut overlay_agent = builtin.agent_profile("po").expect("builtin po profile should exist").clone();
         overlay_agent.mcp_servers.clear();
+        overlay_agent.skills.clear();
         workflow.agent_profiles.insert("workflow-test-agent".to_string(), overlay_agent);
         workflow.phase_definitions.insert(
             "workflow-test-phase".to_string(),
@@ -1987,6 +1960,75 @@ cli_tools:
         assert_eq!(command.cwd_mode, CommandCwdMode::Path);
         assert_eq!(command.cwd_path.as_deref(), Some("workspace/scripts"));
         assert_eq!(tool.executable.as_deref().is_some_and(|value| value.ends_with("assets/review-helper.sh")), true);
+    }
+
+    #[test]
+    fn runtime_resolution_prefers_project_workflow_over_installed_pack_runtime_overlay() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let temp = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        write_pack_agent_overlay_fixture(
+            &crate::machine_installed_packs_dir().join("ao.review").join("0.2.0"),
+            "ao.review",
+            "0.2.0",
+        );
+
+        let mut workflow = crate::workflow_config::builtin_workflow_config();
+        workflow.phase_catalog.insert(
+            "pack-review".to_string(),
+            crate::workflow_config::PhaseUiDefinition {
+                label: "Pack Review".to_string(),
+                description: "Project override".to_string(),
+                category: "verification".to_string(),
+                icon: None,
+                docs_url: None,
+                tags: vec!["override".to_string()],
+                visible: true,
+            },
+        );
+        let mut project_agent = builtin_agent_runtime_config().agent_profile("po").expect("builtin po profile").clone();
+        project_agent.description = "Project agent".to_string();
+        project_agent.system_prompt = "Project prompt".to_string();
+        project_agent.mcp_servers.clear();
+        project_agent.skills.clear();
+        project_agent.capabilities.clear();
+        workflow.agent_profiles.insert("project-agent".to_string(), project_agent);
+        workflow.phase_definitions.insert(
+            "pack-review".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("project-agent".to_string()),
+                directive: Some("project override".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        workflow.workflows.push(crate::workflow_config::WorkflowDefinition {
+            id: "project-override-check".to_string(),
+            name: "Project Override Check".to_string(),
+            description: String::new(),
+            phases: vec!["pack-review".to_string().into()],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
+
+        let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
+        let phase = resolved.config.phase_execution("pack-review").expect("pack-review phase should exist");
+        assert_eq!(phase.mode, PhaseExecutionMode::Agent);
+        assert_eq!(phase.agent_id.as_deref(), Some("project-agent"));
+        assert!(phase.command.is_none(), "project workflow phase should override installed pack command phase");
     }
 
     #[test]

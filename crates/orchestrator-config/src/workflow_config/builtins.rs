@@ -252,26 +252,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 post_success: None,
                 variables: Vec::new(),
             },
-            WorkflowDefinition {
-                id: "requirement-task-generation".to_string(),
-                name: "Requirement Task Generation".to_string(),
-                description: "Legacy alias for the canonical requirement planning workflow.".to_string(),
-                phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
-                })],
-                post_success: None,
-                variables: Vec::new(),
-            },
-            WorkflowDefinition {
-                id: "requirement-task-generation-run".to_string(),
-                name: "Requirement Task Generation Run".to_string(),
-                description: "Legacy alias for the canonical requirement execution workflow.".to_string(),
-                phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
-                    workflow_ref: REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF.to_string(),
-                })],
-                post_success: None,
-                variables: Vec::new(),
-            },
         ],
         phase_definitions: BTreeMap::new(),
         agent_profiles: BTreeMap::new(),
