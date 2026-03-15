@@ -6,13 +6,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{
-    AgentRunEvent, AgentRunRequest, IpcAuthRequest, IpcAuthResult, ModelId, RunId,
-    MAX_UNIX_SOCKET_PATH_LEN, PROTOCOL_VERSION,
+    AgentRunEvent, IpcAuthRequest, IpcAuthResult, RunId,
+    MAX_UNIX_SOCKET_PATH_LEN,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
-use uuid::Uuid;
 
 fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
     protocol::scoped_state_root(project_root)
@@ -289,82 +288,3 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_prompt_against_runner(
-    project_root: &str,
-    prompt: &str,
-    model: &str,
-    tool: &str,
-    timeout_secs: u64,
-) -> Result<String> {
-    let run_id = RunId(format!("task-gen-{}", Uuid::new_v4()));
-    let mut context = serde_json::json!({
-        "tool": tool,
-        "prompt": prompt,
-        "cwd": project_root,
-        "project_root": project_root,
-        "planning_stage": "task-generation",
-        "allowed_tools": ["Read", "Glob", "Grep", "WebSearch"],
-        "timeout_secs": timeout_secs,
-    });
-    if let Some(runtime_contract) = build_runtime_contract(tool, model, prompt) {
-        context["runtime_contract"] = runtime_contract;
-    }
-
-    let request = AgentRunRequest {
-        protocol_version: PROTOCOL_VERSION.to_string(),
-        run_id: run_id.clone(),
-        model: ModelId(model.to_string()),
-        context,
-        timeout_secs: Some(timeout_secs),
-    };
-
-    let config_dir = runner_config_dir(Path::new(project_root));
-    let stream = connect_runner(&config_dir).await?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    write_json_line(&mut write_half, &request).await?;
-
-    let mut lines = BufReader::new(read_half).lines();
-    let mut transcript = String::new();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
-            continue;
-        };
-        if !event_matches_run(&event, &run_id) {
-            continue;
-        }
-
-        match event {
-            AgentRunEvent::OutputChunk { text, .. } => {
-                transcript.push_str(&text);
-                transcript.push('\n');
-            }
-            AgentRunEvent::Thinking { content, .. } => {
-                transcript.push_str(&content);
-                transcript.push('\n');
-            }
-            AgentRunEvent::Error { error, .. } => {
-                return Err(anyhow!("task generation run failed: {error}"));
-            }
-            AgentRunEvent::Finished { exit_code, .. } => {
-                if exit_code.unwrap_or_default() != 0 {
-                    return Err(anyhow!(
-                        "task generation run exited with non-zero code: {:?}",
-                        exit_code
-                    ));
-                }
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    if transcript.trim().is_empty() {
-        return Err(anyhow!("task generation run produced empty output"));
-    }
-
-    Ok(transcript)
-}

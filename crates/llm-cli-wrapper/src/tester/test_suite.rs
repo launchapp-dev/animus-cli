@@ -45,11 +45,6 @@ impl TestCase {
         self
     }
 
-    pub fn should_fail(mut self) -> Self {
-        self.should_succeed = false;
-        self
-    }
-
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
         self
@@ -191,52 +186,4 @@ impl TestSuite {
             )
     }
 
-    /// Create a test suite for MCP (Model Context Protocol) integration
-    ///
-    /// This test suite verifies that CLIs can:
-    /// - Connect to MCP servers
-    /// - Discover available tools
-    /// - Execute tool calls
-    /// - Handle MCP-specific features
-    ///
-    /// Note: This requires an MCP server to be running.
-    pub fn mcp_integration() -> Self {
-        Self::new("MCP Integration")
-            .with_description("Tests Model Context Protocol support and tool integration")
-            .add_test(
-                TestCase::new(
-                    "mcp_connection",
-                    "Connect to the MCP server and verify connectivity",
-                )
-                .with_description("Test MCP server connection")
-                .with_timeout(30),
-            )
-            .add_test(
-                TestCase::new(
-                    "mcp_tool_discovery",
-                    "List all available tools from the MCP server",
-                )
-                .with_description("Test MCP tool discovery")
-                .expect_output("search")
-                .with_timeout(30),
-            )
-            .add_test(
-                TestCase::new(
-                    "mcp_search_tool",
-                    "Use the MCP search tool to find all Rust files in the project",
-                )
-                .with_description("Test MCP search tool execution")
-                .expect_output(".rs")
-                .with_timeout(60),
-            )
-            .add_test(
-                TestCase::new(
-                    "mcp_search_with_pattern",
-                    "Search for the pattern 'CliInterface' in Rust files using MCP",
-                )
-                .with_description("Test MCP search with pattern matching")
-                .expect_output("CliInterface")
-                .with_timeout(60),
-            )
-    }
 }
