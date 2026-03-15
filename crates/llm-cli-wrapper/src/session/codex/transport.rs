@@ -86,7 +86,8 @@ pub(crate) fn codex_invocation_for_request(
 
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation { command: "codex".to_string(), args, prompt_via_stdin: false };
+    let mut invocation =
+        LaunchInvocation { command: "codex".to_string(), args, env: Default::default(), prompt_via_stdin: false };
     ensure_flag(&mut invocation.args, "--json", 1);
 
     Ok(invocation)

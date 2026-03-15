@@ -87,7 +87,8 @@ pub(crate) fn gemini_invocation_for_request(
     args.push("-p".to_string());
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation { command: "gemini".to_string(), args, prompt_via_stdin: false };
+    let mut invocation =
+        LaunchInvocation { command: "gemini".to_string(), args, env: Default::default(), prompt_via_stdin: false };
     let insert_at = invocation.args.len();
     ensure_flag_value(&mut invocation.args, "--output-format", "json", insert_at);
 

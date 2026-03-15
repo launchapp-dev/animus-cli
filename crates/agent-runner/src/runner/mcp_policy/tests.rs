@@ -40,6 +40,7 @@ fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
     let mut invocation = LaunchInvocation {
         command: "unknown-cli".to_string(),
         args: vec!["hello".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -75,6 +76,7 @@ fn native_mcp_policy_requires_transport_when_enforced() {
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args: vec!["--print".to_string(), "hello".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -102,6 +104,7 @@ fn native_mcp_policy_adds_codex_mcp_server_override() {
     let mut invocation = LaunchInvocation {
         command: "codex".to_string(),
         args: vec!["exec".to_string(), "--json".to_string(), "hello".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -130,6 +133,7 @@ fn native_mcp_policy_configures_claude_permission_mode() {
     let mut invocation = LaunchInvocation {
         command: "claude".to_string(),
         args: vec!["--print".to_string(), "hello".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -222,6 +226,7 @@ fn native_mcp_policy_sets_gemini_system_settings_path_for_stdio_transport() {
     let mut invocation = LaunchInvocation {
         command: "gemini".to_string(),
         args: vec!["--output-format".to_string(), "json".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -265,6 +270,7 @@ fn native_mcp_policy_sets_gemini_http_settings_without_schema_override() {
     let mut invocation = LaunchInvocation {
         command: "gemini".to_string(),
         args: vec!["--output-format".to_string(), "json".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -303,6 +309,7 @@ fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
     let mut invocation = LaunchInvocation {
         command: "opencode".to_string(),
         args: vec!["run".to_string(), "--format".to_string(), "json".to_string()],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {
@@ -353,6 +360,7 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
             "json".to_string(),
             "hello".to_string(),
         ],
+        env: Default::default(),
         prompt_via_stdin: false,
     };
     let enforcement = McpToolEnforcement {

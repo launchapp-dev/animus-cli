@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
 use crate::agent_runtime_config::{AgentRuntimeConfig, PhaseExecutionMode};
+use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
+use crate::skill_scoping::load_builtin_skills;
 
 use super::types::*;
 
@@ -62,7 +65,38 @@ pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime:
     }
 }
 
+fn validate_skill_references(
+    field_path: &str,
+    skills: &[String],
+    project_root: Option<&Path>,
+    errors: &mut Vec<String>,
+) {
+    let mut requested_skills = Vec::with_capacity(skills.len());
+    for skill_name in skills {
+        let trimmed = skill_name.trim();
+        if trimmed.is_empty() {
+            errors.push(format!("{field_path} must not contain empty values"));
+            return;
+        }
+        requested_skills.push(trimmed.to_string());
+    }
+
+    let result = if let Some(project_root) = project_root {
+        resolve_skills_for_project(&requested_skills, project_root).map(|_| ())
+    } else {
+        load_builtin_skills().and_then(|builtin| resolve_skills(&requested_skills, &[builtin]).map(|_| ()))
+    };
+
+    if let Err(error) = result {
+        errors.push(format!("{field_path} validation failed: {error}"));
+    }
+}
+
 pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
+    validate_workflow_config_with_project_root(config, None)
+}
+
+pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, project_root: Option<&Path>) -> Result<()> {
     let mut errors = Vec::new();
 
     if config.schema.trim() != WORKFLOW_CONFIG_SCHEMA_ID {
@@ -230,6 +264,12 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
             errors.push("phase_definitions contains an empty phase id".to_string());
             continue;
         }
+        validate_skill_references(
+            format!("phase_definitions['{}'].skills", phase_id).as_str(),
+            &definition.skills,
+            project_root,
+            &mut errors,
+        );
         match definition.mode {
             PhaseExecutionMode::Command => {
                 let Some(command) = definition.command.as_ref() else {
@@ -321,6 +361,12 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
     }
 
     for (agent_id, profile) in &config.agent_profiles {
+        validate_skill_references(
+            format!("agent_profiles['{}'].skills", agent_id).as_str(),
+            &profile.skills,
+            project_root,
+            &mut errors,
+        );
         for server in &profile.mcp_servers {
             if server.trim().is_empty() {
                 errors.push(format!("agent_profiles['{}'].mcp_servers must not contain empty values", agent_id));

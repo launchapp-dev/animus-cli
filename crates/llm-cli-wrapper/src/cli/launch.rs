@@ -1,5 +1,6 @@
 //! Runtime launch parsing and normalization utilities shared by runners.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
@@ -13,6 +14,7 @@ use super::types::CliType;
 pub struct LaunchInvocation {
     pub command: String,
     pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
     pub prompt_via_stdin: bool,
 }
 
@@ -256,8 +258,23 @@ pub fn parse_launch_from_runtime_contract(runtime_contract: Option<&Value>) -> R
         .unwrap_or_default();
 
     let prompt_via_stdin = launch.get("prompt_via_stdin").and_then(Value::as_bool).unwrap_or(false);
+    let env = launch
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_string())).ok_or_else(|| {
+                        anyhow!("Invalid runtime contract launch env for key '{}': expected string value", key)
+                    })
+                })
+                .collect::<std::result::Result<BTreeMap<_, _>, anyhow::Error>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
 
-    let mut invocation = LaunchInvocation { command: command.to_string(), args, prompt_via_stdin };
+    let mut invocation = LaunchInvocation { command: command.to_string(), args, env, prompt_via_stdin };
 
     ensure_machine_json_output(&mut invocation);
     Ok(Some(invocation))
@@ -292,6 +309,7 @@ mod tests {
             .expect("launch should be present");
         let idx = launch.args.iter().position(|arg| arg == "--format").expect("opencode format flag should be present");
         assert_eq!(launch.args.get(idx + 1).map(String::as_str), Some("json"));
+        assert!(launch.env.is_empty());
 
         let claude_contract = json!({
             "cli": {
@@ -312,5 +330,28 @@ mod tests {
             .position(|arg| arg == "--output-format")
             .expect("claude output format flag should be present");
         assert_eq!(claude_launch.args.get(output_idx + 1).map(String::as_str), Some("stream-json"));
+    }
+
+    #[test]
+    fn parse_launch_preserves_environment_variables() {
+        let contract = json!({
+            "cli": {
+                "launch": {
+                    "command": "codex",
+                    "args": ["exec", "hello"],
+                    "env": {
+                        "SKILL_MODE": "review",
+                        "AO_FLAG": "1"
+                    },
+                    "prompt_via_stdin": false
+                }
+            }
+        });
+
+        let launch = parse_launch_from_runtime_contract(Some(&contract))
+            .expect("launch should parse")
+            .expect("launch should be present");
+        assert_eq!(launch.env.get("SKILL_MODE").map(String::as_str), Some("review"));
+        assert_eq!(launch.env.get("AO_FLAG").map(String::as_str), Some("1"));
     }
 }

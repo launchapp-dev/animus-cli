@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::config_context::RuntimeConfigContext;
 use crate::phase_output::{build_workflow_pipeline_context, format_prior_phase_outputs, load_prior_phase_outputs};
+use orchestrator_config::SkillApplicationResult;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -107,6 +108,16 @@ pub fn render_phase_prompt_with_ctx(
     params: &PhaseRenderParams<'_>,
     inputs: PhasePromptInputs,
 ) -> RenderedPhasePrompt {
+    render_phase_prompt_with_ctx_overrides(ctx, params, inputs, None, None)
+}
+
+pub(crate) fn render_phase_prompt_with_ctx_overrides(
+    ctx: &RuntimeConfigContext,
+    params: &PhaseRenderParams<'_>,
+    inputs: PhasePromptInputs,
+    capabilities_override: Option<protocol::PhaseCapabilities>,
+    skill_result: Option<&SkillApplicationResult>,
+) -> RenderedPhasePrompt {
     let project_root = params.project_root;
     let execution_cwd = params.execution_cwd;
     let workflow_id = params.workflow_id;
@@ -114,7 +125,7 @@ pub fn render_phase_prompt_with_ctx(
     let subject_title = params.subject_title;
     let subject_description = params.subject_description;
     let phase_id = params.phase_id;
-    let caps = ctx.phase_capabilities(phase_id);
+    let caps = capabilities_override.unwrap_or_else(|| ctx.phase_capabilities(phase_id));
     let phase_decision_contract = ctx.phase_decision_contract(phase_id).cloned();
     let phase_action_rule = if caps.writes_files {
         "Requirements:\n- Make concrete file changes in this repository."
@@ -256,19 +267,56 @@ pub fn render_phase_prompt_with_ctx(
         phase_prompt.push_str(schedule_input);
     }
 
-    let system_prompt = ctx.phase_system_prompt(phase_id).and_then(|prompt| {
-        let trimmed = prompt.trim();
-        if trimmed.is_empty() {
-            None
-        } else if inputs.pipeline_vars.is_empty() {
-            Some(prompt)
-        } else {
-            Some(orchestrator_core::workflow_config::expand_variables(&prompt, &inputs.pipeline_vars))
+    let mut prompt_sections = Vec::new();
+    if let Some(skill_result) = skill_result {
+        for prefix in &skill_result.prompt_prefixes {
+            if let Some(expanded) = expand_prompt_fragment(prefix, &inputs.pipeline_vars) {
+                prompt_sections.push(expanded);
+            }
         }
-    });
+        if !skill_result.directives.is_empty() {
+            let directives = skill_result
+                .directives
+                .iter()
+                .filter_map(|directive| expand_prompt_fragment(directive, &inputs.pipeline_vars))
+                .collect::<Vec<_>>();
+            if !directives.is_empty() {
+                let mut section = String::from("Skill directives:");
+                for directive in directives {
+                    section.push_str("\n- ");
+                    section.push_str(&directive);
+                }
+                prompt_sections.push(section);
+            }
+        }
+    }
+    prompt_sections.push(phase_prompt);
+    if let Some(skill_result) = skill_result {
+        for suffix in &skill_result.prompt_suffixes {
+            if let Some(expanded) = expand_prompt_fragment(suffix, &inputs.pipeline_vars) {
+                prompt_sections.push(expanded);
+            }
+        }
+    }
+    let phase_prompt_body = prompt_sections.join("\n\n");
+
+    let mut system_prompt_sections = Vec::new();
+    if let Some(prompt) = ctx.phase_system_prompt(phase_id) {
+        if let Some(expanded) = expand_prompt_fragment(&prompt, &inputs.pipeline_vars) {
+            system_prompt_sections.push(expanded);
+        }
+    }
+    if let Some(skill_result) = skill_result {
+        for fragment in &skill_result.system_prompt_fragments {
+            if let Some(expanded) = expand_prompt_fragment(fragment, &inputs.pipeline_vars) {
+                system_prompt_sections.push(expanded);
+            }
+        }
+    }
+    let system_prompt = (!system_prompt_sections.is_empty()).then(|| system_prompt_sections.join("\n\n"));
     let final_prompt = match system_prompt.as_deref() {
-        Some(system_prompt) => format!("{system_prompt}\n\n{phase_prompt}"),
-        None => phase_prompt.clone(),
+        Some(system_prompt) => format!("{system_prompt}\n\n{phase_prompt_body}"),
+        None => phase_prompt_body.clone(),
     };
 
     RenderedPhasePrompt {
@@ -292,9 +340,22 @@ pub fn render_phase_prompt_with_ctx(
         pipeline_context,
         prior_phase_outputs: prior_context,
         system_prompt,
-        phase_prompt_body: phase_prompt,
+        phase_prompt_body,
         final_prompt,
     }
+}
+
+fn expand_prompt_fragment(fragment: &str, pipeline_vars: &HashMap<String, String>) -> Option<String> {
+    let trimmed = fragment.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if pipeline_vars.is_empty() {
+        return Some(trimmed.to_string());
+    }
+
+    Some(orchestrator_core::workflow_config::expand_variables(trimmed, pipeline_vars))
 }
 
 fn phase_decision_example_for_prompt(

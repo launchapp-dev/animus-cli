@@ -1,4 +1,7 @@
+use orchestrator_config::SkillDefinition;
+use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 
 fn default_registry_available() -> bool {
     true
@@ -23,6 +26,8 @@ pub(super) struct SkillVersionRecord {
     pub(super) registry: String,
     pub(super) integrity: String,
     pub(super) artifact: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) definition: Option<SkillDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +38,17 @@ pub(super) struct ResolvedSkillEntry {
     pub(super) registry: String,
     pub(super) integrity: String,
     pub(super) artifact: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) definition: Option<SkillDefinition>,
+}
+
+fn compare_versions_desc(left: &str, right: &str) -> Ordering {
+    match (Version::parse(left), Version::parse(right)) {
+        (Ok(left), Ok(right)) => right.cmp(&left),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => right.cmp(left),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,7 +101,8 @@ impl SkillRegistryStateV1 {
                 .cmp(&b.name)
                 .then_with(|| a.source.cmp(&b.source))
                 .then_with(|| a.registry.cmp(&b.registry))
-                .then_with(|| a.version.cmp(&b.version))
+                .then_with(|| compare_versions_desc(&a.version, &b.version))
+                .then_with(|| b.version.cmp(&a.version))
         });
         self.installed.dedup_by(|a, b| a.name == b.name && a.source == b.source);
 

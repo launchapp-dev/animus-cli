@@ -12,7 +12,7 @@ use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info};
 
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
-use super::process_builder::{build_cli_invocation, resolve_idle_timeout_secs};
+use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 
 pub(super) fn use_native_session_backend(tool: &str, _runtime_contract: Option<&Value>) -> bool {
     matches!(
@@ -48,6 +48,7 @@ pub(super) async fn spawn_session_process(
 ) -> Result<i32> {
     let mut invocation = build_cli_invocation(tool, model, prompt, runtime_contract).await?;
     let mut env = env;
+    merge_launch_env(&mut env, &invocation);
     let enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
     apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, run_id, &mut temp_cleanup)?;
@@ -139,6 +140,8 @@ fn build_session_request(
     if !merged_contract.is_object() {
         merged_contract = json!({});
     }
+    let mut merged_env = env;
+    merge_launch_env(&mut merged_env, &invocation);
 
     if merged_contract.get("cli").and_then(Value::as_object).is_none() {
         merged_contract["cli"] = json!({});
@@ -147,6 +150,7 @@ fn build_session_request(
     merged_contract["cli"]["launch"] = json!({
         "command": invocation.command,
         "args": invocation.args,
+        "env": merged_env,
         "prompt_via_stdin": invocation.prompt_via_stdin,
     });
 
@@ -159,7 +163,7 @@ fn build_session_request(
         mcp_endpoint: merged_contract.pointer("/mcp/endpoint").and_then(Value::as_str).map(ToString::to_string),
         permission_mode: None,
         timeout_secs,
-        env_vars: env.into_iter().collect(),
+        env_vars: merged_env.into_iter().collect(),
         extras: json!({
             "runtime_contract": merged_contract
         }),
@@ -559,6 +563,9 @@ mod tests {
                 "launch": {
                     "command": "gemini",
                     "args": ["--model", "gemini-2.5-pro", "--output-format", "json", "-p", "hello"],
+                    "env": {
+                        "SKILL_LAUNCH_ENV": "review-mode"
+                    },
                     "prompt_via_stdin": false
                 }
             },
@@ -614,6 +621,10 @@ mod tests {
         assert!(
             env_lines.iter().any(|line| line.starts_with("GEMINI_CLI_SYSTEM_SETTINGS_PATH=")),
             "expected gemini launch env to include settings path, got: {env_lines:?}"
+        );
+        assert!(
+            env_lines.iter().any(|line| line == "SKILL_LAUNCH_ENV=review-mode"),
+            "expected gemini launch env to preserve runtime contract env, got: {env_lines:?}"
         );
     }
 

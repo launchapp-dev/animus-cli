@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use super::builtins::builtin_workflow_config;
 use super::types::*;
-use super::validation::validate_workflow_config;
+use super::validation::validate_workflow_config_with_project_root;
 use super::yaml_compiler::{compile_yaml_workflow_files, merge_yaml_into_config, yaml_workflows_dir};
 use super::yaml_scaffold::ensure_workflow_yaml_scaffold;
 use super::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
@@ -29,7 +29,7 @@ pub fn ensure_workflow_config_file(project_root: &Path) -> Result<()> {
 pub fn ensure_workflow_config_compiled(project_root: &Path) -> Result<()> {
     if let Some(yaml_config) = compile_yaml_workflow_files(project_root)? {
         let config = merge_yaml_into_config(builtin_workflow_config(), yaml_config);
-        validate_workflow_config(&config)?;
+        validate_workflow_config_with_project_root(&config, Some(project_root))?;
     }
     Ok(())
 }
@@ -41,7 +41,7 @@ pub fn load_workflow_config(project_root: &Path) -> Result<WorkflowConfig> {
 pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedWorkflowConfig> {
     if let Some(yaml_config) = compile_yaml_workflow_files(project_root)? {
         let config = merge_yaml_into_config(builtin_workflow_config(), yaml_config);
-        validate_workflow_config(&config)?;
+        validate_workflow_config_with_project_root(&config, Some(project_root))?;
 
         let single_file = project_root.join(".ao").join("workflows.yaml");
         let workflows_dir = yaml_workflows_dir(project_root);
@@ -98,7 +98,7 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
 }
 
 pub fn write_workflow_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
-    validate_workflow_config(config)?;
+    validate_workflow_config_with_project_root(config, Some(project_root))?;
     super::yaml_compiler::write_workflow_yaml_overlay(project_root, GENERATED_WORKFLOW_OVERLAY_FILE_NAME, config)
         .map(|_| ())
 }

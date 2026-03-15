@@ -72,9 +72,7 @@ fn canonicalize_lossy(path: &str) -> String {
 
 fn scoped_daemon_dir(project_root: &str) -> PathBuf {
     let canonical = PathBuf::from(canonicalize_lossy(project_root));
-    protocol::scoped_state_root(&canonical)
-        .map(|root| root.join("daemon"))
-        .unwrap_or_else(|| canonical.join(".ao"))
+    protocol::scoped_state_root(&canonical).map(|root| root.join("daemon")).unwrap_or_else(|| canonical.join(".ao"))
 }
 
 fn daemon_runtime_state_path(project_root: &str) -> PathBuf {

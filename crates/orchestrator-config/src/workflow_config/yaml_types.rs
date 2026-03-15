@@ -134,6 +134,8 @@ pub(super) struct YamlPhaseDefinition {
     pub(super) directive: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) runtime: Option<crate::agent_runtime_config::AgentRuntimeOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

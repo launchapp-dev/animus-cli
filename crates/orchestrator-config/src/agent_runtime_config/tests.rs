@@ -136,6 +136,35 @@ fn builtin_defaults_include_em_po_and_swe_profiles() {
 }
 
 #[test]
+fn builtin_persona_skills_resolve_against_builtin_catalog() {
+    let config = builtin_agent_runtime_config();
+    validate_agent_runtime_config(&config).expect("builtin runtime config should validate against builtin skills");
+
+    for agent_id in ["implementation", "em", "po", "swe"] {
+        let profile = config.agent_profile(agent_id).expect("builtin profile should exist");
+        for skill_name in &profile.skills {
+            let resolved = crate::skill_resolution::resolve_skill(
+                skill_name,
+                &[crate::skill_scoping::load_builtin_skills().expect("builtin skills should load")],
+            )
+            .expect("builtin persona skill should resolve");
+            assert_eq!(resolved.definition.name, *skill_name);
+        }
+    }
+}
+
+#[test]
+fn runtime_validation_reports_missing_skill_loudly() {
+    let mut config = builtin_agent_runtime_config();
+    config.agents.get_mut("swe").expect("swe profile should exist").skills.push("missing-skill".to_string());
+
+    let err = validate_agent_runtime_config(&config).expect_err("missing skill should fail validation");
+    let message = err.to_string();
+    assert!(message.contains("agents['swe'].skills"));
+    assert!(message.contains("missing-skill"));
+}
+
+#[test]
 fn builtin_persona_capabilities_and_tool_patterns_are_role_specific() {
     let config = builtin_agent_runtime_config();
     let em = config.agent_profile("em").expect("em profile should exist");

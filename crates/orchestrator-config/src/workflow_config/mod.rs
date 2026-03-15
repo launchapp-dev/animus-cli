@@ -22,7 +22,9 @@ pub use resolution::{
     resolve_workflow_verdict_routing,
 };
 pub use types::*;
-pub use validation::{validate_workflow_and_runtime_configs, validate_workflow_config};
+pub use validation::{
+    validate_workflow_and_runtime_configs, validate_workflow_config, validate_workflow_config_with_project_root,
+};
 pub use yaml_compiler::{
     compile_and_write_yaml_workflows, compile_yaml_workflow_files, merge_yaml_into_config, write_workflow_yaml_overlay,
     yaml_workflows_dir, CompileYamlResult,

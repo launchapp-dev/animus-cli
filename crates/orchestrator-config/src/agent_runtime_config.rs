@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
+use crate::skill_scoping::load_builtin_skills;
+
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
 pub const AGENT_RUNTIME_CONFIG_FILE_NAME: &str = "agent-runtime-config.v2.json";
@@ -1220,7 +1223,7 @@ pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<Lo
     if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root) {
         let mut config = builtin_agent_runtime_config();
         merge_workflow_runtime_overlay(&mut config, &loaded_workflow.config);
-        validate_agent_runtime_config(&config)?;
+        validate_agent_runtime_config_with_project_root(&config, Some(project_root))?;
 
         return Ok(LoadedAgentRuntimeConfig {
             metadata: AgentRuntimeMetadata {
@@ -1349,7 +1352,7 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
 }
 
 pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConfig) -> Result<()> {
-    validate_agent_runtime_config(config)?;
+    validate_agent_runtime_config_with_project_root(config, Some(project_root))?;
     let workflow_overlay = crate::workflow_config::WorkflowConfig {
         schema: crate::workflow_config::WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: crate::workflow_config::WORKFLOW_CONFIG_VERSION,
@@ -1402,6 +1405,7 @@ fn validate_phase_definition(
     phase_id: &str,
     definition: &PhaseExecutionDefinition,
     config: &AgentRuntimeConfig,
+    project_root: Option<&Path>,
 ) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
@@ -1574,10 +1578,43 @@ fn validate_phase_definition(
         }
     }
 
+    validate_skill_references(format!("phases['{}'].skills", phase_id).as_str(), &definition.skills, project_root)?;
+
+    Ok(())
+}
+
+fn validate_skill_references(field_path: &str, skills: &[String], project_root: Option<&Path>) -> Result<()> {
+    let mut requested_skills = Vec::with_capacity(skills.len());
+    for skill_name in skills {
+        let trimmed = skill_name.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("{field_path} must not contain empty values"));
+        }
+        requested_skills.push(trimmed.to_string());
+    }
+
+    let result = if let Some(project_root) = project_root {
+        resolve_skills_for_project(&requested_skills, project_root).map(|_| ())
+    } else {
+        let builtin = load_builtin_skills()?;
+        resolve_skills(&requested_skills, &[builtin]).map(|_| ())
+    };
+
+    if let Err(error) = result {
+        return Err(anyhow!("{field_path} validation failed: {error}"));
+    }
+
     Ok(())
 }
 
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
+    validate_agent_runtime_config_with_project_root(config, None)
+}
+
+fn validate_agent_runtime_config_with_project_root(
+    config: &AgentRuntimeConfig,
+    project_root: Option<&Path>,
+) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
             return false;
@@ -1654,6 +1691,7 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         if profile.skills.iter().any(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].skills must not contain empty values", agent_id));
         }
+        validate_skill_references(format!("agents['{}'].skills", agent_id).as_str(), &profile.skills, project_root)?;
 
         if profile.capabilities.keys().any(|capability| capability.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].capabilities must not contain empty capability keys", agent_id));
@@ -1668,7 +1706,7 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         if phase_id.trim().is_empty() {
             return Err(anyhow!("phases contains empty phase id"));
         }
-        validate_phase_definition(phase_id, definition, config)?;
+        validate_phase_definition(phase_id, definition, config, project_root)?;
     }
 
     Ok(())
