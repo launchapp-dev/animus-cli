@@ -1,5 +1,9 @@
 use super::*;
-use crate::types::{ArchitectureEntity, RequirementPriority, RequirementStatus, WorkflowStatus};
+use crate::types::{
+    ArchitectureEntity, ListPageRequest, Priority, RequirementFilter, RequirementItem, RequirementPriority,
+    RequirementQuery, RequirementQuerySort, RequirementStatus, RequirementType, TaskCreateInput, TaskQuery,
+    TaskQuerySort, TaskType, WorkflowFilter, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
+};
 
 fn global_requirements_index_dir(project_root: &std::path::Path) -> std::path::PathBuf {
     scoped_ao_root(project_root).join("index").join("requirements")
@@ -1341,6 +1345,194 @@ async fn workflow_service_exposes_decisions_and_checkpoints() {
 
     let checkpoint = WorkflowServiceApi::get_checkpoint(&hub, &workflow.id, 1).await.expect("get checkpoint");
     assert_eq!(checkpoint.id, workflow.id);
+}
+
+#[tokio::test]
+async fn task_service_query_returns_stable_paginated_priority_order() {
+    let hub = InMemoryServiceHub::new();
+
+    let critical = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Critical".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Critical),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("critical task should be created");
+
+    let high = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "High".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::High),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("high task should be created");
+
+    TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Low".to_string(),
+            description: String::new(),
+            task_type: Some(TaskType::Feature),
+            priority: Some(Priority::Low),
+            created_by: Some("tester".to_string()),
+            tags: vec![],
+            linked_requirements: vec![],
+            linked_architecture_entities: vec![],
+        },
+    )
+    .await
+    .expect("low task should be created");
+
+    let page = TaskServiceApi::query(
+        &hub,
+        TaskQuery {
+            filter: Default::default(),
+            page: ListPageRequest { limit: Some(1), offset: 1 },
+            sort: TaskQuerySort::Priority,
+        },
+    )
+    .await
+    .expect("task query should succeed");
+
+    assert_eq!(page.total, 3);
+    assert_eq!(page.returned, 1);
+    assert!(page.has_more);
+    assert_eq!(page.next_offset, Some(2));
+    assert_eq!(page.items[0].id, high.id);
+    assert_ne!(page.items[0].id, critical.id);
+}
+
+#[tokio::test]
+async fn planning_service_query_filters_and_sorts_requirements() {
+    let hub = InMemoryServiceHub::new();
+    let now = chrono::Utc::now();
+
+    PlanningServiceApi::upsert_requirement(
+        &hub,
+        RequirementItem {
+            id: "REQ-010".to_string(),
+            title: "GraphQL query cleanup".to_string(),
+            description: "Remove duplicate query adapters".to_string(),
+            body: None,
+            legacy_id: None,
+            category: Some("integration".to_string()),
+            requirement_type: Some(RequirementType::Technical),
+            acceptance_criteria: vec!["One path for GraphQL queries".to_string()],
+            priority: RequirementPriority::Must,
+            status: RequirementStatus::Draft,
+            source: "test".to_string(),
+            tags: vec!["graphql".to_string()],
+            links: Default::default(),
+            comments: Vec::new(),
+            relative_path: None,
+            linked_task_ids: vec!["TASK-590".to_string()],
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("graphql requirement should be created");
+
+    PlanningServiceApi::upsert_requirement(
+        &hub,
+        RequirementItem {
+            id: "REQ-011".to_string(),
+            title: "CLI help drift".to_string(),
+            description: "Make docs match implementation".to_string(),
+            body: None,
+            legacy_id: None,
+            category: Some("integration".to_string()),
+            requirement_type: Some(RequirementType::Technical),
+            acceptance_criteria: vec!["Help text is accurate".to_string()],
+            priority: RequirementPriority::Should,
+            status: RequirementStatus::Draft,
+            source: "test".to_string(),
+            tags: vec!["cli".to_string()],
+            links: Default::default(),
+            comments: Vec::new(),
+            relative_path: None,
+            linked_task_ids: vec!["TASK-592".to_string()],
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("cli requirement should be created");
+
+    let page = PlanningServiceApi::query(
+        &hub,
+        RequirementQuery {
+            filter: RequirementFilter {
+                status: Some(RequirementStatus::Draft),
+                priority: None,
+                category: Some("integration".to_string()),
+                requirement_type: Some(RequirementType::Technical),
+                tags: None,
+                linked_task_id: None,
+                search_text: Some("query".to_string()),
+            },
+            page: ListPageRequest::unbounded(),
+            sort: RequirementQuerySort::Priority,
+        },
+    )
+    .await
+    .expect("requirement query should succeed");
+
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].id, "REQ-010");
+}
+
+#[tokio::test]
+async fn workflow_service_query_filters_by_status_and_reference() {
+    let hub = InMemoryServiceHub::new();
+
+    let first =
+        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-100".to_string(), Some("standard".to_string())))
+            .await
+            .expect("first workflow should start");
+    let second =
+        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-200".to_string(), Some("ui-ux".to_string())))
+            .await
+            .expect("second workflow should start");
+
+    WorkflowServiceApi::pause(&hub, &first.id).await.expect("first workflow should pause");
+    WorkflowServiceApi::cancel(&hub, &second.id).await.expect("second workflow should cancel");
+
+    let page = WorkflowServiceApi::query(
+        &hub,
+        WorkflowQuery {
+            filter: WorkflowFilter {
+                status: Some(WorkflowStatus::Paused),
+                workflow_ref: Some("standard".to_string()),
+                task_id: None,
+                phase_id: None,
+                search_text: None,
+            },
+            page: ListPageRequest::unbounded(),
+            sort: WorkflowQuerySort::Id,
+        },
+    )
+    .await
+    .expect("workflow query should succeed");
+
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].id, first.id);
 }
 
 #[tokio::test]

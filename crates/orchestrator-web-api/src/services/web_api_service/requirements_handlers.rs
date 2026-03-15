@@ -1,7 +1,7 @@
 use chrono::Utc;
 use orchestrator_core::{
-    FileServiceHub, RequirementItem, RequirementPriority, RequirementStatus, RequirementsDraftInput,
-    RequirementsRefineInput, ServiceHub,
+    FileServiceHub, ListPage, RequirementItem, RequirementPriority, RequirementQuery, RequirementStatus,
+    RequirementsDraftInput, RequirementsRefineInput, ServiceHub,
 };
 use serde_json::{json, Value};
 
@@ -18,8 +18,8 @@ use super::{
 };
 
 impl WebApiService {
-    pub async fn requirements_list(&self) -> Result<Value, WebApiError> {
-        Ok(json!(self.context.hub.planning().list_requirements().await?))
+    pub async fn requirements_list(&self, query: RequirementQuery) -> Result<ListPage<RequirementItem>, WebApiError> {
+        Ok(self.context.hub.planning().query(query).await?)
     }
 
     pub async fn requirements_get(&self, id: &str) -> Result<Value, WebApiError> {

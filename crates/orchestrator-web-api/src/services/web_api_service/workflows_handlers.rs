@@ -2,8 +2,8 @@ use orchestrator_config::workflow_config::{
     load_workflow_config_or_default, write_workflow_config, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowVariable,
 };
 use orchestrator_core::{
-    dispatch_workflow_event, workflow_ref_for_task, FileServiceHub, ServiceHub, WorkflowDefinition, WorkflowEvent,
-    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    dispatch_workflow_event, workflow_ref_for_task, FileServiceHub, ListPage, OrchestratorWorkflow, ServiceHub,
+    WorkflowDefinition, WorkflowEvent, WorkflowQuery, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use protocol::orchestrator::{WorkflowRunInput, WorkflowSubject};
 use serde_json::{json, Value};
@@ -127,8 +127,8 @@ fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String, String
 }
 
 impl WebApiService {
-    pub async fn workflows_list(&self) -> Result<Value, WebApiError> {
-        Ok(json!(self.context.hub.workflows().list().await?))
+    pub async fn workflows_list(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>, WebApiError> {
+        Ok(self.context.hub.workflows().query(query).await?)
     }
 
     pub async fn workflow_config(&self) -> Result<Value, WebApiError> {

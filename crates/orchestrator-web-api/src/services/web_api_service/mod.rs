@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::Utc;
+use orchestrator_core::{ListPageRequest, RequirementQuery, TaskQuery, WorkflowQuery};
 use orchestrator_web_contracts::DaemonEventRecord;
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -67,5 +68,83 @@ impl WebApiService {
         };
 
         let _ = self.event_tx.send(record);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_task_query(
+        &self,
+        task_type: Option<String>,
+        status: Option<String>,
+        priority: Option<String>,
+        risk: Option<String>,
+        assignee_type: Option<String>,
+        tags: Vec<String>,
+        linked_requirement: Option<String>,
+        linked_architecture_entity: Option<String>,
+        search: Option<String>,
+        page: ListPageRequest,
+        sort: Option<String>,
+    ) -> Result<TaskQuery, WebApiError> {
+        Ok(TaskQuery {
+            filter: parsing::build_task_filter(
+                task_type,
+                status,
+                priority,
+                risk,
+                assignee_type,
+                tags,
+                linked_requirement,
+                linked_architecture_entity,
+                search,
+            )?,
+            page,
+            sort: parsing::parse_task_query_sort_opt(sort.as_deref())?.unwrap_or_default(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_requirement_query(
+        &self,
+        status: Option<String>,
+        priority: Option<String>,
+        category: Option<String>,
+        requirement_type: Option<String>,
+        tags: Vec<String>,
+        linked_task_id: Option<String>,
+        search: Option<String>,
+        page: ListPageRequest,
+        sort: Option<String>,
+    ) -> Result<RequirementQuery, WebApiError> {
+        Ok(RequirementQuery {
+            filter: parsing::build_requirement_filter(
+                status,
+                priority,
+                category,
+                requirement_type,
+                tags,
+                linked_task_id,
+                search,
+            )?,
+            page,
+            sort: parsing::parse_requirement_query_sort_opt(sort.as_deref())?.unwrap_or_default(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_workflow_query(
+        &self,
+        status: Option<String>,
+        workflow_ref: Option<String>,
+        task_id: Option<String>,
+        phase_id: Option<String>,
+        search: Option<String>,
+        page: ListPageRequest,
+        sort: Option<String>,
+    ) -> Result<WorkflowQuery, WebApiError> {
+        Ok(WorkflowQuery {
+            filter: parsing::build_workflow_filter(status, workflow_ref, task_id, phase_id, search)?,
+            page,
+            sort: parsing::parse_workflow_query_sort_opt(sort.as_deref())?.unwrap_or_default(),
+        })
     }
 }

@@ -11,16 +11,17 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
     dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
-    workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
-    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    workflow_ref_for_task, ListPageRequest, WorkflowEvent, WorkflowFilter, WorkflowQuery, WorkflowResumeManager,
+    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, print_value, WorkflowAgentRuntimeCommand,
-    WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowExecuteArgs,
-    WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPromptCommand, WorkflowStateMachineCommand,
+    dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, parse_workflow_query_sort_opt,
+    parse_workflow_status_opt, print_value, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand,
+    WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowExecuteArgs, WorkflowPhaseCommand,
+    WorkflowPhasesCommand, WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -252,6 +253,20 @@ fn emit_daemon_event(project_root: &str, event_type: &str, data: Value) -> Resul
     Ok(())
 }
 
+fn build_workflow_query(args: crate::WorkflowListArgs) -> Result<WorkflowQuery> {
+    Ok(WorkflowQuery {
+        filter: WorkflowFilter {
+            status: parse_workflow_status_opt(args.status.as_deref())?,
+            workflow_ref: args.workflow_ref,
+            task_id: args.task_id,
+            phase_id: args.phase_id,
+            search_text: args.search,
+        },
+        page: ListPageRequest { limit: args.limit, offset: args.offset },
+        sort: parse_workflow_query_sort_opt(args.sort.as_deref())?.unwrap_or_default(),
+    })
+}
+
 pub(crate) async fn handle_workflow(
     command: WorkflowCommand,
     hub: Arc<dyn ServiceHub>,
@@ -261,7 +276,10 @@ pub(crate) async fn handle_workflow(
     let workflows = hub.workflows();
 
     match command {
-        WorkflowCommand::List => print_value(workflows.list().await?, json),
+        WorkflowCommand::List(args) => {
+            let page = workflows.query(build_workflow_query(args)?).await?;
+            print_value(page.items, json)
+        }
         WorkflowCommand::Get(args) => print_value(workflows.get(&args.id).await?, json),
         WorkflowCommand::Decisions(args) => print_value(workflows.decisions(&args.id).await?, json),
         WorkflowCommand::Checkpoints { command } => match command {

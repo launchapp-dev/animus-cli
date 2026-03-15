@@ -11,6 +11,7 @@ pub(crate) const TASK_STATUS_FILTER_HELP: &str =
     "Status filter: backlog|todo|ready|in-progress|in_progress|blocked|on-hold|on_hold|done|cancelled.";
 pub(crate) const TASK_PRIORITY_HELP: &str = "Task priority: critical|high|medium|low.";
 pub(crate) const TASK_PRIORITY_FILTER_HELP: &str = "Priority filter: critical|high|medium|low.";
+pub(crate) const TASK_SORT_HELP: &str = "Task sort: priority|updated-at|updated_at|created-at|created_at|id.";
 pub(crate) const REQUIREMENT_PRIORITY_HELP: &str = "Requirement priority: must|should|could|wont|won't.";
 pub(crate) const REQUIREMENT_STATUS_HELP: &str =
     "Requirement status: draft|refined|planned|in-progress|in_progress|done.";
@@ -18,7 +19,11 @@ pub(crate) const REQUIREMENT_CATEGORY_HELP: &str =
     "Requirement category: documentation|usability|runtime|integration|quality|release|security.";
 pub(crate) const REQUIREMENT_TYPE_HELP: &str =
     "Requirement type: product|functional|non-functional|nonfunctional|non_functional|technical|other.";
+pub(crate) const REQUIREMENT_SORT_HELP: &str = "Requirement sort: id|updated-at|updated_at|priority|status.";
 pub(crate) const TASK_RISK_FILTER_HELP: &str = "Risk filter: high|medium|low.";
+pub(crate) const WORKFLOW_STATUS_HELP: &str =
+    "Workflow status: pending|running|paused|completed|failed|escalated|cancelled.";
+pub(crate) const WORKFLOW_SORT_HELP: &str = "Workflow sort: started-at|started_at|status|workflow-ref|workflow_ref|id.";
 pub(crate) const DEPENDENCY_TYPE_HELP: &str =
     "Dependency type: blocks-by|blocks_by|blocked-by|blocked_by|related-to|related_to.";
 

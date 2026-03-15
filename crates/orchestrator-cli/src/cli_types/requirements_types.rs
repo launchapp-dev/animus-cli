@@ -1,8 +1,8 @@
 use clap::{ArgAction, Args, Subcommand};
 
 use super::{
-    IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_CATEGORY_HELP, REQUIREMENT_PRIORITY_HELP, REQUIREMENT_STATUS_HELP,
-    REQUIREMENT_TYPE_HELP,
+    parse_positive_usize, IdArgs, INPUT_JSON_PRECEDENCE_HELP, REQUIREMENT_CATEGORY_HELP, REQUIREMENT_PRIORITY_HELP,
+    REQUIREMENT_SORT_HELP, REQUIREMENT_STATUS_HELP, REQUIREMENT_TYPE_HELP,
 };
 
 #[derive(Debug, Subcommand)]
@@ -10,7 +10,7 @@ pub(crate) enum RequirementsCommand {
     /// Execute requirements into implementation tasks and optional workflows.
     Execute(RequirementsExecuteArgs),
     /// List requirements.
-    List,
+    List(RequirementsListArgs),
     /// Get a requirement by id.
     Get(IdArgs),
     /// Create a requirement.
@@ -34,6 +34,44 @@ pub(crate) enum RequirementsCommand {
         #[command(subcommand)]
         command: RecommendationCommand,
     },
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RequirementsListArgs {
+    #[arg(long, value_name = "STATUS", help = REQUIREMENT_STATUS_HELP)]
+    pub(crate) status: Option<String>,
+    #[arg(long, value_name = "PRIORITY", help = REQUIREMENT_PRIORITY_HELP)]
+    pub(crate) priority: Option<String>,
+    #[arg(long, value_name = "CATEGORY", help = REQUIREMENT_CATEGORY_HELP)]
+    pub(crate) category: Option<String>,
+    #[arg(long = "type", value_name = "TYPE", help = REQUIREMENT_TYPE_HELP)]
+    pub(crate) requirement_type: Option<String>,
+    #[arg(
+        long,
+        value_name = "TAG",
+        help = "Match requirements that include all provided tags. Repeat to require multiple tags."
+    )]
+    pub(crate) tag: Vec<String>,
+    #[arg(long = "linked-task-id", value_name = "TASK_ID", help = "Filter requirements linked to a task id.")]
+    pub(crate) linked_task_id: Option<String>,
+    #[arg(long, value_name = "TEXT", help = "Case-insensitive text search over requirement fields.")]
+    pub(crate) search: Option<String>,
+    #[arg(long, value_name = "SORT", help = REQUIREMENT_SORT_HELP)]
+    pub(crate) sort: Option<String>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of requirements to return."
+    )]
+    pub(crate) limit: Option<usize>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 0,
+        help = "Number of requirements to skip before returning results."
+    )]
+    pub(crate) offset: usize,
 }
 
 #[derive(Debug, Args)]

@@ -1,5 +1,16 @@
 use super::{push_opt, BulkWorkflowRunItem, MAX_BATCH_SIZE};
 
+pub(super) fn build_workflow_list_args(input: &super::WorkflowListInput) -> Vec<String> {
+    let mut args = vec!["workflow".to_string(), "list".to_string()];
+    push_opt(&mut args, "--status", input.status.clone());
+    push_opt(&mut args, "--workflow-ref", input.workflow_ref.clone());
+    push_opt(&mut args, "--task-id", input.task_id.clone());
+    push_opt(&mut args, "--phase-id", input.phase_id.clone());
+    push_opt(&mut args, "--search", input.search.clone());
+    push_opt(&mut args, "--sort", input.sort.clone());
+    args
+}
+
 pub(super) fn build_bulk_workflow_run_item_args(item: &BulkWorkflowRunItem) -> Vec<String> {
     let mut args = vec!["workflow".to_string(), "run".to_string(), "--task-id".to_string(), item.task_id.clone()];
     push_opt(&mut args, "--workflow-ref", item.workflow_ref.clone());

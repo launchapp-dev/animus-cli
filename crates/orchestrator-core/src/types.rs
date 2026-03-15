@@ -1,22 +1,24 @@
 pub use protocol::orchestrator::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge, ArchitectureEntity,
     ArchitectureGraph, Assignee, CheckpointReason, Complexity, ComplexityAssessment, ComplexityTier, DaemonHealth,
-    DaemonStatus, ImpactArea, LogEntry, LogLevel, OrchestratorProject, OrchestratorWorkflow, PhaseDecision,
-    PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits, ProjectConfig,
-    ProjectCreateInput, ProjectMetadata, ProjectModelPreferences, ProjectType, RequirementRange, RiskLevel, Scope,
-    SubjectDispatch, TaskDensity, TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
-    WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
-    WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
-    WorkflowRunInput, WorkflowStatus, WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    DaemonStatus, ImpactArea, ListPage, ListPageRequest, LogEntry, LogLevel, OrchestratorProject, OrchestratorWorkflow,
+    PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits,
+    ProjectConfig, ProjectCreateInput, ProjectMetadata, ProjectModelPreferences, ProjectType, RequirementQuery,
+    RequirementQuerySort, RequirementRange, RiskLevel, Scope, SubjectDispatch, TaskDensity, TaskQuery, TaskQuerySort,
+    TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint, WorkflowCheckpointMetadata,
+    WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowFilter,
+    WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery,
+    WorkflowQuerySort, WorkflowRunInput, WorkflowStatus, WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 
 pub use protocol::orchestrator::{
     is_frontend_related_content, ChecklistItem, CodebaseInsight, DependencyType, DispatchHistoryEntry,
-    HandoffTargetRole, OrchestratorTask, RequirementComment, RequirementItem, RequirementLinks, RequirementStatus,
-    RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, ResourceRequirements, TaskCreateInput, TaskDependency, TaskFilter, TaskMetadata,
-    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions,
-    TaskPriorityRebalancePlan, TaskStatistics, TaskUpdateInput, WorkflowMetadata, MAX_DISPATCH_HISTORY_ENTRIES,
+    HandoffTargetRole, OrchestratorTask, RequirementComment, RequirementFilter, RequirementItem, RequirementLinks,
+    RequirementStatus, RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput,
+    RequirementsExecutionResult, RequirementsRefineInput, ResourceRequirements, TaskCreateInput, TaskDependency,
+    TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange,
+    TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan, TaskStatistics, TaskUpdateInput, WorkflowMetadata,
+    MAX_DISPATCH_HISTORY_ENTRIES,
 };
 
 pub use protocol::RequirementPriority;

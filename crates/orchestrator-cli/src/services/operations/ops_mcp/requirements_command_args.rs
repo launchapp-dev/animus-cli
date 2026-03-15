@@ -1,4 +1,20 @@
-use super::{push_opt, RequirementCreateInput, RequirementRefineInput, RequirementUpdateInput};
+use super::{push_opt, RequirementCreateInput, RequirementListInput, RequirementRefineInput, RequirementUpdateInput};
+
+pub(super) fn build_requirements_list_args(input: &RequirementListInput) -> Vec<String> {
+    let mut args = vec!["requirements".to_string(), "list".to_string()];
+    push_opt(&mut args, "--status", input.status.clone());
+    push_opt(&mut args, "--priority", input.priority.clone());
+    push_opt(&mut args, "--category", input.category.clone());
+    push_opt(&mut args, "--type", input.requirement_type.clone());
+    for tag in &input.tag {
+        args.push("--tag".to_string());
+        args.push(tag.clone());
+    }
+    push_opt(&mut args, "--linked-task-id", input.linked_task_id.clone());
+    push_opt(&mut args, "--search", input.search.clone());
+    push_opt(&mut args, "--sort", input.sort.clone());
+    args
+}
 
 pub(super) fn build_requirements_get_args(id: String) -> Vec<String> {
     vec!["requirements".to_string(), "get".to_string(), "--id".to_string(), id]

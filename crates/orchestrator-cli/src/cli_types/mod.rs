@@ -176,6 +176,52 @@ mod tests {
     }
 
     #[test]
+    fn parses_requirements_list_filters_and_sort() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "requirements",
+            "list",
+            "--status",
+            "draft",
+            "--priority",
+            "must",
+            "--category",
+            "runtime",
+            "--type",
+            "technical",
+            "--tag",
+            "backend",
+            "--linked-task-id",
+            "TASK-123",
+            "--search",
+            "cache",
+            "--sort",
+            "updated_at",
+            "--limit",
+            "20",
+            "--offset",
+            "5",
+        ])
+        .expect("requirements list should parse");
+
+        match cli.command {
+            Command::Requirements { command: RequirementsCommand::List(args) } => {
+                assert_eq!(args.status.as_deref(), Some("draft"));
+                assert_eq!(args.priority.as_deref(), Some("must"));
+                assert_eq!(args.category.as_deref(), Some("runtime"));
+                assert_eq!(args.requirement_type.as_deref(), Some("technical"));
+                assert_eq!(args.tag, vec!["backend".to_string()]);
+                assert_eq!(args.linked_task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.search.as_deref(), Some("cache"));
+                assert_eq!(args.sort.as_deref(), Some("updated_at"));
+                assert_eq!(args.limit, Some(20));
+                assert_eq!(args.offset, 5);
+            }
+            _ => panic!("expected requirements list command"),
+        }
+    }
+
+    #[test]
     fn parses_task_list_filters_from_task_module() {
         let cli = Cli::try_parse_from([
             "ao",
@@ -197,6 +243,8 @@ mod tests {
             "ARCH-42",
             "--search",
             "critical path",
+            "--sort",
+            "updated_at",
         ])
         .expect("task list command should parse");
 
@@ -210,8 +258,49 @@ mod tests {
                 assert_eq!(args.linked_requirement.as_deref(), Some("REQ-123"));
                 assert_eq!(args.linked_architecture_entity.as_deref(), Some("ARCH-42"));
                 assert_eq!(args.search.as_deref(), Some("critical path"));
+                assert_eq!(args.sort.as_deref(), Some("updated_at"));
             }
             _ => panic!("expected task list command"),
+        }
+    }
+
+    #[test]
+    fn parses_workflow_list_filters_and_sort() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "workflow",
+            "list",
+            "--status",
+            "running",
+            "--workflow-ref",
+            "default",
+            "--task-id",
+            "TASK-123",
+            "--phase-id",
+            "implementation",
+            "--search",
+            "retry",
+            "--sort",
+            "started_at",
+            "--limit",
+            "10",
+            "--offset",
+            "2",
+        ])
+        .expect("workflow list should parse");
+
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::List(args) } => {
+                assert_eq!(args.status.as_deref(), Some("running"));
+                assert_eq!(args.workflow_ref.as_deref(), Some("default"));
+                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.phase_id.as_deref(), Some("implementation"));
+                assert_eq!(args.search.as_deref(), Some("retry"));
+                assert_eq!(args.sort.as_deref(), Some("started_at"));
+                assert_eq!(args.limit, Some(10));
+                assert_eq!(args.offset, 2);
+            }
+            _ => panic!("expected workflow list command"),
         }
     }
 

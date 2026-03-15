@@ -23,6 +23,8 @@ pub(super) struct TaskListInput {
     #[serde(default)]
     pub(super) search: Option<String>,
     #[serde(default)]
+    pub(super) sort: Option<String>,
+    #[serde(default)]
     pub(super) limit: Option<usize>,
     #[serde(default)]
     pub(super) offset: Option<usize>,

@@ -112,7 +112,9 @@
       "Bash(alias:*)",
       "mcp__ao__ao_queue_list",
       "mcp__ao__ao_daemon_logs",
-      "Bash(cargo clean:*)"
+      "Bash(cargo clean:*)",
+      "Read(//Users/samishukri/.ao/**)",
+      "Bash(2)"
     ]
   },
   "enableAllProjectMcpServers": true,

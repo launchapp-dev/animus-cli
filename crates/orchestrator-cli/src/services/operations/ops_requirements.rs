@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use orchestrator_core::{services::ServiceHub, RequirementsExecutionInput, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF};
+use orchestrator_core::{
+    services::ServiceHub, ListPageRequest, RequirementFilter, RequirementQuery, RequirementsExecutionInput,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+};
 
 mod graph;
 mod mockups;
@@ -9,7 +12,9 @@ mod recommendations;
 mod state;
 
 use crate::{
-    print_ok, print_value, RequirementGraphCommand, RequirementsCommand, RequirementsExecuteArgs, WorkflowExecuteArgs,
+    parse_requirement_category_opt, parse_requirement_priority_opt, parse_requirement_query_sort_opt,
+    parse_requirement_status_opt, parse_requirement_type_opt, print_ok, print_value, RequirementGraphCommand,
+    RequirementsCommand, RequirementsExecuteArgs, WorkflowExecuteArgs,
 };
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
@@ -17,6 +22,22 @@ use recommendations::handle_requirement_recommendations;
 use state::{create_requirement_cli, delete_requirement_cli, update_requirement_cli};
 
 const BUILTIN_REQUIREMENTS_EXECUTE_WORKFLOW_REF: &str = "builtin/requirements-execute";
+
+fn build_requirements_query(args: crate::RequirementsListArgs) -> Result<RequirementQuery> {
+    Ok(RequirementQuery {
+        filter: RequirementFilter {
+            status: parse_requirement_status_opt(args.status.as_deref())?,
+            priority: parse_requirement_priority_opt(args.priority.as_deref())?,
+            category: parse_requirement_category_opt(args.category.as_deref())?,
+            requirement_type: parse_requirement_type_opt(args.requirement_type.as_deref())?,
+            tags: if args.tag.is_empty() { None } else { Some(args.tag) },
+            linked_task_id: args.linked_task_id,
+            search_text: args.search,
+        },
+        page: ListPageRequest { limit: args.limit, offset: args.offset },
+        sort: parse_requirement_query_sort_opt(args.sort.as_deref())?.unwrap_or_default(),
+    })
+}
 
 pub(crate) async fn handle_requirements(
     command: RequirementsCommand,
@@ -31,7 +52,10 @@ pub(crate) async fn handle_requirements(
             let execute_args = build_requirements_execute_args(args)?;
             super::ops_workflow::execute::handle_workflow_execute(execute_args, hub.clone(), project_root, json).await
         }
-        RequirementsCommand::List => print_value(planning.list_requirements().await?, json),
+        RequirementsCommand::List(args) => {
+            let page = planning.query(build_requirements_query(args)?).await?;
+            print_value(page.items, json)
+        }
         RequirementsCommand::Get(args) => print_value(planning.get_requirement(&args.id).await?, json),
         RequirementsCommand::Create(args) => {
             let created = create_requirement_cli(project_root, args)?;

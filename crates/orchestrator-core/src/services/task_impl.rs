@@ -11,6 +11,11 @@ impl TaskServiceApi for InMemoryServiceHub {
         Ok(self.state.read().await.tasks.values().cloned().collect())
     }
 
+    async fn query(&self, query: TaskQuery) -> Result<ListPage<OrchestratorTask>> {
+        let tasks = TaskServiceApi::list(self).await?;
+        Ok(query_tasks(tasks, &query))
+    }
+
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>> {
         let tasks = TaskServiceApi::list(self).await?;
         Ok(tasks.into_iter().filter(|task| task_matches_filter(task, &filter)).collect())
@@ -113,6 +118,11 @@ impl TaskServiceApi for FileServiceHub {
 
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {
         Ok(self.state.read().await.tasks.values().cloned().collect())
+    }
+
+    async fn query(&self, query: TaskQuery) -> Result<ListPage<OrchestratorTask>> {
+        let tasks = TaskServiceApi::list(self).await?;
+        Ok(query_tasks(tasks, &query))
     }
 
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>> {

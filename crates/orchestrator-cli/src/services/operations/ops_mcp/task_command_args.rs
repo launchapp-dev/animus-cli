@@ -1,4 +1,34 @@
-use super::{push_opt, BulkTaskStatusItem, BulkTaskUpdateItem, TaskCreateInput, MAX_BATCH_SIZE};
+use super::{
+    push_opt, BulkTaskStatusItem, BulkTaskUpdateItem, TaskCreateInput, TaskListInput, TaskPrioritizedInput,
+    MAX_BATCH_SIZE,
+};
+
+pub(super) fn build_task_list_args(input: &TaskListInput) -> Vec<String> {
+    let mut args = vec!["task".to_string(), "list".to_string()];
+    push_opt(&mut args, "--task-type", input.task_type.clone());
+    push_opt(&mut args, "--status", input.status.clone());
+    push_opt(&mut args, "--priority", input.priority.clone());
+    push_opt(&mut args, "--risk", input.risk.clone());
+    push_opt(&mut args, "--assignee-type", input.assignee_type.clone());
+    for tag in &input.tag {
+        args.push("--tag".to_string());
+        args.push(tag.clone());
+    }
+    push_opt(&mut args, "--linked-requirement", input.linked_requirement.clone());
+    push_opt(&mut args, "--linked-architecture-entity", input.linked_architecture_entity.clone());
+    push_opt(&mut args, "--search", input.search.clone());
+    push_opt(&mut args, "--sort", input.sort.clone());
+    args
+}
+
+pub(super) fn build_task_prioritized_args(input: &TaskPrioritizedInput) -> Vec<String> {
+    let mut args = vec!["task".to_string(), "prioritized".to_string()];
+    push_opt(&mut args, "--status", input.status.clone());
+    push_opt(&mut args, "--priority", input.priority.clone());
+    push_opt(&mut args, "--assignee-type", input.assignee_type.clone());
+    push_opt(&mut args, "--search", input.search.clone());
+    args
+}
 
 pub(super) fn build_task_create_args(input: &TaskCreateInput) -> Vec<String> {
     let mut args = vec![

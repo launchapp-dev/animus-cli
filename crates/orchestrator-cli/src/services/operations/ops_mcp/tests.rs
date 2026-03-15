@@ -98,6 +98,53 @@ fn build_task_get_args_includes_id() {
     assert_eq!(args, vec!["task".to_string(), "get".to_string(), "--id".to_string(), "task-123".to_string()]);
 }
 
+#[test]
+fn build_task_list_args_includes_filters_and_sort() {
+    let args = build_task_list_args(&TaskListInput {
+        task_type: Some("feature".to_string()),
+        status: Some("in-progress".to_string()),
+        priority: Some("high".to_string()),
+        risk: Some("low".to_string()),
+        assignee_type: Some("human".to_string()),
+        tag: vec!["api".to_string()],
+        linked_requirement: Some("REQ-123".to_string()),
+        linked_architecture_entity: Some("ARCH-42".to_string()),
+        search: Some("critical path".to_string()),
+        sort: Some("updated_at".to_string()),
+        limit: Some(10),
+        offset: Some(5),
+        max_tokens: Some(4000),
+        project_root: None,
+    });
+    assert_eq!(
+        args,
+        vec![
+            "task".to_string(),
+            "list".to_string(),
+            "--task-type".to_string(),
+            "feature".to_string(),
+            "--status".to_string(),
+            "in-progress".to_string(),
+            "--priority".to_string(),
+            "high".to_string(),
+            "--risk".to_string(),
+            "low".to_string(),
+            "--assignee-type".to_string(),
+            "human".to_string(),
+            "--tag".to_string(),
+            "api".to_string(),
+            "--linked-requirement".to_string(),
+            "REQ-123".to_string(),
+            "--linked-architecture-entity".to_string(),
+            "ARCH-42".to_string(),
+            "--search".to_string(),
+            "critical path".to_string(),
+            "--sort".to_string(),
+            "updated_at".to_string(),
+        ]
+    );
+}
+
 fn sample_cli_failure_result() -> CliExecutionResult {
     CliExecutionResult {
         command: "ao".to_string(),
@@ -242,6 +289,47 @@ fn build_task_control_args_emits_resume() {
 fn builds_requirements_get_args() {
     let args = build_requirements_get_args("REQ-123".to_string());
     assert_eq!(args, vec!["requirements".to_string(), "get".to_string(), "--id".to_string(), "REQ-123".to_string(),]);
+}
+
+#[test]
+fn build_requirements_list_args_includes_filters_and_sort() {
+    let args = build_requirements_list_args(&RequirementListInput {
+        status: Some("draft".to_string()),
+        priority: Some("must".to_string()),
+        category: Some("runtime".to_string()),
+        requirement_type: Some("technical".to_string()),
+        tag: vec!["backend".to_string()],
+        linked_task_id: Some("TASK-123".to_string()),
+        search: Some("cache".to_string()),
+        sort: Some("updated_at".to_string()),
+        limit: Some(20),
+        offset: Some(5),
+        max_tokens: Some(4000),
+        project_root: None,
+    });
+    assert_eq!(
+        args,
+        vec![
+            "requirements".to_string(),
+            "list".to_string(),
+            "--status".to_string(),
+            "draft".to_string(),
+            "--priority".to_string(),
+            "must".to_string(),
+            "--category".to_string(),
+            "runtime".to_string(),
+            "--type".to_string(),
+            "technical".to_string(),
+            "--tag".to_string(),
+            "backend".to_string(),
+            "--linked-task-id".to_string(),
+            "TASK-123".to_string(),
+            "--search".to_string(),
+            "cache".to_string(),
+            "--sort".to_string(),
+            "updated_at".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -838,6 +926,41 @@ fn build_guarded_list_result_supports_workflow_decisions() {
 
     assert_eq!(result.get("tool").and_then(Value::as_str), Some("ao.workflow.decisions"));
     assert_eq!(result.pointer("/pagination/returned").and_then(Value::as_u64), Some(1));
+}
+
+#[test]
+fn build_workflow_list_args_includes_filters_and_sort() {
+    let args = build_workflow_list_args(&WorkflowListInput {
+        status: Some("running".to_string()),
+        workflow_ref: Some("default".to_string()),
+        task_id: Some("TASK-123".to_string()),
+        phase_id: Some("implementation".to_string()),
+        search: Some("retry".to_string()),
+        sort: Some("started_at".to_string()),
+        limit: Some(10),
+        offset: Some(2),
+        max_tokens: Some(4000),
+        project_root: None,
+    });
+    assert_eq!(
+        args,
+        vec![
+            "workflow".to_string(),
+            "list".to_string(),
+            "--status".to_string(),
+            "running".to_string(),
+            "--workflow-ref".to_string(),
+            "default".to_string(),
+            "--task-id".to_string(),
+            "TASK-123".to_string(),
+            "--phase-id".to_string(),
+            "implementation".to_string(),
+            "--search".to_string(),
+            "retry".to_string(),
+            "--sort".to_string(),
+            "started_at".to_string(),
+        ]
+    );
 }
 
 #[test]

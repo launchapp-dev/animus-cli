@@ -302,6 +302,44 @@ pub struct RequirementItem {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementFilter {
+    #[serde(default)]
+    pub status: Option<RequirementStatus>,
+    #[serde(default)]
+    pub priority: Option<RequirementPriority>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(rename = "type", default)]
+    pub requirement_type: Option<RequirementType>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub linked_task_id: Option<String>,
+    #[serde(default)]
+    pub search_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RequirementQuerySort {
+    #[default]
+    Id,
+    UpdatedAt,
+    Priority,
+    Status,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementQuery {
+    #[serde(default)]
+    pub filter: RequirementFilter,
+    #[serde(default)]
+    pub page: ListPageRequest,
+    #[serde(default)]
+    pub sort: RequirementQuerySort,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequirementsDraftInput {
     #[serde(default = "default_true")]
@@ -607,7 +645,7 @@ pub struct TaskUpdateInput {
     pub linked_architecture_entities: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskFilter {
     pub task_type: Option<TaskType>,
     pub status: Option<TaskStatus>,
@@ -618,6 +656,72 @@ pub struct TaskFilter {
     pub linked_requirement: Option<String>,
     pub linked_architecture_entity: Option<String>,
     pub search_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskQuerySort {
+    #[default]
+    Priority,
+    UpdatedAt,
+    CreatedAt,
+    Id,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ListPageRequest {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+impl ListPageRequest {
+    pub const fn unbounded() -> Self {
+        Self { limit: None, offset: 0 }
+    }
+
+    pub fn bounds(self, total: usize) -> (usize, usize) {
+        let start = self.offset.min(total);
+        let remaining = total.saturating_sub(start);
+        let limit = self.limit.unwrap_or(remaining).min(remaining);
+        (start, start.saturating_add(limit))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListPage<T> {
+    pub items: Vec<T>,
+    pub total: usize,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub offset: usize,
+    pub returned: usize,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
+}
+
+impl<T> ListPage<T> {
+    pub fn new(items: Vec<T>, total: usize, request: ListPageRequest) -> Self {
+        let offset = request.offset.min(total);
+        let returned = items.len();
+        let has_more = offset.saturating_add(returned) < total;
+        let next_offset = has_more.then_some(offset.saturating_add(returned));
+
+        Self { items, total, limit: request.limit, offset, returned, has_more, next_offset }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskQuery {
+    #[serde(default)]
+    pub filter: TaskFilter,
+    #[serde(default)]
+    pub page: ListPageRequest,
+    #[serde(default)]
+    pub sort: TaskQuerySort,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1049,6 +1153,40 @@ pub enum WorkflowStatus {
     Failed,
     Escalated,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowFilter {
+    #[serde(default)]
+    pub status: Option<WorkflowStatus>,
+    #[serde(default)]
+    pub workflow_ref: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub phase_id: Option<String>,
+    #[serde(default)]
+    pub search_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowQuerySort {
+    #[default]
+    StartedAt,
+    Status,
+    WorkflowRef,
+    Id,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowQuery {
+    #[serde(default)]
+    pub filter: WorkflowFilter,
+    #[serde(default)]
+    pub page: ListPageRequest,
+    #[serde(default)]
+    pub sort: WorkflowQuerySort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1686,5 +1824,122 @@ impl WorkflowRunInput {
     pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
         self.vars = vars;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn list_page_request_bounds_clamp_to_available_items() {
+        let request = ListPageRequest { limit: Some(5), offset: 8 };
+        assert_eq!(request.bounds(10), (8, 10));
+
+        let request = ListPageRequest { limit: None, offset: 3 };
+        assert_eq!(request.bounds(10), (3, 10));
+
+        let request = ListPageRequest { limit: Some(5), offset: 20 };
+        assert_eq!(request.bounds(10), (10, 10));
+    }
+
+    #[test]
+    fn list_page_metadata_tracks_next_offset() {
+        let page = ListPage::new(vec![1, 2, 3], 10, ListPageRequest { limit: Some(3), offset: 3 });
+        assert_eq!(page.returned, 3);
+        assert_eq!(page.offset, 3);
+        assert!(page.has_more);
+        assert_eq!(page.next_offset, Some(6));
+
+        let final_page = ListPage::new(vec![7, 8], 8, ListPageRequest { limit: Some(3), offset: 6 });
+        assert_eq!(final_page.returned, 2);
+        assert!(!final_page.has_more);
+        assert_eq!(final_page.next_offset, None);
+    }
+
+    #[test]
+    fn query_models_serialize_with_stable_field_names() {
+        let requirement_query = RequirementQuery {
+            filter: RequirementFilter {
+                status: Some(RequirementStatus::InProgress),
+                priority: Some(RequirementPriority::Must),
+                category: Some("integration".to_string()),
+                requirement_type: Some(RequirementType::Technical),
+                tags: Some(vec!["graphql".to_string()]),
+                linked_task_id: Some("TASK-590".to_string()),
+                search_text: Some("query".to_string()),
+            },
+            page: ListPageRequest { limit: Some(25), offset: 50 },
+            sort: RequirementQuerySort::UpdatedAt,
+        };
+
+        let workflow_query = WorkflowQuery {
+            filter: WorkflowFilter {
+                status: Some(WorkflowStatus::Running),
+                workflow_ref: Some("standard".to_string()),
+                task_id: Some("TASK-590".to_string()),
+                phase_id: Some("implementation".to_string()),
+                search_text: Some("graphql".to_string()),
+            },
+            page: ListPageRequest::unbounded(),
+            sort: WorkflowQuerySort::Status,
+        };
+
+        let requirement_value = serde_json::to_value(&requirement_query).expect("requirement query should serialize");
+        assert_eq!(requirement_value["filter"]["status"], "in-progress");
+        assert_eq!(requirement_value["filter"]["priority"], "must");
+        assert_eq!(requirement_value["filter"]["type"], "technical");
+        assert_eq!(requirement_value["sort"], "updated_at");
+
+        let workflow_value = serde_json::to_value(&workflow_query).expect("workflow query should serialize");
+        assert_eq!(workflow_value["filter"]["status"], "running");
+        assert_eq!(workflow_value["filter"]["workflow_ref"], "standard");
+        assert_eq!(workflow_value["sort"], "status");
+    }
+
+    #[test]
+    fn task_query_defaults_are_canonical() {
+        let query = TaskQuery::default();
+        assert!(query.filter.search_text.is_none());
+        assert_eq!(query.page, ListPageRequest::unbounded());
+        assert_eq!(query.sort, TaskQuerySort::Priority);
+    }
+
+    #[test]
+    fn list_page_handles_zero_total() {
+        let page: ListPage<String> = ListPage::new(Vec::new(), 0, ListPageRequest { limit: Some(10), offset: 5 });
+        assert_eq!(page.offset, 0);
+        assert_eq!(page.returned, 0);
+        assert!(!page.has_more);
+        assert_eq!(page.next_offset, None);
+    }
+
+    #[test]
+    fn requirement_items_can_be_embedded_in_paginated_results() {
+        let requirement = RequirementItem {
+            id: "REQ-001".to_string(),
+            title: "Shared query contracts".to_string(),
+            description: "Normalize list/filter behavior.".to_string(),
+            body: None,
+            legacy_id: None,
+            category: Some("integration".to_string()),
+            requirement_type: Some(RequirementType::Technical),
+            acceptance_criteria: vec!["Single source of truth".to_string()],
+            priority: RequirementPriority::Must,
+            status: RequirementStatus::Draft,
+            source: "test".to_string(),
+            tags: vec!["query".to_string()],
+            links: RequirementLinks::default(),
+            comments: Vec::new(),
+            relative_path: None,
+            linked_task_ids: vec!["TASK-590".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let page = ListPage::new(vec![requirement], 1, ListPageRequest::unbounded());
+        let serialized = serde_json::to_value(&page).expect("page should serialize");
+        assert_eq!(serialized["total"], 1);
+        assert_eq!(serialized["items"][0]["status"], "draft");
     }
 }

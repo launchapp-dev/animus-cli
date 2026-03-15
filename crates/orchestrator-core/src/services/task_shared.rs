@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::HashSet;
 
+use super::query_support::paginate_items;
+
 pub(crate) fn next_sequential_id<'a>(keys: impl Iterator<Item = &'a String>, prefix: &str) -> String {
     let next_seq = keys
         .filter_map(|id| id.strip_prefix(prefix))
@@ -214,6 +216,27 @@ pub(super) fn sort_tasks_by_priority(tasks: &mut [OrchestratorTask]) {
             .then_with(|| b.metadata.updated_at.cmp(&a.metadata.updated_at))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+pub(super) fn sort_tasks(tasks: &mut [OrchestratorTask], sort: TaskQuerySort) {
+    match sort {
+        TaskQuerySort::Priority => sort_tasks_by_priority(tasks),
+        TaskQuerySort::UpdatedAt => {
+            tasks.sort_by(|a, b| b.metadata.updated_at.cmp(&a.metadata.updated_at).then_with(|| a.id.cmp(&b.id)));
+        }
+        TaskQuerySort::CreatedAt => {
+            tasks.sort_by(|a, b| b.metadata.created_at.cmp(&a.metadata.created_at).then_with(|| a.id.cmp(&b.id)));
+        }
+        TaskQuerySort::Id => {
+            tasks.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+    }
+}
+
+pub(super) fn query_tasks(tasks: Vec<OrchestratorTask>, query: &TaskQuery) -> ListPage<OrchestratorTask> {
+    let mut filtered: Vec<_> = tasks.into_iter().filter(|task| task_matches_filter(task, &query.filter)).collect();
+    sort_tasks(&mut filtered, query.sort);
+    paginate_items(filtered, query.page)
 }
 
 pub(super) fn build_task_statistics(tasks: &[OrchestratorTask]) -> TaskStatistics {

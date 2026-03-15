@@ -23,14 +23,16 @@ use crate::providers::{
 };
 use crate::types::{
     AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
-    CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth, DaemonStatus, DependencyType, LogEntry, LogLevel,
-    OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig,
-    ProjectCreateInput, ProjectType, RequirementItem, RequirementPriorityExt, RequirementStatus,
-    RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata,
-    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions,
-    TaskPriorityRebalancePlan, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
-    WorkflowMetadata, WorkflowRunInput, WorkflowSubject,
+    CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth, DaemonStatus, DependencyType, ListPage, LogEntry,
+    LogLevel, OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig,
+    ProjectCreateInput, ProjectType, RequirementFilter, RequirementItem, RequirementPriority, RequirementPriorityExt,
+    RequirementQuery, RequirementQuerySort, RequirementStatus, RequirementsDraftInput, RequirementsDraftResult,
+    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, RiskLevel, Scope,
+    TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution,
+    TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
+    TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
+    WorkflowFilter, WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
+    WorkflowSubject,
 };
 use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
 
@@ -41,6 +43,7 @@ mod planning_shared;
 mod planning_utils;
 mod project_impl;
 mod project_shared;
+mod query_support;
 mod review_impl;
 mod runner_helpers;
 mod schedule_state;
@@ -108,6 +111,7 @@ pub trait ProjectServiceApi: Send + Sync {
 pub trait TaskServiceApi: Send + Sync {
     fn task_provider(&self) -> Arc<dyn TaskProvider>;
     async fn list(&self) -> Result<Vec<OrchestratorTask>>;
+    async fn query(&self, query: TaskQuery) -> Result<ListPage<OrchestratorTask>>;
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>>;
     async fn list_prioritized(&self) -> Result<Vec<OrchestratorTask>>;
     async fn next_task(&self) -> Result<Option<OrchestratorTask>>;
@@ -148,6 +152,7 @@ pub trait TaskServiceApi: Send + Sync {
 #[async_trait]
 pub trait WorkflowServiceApi: Send + Sync {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>>;
+    async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>>;
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;
     async fn list_checkpoints(&self, id: &str) -> Result<Vec<usize>>;
@@ -175,6 +180,7 @@ pub trait PlanningServiceApi: Send + Sync {
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument>;
     async fn get_vision(&self) -> Result<Option<VisionDocument>>;
     async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult>;
+    async fn query(&self, query: RequirementQuery) -> Result<ListPage<RequirementItem>>;
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>>;
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem>;
     async fn refine_requirements(&self, input: RequirementsRefineInput) -> Result<Vec<RequirementItem>>;

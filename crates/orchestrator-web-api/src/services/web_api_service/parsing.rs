@@ -1,7 +1,8 @@
 use anyhow::anyhow;
 use orchestrator_core::{
-    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementPriority, RequirementStatus, RequirementType,
-    RiskLevel, TaskFilter, TaskStatus, TaskType, VisionDocument, VisionDraftInput,
+    DependencyType, HandoffTargetRole, Priority, ProjectType, RequirementFilter, RequirementPriority,
+    RequirementQuerySort, RequirementStatus, RequirementType, RiskLevel, TaskFilter, TaskQuerySort, TaskStatus,
+    TaskType, VisionDocument, VisionDraftInput, WorkflowFilter, WorkflowQuerySort, WorkflowStatus,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -182,6 +183,47 @@ pub(super) fn build_task_filter(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_requirement_filter(
+    status: Option<String>,
+    priority: Option<String>,
+    category: Option<String>,
+    requirement_type: Option<String>,
+    tags: Vec<String>,
+    linked_task_id: Option<String>,
+    search: Option<String>,
+) -> Result<RequirementFilter, WebApiError> {
+    let normalized_tags = normalize_string_list(tags);
+
+    Ok(RequirementFilter {
+        status: parse_requirement_status_opt(status.as_deref())?,
+        priority: parse_requirement_priority_opt(priority.as_deref())?,
+        category: normalize_optional_string(category),
+        requirement_type: parse_requirement_type_opt(requirement_type.as_deref())?,
+        tags: if normalized_tags.is_empty() { None } else { Some(normalized_tags) },
+        linked_task_id: normalize_optional_string(linked_task_id),
+        search_text: normalize_optional_string(search),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_workflow_filter(
+    status: Option<String>,
+    workflow_ref: Option<String>,
+    task_id: Option<String>,
+    phase_id: Option<String>,
+    search: Option<String>,
+) -> Result<WorkflowFilter, WebApiError> {
+    Ok(WorkflowFilter {
+        status: parse_workflow_status_opt(status.as_deref())?,
+        workflow_ref: normalize_optional_string(workflow_ref),
+        task_id: normalize_optional_string(task_id),
+        phase_id: normalize_optional_string(phase_id),
+        search_text: normalize_optional_string(search),
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn is_empty_task_filter(filter: &TaskFilter) -> bool {
     filter.task_type.is_none()
         && filter.status.is_none()
@@ -196,6 +238,22 @@ pub(super) fn is_empty_task_filter(filter: &TaskFilter) -> bool {
 
 pub(super) fn parse_task_status(value: &str) -> Result<TaskStatus, WebApiError> {
     value.parse().map_err(|_| WebApiError::new("invalid_input", format!("invalid status: {value}"), 2))
+}
+
+pub(super) fn parse_task_query_sort_opt(value: Option<&str>) -> Result<Option<TaskQuerySort>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let parsed = match normalize_enum_key(value).as_str() {
+        "priority" => TaskQuerySort::Priority,
+        "updated-at" => TaskQuerySort::UpdatedAt,
+        "created-at" => TaskQuerySort::CreatedAt,
+        "id" => TaskQuerySort::Id,
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid task sort: {value}"), 2)),
+    };
+
+    Ok(Some(parsed))
 }
 
 pub(super) fn parse_requirement_priority(value: &str) -> Result<RequirementPriority, WebApiError> {
@@ -230,6 +288,24 @@ pub(super) fn parse_requirement_status_opt(value: Option<&str>) -> Result<Option
     Ok(Some(parse_requirement_status(value)?))
 }
 
+pub(super) fn parse_requirement_query_sort_opt(
+    value: Option<&str>,
+) -> Result<Option<RequirementQuerySort>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let parsed = match normalize_enum_key(value).as_str() {
+        "id" => RequirementQuerySort::Id,
+        "updated-at" => RequirementQuerySort::UpdatedAt,
+        "priority" => RequirementQuerySort::Priority,
+        "status" => RequirementQuerySort::Status,
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid requirement sort: {value}"), 2)),
+    };
+
+    Ok(Some(parsed))
+}
+
 pub(super) fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<RequirementType>, WebApiError> {
     let Some(value) = value else {
         return Ok(None);
@@ -243,6 +319,45 @@ pub(super) fn parse_requirement_type_opt(value: Option<&str>) -> Result<Option<R
         "technical" => RequirementType::Technical,
         "other" => RequirementType::Other,
         _ => return Err(WebApiError::new("invalid_input", format!("invalid requirement_type: {value}"), 2)),
+    };
+
+    Ok(Some(parsed))
+}
+
+pub(super) fn parse_workflow_status(value: &str) -> Result<WorkflowStatus, WebApiError> {
+    let parsed = match normalize_enum_key(value).as_str() {
+        "pending" => WorkflowStatus::Pending,
+        "running" => WorkflowStatus::Running,
+        "paused" => WorkflowStatus::Paused,
+        "completed" => WorkflowStatus::Completed,
+        "failed" => WorkflowStatus::Failed,
+        "escalated" => WorkflowStatus::Escalated,
+        "cancelled" => WorkflowStatus::Cancelled,
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid workflow status: {value}"), 2)),
+    };
+
+    Ok(parsed)
+}
+
+pub(super) fn parse_workflow_status_opt(value: Option<&str>) -> Result<Option<WorkflowStatus>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    Ok(Some(parse_workflow_status(value)?))
+}
+
+pub(super) fn parse_workflow_query_sort_opt(value: Option<&str>) -> Result<Option<WorkflowQuerySort>, WebApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let parsed = match normalize_enum_key(value).as_str() {
+        "started-at" => WorkflowQuerySort::StartedAt,
+        "status" => WorkflowQuerySort::Status,
+        "workflow-ref" => WorkflowQuerySort::WorkflowRef,
+        "id" => WorkflowQuerySort::Id,
+        _ => return Err(WebApiError::new("invalid_input", format!("invalid workflow sort: {value}"), 2)),
     };
 
     Ok(Some(parsed))
@@ -365,7 +480,8 @@ fn normalize_enum_key(value: &str) -> String {
 mod tests {
     use super::*;
     use orchestrator_core::{
-        DependencyType, Priority, ProjectType, RequirementStatus, RiskLevel, TaskStatus, TaskType,
+        DependencyType, Priority, ProjectType, RequirementPriority, RequirementStatus, RiskLevel, TaskQuerySort,
+        TaskStatus, TaskType, WorkflowQuerySort, WorkflowStatus,
     };
 
     #[test]
@@ -413,6 +529,61 @@ mod tests {
         assert_eq!(filter.linked_requirement.as_deref(), Some("REQ-1"));
         assert_eq!(filter.linked_architecture_entity.as_deref(), Some("entity-1"));
         assert_eq!(filter.search_text.as_deref(), Some("shipping blocker"));
+    }
+
+    #[test]
+    fn build_requirement_filter_normalizes_values_and_tags() {
+        let filter = build_requirement_filter(
+            Some(" IN_PROGRESS ".to_string()),
+            Some(" MUST ".to_string()),
+            Some(" api ".to_string()),
+            Some(" functional ".to_string()),
+            vec!["backend".to_string(), " backend ".to_string(), " api ".to_string()],
+            Some(" TASK-1 ".to_string()),
+            Some(" shipping ".to_string()),
+        )
+        .expect("requirement filter should parse");
+
+        assert_eq!(filter.status, Some(RequirementStatus::InProgress));
+        assert_eq!(filter.priority, Some(RequirementPriority::Must));
+        assert_eq!(filter.category.as_deref(), Some("api"));
+        assert_eq!(filter.tags, Some(vec!["backend".to_string(), "api".to_string()]));
+        assert_eq!(filter.linked_task_id.as_deref(), Some("TASK-1"));
+        assert_eq!(filter.search_text.as_deref(), Some("shipping"));
+    }
+
+    #[test]
+    fn build_workflow_filter_normalizes_fields() {
+        let filter = build_workflow_filter(
+            Some(" running ".to_string()),
+            Some(" default ".to_string()),
+            Some(" TASK-1 ".to_string()),
+            Some(" implementation ".to_string()),
+            Some(" blocker ".to_string()),
+        )
+        .expect("workflow filter should parse");
+
+        assert_eq!(filter.status, Some(WorkflowStatus::Running));
+        assert_eq!(filter.workflow_ref.as_deref(), Some("default"));
+        assert_eq!(filter.task_id.as_deref(), Some("TASK-1"));
+        assert_eq!(filter.phase_id.as_deref(), Some("implementation"));
+        assert_eq!(filter.search_text.as_deref(), Some("blocker"));
+    }
+
+    #[test]
+    fn parse_query_sorts_accept_hyphen_and_underscore_variants() {
+        assert_eq!(
+            parse_task_query_sort_opt(Some("updated_at")).expect("task sort should parse"),
+            Some(TaskQuerySort::UpdatedAt)
+        );
+        assert_eq!(
+            parse_requirement_query_sort_opt(Some("updated-at")).expect("requirement sort should parse"),
+            Some(RequirementQuerySort::UpdatedAt)
+        );
+        assert_eq!(
+            parse_workflow_query_sort_opt(Some("workflow_ref")).expect("workflow sort should parse"),
+            Some(WorkflowQuerySort::WorkflowRef)
+        );
     }
 
     #[test]

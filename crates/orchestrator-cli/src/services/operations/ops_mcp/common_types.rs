@@ -6,18 +6,6 @@ pub(super) struct ProjectRootInput {
     pub(super) project_root: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-pub(super) struct PaginatedProjectRootInput {
-    #[serde(default)]
-    pub(super) project_root: Option<String>,
-    #[serde(default)]
-    pub(super) limit: Option<usize>,
-    #[serde(default)]
-    pub(super) offset: Option<usize>,
-    #[serde(default)]
-    pub(super) max_tokens: Option<usize>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct RunIdInput {
     pub(super) run_id: String,

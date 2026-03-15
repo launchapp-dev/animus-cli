@@ -5,6 +5,8 @@ use crate::{STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF};
 mod requirement_lifecycle;
 use requirement_lifecycle::run_requirement_lifecycle_state_machine;
 
+use super::query_support::paginate_items;
+
 pub(super) fn draft_vision_and_record(
     lock: &mut CoreState,
     project_root: String,
@@ -109,6 +111,112 @@ pub(super) fn list_requirements_sorted(lock: &CoreState) -> Vec<RequirementItem>
     let mut requirements: Vec<_> = lock.requirements.values().cloned().collect();
     requirements.sort_by(|a, b| a.id.cmp(&b.id));
     requirements
+}
+
+pub(super) fn requirement_matches_filter(requirement: &RequirementItem, filter: &RequirementFilter) -> bool {
+    if let Some(status) = filter.status {
+        if requirement.status != status {
+            return false;
+        }
+    }
+
+    if let Some(priority) = filter.priority {
+        if requirement.priority != priority {
+            return false;
+        }
+    }
+
+    if let Some(ref category) = filter.category {
+        let matches =
+            requirement.category.as_deref().map(|value| value.eq_ignore_ascii_case(category)).unwrap_or(false);
+        if !matches {
+            return false;
+        }
+    }
+
+    if let Some(requirement_type) = filter.requirement_type {
+        if requirement.requirement_type != Some(requirement_type) {
+            return false;
+        }
+    }
+
+    if let Some(ref tags) = filter.tags {
+        if !tags.iter().all(|tag| requirement.tags.iter().any(|existing| existing.eq_ignore_ascii_case(tag))) {
+            return false;
+        }
+    }
+
+    if let Some(ref linked_task_id) = filter.linked_task_id {
+        if !requirement.linked_task_ids.iter().any(|existing| existing == linked_task_id) {
+            return false;
+        }
+    }
+
+    if let Some(ref search_text) = filter.search_text {
+        let needle = search_text.trim().to_ascii_lowercase();
+        if !needle.is_empty() {
+            let haystack = format!(
+                "{} {} {} {}",
+                requirement.id,
+                requirement.title,
+                requirement.description,
+                requirement.acceptance_criteria.join(" ")
+            )
+            .to_ascii_lowercase();
+            if !haystack.contains(&needle) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn requirement_priority_rank(priority: RequirementPriority) -> usize {
+    match priority {
+        RequirementPriority::Must => 0,
+        RequirementPriority::Should => 1,
+        RequirementPriority::Could => 2,
+        RequirementPriority::Wont => 3,
+    }
+}
+
+pub(super) fn sort_requirements(requirements: &mut [RequirementItem], sort: RequirementQuerySort) {
+    match sort {
+        RequirementQuerySort::Id => {
+            requirements.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        RequirementQuerySort::UpdatedAt => {
+            requirements.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+        }
+        RequirementQuerySort::Priority => {
+            requirements.sort_by(|a, b| {
+                requirement_priority_rank(a.priority)
+                    .cmp(&requirement_priority_rank(b.priority))
+                    .then_with(|| b.updated_at.cmp(&a.updated_at))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+        }
+        RequirementQuerySort::Status => {
+            requirements.sort_by(|a, b| {
+                a.status
+                    .to_string()
+                    .cmp(&b.status.to_string())
+                    .then_with(|| b.updated_at.cmp(&a.updated_at))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+        }
+    }
+}
+
+pub(super) fn query_requirements(
+    requirements: Vec<RequirementItem>,
+    query: &RequirementQuery,
+) -> ListPage<RequirementItem> {
+    let mut filtered: Vec<_> =
+        requirements.into_iter().filter(|requirement| requirement_matches_filter(requirement, &query.filter)).collect();
+    sort_requirements(&mut filtered, query.sort);
+    paginate_items(filtered, query.page)
 }
 
 pub(super) fn get_requirement(lock: &CoreState, id: &str) -> Result<RequirementItem> {

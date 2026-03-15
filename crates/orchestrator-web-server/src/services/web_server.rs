@@ -13,6 +13,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use include_dir::{include_dir, Dir};
+use orchestrator_core::{ListPage, ListPageRequest};
 use orchestrator_web_api::{WebApiError, WebApiService};
 use orchestrator_web_contracts::{http_status_for_exit_code, CliEnvelopeService, DaemonEventRecord};
 use serde::{Deserialize, Serialize};
@@ -389,15 +390,29 @@ async fn vision_refine_handler(State(state): State<AppState>, Json(body): Json<V
 
 async fn requirements_list_handler(
     State(state): State<AppState>,
-    Query(query): Query<ListPaginationQuery>,
+    Query(query): Query<RequirementsListQuery>,
 ) -> Response {
-    let pagination = match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
-        Ok(pagination) => pagination,
+    let page = match normalize_pagination_query(&query.pagination, state.default_page_size, state.max_page_size) {
+        Ok(page) => page,
+        Err(error) => return error_response(error),
+    };
+    let query = match state.api.build_requirement_query(
+        query.status,
+        query.priority,
+        query.category,
+        query.requirement_type,
+        query.tag,
+        query.linked_task_id,
+        query.search,
+        page,
+        query.sort,
+    ) {
+        Ok(query) => query,
         Err(error) => return error_response(error),
     };
 
-    match state.api.requirements_list().await {
-        Ok(data) => match paginated_success_response(data, pagination, None) {
+    match state.api.requirements_list(query).await {
+        Ok(data) => match paginated_success_response(data, None) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -456,27 +471,29 @@ async fn tasks_list_handler(
     Query(query): Query<TasksListQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let pagination = match normalize_pagination_query(&query.pagination, state.default_page_size, state.max_page_size) {
-        Ok(pagination) => pagination,
+    let page = match normalize_pagination_query(&query.pagination, state.default_page_size, state.max_page_size) {
+        Ok(page) => page,
+        Err(error) => return error_response(error),
+    };
+    let query = match state.api.build_task_query(
+        query.task_type,
+        query.status,
+        query.priority,
+        query.risk,
+        query.assignee_type,
+        query.tag,
+        query.linked_requirement,
+        query.linked_architecture_entity,
+        query.search,
+        page,
+        query.sort,
+    ) {
+        Ok(query) => query,
         Err(error) => return error_response(error),
     };
 
-    match state
-        .api
-        .tasks_list(
-            query.task_type,
-            query.status,
-            query.priority,
-            query.risk,
-            query.assignee_type,
-            query.tag,
-            query.linked_requirement,
-            query.linked_architecture_entity,
-            query.search,
-        )
-        .await
-    {
-        Ok(data) => match paginated_success_response(data, pagination, Some(&headers)) {
+    match state.api.tasks_list(query).await {
+        Ok(data) => match paginated_success_response(data, Some(&headers)) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -614,14 +631,26 @@ async fn tasks_dependency_remove_handler(
     }
 }
 
-async fn workflows_list_handler(State(state): State<AppState>, Query(query): Query<ListPaginationQuery>) -> Response {
-    let pagination = match normalize_pagination_query(&query, state.default_page_size, state.max_page_size) {
-        Ok(pagination) => pagination,
+async fn workflows_list_handler(State(state): State<AppState>, Query(query): Query<WorkflowsListQuery>) -> Response {
+    let page = match normalize_pagination_query(&query.pagination, state.default_page_size, state.max_page_size) {
+        Ok(page) => page,
+        Err(error) => return error_response(error),
+    };
+    let query = match state.api.build_workflow_query(
+        query.status,
+        query.workflow_ref,
+        query.task_id,
+        query.phase_id,
+        query.search,
+        page,
+        query.sort,
+    ) {
+        Ok(query) => query,
         Err(error) => return error_response(error),
     };
 
-    match state.api.workflows_list().await {
-        Ok(data) => match paginated_success_response(data, pagination, None) {
+    match state.api.workflows_list(query).await {
+        Ok(data) => match paginated_success_response(data, None) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -830,14 +859,19 @@ fn success_response_with_etag(data: Value, request_headers: &HeaderMap) -> Respo
     response
 }
 
-fn paginated_success_response(
-    data: Value,
-    pagination: PaginationRequest,
+fn paginated_success_response<T: Serialize>(
+    page: ListPage<T>,
     conditional_headers: Option<&HeaderMap>,
 ) -> std::result::Result<Response, WebApiError> {
-    let paginated = paginate_array_data(data, pagination)?;
-    let etag = conditional_headers.map(|_| compute_etag(&paginated));
-    let PaginatedArray { items, page_size, total_count, next_cursor } = paginated;
+    let etag = conditional_headers.map(|_| compute_etag(&page));
+    let page_size = page.limit.unwrap_or(page.returned);
+    let total_count = page.total;
+    let next_cursor = page.next_offset.map(|offset| offset.to_string());
+    let items = serde_json::to_value(page.items)
+        .map_err(|error| WebApiError::new("internal", format!("failed to serialize paginated items: {error}"), 1))?
+        .as_array()
+        .cloned()
+        .ok_or_else(|| WebApiError::new("internal", "expected paginated items to serialize as an array", 1))?;
 
     if let (Some(headers), Some(etag)) = (conditional_headers, etag.as_deref()) {
         if if_none_match_matches(headers, etag) {
@@ -859,7 +893,7 @@ fn normalize_pagination_query(
     query: &ListPaginationQuery,
     default_page_size: usize,
     max_page_size: usize,
-) -> std::result::Result<PaginationRequest, WebApiError> {
+) -> std::result::Result<ListPageRequest, WebApiError> {
     let max_page_size = max_page_size.max(1);
     let default_page_size = default_page_size.max(1).min(max_page_size);
     let requested_page_size = match query.page_size.as_deref() {
@@ -873,7 +907,7 @@ fn normalize_pagination_query(
         Some(cursor) => parse_pagination_cursor(cursor)?,
     };
 
-    Ok(PaginationRequest { start, page_size })
+    Ok(ListPageRequest { limit: Some(page_size), offset: start })
 }
 
 fn parse_pagination_cursor(cursor: &str) -> std::result::Result<usize, WebApiError> {
@@ -892,20 +926,6 @@ fn parse_page_size(page_size: &str) -> std::result::Result<usize, WebApiError> {
     }
 
     Ok(parsed)
-}
-
-fn paginate_array_data(data: Value, pagination: PaginationRequest) -> std::result::Result<PaginatedArray, WebApiError> {
-    let items = data
-        .as_array()
-        .ok_or_else(|| WebApiError::new("internal", "expected list endpoint payload to be an array", 1))?;
-
-    let total_count = items.len();
-    let start = pagination.start.min(total_count);
-    let end = start.saturating_add(pagination.page_size).min(total_count);
-    let page_items = items[start..end].to_vec();
-    let next_cursor = if end < total_count { Some(end.to_string()) } else { None };
-
-    Ok(PaginatedArray { items: page_items, page_size: pagination.page_size, total_count, next_cursor })
 }
 
 fn attach_pagination_headers(response: &mut Response, page_size: usize, total_count: usize, next_cursor: Option<&str>) {
@@ -1075,22 +1095,37 @@ struct TasksListQuery {
     linked_requirement: Option<String>,
     linked_architecture_entity: Option<String>,
     search: Option<String>,
+    sort: Option<String>,
     #[serde(flatten)]
     pagination: ListPaginationQuery,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PaginationRequest {
-    start: usize,
-    page_size: usize,
+#[derive(Debug, Deserialize)]
+struct RequirementsListQuery {
+    status: Option<String>,
+    priority: Option<String>,
+    category: Option<String>,
+    #[serde(alias = "type")]
+    requirement_type: Option<String>,
+    #[serde(default)]
+    tag: Vec<String>,
+    linked_task_id: Option<String>,
+    search: Option<String>,
+    sort: Option<String>,
+    #[serde(flatten)]
+    pagination: ListPaginationQuery,
 }
 
-#[derive(Debug, Serialize)]
-struct PaginatedArray {
-    items: Vec<Value>,
-    page_size: usize,
-    total_count: usize,
-    next_cursor: Option<String>,
+#[derive(Debug, Deserialize)]
+struct WorkflowsListQuery {
+    status: Option<String>,
+    workflow_ref: Option<String>,
+    task_id: Option<String>,
+    phase_id: Option<String>,
+    search: Option<String>,
+    sort: Option<String>,
+    #[serde(flatten)]
+    pagination: ListPaginationQuery,
 }
 
 #[cfg(test)]
@@ -1207,6 +1242,105 @@ mod tests {
             .0;
         assert_eq!(query.pagination.page_size.as_deref(), Some("200"));
         assert_eq!(query.pagination.cursor, None);
+    }
+
+    #[tokio::test]
+    async fn requirements_list_filters_by_status_priority_and_category() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let app = build_test_app(hub, true, 50, 200);
+
+        for requirement in [
+            serde_json::json!({
+                "title": "Draft requirement",
+                "description": "baseline",
+                "status": "draft",
+                "priority": "should",
+                "category": "ops"
+            }),
+            serde_json::json!({
+                "title": "API requirement",
+                "description": "target",
+                "status": "in-progress",
+                "priority": "must",
+                "category": "api"
+            }),
+            serde_json::json!({
+                "title": "Other in-progress requirement",
+                "description": "noise",
+                "status": "in-progress",
+                "priority": "could",
+                "category": "api"
+            }),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/requirements")
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(requirement.to_string()))
+                        .expect("request should be built"),
+                )
+                .await
+                .expect("request should succeed");
+
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/requirements?status=in-progress&priority=must&category=api")
+                    .body(Body::empty())
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+        let items = payload["data"].as_array().expect("requirements payload should be an array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["title"], Value::String("API requirement".to_string()));
+    }
+
+    #[tokio::test]
+    async fn graphql_tasks_paginated_uses_shared_query_page_metadata() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        seed_tasks(&hub, 3).await;
+        let app = build_test_app(hub, true, 50, 200);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/graphql")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "query": "{ tasksPaginated(limit: 2, offset: 1) { totalCount items { id } } }"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be built"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("response body should load");
+        let payload: Value = serde_json::from_slice(&body).expect("response should be valid json");
+        assert_eq!(payload["data"]["tasksPaginated"]["totalCount"], Value::from(3));
+        assert_eq!(
+            payload["data"]["tasksPaginated"]["items"]
+                .as_array()
+                .expect("graphql tasks page should include items")
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

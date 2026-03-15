@@ -1,6 +1,8 @@
 use super::*;
 use crate::types::PhaseDecision;
 
+use super::query_support::paginate_items;
+
 fn effective_workflow_ref(requested: Option<&str>, task: Option<&crate::types::OrchestratorTask>) -> String {
     if let Some(workflow_ref) = requested.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned) {
         return workflow_ref;
@@ -43,10 +45,109 @@ fn load_compiled_state_machines(
     Ok(loaded.compiled)
 }
 
+fn workflow_matches_filter(workflow: &OrchestratorWorkflow, filter: &WorkflowFilter) -> bool {
+    if let Some(status) = filter.status {
+        if workflow.status != status {
+            return false;
+        }
+    }
+
+    if let Some(ref workflow_ref) = filter.workflow_ref {
+        if workflow.workflow_ref.as_deref() != Some(workflow_ref.as_str()) {
+            return false;
+        }
+    }
+
+    if let Some(ref task_id) = filter.task_id {
+        if workflow.task_id != *task_id {
+            return false;
+        }
+    }
+
+    if let Some(ref phase_id) = filter.phase_id {
+        let matches_current = workflow.current_phase.as_deref() == Some(phase_id.as_str());
+        let matches_history = workflow.phases.iter().any(|phase| phase.phase_id == *phase_id);
+        if !matches_current && !matches_history {
+            return false;
+        }
+    }
+
+    if let Some(ref search_text) = filter.search_text {
+        let needle = search_text.trim().to_ascii_lowercase();
+        if !needle.is_empty() {
+            let haystack = format!(
+                "{} {} {} {} {}",
+                workflow.id,
+                workflow.task_id,
+                workflow.workflow_ref.as_deref().unwrap_or_default(),
+                workflow.current_phase.as_deref().unwrap_or_default(),
+                workflow.failure_reason.as_deref().unwrap_or_default()
+            )
+            .to_ascii_lowercase();
+            if !haystack.contains(&needle) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn workflow_status_key(status: WorkflowStatus) -> &'static str {
+    match status {
+        WorkflowStatus::Pending => "pending",
+        WorkflowStatus::Running => "running",
+        WorkflowStatus::Paused => "paused",
+        WorkflowStatus::Completed => "completed",
+        WorkflowStatus::Failed => "failed",
+        WorkflowStatus::Escalated => "escalated",
+        WorkflowStatus::Cancelled => "cancelled",
+    }
+}
+
+fn sort_workflows(workflows: &mut [OrchestratorWorkflow], sort: WorkflowQuerySort) {
+    match sort {
+        WorkflowQuerySort::StartedAt => {
+            workflows.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
+        }
+        WorkflowQuerySort::Status => {
+            workflows.sort_by(|a, b| {
+                workflow_status_key(a.status)
+                    .cmp(workflow_status_key(b.status))
+                    .then_with(|| b.started_at.cmp(&a.started_at))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+        }
+        WorkflowQuerySort::WorkflowRef => {
+            workflows.sort_by(|a, b| {
+                a.workflow_ref
+                    .cmp(&b.workflow_ref)
+                    .then_with(|| b.started_at.cmp(&a.started_at))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+        }
+        WorkflowQuerySort::Id => {
+            workflows.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+    }
+}
+
+fn query_workflows(workflows: Vec<OrchestratorWorkflow>, query: &WorkflowQuery) -> ListPage<OrchestratorWorkflow> {
+    let mut filtered: Vec<_> =
+        workflows.into_iter().filter(|workflow| workflow_matches_filter(workflow, &query.filter)).collect();
+    sort_workflows(&mut filtered, query.sort);
+    paginate_items(filtered, query.page)
+}
+
 #[async_trait]
 impl WorkflowServiceApi for InMemoryServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
         Ok(self.state.read().await.workflows.values().cloned().collect())
+    }
+
+    async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
+        let workflows = WorkflowServiceApi::list(self).await?;
+        Ok(query_workflows(workflows, &query))
     }
 
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow> {
@@ -188,6 +289,11 @@ impl WorkflowServiceApi for FileServiceHub {
         .await?;
 
         Ok(workflows)
+    }
+
+    async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
+        let workflows = WorkflowServiceApi::list(self).await?;
+        Ok(query_workflows(workflows, &query))
     }
 
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow> {

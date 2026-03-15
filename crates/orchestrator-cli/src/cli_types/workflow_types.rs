@@ -1,11 +1,11 @@
 use clap::{Args, Subcommand};
 
-use super::{parse_positive_usize, IdArgs, INPUT_JSON_PRECEDENCE_HELP};
+use super::{parse_positive_usize, IdArgs, INPUT_JSON_PRECEDENCE_HELP, WORKFLOW_SORT_HELP, WORKFLOW_STATUS_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
     /// List workflows.
-    List,
+    List(WorkflowListArgs),
     /// Get workflow details.
     Get(IdArgs),
     /// Show workflow decisions.
@@ -62,6 +62,40 @@ pub(crate) enum WorkflowCommand {
     },
     /// Update a workflow definition by id.
     UpdateDefinition(WorkflowDefinitionUpdateArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowListArgs {
+    #[arg(long, value_name = "STATUS", help = WORKFLOW_STATUS_HELP)]
+    pub(crate) status: Option<String>,
+    #[arg(long, value_name = "WORKFLOW_REF", help = "Filter workflows by workflow definition/reference id.")]
+    pub(crate) workflow_ref: Option<String>,
+    #[arg(long, value_name = "TASK_ID", help = "Filter workflows linked to a task id.")]
+    pub(crate) task_id: Option<String>,
+    #[arg(long, value_name = "PHASE_ID", help = "Filter workflows containing a phase id.")]
+    pub(crate) phase_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Case-insensitive text search over workflow id, task id, ref, and phases."
+    )]
+    pub(crate) search: Option<String>,
+    #[arg(long, value_name = "SORT", help = WORKFLOW_SORT_HELP)]
+    pub(crate) sort: Option<String>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Maximum number of workflows to return."
+    )]
+    pub(crate) limit: Option<usize>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 0,
+        help = "Number of workflows to skip before returning results."
+    )]
+    pub(crate) offset: usize,
 }
 
 #[derive(Debug, Subcommand)]

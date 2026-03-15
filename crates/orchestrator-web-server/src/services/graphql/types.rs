@@ -660,10 +660,20 @@ impl GqlTask {
             return Ok(vec![]);
         }
         let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
-        let all_val = api.requirements_list().await?;
-        let all_reqs: Vec<RawRequirement> = serde_json::from_value(all_val).unwrap_or_default();
-        let linked: std::collections::HashSet<&str> = self.0.linked_requirements.iter().map(|s| s.as_str()).collect();
-        Ok(all_reqs.into_iter().filter(|r| linked.contains(r.id.as_str())).map(GqlRequirement).collect())
+        let mut requirements = Vec::new();
+        for requirement_id in &self.0.linked_requirements {
+            match api.requirements_get(requirement_id).await {
+                Ok(value) => {
+                    let requirement: RawRequirement = serde_json::from_value(value).map_err(|error| {
+                        async_graphql::Error::new(format!("failed to parse requirement {requirement_id}: {error}"))
+                    })?;
+                    requirements.push(GqlRequirement(requirement));
+                }
+                Err(error) if error.code == "not_found" => continue,
+                Err(error) => return Err(super::gql_err(error)),
+            }
+        }
+        Ok(requirements)
     }
 }
 

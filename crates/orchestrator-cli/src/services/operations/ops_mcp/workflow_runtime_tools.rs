@@ -4,17 +4,14 @@ use super::*;
 impl AoMcpServer {
     #[tool(
         name = "ao.workflow.list",
-        description = "List workflows. Purpose: View workflow executions and their current state. Prerequisites: None. Example: {\"limit\": 10} or {\"status\": \"running\"}. Sequencing: Use ao.workflow.get for specific workflow details, or ao.workflow.run to start a new workflow.",
-        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
+        description = "List workflows with optional filters (status, workflow_ref, task_id, phase_id, search), plus sort and pagination hints. Purpose: View workflow executions and their current state. Prerequisites: None. Example: {\"status\": \"running\"} or {\"task_id\": \"TASK-001\", \"sort\": \"started_at\"}. Sequencing: Use ao.workflow.get for specific workflow details, or ao.workflow.run to start a new workflow.",
+        input_schema = ao_schema_for_type::<WorkflowListInput>()
     )]
-    async fn ao_workflow_list(
-        &self,
-        params: Parameters<PaginatedProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_workflow_list(&self, params: Parameters<WorkflowListInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         self.run_list_tool(
             "ao.workflow.list",
-            vec!["workflow".to_string(), "list".to_string()],
+            build_workflow_list_args(&input),
             input.project_root,
             ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )

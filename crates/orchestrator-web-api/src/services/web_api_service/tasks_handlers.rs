@@ -1,11 +1,11 @@
-use orchestrator_core::{FileServiceHub, ServiceHub, TaskCreateInput, TaskUpdateInput};
+use orchestrator_core::{
+    FileServiceHub, ListPage, ListPageRequest, OrchestratorTask, ServiceHub, TaskCreateInput, TaskQuery,
+    TaskUpdateInput,
+};
 use serde_json::{json, Value};
 
 use super::{
-    parsing::{
-        build_task_filter, is_empty_task_filter, parse_dependency_type, parse_json_body, parse_priority_opt,
-        parse_task_status, parse_task_type_opt,
-    },
+    parsing::{parse_dependency_type, parse_json_body, parse_priority_opt, parse_task_status, parse_task_type_opt},
     requests::{
         TaskAssignAgentRequest, TaskAssignHumanRequest, TaskChecklistAddRequest, TaskChecklistUpdateRequest,
         TaskCreateRequest, TaskDependencyAddRequest, TaskDependencyRemoveRequest, TaskPatchRequest, TaskStatusRequest,
@@ -14,36 +14,8 @@ use super::{
 };
 
 impl WebApiService {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn tasks_list(
-        &self,
-        task_type: Option<String>,
-        status: Option<String>,
-        priority: Option<String>,
-        risk: Option<String>,
-        assignee_type: Option<String>,
-        tags: Vec<String>,
-        linked_requirement: Option<String>,
-        linked_architecture_entity: Option<String>,
-        search: Option<String>,
-    ) -> Result<Value, WebApiError> {
-        let task_filter = build_task_filter(
-            task_type,
-            status,
-            priority,
-            risk,
-            assignee_type,
-            tags,
-            linked_requirement,
-            linked_architecture_entity,
-            search,
-        )?;
-
-        if is_empty_task_filter(&task_filter) {
-            return Ok(json!(self.context.hub.tasks().list().await?));
-        }
-
-        Ok(json!(self.context.hub.tasks().list_filtered(task_filter).await?))
+    pub async fn tasks_list(&self, query: TaskQuery) -> Result<ListPage<OrchestratorTask>, WebApiError> {
+        Ok(self.context.hub.tasks().query(query).await?)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -62,7 +34,7 @@ impl WebApiService {
     ) -> Result<Value, WebApiError> {
         let project = self.context.hub.projects().get(id).await?;
         let hub = FileServiceHub::new(&project.path)?;
-        let task_filter = build_task_filter(
+        let query = self.build_task_query(
             task_type,
             status,
             priority,
@@ -72,13 +44,10 @@ impl WebApiService {
             linked_requirement,
             linked_architecture_entity,
             search,
+            ListPageRequest::unbounded(),
+            None,
         )?;
-
-        let tasks = if is_empty_task_filter(&task_filter) {
-            hub.tasks().list().await?
-        } else {
-            hub.tasks().list_filtered(task_filter).await?
-        };
+        let tasks = hub.tasks().query(query).await?.items;
 
         Ok(json!({
             "project": project,

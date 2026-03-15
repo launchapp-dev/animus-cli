@@ -4,17 +4,14 @@ use super::*;
 impl AoMcpServer {
     #[tool(
         name = "ao.requirements.list",
-        description = "List requirements. Purpose: Discover requirements for planning and task creation. Prerequisites: None. Example: {\"limit\": 20} or {\"status\": \"draft\"}. Sequencing: Use ao.requirements.get for details, then ao.task.create to create tasks linked to requirements.",
-        input_schema = ao_schema_for_type::<PaginatedProjectRootInput>()
+        description = "List requirements with optional filters (status, priority, category, type, tags, linked task), plus sort and pagination hints. Purpose: Discover requirements for planning and task creation. Prerequisites: None. Example: {\"status\": \"draft\"} or {\"priority\": \"must\", \"category\": \"runtime\", \"sort\": \"updated_at\"}. Sequencing: Use ao.requirements.get for details, then ao.task.create to create tasks linked to requirements.",
+        input_schema = ao_schema_for_type::<RequirementListInput>()
     )]
-    async fn ao_requirements_list(
-        &self,
-        params: Parameters<PaginatedProjectRootInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn ao_requirements_list(&self, params: Parameters<RequirementListInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         self.run_list_tool(
             "ao.requirements.list",
-            vec!["requirements".to_string(), "list".to_string()],
+            build_requirements_list_args(&input),
             input.project_root,
             ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
         )

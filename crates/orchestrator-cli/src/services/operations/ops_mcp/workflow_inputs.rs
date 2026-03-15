@@ -1,5 +1,29 @@
 use super::*;
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub(super) struct WorkflowListInput {
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) workflow_ref: Option<String>,
+    #[serde(default)]
+    pub(super) task_id: Option<String>,
+    #[serde(default)]
+    pub(super) phase_id: Option<String>,
+    #[serde(default)]
+    pub(super) search: Option<String>,
+    #[serde(default)]
+    pub(super) sort: Option<String>,
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    #[serde(default)]
+    pub(super) offset: Option<usize>,
+    #[serde(default)]
+    pub(super) max_tokens: Option<usize>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowRunInput {
     #[serde(default)]

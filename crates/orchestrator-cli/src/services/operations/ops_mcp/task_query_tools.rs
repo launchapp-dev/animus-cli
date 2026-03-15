@@ -4,24 +4,12 @@ use super::*;
 impl AoMcpServer {
     #[tool(
         name = "ao.task.list",
-        description = "List tasks with optional filters (status, priority, type, assignee, tags, linked requirements). Purpose: Find tasks matching criteria for work planning. Prerequisites: None. Example: {\"status\": \"in-progress\"} or {\"priority\": \"high\", \"tag\": [\"frontend\"]}. Sequencing: Filter results, then use ao.task.get for details or ao.task.status to update.",
+        description = "List tasks with optional filters (status, priority, type, assignee, tags, linked requirements), plus sort and pagination hints. Purpose: Find tasks matching criteria for work planning. Prerequisites: None. Example: {\"status\": \"in-progress\"} or {\"priority\": \"high\", \"tag\": [\"frontend\"], \"sort\": \"updated_at\"}. Sequencing: Filter results, then use ao.task.get for details or ao.task.status to update.",
         input_schema = ao_schema_for_type::<TaskListInput>()
     )]
     async fn ao_task_list(&self, params: Parameters<TaskListInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec!["task".to_string(), "list".to_string()];
-        push_opt(&mut args, "--task-type", input.task_type);
-        push_opt(&mut args, "--status", input.status);
-        push_opt(&mut args, "--priority", input.priority);
-        push_opt(&mut args, "--risk", input.risk);
-        push_opt(&mut args, "--assignee-type", input.assignee_type);
-        for tag in input.tag {
-            args.push("--tag".to_string());
-            args.push(tag);
-        }
-        push_opt(&mut args, "--linked-requirement", input.linked_requirement);
-        push_opt(&mut args, "--linked-architecture-entity", input.linked_architecture_entity);
-        push_opt(&mut args, "--search", input.search);
+        let args = build_task_list_args(&input);
         self.run_list_tool(
             "ao.task.list",
             args,
@@ -49,11 +37,7 @@ impl AoMcpServer {
     )]
     async fn ao_task_prioritized(&self, params: Parameters<TaskPrioritizedInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec!["task".to_string(), "prioritized".to_string()];
-        push_opt(&mut args, "--status", input.status);
-        push_opt(&mut args, "--priority", input.priority);
-        push_opt(&mut args, "--assignee-type", input.assignee_type);
-        push_opt(&mut args, "--search", input.search);
+        let args = build_task_prioritized_args(&input);
         self.run_list_tool(
             "ao.task.prioritized",
             args,

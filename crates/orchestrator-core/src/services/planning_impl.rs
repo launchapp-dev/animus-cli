@@ -26,6 +26,11 @@ impl PlanningServiceApi for InMemoryServiceHub {
         Ok(RequirementsDraftResult { requirements, appended_count, codebase_insight: None })
     }
 
+    async fn query(&self, query: RequirementQuery) -> Result<ListPage<RequirementItem>> {
+        let requirements = PlanningServiceApi::list_requirements(self).await?;
+        Ok(planning_shared::query_requirements(requirements, &query))
+    }
+
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
         let lock = self.state.read().await;
         Ok(planning_shared::list_requirements_sorted(&lock))
@@ -146,6 +151,11 @@ impl PlanningServiceApi for FileServiceHub {
         write_planning_artifacts(&self.project_root, snapshot.vision.as_ref(), &snapshot.requirements)?;
 
         Ok(RequirementsDraftResult { requirements, appended_count, codebase_insight })
+    }
+
+    async fn query(&self, query: RequirementQuery) -> Result<ListPage<RequirementItem>> {
+        let requirements = PlanningServiceApi::list_requirements(self).await?;
+        Ok(planning_shared::query_requirements(requirements, &query))
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
