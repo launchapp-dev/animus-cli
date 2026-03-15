@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct RuntimeConfig {
     pub project_root: Option<String>,
     pub log_dir: Option<String>,
-    pub max_agents: Option<usize>,
+    pub pool_size: Option<usize>,
     pub headless: bool,
     pub runner_endpoint: Option<String>,
 }

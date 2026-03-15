@@ -559,8 +559,8 @@ pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
         if daemon.interval_secs == Some(0) {
             errors.push("daemon.interval_secs must be greater than zero when set".to_string());
         }
-        if daemon.max_agents == Some(0) {
-            errors.push("daemon.max_agents must be greater than zero when set".to_string());
+        if daemon.pool_size == Some(0) {
+            errors.push("daemon.pool_size must be greater than zero when set".to_string());
         }
         if daemon
             .active_hours

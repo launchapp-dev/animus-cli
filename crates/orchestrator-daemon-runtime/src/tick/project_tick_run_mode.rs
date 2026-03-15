@@ -35,11 +35,7 @@ impl ProjectTickRunMode {
             snapshot
                 .daemon_health
                 .as_ref()
-                .and_then(|health| health.max_agents),
-            snapshot
-                .daemon_health
-                .as_ref()
-                .and_then(|health| health.pool_size.map(|value| value as usize)),
+                .and_then(|health| health.pool_size),
             self.active_process_count,
         )
     }

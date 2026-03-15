@@ -699,16 +699,14 @@ pub struct DaemonHealth {
     pub runner_pid: Option<u32>,
     #[serde(default)]
     pub active_agents: usize,
-    #[serde(default)]
-    pub max_agents: Option<usize>,
+    #[serde(default, alias = "max_agents")]
+    pub pool_size: Option<usize>,
     #[serde(default)]
     pub project_root: Option<String>,
     #[serde(default)]
     pub daemon_pid: Option<u32>,
     #[serde(default)]
     pub process_alive: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pool_size: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_utilization_percent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

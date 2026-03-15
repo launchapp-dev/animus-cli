@@ -1099,7 +1099,7 @@ impl GqlDaemonStatus {
     }
     async fn max_agents(&self) -> Option<i32> {
         self.0
-            .get("max_agents")
+            .get("pool_size")
             .and_then(|v| v.as_i64())
             .map(|v| v as i32)
     }

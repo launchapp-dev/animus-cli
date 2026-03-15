@@ -1145,7 +1145,7 @@ fn build_daemon_start_args_defaults_minimal() {
 #[test]
 fn build_daemon_start_args_with_flags() {
     let input = DaemonStartInput {
-        max_agents: Some(4),
+        pool_size: Some(4),
         skip_runner: Some(true),
         auto_run_ready: Some(true),
         runner_scope: Some("project".to_string()),
@@ -1157,7 +1157,7 @@ fn build_daemon_start_args_with_flags() {
         vec![
             "daemon".to_string(),
             "start".to_string(),
-            "--max-agents".to_string(),
+            "--pool-size".to_string(),
             "4".to_string(),
             "--skip-runner".to_string(),
             "--auto-run-ready".to_string(),

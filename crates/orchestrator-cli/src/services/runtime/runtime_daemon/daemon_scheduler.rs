@@ -9,7 +9,6 @@ pub(crate) use project_tick_ops::{slim_project_tick_driver, SlimProjectTickDrive
 pub(super) fn runtime_options_from_cli(args: &DaemonRunArgs) -> DaemonRuntimeOptions {
     DaemonRuntimeOptions {
         pool_size: args.scheduler.pool_size,
-        max_agents: None,
         interval_secs: args.scheduler.interval_secs,
         auto_run_ready: args.scheduler.auto_run_ready,
         startup_cleanup: args.scheduler.startup_cleanup,

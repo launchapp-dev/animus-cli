@@ -62,15 +62,15 @@ async fn mutate_daemon_state<T>(
 #[async_trait]
 impl DaemonServiceApi for InMemoryServiceHub {
     async fn start(&self, config: DaemonStartConfig) -> Result<()> {
-        let max_agents = config.max_agents;
+        let pool_size = config.pool_size;
         let mut lock = self.state.write().await;
         lock.daemon_status = DaemonStatus::Running;
-        lock.daemon_max_agents = max_agents;
+        lock.daemon_pool_size = pool_size;
         lock.logs.push(LogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
-            message: match max_agents {
-                Some(max) => format!("daemon started (max_agents: {max})"),
+            message: match pool_size {
+                Some(ps) => format!("daemon started (pool_size: {ps})"),
                 None => "daemon started".to_string(),
             },
         });
@@ -117,7 +117,6 @@ impl DaemonServiceApi for InMemoryServiceHub {
 
     async fn health(&self) -> Result<DaemonHealth> {
         let lock = self.state.read().await;
-        let pool_size = lock.daemon_max_agents.map(|m| m as u32);
         Ok(DaemonHealth {
             healthy: matches!(
                 lock.daemon_status,
@@ -127,12 +126,11 @@ impl DaemonServiceApi for InMemoryServiceHub {
             runner_connected: lock.runner_pid.is_some(),
             runner_pid: lock.runner_pid,
             active_agents: 0,
-            max_agents: lock.daemon_max_agents,
+            pool_size: lock.daemon_pool_size,
             project_root: None,
             daemon_pid: None,
             process_alive: None,
-            pool_size,
-            pool_utilization_percent: pool_size.map(|_| 0.0),
+            pool_utilization_percent: lock.daemon_pool_size.map(|_| 0.0),
             queued_tasks: Some(0),
             total_agents_spawned: None,
             total_agents_completed: None,
@@ -164,7 +162,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl DaemonServiceApi for FileServiceHub {
     async fn start(&self, config: DaemonStartConfig) -> Result<()> {
-        let max_agents = config.max_agents;
+        let pool_size = config.pool_size;
         let runner_pid = match ensure_runner_started(&self.project_root).await {
             Ok(pid) => pid,
             Err(first_error) => {
@@ -179,17 +177,17 @@ impl DaemonServiceApi for FileServiceHub {
 
         mutate_daemon_state(self, |state| {
             state.daemon_status = DaemonStatus::Running;
-            state.daemon_max_agents = max_agents;
+            state.daemon_pool_size = pool_size;
             state.runner_pid = runner_pid;
             state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
-                message: match (runner_pid, max_agents) {
-                    (Some(pid), Some(max)) => {
-                        format!("daemon started (runner pid: {pid}, max_agents: {max})")
+                message: match (runner_pid, pool_size) {
+                    (Some(pid), Some(ps)) => {
+                        format!("daemon started (runner pid: {pid}, pool_size: {ps})")
                     }
                     (Some(pid), None) => format!("daemon started (runner pid: {pid})"),
-                    (None, Some(max)) => format!("daemon started (max_agents: {max})"),
+                    (None, Some(ps)) => format!("daemon started (pool_size: {ps})"),
                     (None, None) => "daemon started".to_string(),
                 },
             });
@@ -312,8 +310,7 @@ impl DaemonServiceApi for FileServiceHub {
             0
         };
         let lock = self.state.read().await;
-        let pool_size = lock.daemon_max_agents.map(|m| m as u32);
-        let pool_utilization_percent = pool_size.map(|ps| {
+        let pool_utilization_percent = lock.daemon_pool_size.map(|ps| {
             if ps == 0 {
                 0.0
             } else {
@@ -333,11 +330,10 @@ impl DaemonServiceApi for FileServiceHub {
             runner_connected,
             runner_pid: lock.runner_pid,
             active_agents,
-            max_agents: lock.daemon_max_agents,
+            pool_size: lock.daemon_pool_size,
             project_root: Some(self.project_root.display().to_string()),
             daemon_pid: None,
             process_alive: None,
-            pool_size,
             pool_utilization_percent,
             queued_tasks: Some(queued_tasks),
             total_agents_spawned: None,
@@ -506,7 +502,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed");
 
@@ -533,7 +529,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed after retry");
 
@@ -560,7 +556,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed on retry even if stop fails");
 
@@ -587,7 +583,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        let error = DaemonServiceApi::start(&hub)
+        let error = DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect_err("daemon start should fail when retry fails");
 

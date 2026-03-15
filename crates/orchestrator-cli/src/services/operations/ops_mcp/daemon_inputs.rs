@@ -2,10 +2,8 @@ use super::*;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub(super) struct DaemonStartInput {
-    #[serde(default)]
+    #[serde(default, alias = "max_agents")]
     pub(super) pool_size: Option<usize>,
-    #[serde(default)]
-    pub(super) max_agents: Option<usize>,
     #[serde(default)]
     pub(super) interval_secs: Option<u64>,
     #[serde(default)]

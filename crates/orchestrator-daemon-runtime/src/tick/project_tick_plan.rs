@@ -39,14 +39,12 @@ impl ProjectTickPlan {
         active_hours: Option<&str>,
         now: NaiveTime,
         pool_draining: bool,
-        daemon_max_agents: Option<usize>,
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
         let requested_ready_dispatch_limit = ready_dispatch_limit_for_options(
             options,
             active_process_count,
-            daemon_max_agents,
             daemon_pool_size,
         );
 
@@ -130,7 +128,6 @@ mod tests {
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
             Some(8),
-            None,
             3,
         );
 
@@ -138,22 +135,20 @@ mod tests {
     }
 
     #[test]
-    fn slim_tick_uses_smallest_capacity_across_pool_and_max_agents() {
+    fn slim_tick_uses_smallest_capacity_across_pool_sizes() {
         let plan = ProjectTickPlan::for_slim_tick(
             &DaemonRuntimeOptions {
                 pool_size: Some(6),
-                max_agents: Some(2),
                 max_tasks_per_tick: 5,
                 ..DaemonRuntimeOptions::default()
             },
             None,
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
-            Some(4),
             Some(3),
             1,
         );
 
-        assert_eq!(plan.ready_dispatch_limit, 1);
+        assert_eq!(plan.ready_dispatch_limit, 2);
     }
 }

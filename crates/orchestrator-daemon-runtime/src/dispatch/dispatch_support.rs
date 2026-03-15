@@ -9,8 +9,7 @@ pub fn ready_dispatch_limit(max_tasks_per_tick: usize, health: &DaemonHealth) ->
         max_tasks_per_tick,
         health.active_agents,
         effective_capacity_limit(&[
-            health.max_agents,
-            health.pool_size.map(|value| value as usize),
+            health.pool_size,
         ]),
     )
 }
@@ -18,7 +17,6 @@ pub fn ready_dispatch_limit(max_tasks_per_tick: usize, health: &DaemonHealth) ->
 pub fn ready_dispatch_limit_for_options(
     options: &DaemonRuntimeOptions,
     active_agents: usize,
-    observed_max_agents: Option<usize>,
     observed_pool_size: Option<usize>,
 ) -> usize {
     dispatch_headroom(
@@ -26,8 +24,6 @@ pub fn ready_dispatch_limit_for_options(
         active_agents,
         effective_capacity_limit(&[
             options.pool_size,
-            options.max_agents,
-            observed_max_agents,
             observed_pool_size,
         ]),
     )
@@ -120,11 +116,10 @@ mod tests {
             runner_connected: true,
             runner_pid: Some(42),
             active_agents: 1,
-            max_agents: Some(5),
+            pool_size: Some(3),
             project_root: Some("/tmp/project".to_string()),
             daemon_pid: Some(24),
             process_alive: Some(true),
-            pool_size: Some(3),
             pool_utilization_percent: Some(33.0),
             queued_tasks: Some(0),
             total_agents_spawned: Some(1),
@@ -138,14 +133,13 @@ mod tests {
     #[test]
     fn ready_dispatch_limit_for_options_uses_smallest_available_capacity() {
         let options = DaemonRuntimeOptions {
-            pool_size: Some(6),
-            max_agents: Some(2),
+            pool_size: Some(2),
             max_tasks_per_tick: 5,
             ..DaemonRuntimeOptions::default()
         };
 
         assert_eq!(
-            ready_dispatch_limit_for_options(&options, 1, Some(4), Some(3)),
+            ready_dispatch_limit_for_options(&options, 1, Some(3)),
             1
         );
     }
@@ -157,6 +151,6 @@ mod tests {
             ..DaemonRuntimeOptions::default()
         };
 
-        assert_eq!(ready_dispatch_limit_for_options(&options, 2, None, None), 4);
+        assert_eq!(ready_dispatch_limit_for_options(&options, 2, None), 4);
     }
 }

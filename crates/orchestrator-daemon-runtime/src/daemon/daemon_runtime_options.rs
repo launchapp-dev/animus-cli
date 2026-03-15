@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonRuntimeOptions {
     pub pool_size: Option<usize>,
-    pub max_agents: Option<usize>,
     pub interval_secs: u64,
     pub auto_run_ready: bool,
     pub startup_cleanup: bool,
@@ -20,7 +19,6 @@ impl Default for DaemonRuntimeOptions {
     fn default() -> Self {
         Self {
             pool_size: None,
-            max_agents: None,
             interval_secs: 5,
             auto_run_ready: true,
             startup_cleanup: true,

@@ -5,7 +5,8 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(super) struct CoreState {
     pub(super) daemon_status: DaemonStatus,
-    pub(super) daemon_max_agents: Option<usize>,
+    #[serde(alias = "daemon_max_agents")]
+    pub(super) daemon_pool_size: Option<usize>,
     pub(super) runner_pid: Option<u32>,
     pub(super) logs: Vec<LogEntry>,
     pub(super) active_project_id: Option<String>,

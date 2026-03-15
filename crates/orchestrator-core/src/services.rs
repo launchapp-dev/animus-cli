@@ -79,7 +79,7 @@ pub fn plan_task_priority_rebalance(
 
 #[derive(Debug, Clone, Default)]
 pub struct DaemonStartConfig {
-    pub max_agents: Option<usize>,
+    pub pool_size: Option<usize>,
     pub skip_runner: bool,
     pub runner_scope: Option<String>,
 }

@@ -14,7 +14,6 @@ impl ProjectTickPreparation {
         active_hours: Option<&str>,
         now: NaiveTime,
         pool_draining: bool,
-        daemon_max_agents: Option<usize>,
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
@@ -24,7 +23,6 @@ impl ProjectTickPreparation {
             now,
             pool_draining,
             None,
-            None,
             0,
         );
         let tick_plan = ProjectTickPlan::for_slim_tick(
@@ -32,7 +30,6 @@ impl ProjectTickPreparation {
             active_hours,
             now,
             pool_draining,
-            daemon_max_agents,
             daemon_pool_size,
             active_process_count,
         );
@@ -60,7 +57,6 @@ mod tests {
             Some("09:00-17:00"),
             NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
             false,
-            Some(2),
             Some(2),
             1,
         );

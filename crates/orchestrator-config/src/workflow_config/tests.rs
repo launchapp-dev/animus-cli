@@ -1338,7 +1338,7 @@ workflows:
         .as_ref()
         .expect("daemon config should be parsed");
     assert_eq!(daemon.interval_secs, Some(300));
-    assert_eq!(daemon.max_agents, Some(2));
+    assert_eq!(daemon.pool_size, Some(2));
     assert_eq!(daemon.active_hours.as_deref(), Some("00:00-06:00"));
     assert!(daemon.auto_run_ready);
 }

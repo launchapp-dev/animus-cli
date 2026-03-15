@@ -25,7 +25,6 @@ impl ProjectTickContext {
             now,
             pool_draining,
             None,
-            None,
             0,
         );
 
@@ -40,7 +39,6 @@ impl ProjectTickContext {
         options: &DaemonRuntimeOptions,
         now: NaiveTime,
         pool_draining: bool,
-        daemon_max_agents: Option<usize>,
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> ProjectTickPreparation {
@@ -49,7 +47,6 @@ impl ProjectTickContext {
             self.active_hours.as_deref(),
             now,
             pool_draining,
-            daemon_max_agents,
             daemon_pool_size,
             active_process_count,
         )

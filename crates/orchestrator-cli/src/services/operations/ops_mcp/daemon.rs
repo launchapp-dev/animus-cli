@@ -11,7 +11,6 @@ const DEFAULT_DAEMON_LOGS_LIMIT: usize = 100;
 pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     let mut args = vec!["daemon".to_string(), "start".to_string()];
     push_opt_usize(&mut args, "--pool-size", input.pool_size);
-    push_opt_usize(&mut args, "--max-agents", input.max_agents);
     push_opt_num(&mut args, "--interval-secs", input.interval_secs);
     push_opt_num(
         &mut args,

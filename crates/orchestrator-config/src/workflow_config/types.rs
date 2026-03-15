@@ -412,8 +412,8 @@ pub(crate) fn merge_strategy_is_valid(strategy: &MergeStrategy) -> bool {
 pub struct DaemonConfig {
     #[serde(default)]
     pub interval_secs: Option<u64>,
-    #[serde(default)]
-    pub max_agents: Option<u32>,
+    #[serde(default, alias = "max_agents")]
+    pub pool_size: Option<u32>,
     #[serde(default)]
     pub active_hours: Option<String>,
     #[serde(default)]
