@@ -677,9 +677,9 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
 mod tests {
     use super::*;
     use orchestrator_core::{
-        Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope,
-        SubjectRef, TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata,
-        WorkflowDecisionRecord, WorkflowMachineState, WorkflowMetadata, WorkflowPhaseExecution,
+        Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef,
+        TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord,
+        WorkflowMachineState, WorkflowMetadata, WorkflowPhaseExecution,
     };
     use std::collections::HashMap;
 

@@ -2633,12 +2633,7 @@ cli_tools:
     fn builtin_kernel_config_all_phases_are_agent_mode() {
         let config = builtin_agent_runtime_config();
         for (phase_id, definition) in &config.phases {
-            assert_eq!(
-                definition.mode,
-                PhaseExecutionMode::Agent,
-                "builtin phase '{}' should be agent mode",
-                phase_id
-            );
+            assert_eq!(definition.mode, PhaseExecutionMode::Agent, "builtin phase '{}' should be agent mode", phase_id);
             assert!(definition.command.is_none(), "builtin phase '{}' should have no command block", phase_id);
         }
     }

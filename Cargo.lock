@@ -2341,6 +2341,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "fs2",
  "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",

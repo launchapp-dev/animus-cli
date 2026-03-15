@@ -340,7 +340,9 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         let mut workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
-        if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await {
+        if let Ok(subject_context) =
+            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
+        {
             executor.skip_guarded_phases(&mut workflow, &subject_context);
         }
 
@@ -451,7 +453,9 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision);
-        if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await {
+        if let Ok(subject_context) =
+            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
+        {
             executor.skip_guarded_phases(&mut workflow, &subject_context);
         }
         manager.save(&workflow)?;

@@ -1533,14 +1533,12 @@ tools = "mcp/tools.toml"
             } else {
                 ""
             },
-            mcp_permissions = if include_mcp_overlay {
-                format!(r#"mcp_namespaces = ["{pack_id}"]"#)
-            } else {
-                String::new()
-            },
+            mcp_permissions =
+                if include_mcp_overlay { format!(r#"mcp_namespaces = ["{pack_id}"]"#) } else { String::new() },
             runtime_binary = runtime_binary_display,
         );
-        fs::write(root.join(orchestrator_config::PACK_MANIFEST_FILE_NAME), manifest).expect("pack manifest should write");
+        fs::write(root.join(orchestrator_config::PACK_MANIFEST_FILE_NAME), manifest)
+            .expect("pack manifest should write");
 
         fs::write(
             root.join("runtime/agent-runtime.overlay.yaml"),
@@ -1649,11 +1647,7 @@ servers = ["runtime"]
         let overlay = load_pack_mcp_overlay(&pack).expect("node fixture MCP overlay should load");
         assert!(overlay.servers.contains_key("ao.node-fixture/runtime"));
         assert_eq!(
-            overlay
-                .phase_mcp_bindings
-                .get("node-command")
-                .expect("node phase MCP binding should exist")
-                .servers,
+            overlay.phase_mcp_bindings.get("node-command").expect("node phase MCP binding should exist").servers,
             vec!["ao.node-fixture/runtime".to_string()]
         );
 
@@ -1662,21 +1656,13 @@ servers = ["runtime"]
         assert_eq!(report.checks.len(), 1);
         assert_eq!(report.checks[0].status, PackRuntimeCheckStatus::Satisfied);
         assert_eq!(
-            workflow
-                .phase_mcp_bindings
-                .get("node-command")
-                .expect("node phase MCP binding should merge")
-                .servers,
+            workflow.phase_mcp_bindings.get("node-command").expect("node phase MCP binding should merge").servers,
             vec!["ao.node-fixture/runtime".to_string()]
         );
 
         let loaded = load_workflow_config_with_metadata(project.path()).expect("effective workflow config should load");
         assert!(
-            loaded
-                .config
-                .workflows
-                .iter()
-                .any(|workflow| workflow.id == "ao.node-fixture/run"),
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.node-fixture/run"),
             "node fixture workflow should be discoverable"
         );
 
@@ -1707,14 +1693,8 @@ servers = ["runtime"]
         assert_eq!(result.execution_cwd, project.path().display().to_string());
         assert_eq!(result.phase_results[0]["status"].as_str(), Some("completed"));
         let payload = phase_result_payload(&result.phase_results[0]);
-        assert_eq!(
-            payload.get("runtime").and_then(Value::as_str),
-            Some("node")
-        );
-        assert_eq!(
-            payload.get("subject_id").and_then(Value::as_str),
-            Some("node-fixture-subject")
-        );
+        assert_eq!(payload.get("runtime").and_then(Value::as_str), Some("node"));
+        assert_eq!(payload.get("subject_id").and_then(Value::as_str), Some("node-fixture-subject"));
 
         let output = fs::read_to_string(project.path().join("node-pack-output.txt"))
             .expect("node fixture command output should be written");
@@ -1745,11 +1725,7 @@ servers = ["runtime"]
 
         let loaded = load_workflow_config_with_metadata(project.path()).expect("effective workflow config should load");
         assert!(
-            loaded
-                .config
-                .workflows
-                .iter()
-                .any(|workflow| workflow.id == "ao.python-fixture/run"),
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.python-fixture/run"),
             "python fixture workflow should be discoverable"
         );
 
@@ -1779,14 +1755,8 @@ servers = ["runtime"]
         assert_eq!(result.workflow_ref, "ao.python-fixture/run");
         assert_eq!(result.phase_results[0]["status"].as_str(), Some("completed"));
         let payload = phase_result_payload(&result.phase_results[0]);
-        assert_eq!(
-            payload.get("runtime").and_then(Value::as_str),
-            Some("python")
-        );
-        assert_eq!(
-            payload.get("subject_id").and_then(Value::as_str),
-            Some("python-fixture-subject")
-        );
+        assert_eq!(payload.get("runtime").and_then(Value::as_str), Some("python"));
+        assert_eq!(payload.get("subject_id").and_then(Value::as_str), Some("python-fixture-subject"));
 
         let output = fs::read_to_string(project.path().join("python-pack-output.txt"))
             .expect("python fixture command output should be written");

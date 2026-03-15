@@ -87,9 +87,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Model { command } => {
                     services::operations::handle_model(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Pack { command } => {
-                    services::operations::handle_pack(command, &project_root, cli.json).await
-                }
+                Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
                 Command::Runner { command } => {
                     services::operations::handle_runner(command, hub.clone(), &project_root, cli.json).await
                 }

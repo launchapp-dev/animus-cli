@@ -517,10 +517,7 @@ mod tests {
         let input = serde_json::json!({"window":"nightly"});
         assert_eq!(schedule_prompt_input(&SubjectRef::task("TASK-1".to_string()), Some(&input),), None);
         assert_eq!(
-            schedule_prompt_input(
-                &SubjectRef::custom("schedule:nightly".to_string(), String::new()),
-                Some(&input),
-            ),
+            schedule_prompt_input(&SubjectRef::custom("schedule:nightly".to_string(), String::new()), Some(&input),),
             Some("{\"window\":\"nightly\"}".to_string())
         );
     }
