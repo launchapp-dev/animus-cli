@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
-use crate::{AgentCommand, RunnerScopeEnvGuard};
+use crate::AgentCommand;
 
 mod connection;
 mod run;
@@ -19,17 +19,8 @@ pub(crate) async fn handle_agent(
     json: bool,
 ) -> Result<()> {
     match command {
-        AgentCommand::Run(args) => {
-            let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
-            handle_agent_run(args, hub, project_root, json).await
-        }
-        AgentCommand::Control(args) => {
-            let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
-            handle_agent_control(args, hub, project_root, json).await
-        }
-        AgentCommand::Status(args) => {
-            let _scope_guard = RunnerScopeEnvGuard::new(args.runner_scope.as_ref());
-            handle_agent_status(args, hub, project_root, json).await
-        }
+        AgentCommand::Run(args) => handle_agent_run(args, hub, project_root, json).await,
+        AgentCommand::Control(args) => handle_agent_control(args, hub, project_root, json).await,
+        AgentCommand::Status(args) => handle_agent_status(args, hub, project_root, json).await,
     }
 }
