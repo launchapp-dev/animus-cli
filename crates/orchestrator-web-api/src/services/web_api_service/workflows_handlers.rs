@@ -90,11 +90,7 @@ async fn resolve_workflow_run_dispatch_from_input(
             "web-api-run",
         ))
     } else {
-        Err(WebApiError::new(
-            "invalid_input",
-            format!("unsupported workflow subject kind '{}'", subject.kind()),
-            2,
-        ))
+        Err(WebApiError::new("invalid_input", format!("unsupported workflow subject kind '{}'", subject.kind()), 2))
     }
 }
 

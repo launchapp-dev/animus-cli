@@ -511,8 +511,8 @@ mod tests {
         Assignee, Complexity, DependencyType, OrchestratorTask, Priority, RequirementItem, RequirementLinks,
         RequirementPriority, RequirementStatus, RequirementsDraftInput, RequirementsDraftResult,
         RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, ResourceRequirements,
-        RiskLevel, Scope, SubjectRef, TaskCreateInput, TaskFilter, TaskMetadata, TaskStatistics,
-        TaskStatus, TaskType, TaskUpdateInput, WorkflowMetadata,
+        RiskLevel, Scope, SubjectRef, TaskCreateInput, TaskFilter, TaskMetadata, TaskStatistics, TaskStatus, TaskType,
+        TaskUpdateInput, WorkflowMetadata,
     };
 
     #[derive(Default)]
@@ -743,10 +743,8 @@ mod tests {
         hub.upsert_requirement(sample_requirement("REQ-1")).await.unwrap();
 
         let resolver = BuiltinSubjectResolver::new(hub);
-        let context = resolver
-            .resolve_subject_context(&SubjectRef::requirement("REQ-1".to_string()), None, None)
-            .await
-            .unwrap();
+        let context =
+            resolver.resolve_subject_context(&SubjectRef::requirement("REQ-1".to_string()), None, None).await.unwrap();
 
         assert_eq!(context.subject_kind, SUBJECT_KIND_REQUIREMENT);
         assert_eq!(context.subject_id, "REQ-1");

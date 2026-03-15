@@ -222,9 +222,7 @@ pub fn load_pack_inventory(project_root: &Path) -> Result<PackInventory> {
     let installed_versions = discover_installed_pack_versions()?;
     let project_overrides = discover_project_override_packs(project_root)?;
 
-    let mut entries = vec![PackInventoryEntry::bundled_builtin(
-        resolved.resolve(BUNDLED_BUILTIN_PACK_ID).is_some(),
-    )];
+    let mut entries = vec![PackInventoryEntry::bundled_builtin(resolved.resolve(BUNDLED_BUILTIN_PACK_ID).is_some())];
 
     let mut bundled_packs = bundled_packs;
     bundled_packs.sort_by(|left, right| {
@@ -255,16 +253,13 @@ pub fn load_pack_inventory(project_root: &Path) -> Result<PackInventory> {
     }
 
     let mut project_overrides = project_overrides;
-    project_overrides.sort_by(|left, right| left.manifest.id.cmp(&right.manifest.id).then_with(|| left.pack_root.cmp(&right.pack_root)));
+    project_overrides.sort_by(|left, right| {
+        left.manifest.id.cmp(&right.manifest.id).then_with(|| left.pack_root.cmp(&right.pack_root))
+    });
     for pack in project_overrides {
         let active = resolved_entry_matches_manifest(&resolved, PackRegistrySource::ProjectOverride, &pack);
         let selection = selection_state.selection_for(&pack.manifest.id).cloned();
-        entries.push(PackInventoryEntry::from_manifest(
-            PackRegistrySource::ProjectOverride,
-            pack,
-            active,
-            selection,
-        ));
+        entries.push(PackInventoryEntry::from_manifest(PackRegistrySource::ProjectOverride, pack, active, selection));
     }
 
     Ok(PackInventory { entries })
@@ -413,10 +408,10 @@ fn select_resolved_pack(
     installed: Option<&Vec<LoadedPackManifest>>,
     project_override: Option<&LoadedPackManifest>,
 ) -> Result<Option<ResolvedPackRegistryEntry>> {
-    let source_order = selection
-        .and_then(|entry| entry.source)
-        .map(|source| vec![source.as_registry_source()])
-        .unwrap_or_else(|| vec![PackRegistrySource::ProjectOverride, PackRegistrySource::Installed, PackRegistrySource::Bundled]);
+    let source_order =
+        selection.and_then(|entry| entry.source).map(|source| vec![source.as_registry_source()]).unwrap_or_else(|| {
+            vec![PackRegistrySource::ProjectOverride, PackRegistrySource::Installed, PackRegistrySource::Bundled]
+        });
 
     for source in source_order {
         match source {
@@ -449,7 +444,10 @@ fn select_resolved_pack(
                     continue;
                 };
                 if version_matches_selection(selection, &pack.manifest.version)? {
-                    return Ok(Some(ResolvedPackRegistryEntry::from_manifest(PackRegistrySource::Bundled, pack.clone())));
+                    return Ok(Some(ResolvedPackRegistryEntry::from_manifest(
+                        PackRegistrySource::Bundled,
+                        pack.clone(),
+                    )));
                 }
             }
         }
@@ -479,8 +477,8 @@ fn version_matches_selection(selection: Option<&PackSelectionEntry>, actual_vers
 
     let requirement = VersionReq::parse(version_req.trim())
         .with_context(|| format!("invalid selection version requirement '{}'", version_req.trim()))?;
-    let actual = Version::parse(actual_version)
-        .with_context(|| format!("invalid pack version '{}'", actual_version))?;
+    let actual =
+        Version::parse(actual_version).with_context(|| format!("invalid pack version '{}'", actual_version))?;
     Ok(requirement.matches(&actual))
 }
 
@@ -667,12 +665,8 @@ fn enforce_pack_secret_policy(pack: &LoadedPackManifest) -> Result<()> {
 
     let mcp_overlay = crate::load_pack_mcp_overlay(pack)?;
     for definition in mcp_overlay.servers.values() {
-        let required_env = definition
-            .config
-            .get("required_env")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let required_env =
+            definition.config.get("required_env").and_then(|value| value.as_array()).cloned().unwrap_or_default();
 
         for key in required_env {
             let Some(secret_name) = key.as_str().map(str::trim).filter(|value| !value.is_empty()) else {

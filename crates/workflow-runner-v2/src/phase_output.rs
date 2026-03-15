@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn test_build_workflow_pipeline_context_returns_structured_json() {
         use protocol::orchestrator::{
-            WorkflowCheckpointMetadata, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
-            WorkflowStatus, SubjectRef,
+            SubjectRef, WorkflowCheckpointMetadata, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
+            WorkflowStatus,
         };
 
         let tmp = std::env::temp_dir().join(format!("ao-test-pipeline-context-{}", Uuid::new_v4()));

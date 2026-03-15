@@ -1962,16 +1962,7 @@ impl WorkflowRunInput {
         let requirement_id = subject.requirement_id().map(ToOwned::to_owned);
         let title = subject.title.clone();
         let description = subject.description.clone();
-        Self {
-            subject,
-            task_id,
-            workflow_ref,
-            input: None,
-            vars: HashMap::new(),
-            requirement_id,
-            title,
-            description,
-        }
+        Self { subject, task_id, workflow_ref, input: None, vars: HashMap::new(), requirement_id, title, description }
     }
 
     pub fn for_task(task_id: String, workflow_ref: Option<String>) -> Self {

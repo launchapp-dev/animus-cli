@@ -348,9 +348,9 @@ pub fn builtin_workflow_config() -> WorkflowConfig {
             for pack in discover_bundled_pack_manifests()
                 .unwrap_or_else(|error| panic!("failed to load bundled pack manifests: {error}"))
             {
-                if let Some(overlay) = load_pack_workflow_overlay(&pack, &config)
-                    .unwrap_or_else(|error| panic!("invalid bundled pack workflow overlay '{}': {error}", pack.manifest.id))
-                {
+                if let Some(overlay) = load_pack_workflow_overlay(&pack, &config).unwrap_or_else(|error| {
+                    panic!("invalid bundled pack workflow overlay '{}': {error}", pack.manifest.id)
+                }) {
                     config = merge_yaml_into_config(config, overlay);
                 }
             }

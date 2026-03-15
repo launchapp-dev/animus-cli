@@ -2,8 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use protocol::orchestrator::{
     DependencyType, OrchestratorTask, RequirementItem, RequirementsDraftInput, RequirementsDraftResult,
-    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, TaskCreateInput, TaskFilter,
-    TaskStatistics, TaskStatus, TaskUpdateInput, SubjectRef,
+    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, SubjectRef, TaskCreateInput,
+    TaskFilter, TaskStatistics, TaskStatus, TaskUpdateInput,
 };
 use std::collections::HashMap;
 

@@ -144,10 +144,7 @@ fn resolve_local_pack_root(raw_path: &str) -> Result<PathBuf> {
     root.canonicalize().with_context(|| format!("failed to resolve pack path {}", root.display()))
 }
 
-fn inspect_pack(
-    project_root: &Path,
-    args: PackInspectArgs,
-) -> Result<PackInspectOutput> {
+fn inspect_pack(project_root: &Path, args: PackInspectArgs) -> Result<PackInspectOutput> {
     if let Some(path) = args.path.as_deref() {
         let root = resolve_local_pack_root(path)?;
         let pack = load_pack_manifest(&root)?;
@@ -276,14 +273,7 @@ fn handle_pin(project_root: &Path, args: PackPinArgs, json: bool) -> Result<()> 
         );
     }
 
-    print_ok(
-        if selection.enabled {
-            "pack pin updated"
-        } else {
-            "pack disabled for project"
-        },
-        false,
-    );
+    print_ok(if selection.enabled { "pack pin updated" } else { "pack disabled for project" }, false);
     Ok(())
 }
 
@@ -293,7 +283,10 @@ mod tests {
 
     #[test]
     fn parse_source_accepts_project_aliases() {
-        assert_eq!(parse_source(Some("project")).expect("source should parse"), Some(PackRegistrySource::ProjectOverride));
+        assert_eq!(
+            parse_source(Some("project")).expect("source should parse"),
+            Some(PackRegistrySource::ProjectOverride)
+        );
         assert_eq!(
             parse_source(Some("project-override")).expect("source should parse"),
             Some(PackRegistrySource::ProjectOverride)
