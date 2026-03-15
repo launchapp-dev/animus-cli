@@ -180,7 +180,7 @@ type GqlRequirement {
 type GqlRequirementConnection {
 	items: [GqlRequirement!]!
 	totalCount: Int!
-	limit: Int
+	limit: Int!
 	offset: Int!
 	returned: Int!
 	hasMore: Boolean!
@@ -276,7 +276,7 @@ type GqlTask {
 type GqlTaskConnection {
 	items: [GqlTask!]!
 	totalCount: Int!
-	limit: Int
+	limit: Int!
 	offset: Int!
 	returned: Int!
 	hasMore: Boolean!
@@ -360,7 +360,7 @@ type GqlWorkflowConfig {
 type GqlWorkflowConnection {
 	items: [GqlWorkflow!]!
 	totalCount: Int!
-	limit: Int
+	limit: Int!
 	offset: Int!
 	returned: Int!
 	hasMore: Boolean!
