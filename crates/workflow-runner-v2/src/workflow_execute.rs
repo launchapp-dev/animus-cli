@@ -750,8 +750,14 @@ async fn execute_post_success_actions(
     }
 
     if merge_cfg.auto_merge {
-        action_result["actions"]["merge"] =
-            perform_auto_merge_with_git(project_root, &source_branch, &target_branch, &merge_cfg.strategy).await;
+        action_result["actions"]["merge"] = perform_auto_merge_with_git(
+            project_root,
+            execution_cwd,
+            &source_branch,
+            &target_branch,
+            &merge_cfg.strategy,
+        )
+        .await;
         action_result["status"] = action_result["actions"]["merge"]["status"].clone();
     }
 
@@ -924,15 +930,15 @@ async fn create_pull_request_via_gh(
     }
 }
 
-async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Result<()> {
-    let checkout_output = run_git_output("git", execution_cwd, &["checkout", target_branch]).await;
+async fn checkout_target_branch(git_cwd: &str, target_branch: &str) -> Result<()> {
+    let checkout_output = run_git_output("git", git_cwd, &["checkout", target_branch]).await;
     match checkout_output {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
             let primary_error = command_summary(&output);
             let fallback_ref = format!("origin/{target_branch}");
             let fallback =
-                run_git_output("git", execution_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
+                run_git_output("git", git_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
             match fallback {
                 Ok(fb_output) if fb_output.status.success() => Ok(()),
                 Ok(fb_output) => anyhow::bail!(
@@ -947,7 +953,7 @@ async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Res
         Err(error) => {
             let fallback_ref = format!("origin/{target_branch}");
             let fallback =
-                run_git_output("git", execution_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
+                run_git_output("git", git_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
             match fallback {
                 Ok(fb_output) if fb_output.status.success() => Ok(()),
                 Ok(fb_output) => anyhow::bail!(
@@ -962,11 +968,103 @@ async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Res
     }
 }
 
-async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, target_branch: &str) -> Value {
-    let rebase_output = run_git_output("git", execution_cwd, &["rebase", target_branch, source_branch]).await;
+fn parse_worktree_path_for_branch(raw: &str, target_branch: &str) -> Option<String> {
+    let target_ref = format!("refs/heads/{target_branch}");
+    let mut current_path: Option<String> = None;
+    let mut current_branch: Option<String> = None;
+
+    for line in raw.lines().chain(std::iter::once("")) {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(path.trim().to_string());
+            continue;
+        }
+        if let Some(branch) = line.strip_prefix("branch ") {
+            current_branch = Some(branch.trim().to_string());
+            continue;
+        }
+        if line.trim().is_empty() {
+            if current_branch.as_deref() == Some(target_ref.as_str()) {
+                return current_path;
+            }
+            current_path = None;
+            current_branch = None;
+        }
+    }
+
+    None
+}
+
+async fn resolve_target_merge_cwd(project_root: &str, target_branch: &str) -> Result<String> {
+    let worktree_list = run_git_output("git", project_root, &["worktree", "list", "--porcelain"]).await?;
+    if !worktree_list.status.success() {
+        anyhow::bail!(
+            "failed to inspect git worktrees while resolving target branch '{}': {}",
+            target_branch,
+            command_summary(&worktree_list)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&worktree_list.stdout);
+    if let Some(path) = parse_worktree_path_for_branch(&stdout, target_branch) {
+        return Ok(path);
+    }
+
+    checkout_target_branch(project_root, target_branch).await?;
+    Ok(project_root.to_string())
+}
+
+async fn current_branch(cwd: &str) -> Result<String> {
+    let output = run_git_output("git", cwd, &["branch", "--show-current"]).await?;
+    if !output.status.success() {
+        anyhow::bail!("failed to resolve current branch in {}: {}", cwd, command_summary(&output));
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        anyhow::bail!("git reported an empty current branch in {}", cwd);
+    }
+
+    Ok(branch)
+}
+
+async fn perform_rebase_strategy(
+    source_execution_cwd: &str,
+    target_execution_cwd: &str,
+    source_branch: &str,
+    target_branch: &str,
+) -> Value {
+    let current_source_branch = match current_branch(source_execution_cwd).await {
+        Ok(branch) => branch,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "failed",
+                "method": "git",
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "strategy": "rebase",
+                "error": error.to_string(),
+            });
+        }
+    };
+
+    if current_source_branch != source_branch {
+        return serde_json::json!({
+            "status": "failed",
+            "method": "git",
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "strategy": "rebase",
+            "error": format!(
+                "source execution cwd '{}' is on branch '{}' instead of '{}'",
+                source_execution_cwd, current_source_branch, source_branch
+            ),
+        });
+    }
+
+    let rebase_output = run_git_output("git", source_execution_cwd, &["rebase", target_branch]).await;
     match rebase_output {
         Ok(output) if output.status.success() => {
-            let ff_merge = run_git_output("git", execution_cwd, &["merge", "--ff-only", source_branch]).await;
+            let ff_merge = run_git_output("git", target_execution_cwd, &["merge", "--ff-only", source_branch]).await;
             match ff_merge {
                 Ok(merge_out) if merge_out.status.success() => serde_json::json!({
                     "status": "completed",
@@ -994,7 +1092,7 @@ async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, targe
             }
         }
         Ok(output) => {
-            let _ = run_git_output("git", execution_cwd, &["rebase", "--abort"]).await;
+            let _ = run_git_output("git", source_execution_cwd, &["rebase", "--abort"]).await;
             let summary = command_summary(&output);
             let status = if looks_like_merge_conflict(&summary) { "conflict" } else { "failed" };
             serde_json::json!({
@@ -1017,41 +1115,102 @@ async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, targe
     }
 }
 
+async fn has_staged_changes(cwd: &str) -> Result<bool> {
+    let output = run_git_output("git", cwd, &["diff", "--cached", "--quiet"]).await?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => anyhow::bail!("failed to inspect staged changes in {}: {}", cwd, command_summary(&output)),
+    }
+}
+
 async fn perform_auto_merge_with_git(
-    execution_cwd: &str,
+    project_root: &str,
+    source_execution_cwd: &str,
     source_branch: &str,
     target_branch: &str,
     strategy: &MergeStrategy,
 ) -> Value {
-    if let Err(error) = checkout_target_branch(execution_cwd, target_branch).await {
-        return serde_json::json!({
-            "status": "failed",
-            "method": "git",
-            "source_branch": source_branch,
-            "target_branch": target_branch,
-            "strategy": merge_strategy_name(strategy),
-            "error": error.to_string(),
-        });
-    }
+    let target_execution_cwd = match resolve_target_merge_cwd(project_root, target_branch).await {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "failed",
+                "method": "git",
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "strategy": merge_strategy_name(strategy),
+                "error": error.to_string(),
+            });
+        }
+    };
 
     if matches!(strategy, MergeStrategy::Rebase) {
-        return perform_rebase_strategy(execution_cwd, source_branch, target_branch).await;
+        return perform_rebase_strategy(source_execution_cwd, &target_execution_cwd, source_branch, target_branch)
+            .await;
     }
 
-    let merge_args = {
-        let mut args: Vec<String> = vec!["merge".to_string()];
-        match strategy {
-            MergeStrategy::Squash => args.push("--squash".to_string()),
-            MergeStrategy::Merge => args.push("--no-ff".to_string()),
-            MergeStrategy::Rebase => unreachable!(),
-        };
-        args.push("--no-edit".to_string());
-        args.push(source_branch.to_string());
-        args
+    let mut merge_args: Vec<&str> = vec!["merge"];
+    match strategy {
+        MergeStrategy::Squash => merge_args.push("--squash"),
+        MergeStrategy::Merge => merge_args.push("--no-ff"),
+        MergeStrategy::Rebase => unreachable!(),
     };
-    let arg_refs: Vec<&str> = merge_args.iter().map(String::as_str).collect();
-    let output = run_git_output("git", execution_cwd, &arg_refs).await;
+    merge_args.push("--no-edit");
+    merge_args.push(source_branch);
+
+    let output = run_git_output("git", &target_execution_cwd, &merge_args).await;
     match output {
+        Ok(output) if output.status.success() && matches!(strategy, MergeStrategy::Squash) => {
+            match has_staged_changes(&target_execution_cwd).await {
+                Ok(true) => {
+                    let message = format!("Squash merge branch '{source_branch}' into '{target_branch}'");
+                    let commit =
+                        run_git_output("git", &target_execution_cwd, &["commit", "-m", message.as_str()]).await;
+                    match commit {
+                        Ok(commit_output) if commit_output.status.success() => serde_json::json!({
+                            "status": "completed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                        }),
+                        Ok(commit_output) => serde_json::json!({
+                            "status": "failed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                            "error": format!("squash merge staged changes but commit failed: {}", command_summary(&commit_output)),
+                        }),
+                        Err(error) => serde_json::json!({
+                            "status": "failed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                            "error": format!("squash merge staged changes but commit failed: {error}"),
+                        }),
+                    }
+                }
+                Ok(false) => serde_json::json!({
+                    "status": "completed",
+                    "method": "git",
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "strategy": merge_strategy_name(strategy),
+                    "result": "no-op",
+                }),
+                Err(error) => serde_json::json!({
+                    "status": "failed",
+                    "method": "git",
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "strategy": merge_strategy_name(strategy),
+                    "error": error.to_string(),
+                }),
+            }
+        }
         Ok(output) if output.status.success() => serde_json::json!({
             "status": "completed",
             "method": "git",
@@ -1846,5 +2005,127 @@ servers = ["runtime"]
         let output = fs::read_to_string(project.path().join("python-pack-output.txt"))
             .expect("python fixture command output should be written");
         assert_eq!(output.trim(), "python:scripts/python-fixture.py");
+    }
+}
+
+#[cfg(test)]
+mod post_success_merge_tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command as ProcessCommand;
+    use tempfile::TempDir;
+
+    fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        ProcessCommand::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("git {:?} failed to start in {}: {error}", args, cwd.display()))
+    }
+
+    fn run_git_ok(cwd: &Path, args: &[&str]) {
+        let output = run_git(cwd, args);
+        assert!(output.status.success(), "git {:?} failed in {}: {}", args, cwd.display(), command_summary(&output));
+    }
+
+    fn git_stdout(cwd: &Path, args: &[&str]) -> String {
+        let output = run_git(cwd, args);
+        assert!(output.status.success(), "git {:?} failed in {}: {}", args, cwd.display(), command_summary(&output));
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn init_repo() -> (TempDir, PathBuf) {
+        let temp = TempDir::new().expect("temp dir");
+        run_git_ok(temp.path(), &["init", "--initial-branch=main"]);
+        run_git_ok(temp.path(), &["config", "user.email", "ao@example.com"]);
+        run_git_ok(temp.path(), &["config", "user.name", "AO"]);
+        fs::write(temp.path().join("README.md"), "base\n").expect("write base file");
+        run_git_ok(temp.path(), &["add", "README.md"]);
+        run_git_ok(temp.path(), &["commit", "-m", "initial"]);
+
+        let worktree_path = temp.path().join(".ao").join("worktrees").join("task-task-1");
+        fs::create_dir_all(worktree_path.parent().expect("worktree parent")).expect("create worktree parent");
+        run_git_ok(
+            temp.path(),
+            &["worktree", "add", "-b", "ao/task-1", worktree_path.to_str().expect("worktree path"), "main"],
+        );
+
+        (temp, worktree_path)
+    }
+
+    fn commit_file(cwd: &Path, file_name: &str, contents: &str, message: &str) {
+        fs::write(cwd.join(file_name), contents).expect("write fixture file");
+        run_git_ok(cwd, &["add", file_name]);
+        run_git_ok(cwd, &["commit", "-m", message]);
+    }
+
+    #[tokio::test]
+    async fn auto_merge_uses_target_branch_worktree_for_standard_merge() {
+        let (repo, source_worktree) = init_repo();
+        commit_file(&source_worktree, "feature.txt", "merged\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Merge,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_eq!(git_stdout(repo.path(), &["branch", "--show-current"]), "main");
+        assert_eq!(git_stdout(&source_worktree, &["branch", "--show-current"]), "ao/task-1");
+        assert_eq!(fs::read_to_string(repo.path().join("feature.txt")).expect("merged file"), "merged\n");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_rebase_advances_target_branch() {
+        let (repo, source_worktree) = init_repo();
+        commit_file(repo.path(), "main.txt", "target\n", "target change");
+        commit_file(&source_worktree, "feature.txt", "rebased\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Rebase,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_eq!(
+            git_stdout(repo.path(), &["rev-parse", "main"]),
+            git_stdout(repo.path(), &["rev-parse", "ao/task-1"])
+        );
+        assert_eq!(git_stdout(repo.path(), &["log", "--format=%s", "-2", "main"]), "source change\ntarget change");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_squash_creates_commit_and_leaves_target_clean() {
+        let (repo, source_worktree) = init_repo();
+        let before = git_stdout(repo.path(), &["rev-parse", "main"]);
+        commit_file(&source_worktree, "feature.txt", "squashed\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Squash,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_ne!(before, git_stdout(repo.path(), &["rev-parse", "main"]));
+        assert_eq!(
+            git_stdout(repo.path(), &["log", "--format=%s", "-1", "main"]),
+            "Squash merge branch 'ao/task-1' into 'main'"
+        );
+        assert_eq!(git_stdout(repo.path(), &["status", "--porcelain", "--untracked-files=no"]), "");
+        assert_eq!(fs::read_to_string(repo.path().join("feature.txt")).expect("squashed file"), "squashed\n");
     }
 }

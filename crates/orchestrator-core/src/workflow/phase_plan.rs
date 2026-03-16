@@ -100,7 +100,7 @@ pub fn resolve_phase_plan_for_workflow_ref(
             .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
             .any(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false));
     let has_pack_workflows =
-        crate::resolve_pack_registry(root).map(|registry| registry.has_external_packs()).unwrap_or(false);
+        crate::resolve_pack_registry(root).map(|registry| registry.has_pack_overlays()).unwrap_or(false);
     let has_legacy_workflow_config =
         crate::legacy_workflow_config_paths(root).iter().any(|candidate| candidate.exists());
     if !has_yaml_workflows && !has_pack_workflows && !workflow_config_path.exists() && !has_legacy_workflow_config {
@@ -225,7 +225,9 @@ workflows:
     #[test]
     fn resolve_phase_plan_falls_back_when_workflow_config_is_missing() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
             .expect("missing config should use fallback");
@@ -253,7 +255,9 @@ workflows:
     #[test]
     fn resolve_phase_plan_errors_when_workflow_config_is_invalid() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let state_dir = crate::workflow_config::workflow_config_path(temp.path())
             .parent()
             .expect("config has parent")
@@ -272,7 +276,9 @@ workflows:
     #[test]
     fn resolve_phase_plan_errors_when_legacy_workflow_config_exists_without_v2() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let legacy_path = crate::legacy_workflow_config_paths(temp.path())[0].clone();
         let parent = legacy_path.parent().expect("legacy parent directory");
         std::fs::create_dir_all(parent).expect("create legacy directory");
@@ -288,11 +294,11 @@ workflows:
     #[test]
     fn resolve_phase_plan_errors_when_pipeline_is_missing_from_config() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let err = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("does-not-exist"))
             .expect_err("missing pipeline should return error");
@@ -304,7 +310,9 @@ workflows:
     #[test]
     fn resolve_phase_plan_uses_config_phases_for_standard_pipeline() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
 
         let standard_pipeline = workflow_config
@@ -316,8 +324,6 @@ workflows:
             vec!["requirements".to_string().into(), "testing".to_string().into(), "implementation".to_string().into()];
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(STANDARD_WORKFLOW_REF))
             .expect("resolver should use configured standard pipeline phases");
@@ -328,13 +334,13 @@ workflows:
     #[test]
     fn resolve_phase_plan_uses_config_default_pipeline_when_none_is_requested() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
         workflow_config.default_workflow_ref = UI_UX_WORKFLOW_REF.to_string();
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), None)
             .expect("resolver should use configured default pipeline");
@@ -344,7 +350,9 @@ workflows:
     #[test]
     fn resolve_phase_plan_prefers_explicit_config_pipeline_before_alias_normalization() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
 
         let ui_ux_pipeline = workflow_config
@@ -358,8 +366,6 @@ workflows:
         workflow_config.workflows.push(explicit_ui_ux_pipeline);
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
             .expect("resolver should use explicit configured pipeline id");
@@ -369,11 +375,11 @@ workflows:
     #[test]
     fn resolve_phase_plan_uses_canonical_requirement_workflow_refs_from_builtin_config() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
         let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let phases =
             resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF))
@@ -389,16 +395,30 @@ workflows:
         let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         write_pack_fixture(
-            &crate::machine_installed_packs_dir().join("ao.review").join("0.2.0"),
-            "ao.review",
+            &crate::machine_installed_packs_dir().join("ao.custom").join("0.2.0"),
+            "ao.custom",
             "0.2.0",
             "review-pack",
         );
-        crate::write_agent_runtime_config(temp.path(), &crate::builtin_agent_runtime_config())
-            .expect("write runtime config");
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("review-pack"))
             .expect("resolver should use installed pack workflow");
         assert_eq!(phases, vec!["requirements".to_string(), "testing".to_string()]);
+    }
+
+    #[test]
+    fn resolve_phase_plan_uses_bundled_pack_workflows_without_project_yaml() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let quick_fix = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.task/quick-fix"))
+            .expect("bundled quick-fix workflow should resolve from bundled pack config");
+        assert_eq!(quick_fix, vec!["implementation".to_string(), "testing".to_string()]);
+
+        let review_cycle = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.review/cycle"))
+            .expect("bundled review workflow should resolve from bundled pack config");
+        assert_eq!(review_cycle, vec!["code-review".to_string(), "testing".to_string()]);
     }
 }

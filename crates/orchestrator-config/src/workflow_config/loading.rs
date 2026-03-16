@@ -48,6 +48,22 @@ pub fn load_workflow_config(project_root: &Path) -> Result<WorkflowConfig> {
 pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedWorkflowConfig> {
     let yaml_sources = super::collect_project_yaml_workflow_sources(project_root)?;
     let registry = resolve_pack_registry(project_root)?;
+    let path = workflow_config_path(project_root);
+    if let Some(legacy_path) = legacy_workflow_config_paths(project_root).iter().find(|candidate| candidate.exists()) {
+        return Err(anyhow!(
+            "workflow config v2 JSON is no longer supported at {} (found unsupported legacy file at {}). Remove the JSON config and define workflows in .ao/workflows.yaml or .ao/workflows/*.yaml",
+            path.display(),
+            legacy_path.display()
+        ));
+    }
+
+    if path.exists() {
+        return Err(anyhow!(
+            "workflow config JSON is no longer supported at {}. Remove the JSON config and define workflows in .ao/workflows.yaml or .ao/workflows/*.yaml",
+            path.display()
+        ));
+    }
+
     if !yaml_sources.is_empty() || registry.has_pack_overlays() {
         validate_active_pack_configuration(&registry)?;
         let (mut config, mut path) = build_pack_aware_builtin_workflow_config(project_root, &registry)?;
@@ -97,22 +113,6 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             config,
             path,
         });
-    }
-
-    let path = workflow_config_path(project_root);
-    if let Some(legacy_path) = legacy_workflow_config_paths(project_root).iter().find(|candidate| candidate.exists()) {
-        return Err(anyhow!(
-            "workflow config v2 JSON is no longer supported at {} (found unsupported legacy file at {}). Remove the JSON config and define workflows in .ao/workflows.yaml or .ao/workflows/*.yaml",
-            path.display(),
-            legacy_path.display()
-        ));
-    }
-
-    if path.exists() {
-        return Err(anyhow!(
-            "workflow config JSON is no longer supported at {}. Remove the JSON config and define workflows in .ao/workflows.yaml or .ao/workflows/*.yaml",
-            path.display()
-        ));
     }
 
     Err(anyhow!("workflow config is missing. Define workflows in .ao/workflows.yaml or .ao/workflows/*.yaml"))
