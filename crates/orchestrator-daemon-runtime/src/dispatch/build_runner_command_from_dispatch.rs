@@ -13,7 +13,7 @@ pub fn build_runner_command(
     let mut cmd = std::process::Command::new("ao-workflow-runner");
     cmd.arg("execute");
 
-    match &dispatch.subject {
+    match dispatch.subject.to_workflow_subject() {
         protocol::orchestrator::WorkflowSubject::Task { id } => {
             cmd.arg("--task-id").arg(id);
         }
@@ -84,7 +84,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            &dispatch.subject,
+            &dispatch.subject.to_workflow_subject(),
             &WorkflowSubject::Custom {
                 title: "schedule:nightly".to_string(),
                 description: "nightly dispatch".to_string(),

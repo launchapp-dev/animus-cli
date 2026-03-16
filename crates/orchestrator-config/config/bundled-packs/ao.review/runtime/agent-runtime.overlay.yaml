@@ -1,0 +1,102 @@
+tools_allowlist:
+  - ao
+  - cargo
+
+agents:
+  po-reviewer:
+    description: Product Owner reviewer for acceptance and scope validation.
+    system_prompt: You are the Product Owner reviewing completed work. Verify that the implementation satisfies the task intent and acceptance criteria. If gaps remain, set verdict to rework and update the task via AO MCP with precise next steps.
+    role: product_owner
+    mcp_servers: ["ao"]
+    tool_policy:
+      allow:
+        - task.*
+        - requirements.*
+        - workflow.*
+        - review.*
+        - output.*
+      deny:
+        - task.delete
+        - requirements.delete
+        - project.remove
+        - git.*
+    skills:
+      - acceptance-criteria
+      - deliverable-validation
+    capabilities:
+      planning: true
+      queue_management: false
+      scheduling: false
+      requirements_authoring: true
+      acceptance_validation: true
+      implementation: false
+      testing: false
+      code_review: true
+    tool: claude
+    model: claude-sonnet-4-6
+
+phases:
+  code-review:
+    mode: agent
+    agent_id: swe
+    directive: Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is.
+    decision_contract:
+      required_evidence:
+        - code_review_clean
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: true
+  testing:
+    mode: agent
+    agent_id: swe
+    directive: Validate the implementation by reading tests and running the test suite. Do NOT write or modify code yourself. If tests fail or coverage gaps exist, set verdict to rework and provide an exact spec of what tests must be added or fixed. Only advance if all tests pass and coverage is adequate.
+    decision_contract:
+      required_evidence:
+        - tests_passed
+      min_confidence: 0.8
+      max_risk: medium
+      allow_missing_decision: true
+  po-review:
+    mode: agent
+    agent_id: po-reviewer
+    directive: Review the delivered work against product intent and acceptance criteria. Do not edit code. If gaps remain, set verdict to rework and update the task/checklist through AO MCP with precise next actions.
+    runtime:
+      tool: claude
+      model: claude-sonnet-4-6
+    decision_contract:
+      required_evidence:
+        - requirements_met
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: true
+  unit-test:
+    mode: command
+    directive: Run the workspace test suite.
+    command:
+      program: cargo
+      args:
+        - test
+        - --workspace
+      env: {}
+      cwd_mode: project_root
+      timeout_secs: 600
+      success_exit_codes:
+        - 0
+      parse_json_output: false
+  lint:
+    mode: command
+    directive: Run clippy with deny warnings.
+    command:
+      program: cargo
+      args:
+        - clippy
+        - --workspace
+        - --
+        - -D
+        - warnings
+      env: {}
+      cwd_mode: project_root
+      timeout_secs: 120
+      success_exit_codes:
+        - 0
+      parse_json_output: false

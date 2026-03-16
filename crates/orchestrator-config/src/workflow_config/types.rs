@@ -193,6 +193,49 @@ pub fn expand_workflow_phases(workflows: &[WorkflowDefinition], workflow_ref: &s
     expand_workflow_phases_inner(workflows, workflow_ref, &mut visited)
 }
 
+pub fn collect_workflow_refs(workflows: &[WorkflowDefinition], workflow_ref: &str) -> Result<Vec<String>> {
+    let mut active = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    collect_workflow_refs_inner(workflows, workflow_ref, &mut active, &mut seen, &mut refs)?;
+    Ok(refs)
+}
+
+fn collect_workflow_refs_inner(
+    workflows: &[WorkflowDefinition],
+    workflow_ref: &str,
+    active: &mut HashSet<String>,
+    seen: &mut HashSet<String>,
+    refs: &mut Vec<String>,
+) -> Result<()> {
+    let normalized = workflow_ref.to_ascii_lowercase();
+    if !active.insert(normalized.clone()) {
+        let chain: Vec<&str> = active.iter().map(String::as_str).collect();
+        return Err(anyhow!(
+            "circular sub-workflow reference detected: '{}' (visited: {})",
+            workflow_ref,
+            chain.join(" -> ")
+        ));
+    }
+
+    let workflow = workflows
+        .iter()
+        .find(|candidate| candidate.id.eq_ignore_ascii_case(workflow_ref))
+        .ok_or_else(|| anyhow!("sub-workflow '{}' not found", workflow_ref))?;
+
+    if seen.insert(normalized.clone()) {
+        refs.push(workflow.id.clone());
+        for entry in &workflow.phases {
+            if let WorkflowPhaseEntry::SubWorkflow(sub) = entry {
+                collect_workflow_refs_inner(workflows, &sub.workflow_ref, active, seen, refs)?;
+            }
+        }
+    }
+
+    active.remove(&normalized);
+    Ok(())
+}
+
 fn expand_workflow_phases_inner(
     workflows: &[WorkflowDefinition],
     workflow_ref: &str,
@@ -297,6 +340,12 @@ pub struct McpServerDefinition {
     pub tools: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PhaseMcpBinding {
+    #[serde(default)]
+    pub servers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,6 +483,8 @@ pub struct WorkflowConfig {
     pub tools_allowlist: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: BTreeMap<String, McpServerDefinition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub phase_mcp_bindings: BTreeMap<String, PhaseMcpBinding>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools: BTreeMap<String, ToolDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -4,6 +4,7 @@ use protocol::orchestrator::WorkflowStatus;
 #[derive(Debug)]
 pub struct CompletedProcess {
     pub subject_id: String,
+    pub subject_kind: Option<String>,
     pub task_id: Option<String>,
     pub workflow_id: Option<String>,
     pub workflow_ref: Option<String>,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use orchestrator_core::{project_schedule_execution_fact, project_task_execution_fact, services::ServiceHub};
+use orchestrator_core::{project_execution_fact, project_schedule_execution_fact, services::ServiceHub};
 use orchestrator_daemon_runtime::{
     build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal, CompletedProcess,
 };
@@ -31,9 +31,7 @@ pub(crate) async fn reconcile_completed_processes(
             fact.workflow_id.as_deref(),
         );
 
-        if fact.task_id.is_some() {
-            project_task_execution_fact(hub.clone(), root, &fact).await;
-        } else {
+        if !project_execution_fact(hub.clone(), root, &fact).await {
             eprintln!(
                 "{}: workflow runner {} for subject '{}' (exit={:?})",
                 protocol::ACTOR_DAEMON,

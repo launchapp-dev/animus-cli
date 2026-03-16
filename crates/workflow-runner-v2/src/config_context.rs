@@ -63,6 +63,15 @@ impl RuntimeConfigContext {
         self.agent_runtime_config.phase_output_contract(phase_id)
     }
 
+    pub fn phase_mcp_servers(&self, phase_id: &str) -> Vec<String> {
+        self.workflow_config
+            .config
+            .phase_mcp_bindings
+            .get(phase_id)
+            .map(|binding| binding.servers.clone())
+            .unwrap_or_default()
+    }
+
     pub fn phase_output_json_schema(&self, phase_id: &str) -> Option<&Value> {
         self.agent_runtime_config.phase_output_json_schema(phase_id)
     }

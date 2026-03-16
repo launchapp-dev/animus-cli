@@ -1,10 +1,11 @@
 use super::*;
+use crate::providers::SubjectContext;
 use crate::types::{
     Assignee, CheckpointReason, Complexity, OrchestratorTask, OrchestratorWorkflow, PhaseDecision,
-    PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, TaskMetadata, TaskStatus, TaskType,
-    WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
+    PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef, TaskMetadata, TaskStatus,
+    TaskType, WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
     WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
-    WorkflowStatus,
+    WorkflowStatus, SUBJECT_KIND_TASK,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         id: "WF-test".to_string(),
         task_id: "TASK-1".to_string(),
         workflow_ref: Some("standard".to_string()),
-        subject: crate::types::WorkflowSubject::Task { id: "TASK-1".to_string() },
+        subject: SubjectRef::task("TASK-1".to_string()),
         input: None,
         vars: std::collections::HashMap::new(),
         status,
@@ -36,6 +37,21 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         rework_counts: std::collections::HashMap::new(),
         total_reworks: 0,
         decision_history: Vec::<WorkflowDecisionRecord>::new(),
+    }
+}
+
+fn task_subject_context(task: &OrchestratorTask) -> SubjectContext {
+    let mut attributes = HashMap::new();
+    attributes.insert("task_type".to_string(), task.task_type.as_str().to_string());
+    attributes.insert("priority".to_string(), task.priority.as_str().to_string());
+
+    SubjectContext {
+        subject_kind: SUBJECT_KIND_TASK.to_string(),
+        subject_id: task.id.clone(),
+        subject_title: task.title.clone(),
+        subject_description: task.description.clone(),
+        attributes,
+        task: Some(task.clone()),
     }
 }
 
@@ -641,7 +657,8 @@ fn skip_guarded_phase_skips_when_task_type_matches() {
     assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
     assert_eq!(workflow.status, WorkflowStatus::Running);
 
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Skipped);
@@ -665,7 +682,8 @@ fn skip_guarded_phase_does_not_skip_when_guard_does_not_match() {
     let task = make_task(TaskType::Feature, Priority::High);
 
     executor.mark_current_phase_success(&mut workflow);
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
@@ -686,7 +704,8 @@ fn skip_guarded_phase_any_matching_guard_causes_skip() {
     let task = make_task(TaskType::Feature, Priority::Low);
 
     executor.mark_current_phase_success(&mut workflow);
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Skipped);
@@ -703,7 +722,8 @@ fn skip_guarded_phase_with_empty_skip_if_runs_normally() {
     let task = make_task(TaskType::Docs, Priority::Medium);
 
     executor.mark_current_phase_success(&mut workflow);
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
@@ -713,8 +733,9 @@ fn skip_guarded_phase_with_empty_skip_if_runs_normally() {
 #[test]
 fn skip_guard_evaluator_supports_not_equals() {
     let task = make_task(TaskType::Feature, Priority::High);
-    assert!(lifecycle_executor::evaluate_skip_guard("task_type != 'docs'", &task));
-    assert!(!lifecycle_executor::evaluate_skip_guard("task_type != 'feature'", &task));
+    let subject_context = task_subject_context(&task);
+    assert!(lifecycle_executor::evaluate_skip_guard("task_type != 'docs'", &subject_context));
+    assert!(!lifecycle_executor::evaluate_skip_guard("task_type != 'feature'", &subject_context));
 }
 
 #[test]
@@ -734,7 +755,8 @@ fn skip_guarded_phase_skips_first_phase_on_bootstrap() {
     );
     let task = make_task(TaskType::Chore, Priority::Medium);
 
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
@@ -761,7 +783,8 @@ fn skip_guarded_phases_skips_consecutive_phases() {
     let task = make_task(TaskType::Docs, Priority::Medium);
 
     executor.mark_current_phase_success(&mut workflow);
-    executor.skip_guarded_phases(&mut workflow, &task);
+    let subject_context = task_subject_context(&task);
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Skipped);

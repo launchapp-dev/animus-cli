@@ -36,6 +36,7 @@ pub fn build_completion_reconciliation_plan(
 
         plan.execution_facts.push(SubjectExecutionFact {
             subject_id: completed.subject_id,
+            subject_kind: completed.subject_kind,
             task_id: completed.task_id,
             workflow_id: completed.workflow_id,
             workflow_ref: completed.workflow_ref,
@@ -93,6 +94,7 @@ mod tests {
     fn builds_task_success_plan() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "TASK-123".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_TASK.to_string()),
             task_id: Some("TASK-123".to_string()),
             workflow_id: Some("WF-123".to_string()),
             workflow_ref: Some("standard".to_string()),
@@ -108,6 +110,7 @@ mod tests {
         assert_eq!(plan.failed_workflow_phases, 0);
         assert_eq!(plan.execution_facts.len(), 1);
         assert_eq!(plan.execution_facts[0].task_id.as_deref(), Some("TASK-123"));
+        assert_eq!(plan.execution_facts[0].subject_kind.as_deref(), Some(protocol::SUBJECT_KIND_TASK));
         assert_eq!(plan.execution_facts[0].workflow_id.as_deref(), Some("WF-123"));
         assert_eq!(plan.execution_facts[0].workflow_ref.as_deref(), Some("standard"));
         assert_eq!(plan.execution_facts[0].workflow_status, Some(WorkflowStatus::Completed));
@@ -119,6 +122,7 @@ mod tests {
     fn builds_failure_plan_with_schedule_update() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "schedule:nightly".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_CUSTOM.to_string()),
             task_id: Some("TASK-999".to_string()),
             workflow_id: Some("WF-999".to_string()),
             workflow_ref: Some("ops".to_string()),
@@ -142,6 +146,7 @@ mod tests {
     fn preserves_non_task_subjects_without_task_actions() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "schedule:daily-review".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_CUSTOM.to_string()),
             task_id: None,
             workflow_id: Some("WF-321".to_string()),
             workflow_ref: Some("review".to_string()),
@@ -162,6 +167,7 @@ mod tests {
     fn running_workflow_does_not_count_as_terminal_completion() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "TASK-777".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_TASK.to_string()),
             task_id: Some("TASK-777".to_string()),
             workflow_id: Some("WF-777".to_string()),
             workflow_ref: Some("standard".to_string()),
@@ -183,6 +189,7 @@ mod tests {
     fn cancelled_workflow_is_not_reported_as_success() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "TASK-404".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_TASK.to_string()),
             task_id: Some("TASK-404".to_string()),
             workflow_id: Some("WF-404".to_string()),
             workflow_ref: Some("standard".to_string()),
@@ -208,6 +215,7 @@ mod tests {
     fn missing_workflow_status_is_not_inferred_from_exit_code() {
         let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
             subject_id: "TASK-505".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_TASK.to_string()),
             task_id: Some("TASK-505".to_string()),
             workflow_id: None,
             workflow_ref: Some("standard".to_string()),

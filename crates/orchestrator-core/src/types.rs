@@ -4,11 +4,12 @@ pub use protocol::orchestrator::{
     DaemonStatus, ImpactArea, ListPage, ListPageRequest, LogEntry, LogLevel, OrchestratorProject, OrchestratorWorkflow,
     PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits,
     ProjectConfig, ProjectCreateInput, ProjectMetadata, ProjectModelPreferences, ProjectType, RequirementQuery,
-    RequirementQuerySort, RequirementRange, RiskLevel, Scope, SubjectDispatch, TaskDensity, TaskQuery, TaskQuerySort,
-    TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint, WorkflowCheckpointMetadata,
-    WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowFilter,
-    WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery,
-    WorkflowQuerySort, WorkflowRunInput, WorkflowStatus, WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    RequirementQuerySort, RequirementRange, RiskLevel, Scope, SubjectDispatch, SubjectRef, TaskDensity, TaskQuery,
+    TaskQuerySort, TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
+    WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
+    WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
+    WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
+    DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 
 pub use protocol::orchestrator::{

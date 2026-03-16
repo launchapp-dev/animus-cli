@@ -56,7 +56,7 @@ The daemon tracks active subjects to prevent duplicate dispatches for the same s
 
 ### Knows about
 
-- **Subjects** -- `WorkflowSubject` identity (Task, Requirement, Custom).
+- **Subjects** -- generic `SubjectRef` identity (`kind`, `id`, optional metadata).
 - **Dispatch envelopes** -- `SubjectDispatch` with `workflow_ref`, priority, trigger source.
 - **Slots and headroom** -- How many workflows are running, how many can start.
 - **Subprocess lifecycle** -- PID tracking, health checks, orphan detection on restart.

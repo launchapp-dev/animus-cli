@@ -317,9 +317,6 @@ pub fn inject_agent_tool_policy(runtime_contract: &mut Value, ctx: &RuntimeConfi
     let Some(policy) = policy else {
         return;
     };
-    if policy.allow.is_empty() && policy.deny.is_empty() {
-        return;
-    }
     set_mcp_tool_policy(runtime_contract, policy);
 }
 
@@ -384,31 +381,38 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
         return;
     }
     let agent_id = ctx.phase_agent_id(phase_id);
-    let workflow_profile_servers: Option<&[String]> = agent_id
+    let workflow_profile_servers: Vec<String> = agent_id
         .as_deref()
         .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id))
-        .map(|profile| profile.mcp_servers.as_slice())
-        .filter(|servers| !servers.is_empty());
-    let runtime_profile_servers: Option<Vec<String>> = if workflow_profile_servers.is_none() {
+        .map(|profile| profile.mcp_servers.clone())
+        .unwrap_or_default();
+    let runtime_profile_servers: Vec<String> = if workflow_profile_servers.is_empty() {
         agent_id
             .as_deref()
             .and_then(|id| ctx.agent_runtime_config.agent_profile(id))
             .map(|profile| profile.mcp_servers.clone())
             .filter(|servers| !servers.is_empty())
+            .unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
-    let allowed_servers: Option<&[String]> = workflow_profile_servers.or(runtime_profile_servers.as_deref());
+    let phase_servers = ctx.phase_mcp_servers(phase_id);
+
+    let mut allowed_servers = std::collections::BTreeSet::new();
+    for server in workflow_profile_servers.iter().chain(runtime_profile_servers.iter()).chain(phase_servers.iter()) {
+        let trimmed = server.trim();
+        if !trimmed.is_empty() {
+            allowed_servers.insert(trimmed.to_string());
+        }
+    }
 
     let existing =
         runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut servers = existing;
 
     for (name, definition) in &ctx.workflow_config.config.mcp_servers {
-        if let Some(allowed) = allowed_servers {
-            if !allowed.iter().any(|a| a == name) {
-                continue;
-            }
+        if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
+            continue;
         }
         servers.insert(
             name.clone(),
@@ -488,4 +492,66 @@ pub fn inject_named_mcp_servers(
         mcp.insert("additional_servers".to_string(), Value::Object(servers));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use orchestrator_config::McpServerDefinition;
+    use orchestrator_core::{
+        builtin_agent_runtime_config, builtin_workflow_config, workflow_config_hash, LoadedWorkflowConfig,
+        PhaseMcpBinding, WorkflowConfigMetadata, WorkflowConfigSource,
+    };
+
+    use crate::runtime_support::WorkflowRuntimeConfigLite;
+
+    use super::*;
+
+    #[test]
+    fn inject_workflow_mcp_servers_includes_phase_bound_pack_servers() {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "ao.requirements/ao".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec!["server.js".to_string()],
+                transport: Some("stdio".to_string()),
+                config: BTreeMap::new(),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("research".to_string(), PhaseMcpBinding { servers: vec!["ao.requirements/ao".to_string()] });
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {}
+        });
+        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+
+        let additional_servers = runtime_contract
+            .pointer("/mcp/additional_servers")
+            .and_then(Value::as_object)
+            .expect("additional_servers should be injected");
+        assert!(additional_servers.contains_key("ao.requirements/ao"));
+    }
 }

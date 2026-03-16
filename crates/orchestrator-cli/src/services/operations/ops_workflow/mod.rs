@@ -12,7 +12,7 @@ use chrono::Utc;
 use orchestrator_core::{
     dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config, services::ServiceHub,
     workflow_ref_for_task, ListPageRequest, WorkflowEvent, WorkflowFilter, WorkflowQuery, WorkflowResumeManager,
-    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
+    WorkflowRunInput, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -58,7 +58,7 @@ async fn resolve_workflow_run_dispatch(
         (None, None, Some(t)) => Ok(protocol::SubjectDispatch::for_custom(
             t,
             description.unwrap_or_default(),
-            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+            workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root)),
             None,
             "manual-cli-run",
         )
@@ -74,36 +74,34 @@ async fn resolve_workflow_run_dispatch_from_input(
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch> {
     let WorkflowRunInput { subject, workflow_ref, input, vars, .. } = input;
-    match subject {
-        WorkflowSubject::Task { id } => {
-            let task = hub.tasks().get(&id).await?;
-            Ok(protocol::SubjectDispatch::for_task_with_metadata(
-                task.id.clone(),
-                workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task)),
-                "manual-cli-run",
-                Utc::now(),
-            )
-            .with_input(input))
-            .map(|dispatch| dispatch.with_vars(vars))
-        }
-        WorkflowSubject::Requirement { id } => {
-            hub.planning().get_requirement(&id).await?;
-            Ok(protocol::SubjectDispatch::for_requirement(
-                id,
-                workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
-                "manual-cli-run",
-            )
-            .with_input(input))
-            .map(|dispatch| dispatch.with_vars(vars))
-        }
-        WorkflowSubject::Custom { title, description } => Ok(protocol::SubjectDispatch::for_custom(
-            title,
-            description,
-            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+    if let Some(id) = subject.task_id() {
+        let task = hub.tasks().get(id).await?;
+        Ok(protocol::SubjectDispatch::for_task_with_metadata(
+            task.id.clone(),
+            workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task)),
+            "manual-cli-run",
+            Utc::now(),
+        )
+        .with_input(input))
+        .map(|dispatch| dispatch.with_vars(vars))
+    } else if let Some(id) = subject.requirement_id() {
+        hub.planning().get_requirement(id).await?;
+        Ok(protocol::SubjectDispatch::for_requirement(
+            id.to_string(),
+            workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
+            "manual-cli-run",
+        )
+        .with_input(input))
+        .map(|dispatch| dispatch.with_vars(vars))
+    } else {
+        Ok(protocol::SubjectDispatch::for_custom(
+            subject.title.unwrap_or_else(|| subject.id.clone()),
+            subject.description.unwrap_or_default(),
+            workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root)),
             input,
             "manual-cli-run",
         ))
-        .map(|dispatch| dispatch.with_vars(vars)),
+        .map(|dispatch| dispatch.with_vars(vars))
     }
 }
 
@@ -189,6 +187,10 @@ fn parse_workflow_vars(raw_vars: &[String]) -> Result<std::collections::HashMap<
         vars.insert(key.to_string(), value.to_string());
     }
     Ok(vars)
+}
+
+fn default_project_workflow_ref(project_root: &str) -> String {
+    orchestrator_core::load_workflow_config_or_default(Path::new(project_root)).config.default_workflow_ref
 }
 
 async fn resolve_workflow_run_dispatch_from_raw_input(
@@ -505,36 +507,23 @@ mod requirement_workflow_tests {
     use super::*;
     use orchestrator_core::{
         builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
-        WorkflowDefinition,
     };
 
     #[test]
-    fn resolve_requirement_workflow_ref_errors_when_workflow_missing() {
+    fn resolve_requirement_workflow_ref_uses_bundled_canonical_workflow() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
-        let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
-            .expect_err("missing requirement workflow should error");
-        assert!(
-            error.to_string().contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
-            "error should mention missing requirement workflow"
-        );
+        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
+            .expect("bundled requirement workflow should resolve");
+        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
     }
 
     #[test]
     fn resolve_requirement_workflow_ref_detects_requirement_pipeline() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut workflow_config = builtin_workflow_config();
-        workflow_config.workflows.push(WorkflowDefinition {
-            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
-            name: "Requirement Task Generation".to_string(),
-            description: String::new(),
-            phases: vec!["requirements".to_string().into()],
-            post_success: None,
-            variables: Vec::new(),
-        });
-        write_workflow_config(temp.path(), &workflow_config).expect("write config");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
@@ -543,17 +532,14 @@ mod requirement_workflow_tests {
     }
 
     #[test]
-    fn apply_requirement_workflow_default_errors_when_requirement_workflow_missing() {
+    fn apply_requirement_workflow_default_uses_bundled_requirement_workflow() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
-        let error = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
-            .expect_err("missing requirement workflow should fail closed");
-        assert!(
-            error.to_string().contains(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF),
-            "error should mention missing requirement workflow"
-        );
+        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
+            .expect("default requirement workflow should resolve");
+        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
     }
 }
 
@@ -564,7 +550,7 @@ mod tests {
     use orchestrator_core::{
         builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
         InMemoryServiceHub, Priority, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
-        TaskCreateInput, TaskType, WorkflowDefinition,
+        TaskCreateInput, TaskType,
     };
     use std::sync::Arc;
 
@@ -623,16 +609,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_workflow_run_dispatch_uses_requirement_workflow_default() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut workflow_config = builtin_workflow_config();
-        workflow_config.workflows.push(WorkflowDefinition {
-            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
-            name: "Requirement Task Generation".to_string(),
-            description: "test workflow".to_string(),
-            phases: vec!["requirements".to_string().into()],
-            post_success: None,
-            variables: Vec::new(),
-        });
-        write_workflow_config(temp.path(), &workflow_config).expect("write config");
+        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());

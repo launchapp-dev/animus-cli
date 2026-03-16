@@ -169,6 +169,8 @@ pub(super) struct YamlWorkflowFile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) mcp_servers: BTreeMap<String, McpServerDefinition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) phase_mcp_bindings: BTreeMap<String, PhaseMcpBinding>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) tools: BTreeMap<String, ToolDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) integrations: Option<IntegrationsConfig>,

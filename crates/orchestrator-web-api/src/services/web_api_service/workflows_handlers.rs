@@ -5,7 +5,7 @@ use orchestrator_core::{
     dispatch_workflow_event, workflow_ref_for_task, FileServiceHub, ListPage, OrchestratorWorkflow, ServiceHub,
     WorkflowDefinition, WorkflowEvent, WorkflowQuery, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
-use protocol::orchestrator::{WorkflowRunInput, WorkflowSubject};
+use protocol::orchestrator::{WorkflowRunInput, SUBJECT_KIND_CUSTOM};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -64,33 +64,33 @@ async fn resolve_workflow_run_dispatch_from_input(
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch, WebApiError> {
     let WorkflowRunInput { subject, workflow_ref, input, .. } = input;
-    match subject {
-        WorkflowSubject::Task { id } => {
-            let task = hub.tasks().get(&id).await.map_err(WebApiError::from)?;
-            Ok(protocol::SubjectDispatch::for_task_with_metadata(
-                task.id.clone(),
-                workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task)),
-                "web-api-run",
-                chrono::Utc::now(),
-            )
-            .with_input(input))
-        }
-        WorkflowSubject::Requirement { id } => {
-            hub.planning().get_requirement(&id).await.map_err(WebApiError::from)?;
-            let workflow_ref = match workflow_ref {
-                Some(workflow_ref) => workflow_ref,
-                None => resolve_requirement_workflow_ref(project_root)
-                    .map_err(|message| WebApiError::new("invalid_input", message, 2))?,
-            };
-            Ok(protocol::SubjectDispatch::for_requirement(id, workflow_ref, "web-api-run").with_input(input))
-        }
-        WorkflowSubject::Custom { title, description } => Ok(protocol::SubjectDispatch::for_custom(
-            title,
-            description,
+    if let Some(id) = subject.task_id() {
+        let task = hub.tasks().get(id).await.map_err(WebApiError::from)?;
+        Ok(protocol::SubjectDispatch::for_task_with_metadata(
+            task.id.clone(),
+            workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task)),
+            "web-api-run",
+            chrono::Utc::now(),
+        )
+        .with_input(input))
+    } else if let Some(id) = subject.requirement_id() {
+        hub.planning().get_requirement(id).await.map_err(WebApiError::from)?;
+        let workflow_ref = match workflow_ref {
+            Some(workflow_ref) => workflow_ref,
+            None => resolve_requirement_workflow_ref(project_root)
+                .map_err(|message| WebApiError::new("invalid_input", message, 2))?,
+        };
+        Ok(protocol::SubjectDispatch::for_requirement(id.to_string(), workflow_ref, "web-api-run").with_input(input))
+    } else if subject.kind().eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM) {
+        Ok(protocol::SubjectDispatch::for_custom(
+            subject.title.unwrap_or_else(|| subject.id.clone()),
+            subject.description.unwrap_or_default(),
             workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
             input,
             "web-api-run",
-        )),
+        ))
+    } else {
+        Err(WebApiError::new("invalid_input", format!("unsupported workflow subject kind '{}'", subject.kind()), 2))
     }
 }
 
@@ -270,10 +270,7 @@ impl WebApiService {
             resolve_workflow_run_dispatch_from_body(self.context.hub.as_ref(), &self.context.project_root, body)
                 .await?;
         let workflow = self.context.hub.workflows().run(dispatch.to_workflow_run_input()).await?;
-        let subject_id = match &workflow.subject {
-            WorkflowSubject::Task { id } | WorkflowSubject::Requirement { id } => id.clone(),
-            WorkflowSubject::Custom { title, .. } => title.clone(),
-        };
+        let subject_id = workflow.subject.title.clone().unwrap_or_else(|| workflow.subject.id.clone());
         self.publish_event(
             "workflow-run",
             json!({

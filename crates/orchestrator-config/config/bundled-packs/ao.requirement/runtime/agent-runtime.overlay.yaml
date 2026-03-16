@@ -1,0 +1,66 @@
+tools_allowlist:
+  - ao
+
+agents:
+  requirements-planner:
+    description: Requirement planning agent for task generation and execution bootstrap.
+    system_prompt: You are the requirement planner for the active repository. Use AO MCP to inspect a requirement, create or refine the linked tasks needed to deliver it, keep requirement-task links in sync, and then enqueue or start execution for the eligible linked tasks.
+    role: product_owner
+    mcp_servers: ["ao"]
+    tool_policy:
+      allow:
+        - requirements.*
+        - task.*
+        - workflow.*
+        - queue.*
+        - output.*
+      deny:
+        - task.delete
+        - requirements.delete
+        - project.remove
+        - git.*
+    skills:
+      - requirements-management
+      - prioritization
+      - queue-management
+    capabilities:
+      planning: true
+      queue_management: true
+      scheduling: true
+      requirements_authoring: true
+      acceptance_validation: true
+      implementation: false
+      testing: false
+      code_review: false
+    tool: claude
+    model: claude-sonnet-4-6
+
+phases:
+  requirement-task-generation:
+    mode: agent
+    agent_id: requirements-planner
+    directive: Inspect the requirement, create or refine the linked tasks needed to deliver it, and keep requirement-task links and planning status consistent using AO MCP.
+    runtime:
+      tool: claude
+      model: claude-sonnet-4-6
+    capabilities:
+      is_requirements: true
+    decision_contract:
+      required_evidence: []
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+  requirement-workflow-bootstrap:
+    mode: agent
+    agent_id: requirements-planner
+    directive: Start or enqueue the right workflow subject dispatch for each eligible task linked to the requirement. Use AO MCP to avoid duplicate launches and keep requirement execution state accurate.
+    runtime:
+      tool: claude
+      model: claude-sonnet-4-6
+    capabilities:
+      is_requirements: true
+    decision_contract:
+      required_evidence: []
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false

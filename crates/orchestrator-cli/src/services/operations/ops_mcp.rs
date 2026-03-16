@@ -3,8 +3,6 @@ use crate::run_dir;
 use crate::McpCommand;
 use anyhow::Result;
 #[cfg(test)]
-use orchestrator_core::WorkflowSubject;
-#[cfg(test)]
 use orchestrator_core::{OrchestratorWorkflow, WorkflowStateManager, WorkflowStatus};
 #[cfg(test)]
 use protocol::{AgentRunEvent, RunId};
@@ -23,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 #[path = "ops_mcp/agent_command_args.rs"]

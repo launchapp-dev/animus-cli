@@ -203,7 +203,7 @@ pub(crate) struct WorkflowCheckpointPruneArgs {
 pub(crate) struct WorkflowRunArgs {
     #[arg(
         value_name = "PIPELINE",
-        help = "Workflow definition name (e.g. standard, ui-ux, builtin/vision-draft). Defaults to 'standard' when --task-id is provided."
+        help = "Workflow definition name (e.g. ao.task/standard, ao.task/ui-ux, ao.vision/draft). Legacy builtin refs remain supported during migration."
     )]
     pub(crate) pipeline: Option<String>,
     #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to run the workflow for.")]

@@ -1,22 +1,33 @@
 # Writing Custom Workflows
 
-AO workflows are defined in YAML and live in `.ao/workflows/`. They describe agents, phases, pipelines, and post-success hooks that the daemon executes against tasks.
+AO workflows are defined in YAML and live in `.ao/workflows.yaml` and
+`.ao/workflows/*.yaml`. These files describe project-local workflows, overrides,
+and pack composition. They usually wrap canonical pack-qualified refs such as
+`ao.task/standard` instead of copying task or requirement semantics into the
+repository.
 
 For the target design of universal phase verdicts and YAML-defined phase-local
 fields, see [Phase Contracts](../architecture/phase-contracts.md).
 
 ## File Location
 
-Place workflow files in your project's `.ao/workflows/` directory:
+Place workflow files in either:
+
+- `.ao/workflows.yaml`
+- `.ao/workflows/*.yaml`
+
+Example:
 
 ```
 .ao/
+  workflows.yaml
   workflows/
     custom.yaml
     premium.yaml
 ```
 
-AO loads all `.yaml` files from this directory. You can split workflows across multiple files or keep everything in one.
+AO loads the single-file form and the directory form together. You can keep
+everything in one file or split workflows across multiple files.
 
 ## YAML Structure Overview
 
@@ -216,7 +227,17 @@ phases:
 
 ## Workflows
 
-Workflows tie everything together. They are the top-level units that get dispatched against tasks:
+Workflows tie everything together. They are the top-level units that get
+dispatched against subjects. A project-local workflow can delegate to bundled or
+installed pack refs:
+
+```yaml
+workflows:
+  - id: standard-workflow
+    name: Standard Workflow
+    phases:
+      - workflow_ref: ao.task/standard
+```
 
 ```yaml
 workflows:
@@ -353,4 +374,3 @@ pipelines:
 - Order phases so that fast-failing checks (lint, tests) run before expensive reviews.
 - Keep `max_rework_attempts` reasonable (2-3) to avoid infinite loops.
 - Validate your workflow config with `ao workflow config validate`.
-- Compile YAML workflows with `ao workflow config compile` to check for errors.

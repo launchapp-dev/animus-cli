@@ -33,7 +33,10 @@ pub use daemon_event_record::*;
 pub use error_classification::*;
 pub use errors::*;
 pub use model_routing::*;
-pub use orchestrator::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
+pub use orchestrator::{
+    RunnerEvent, SubjectDispatch, SubjectExecutionFact, SubjectRef, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT,
+    SUBJECT_KIND_TASK,
+};
 pub use output::*;
 pub use process::*;
 pub use repository_scope::*;

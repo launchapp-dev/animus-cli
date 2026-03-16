@@ -1,8 +1,8 @@
 use super::*;
 use orchestrator_core::{
-    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, TaskDependency,
-    TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowMachineState, WorkflowMetadata,
-    WorkflowPhaseExecution, WorkflowSubject,
+    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef,
+    TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowMachineState,
+    WorkflowMetadata, WorkflowPhaseExecution,
 };
 use std::collections::HashMap;
 
@@ -101,7 +101,7 @@ fn make_workflow(
         rework_counts: HashMap::<String, u32>::new(),
         total_reworks: 0,
         decision_history: Vec::<WorkflowDecisionRecord>::new(),
-        subject: WorkflowSubject::Task { id: task_id.to_string() },
+        subject: SubjectRef::task(task_id.to_string()),
     }
 }
 

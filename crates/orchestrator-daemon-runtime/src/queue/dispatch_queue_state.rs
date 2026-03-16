@@ -39,7 +39,7 @@ pub struct DispatchQueueState {
 impl DispatchQueueEntry {
     pub fn from_dispatch(dispatch: SubjectDispatch) -> Self {
         Self {
-            subject_id: Some(dispatch.subject_id().to_string()),
+            subject_id: Some(dispatch.subject_key()),
             task_id: dispatch.task_id().unwrap_or_default().to_string(),
             dispatch: Some(dispatch),
             status: DispatchQueueEntryStatus::Pending,

@@ -32,7 +32,6 @@ use crate::types::{
     TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
     TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
     WorkflowFilter, WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
-    WorkflowSubject,
 };
 use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
 

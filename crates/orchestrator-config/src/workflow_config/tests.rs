@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 
 use crate::agent_runtime_config::{CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode};
+use crate::test_support::env_lock;
 use crate::PhaseExecutionDefinition;
 
 use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
@@ -25,6 +26,24 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
     let config = builtin_workflow_config();
     let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
+    assert_eq!(config.default_workflow_ref, "ao.task/standard");
+    assert!(workflow_ids.contains(&"ao.task/standard"));
+    assert!(workflow_ids.contains(&"ao.task/ui-ux"));
+    assert!(workflow_ids.contains(&"ao.task/quick-fix"));
+    assert!(workflow_ids.contains(&"ao.task/gated"));
+    assert!(workflow_ids.contains(&"ao.task/triage"));
+    assert!(workflow_ids.contains(&"ao.task/refine"));
+    assert!(workflow_ids.contains(&"ao.review/cycle"));
+    assert!(workflow_ids.contains(&"ao.requirement/draft"));
+    assert!(workflow_ids.contains(&"ao.requirement/refine"));
+    assert!(workflow_ids.contains(&"ao.requirement/plan"));
+    assert!(workflow_ids.contains(&"ao.requirement/execute"));
+    assert!(workflow_ids.contains(&"ao.vision/draft"));
+    assert!(workflow_ids.contains(&"ao.vision/refine"));
+    assert!(workflow_ids.contains(&"standard"));
+    assert!(workflow_ids.contains(&"ui-ux-standard"));
+    assert!(workflow_ids.contains(&"requirement-task-generation"));
+    assert!(workflow_ids.contains(&"requirement-task-generation-run"));
     assert!(workflow_ids.contains(&"builtin/vision-draft"));
     assert!(workflow_ids.contains(&"builtin/vision-refine"));
     assert!(workflow_ids.contains(&"builtin/requirements-draft"));
@@ -42,11 +61,11 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
 
 #[test]
 fn missing_v2_file_reports_actionable_error() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
-    let err = load_workflow_config(temp.path()).expect_err("missing config should fail");
-    let message = err.to_string();
-    assert!(message.contains(".ao/workflows.yaml"));
-    assert!(message.contains(".ao/workflows/*.yaml"));
+    let config = load_workflow_config(temp.path()).expect("bundled pack defaults should load");
+    assert_eq!(config.default_workflow_ref, "ao.task/standard");
+    assert!(config.workflows.iter().any(|workflow| workflow.id == "ao.task/standard"));
 }
 
 #[test]
@@ -551,7 +570,58 @@ workflows:
 }
 
 #[test]
+fn yaml_compile_resolves_project_scoped_skills() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join(".ao").join("config").join("skill_definitions");
+    fs::create_dir_all(&skills_dir).expect("create project skills dir");
+    fs::write(
+        skills_dir.join("project-skill.yaml"),
+        r#"
+name: project-skill
+description: Project local validation fixture
+"#,
+    )
+    .expect("write project skill");
+
+    let ao_dir = temp.path().join(".ao");
+    fs::create_dir_all(&ao_dir).expect("create .ao dir");
+    fs::write(
+        ao_dir.join("workflows.yaml"),
+        r#"
+phase_catalog:
+  project-phase:
+    label: Project Phase
+    category: verification
+phases:
+  project-phase:
+    mode: agent
+    agent_id: project-agent
+agents:
+  project-agent:
+    description: Project agent
+    system_prompt: Project prompt
+    skills:
+      - project-skill
+workflows:
+  - id: project-skill-test
+    name: Project Skill Test
+    phases:
+      - project-phase
+"#,
+    )
+    .expect("write workflow yaml");
+
+    let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+    let config = result.expect("should have config");
+    assert!(
+        config.agent_profiles.get("project-agent").is_some_and(|profile| profile.skills == vec!["project-skill"]),
+        "project-local skill reference should remain intact"
+    );
+}
+
+#[test]
 fn yaml_compile_and_write_validates_and_writes() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let state_dir = temp.path().join(".ao").join("state");
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -642,6 +712,30 @@ fn expand_nested_sub_pipelines() {
     let expanded = expand_workflow_phases(&workflows, "standard").expect("should expand");
     let ids: Vec<&str> = expanded.iter().map(|e| e.phase_id()).collect();
     assert_eq!(ids, vec!["requirements", "code-review", "testing"]);
+}
+
+#[test]
+fn collect_workflow_refs_tracks_nested_sub_workflows_once() {
+    let workflows = vec![
+        make_pipeline("lint", vec![WorkflowPhaseEntry::Simple("code-review".into())]),
+        make_pipeline(
+            "review-cycle",
+            vec![
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "lint".into() }),
+                WorkflowPhaseEntry::Simple("testing".into()),
+            ],
+        ),
+        make_pipeline(
+            "standard",
+            vec![
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() }),
+                WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "lint".into() }),
+            ],
+        ),
+    ];
+
+    let refs = collect_workflow_refs(&workflows, "standard").expect("should collect refs");
+    assert_eq!(refs, vec!["standard", "review-cycle", "lint"]);
 }
 
 #[test]
@@ -1271,6 +1365,34 @@ workflows:
 }
 
 #[test]
+fn validate_rejects_phase_mcp_binding_unknown_server_reference() {
+    let yaml = r#"
+mcp_servers:
+  ao:
+    command: "node"
+    args: ["server.js"]
+phase_mcp_bindings:
+  research:
+    servers:
+      - missing
+
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - research
+      - implementation
+      - testing
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse");
+    let err = validate_workflow_config(&config).expect_err("should reject missing MCP reference");
+    assert!(
+        err.to_string().contains("phase_mcp_bindings['research'].servers references unknown MCP server 'missing'"),
+        "validation error should mention the missing MCP server"
+    );
+}
+
+#[test]
 fn yaml_parses_agent_profile_referencing_top_level_mcp_server() {
     let yaml = r#"
 mcp_servers:
@@ -1285,6 +1407,7 @@ agents:
     mcp_servers:
       - ao
 
+default_workflow_ref: standard
 workflows:
   - id: standard
     name: Standard
@@ -1400,6 +1523,7 @@ phases:
       program: cargo
       args: ["build"]
 
+default_workflow_ref: standard
 workflows:
   - id: standard
     name: Standard
@@ -1490,6 +1614,7 @@ phases:
       program: cargo
       args: ["build"]
 
+default_workflow_ref: standard
 workflows:
   - id: standard
     name: Standard

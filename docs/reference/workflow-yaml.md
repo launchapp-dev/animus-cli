@@ -1,6 +1,9 @@
 # Workflow YAML Schema Reference
 
-AO workflows are defined in `.ao/workflows/*.yaml` files. These YAML files are compiled into the effective workflow configuration via `ao workflow config compile`. This document is the formal specification of the YAML format.
+AO workflow YAML is authored in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`.
+Those files are merged with installed and bundled pack overlays to produce the
+effective workflow configuration that `workflow-runner` executes. This document
+describes the authored YAML surface.
 
 For the target direction of phase output contracts, universal verdicts, and
 YAML-defined phase-local fields, see [Phase Contracts](../architecture/phase-contracts.md).
@@ -16,7 +19,8 @@ variables:       # Variable declarations with defaults
 pipelines:       # Named workflow pipelines (collections of phases)
 ```
 
-All sections are optional. Multiple YAML files in `.ao/workflows/` are merged during compilation.
+All sections are optional. Multiple YAML files in `.ao/workflows/` are merged,
+and project YAML can override or wrap pack-owned workflow refs.
 
 ---
 

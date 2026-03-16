@@ -8,6 +8,7 @@ mod history_types;
 mod mcp_types;
 mod model_types;
 mod output_types;
+mod pack_types;
 mod queue_types;
 
 mod project_types;
@@ -35,6 +36,7 @@ pub(crate) use history_types::*;
 pub(crate) use mcp_types::*;
 pub(crate) use model_types::*;
 pub(crate) use output_types::*;
+pub(crate) use pack_types::*;
 pub(crate) use queue_types::*;
 
 pub(crate) use project_types::*;
@@ -132,6 +134,48 @@ mod tests {
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["ao", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parses_pack_install_command() {
+        let cli = Cli::try_parse_from(["ao", "pack", "install", "--path", "./fixtures/ao.review", "--activate"])
+            .expect("pack install should parse");
+
+        match cli.command {
+            Command::Pack { command: PackCommand::Install(args) } => {
+                assert_eq!(args.path, "./fixtures/ao.review");
+                assert!(args.activate);
+                assert!(!args.force);
+            }
+            _ => panic!("expected pack install command"),
+        }
+    }
+
+    #[test]
+    fn parses_pack_pin_command() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "pack",
+            "pin",
+            "--pack-id",
+            "ao.review",
+            "--version",
+            "=0.2.0",
+            "--source",
+            "installed",
+            "--disable",
+        ])
+        .expect("pack pin should parse");
+
+        match cli.command {
+            Command::Pack { command: PackCommand::Pin(args) } => {
+                assert_eq!(args.pack_id, "ao.review");
+                assert_eq!(args.version.as_deref(), Some("=0.2.0"));
+                assert_eq!(args.source.as_deref(), Some("installed"));
+                assert!(args.disable);
+            }
+            _ => panic!("expected pack pin command"),
+        }
     }
 
     #[test]

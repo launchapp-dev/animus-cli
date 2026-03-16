@@ -2,9 +2,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use protocol::orchestrator::{
     DependencyType, OrchestratorTask, RequirementItem, RequirementsDraftInput, RequirementsDraftResult,
-    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, TaskCreateInput, TaskFilter,
-    TaskStatistics, TaskStatus, TaskUpdateInput, WorkflowSubject,
+    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, SubjectRef, TaskCreateInput,
+    TaskFilter, TaskStatistics, TaskStatus, TaskUpdateInput,
 };
+use std::collections::HashMap;
 
 #[async_trait]
 pub trait TaskProvider: Send + Sync {
@@ -51,9 +52,11 @@ pub trait RequirementsProvider: Send + Sync {
 
 #[derive(Debug, Clone)]
 pub struct SubjectContext {
+    pub subject_kind: String,
     pub subject_id: String,
     pub subject_title: String,
     pub subject_description: String,
+    pub attributes: HashMap<String, String>,
     pub task: Option<OrchestratorTask>,
 }
 
@@ -61,7 +64,7 @@ pub struct SubjectContext {
 pub trait SubjectResolver: Send + Sync {
     async fn resolve_subject_context(
         &self,
-        subject: &WorkflowSubject,
+        subject: &SubjectRef,
         fallback_title: Option<&str>,
         fallback_description: Option<&str>,
     ) -> Result<SubjectContext>;
@@ -69,7 +72,12 @@ pub trait SubjectResolver: Send + Sync {
 
 #[async_trait]
 pub trait ProjectAdapter: Send + Sync {
-    async fn ensure_execution_cwd(&self, project_root: &str, task: Option<&OrchestratorTask>) -> Result<String>;
+    async fn ensure_execution_cwd(
+        &self,
+        project_root: &str,
+        subject: &SubjectRef,
+        subject_context: &SubjectContext,
+    ) -> Result<String>;
 }
 
 #[async_trait]
@@ -123,8 +131,9 @@ pub mod gitlab;
 pub mod jira;
 #[cfg(feature = "linear")]
 pub mod linear;
+pub mod subject_adapter;
 
-pub use builtin::{BuiltinProjectAdapter, BuiltinRequirementsProvider, BuiltinSubjectResolver, BuiltinTaskProvider};
+pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
 pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo,
 };
@@ -134,3 +143,8 @@ pub use gitlab::{GitLabConfig, GitLabGitProvider};
 pub use jira::{JiraConfig, JiraTaskProvider};
 #[cfg(feature = "linear")]
 pub use linear::{LinearConfig, LinearTaskProvider};
+pub use subject_adapter::{
+    builtin_subject_adapter_registry, BuiltinCustomSubjectAdapter, BuiltinProjectAdapter,
+    BuiltinRequirementSubjectAdapter, BuiltinSubjectResolver, BuiltinTaskSubjectAdapter, SubjectAdapter,
+    SubjectAdapterRegistry,
+};

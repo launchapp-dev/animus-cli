@@ -87,7 +87,7 @@ fn save_workflow(
             rework_counts: HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
-            subject: WorkflowSubject::Task { id: task_id.to_string() },
+            subject: protocol::SubjectRef::task(task_id.to_string()),
         })
         .expect("workflow should be written");
 }

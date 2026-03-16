@@ -15,7 +15,7 @@ Advanced AI behavior should live in YAML-defined workflows executed by
 
 The daemon runtime processes `SubjectDispatch`, not raw tasks.
 
-- `WorkflowSubject` is identity only.
+- `SubjectRef` is identity only.
 - `SubjectDispatch` is the execution envelope.
 - Ingress surfaces produce dispatches.
 - The daemon runtime consumes dispatches and emits execution facts.
@@ -24,7 +24,7 @@ The daemon runtime processes `SubjectDispatch`, not raw tasks.
 
 ## Definitions
 
-### `WorkflowSubject`
+### `SubjectRef`
 
 Identity of the work item:
 
@@ -32,7 +32,7 @@ Identity of the work item:
 - `requirement`
 - `custom`
 
-`WorkflowSubject` does not own execution configuration.
+`SubjectRef` does not own execution configuration.
 
 ### `SubjectDispatch`
 
@@ -46,7 +46,7 @@ Execution envelope for a subject. At minimum it should include:
 - `requested_at`
 - optional idempotency or dispatch key
 
-`workflow_ref` belongs here, not on `WorkflowSubject`.
+`workflow_ref` belongs here, not on `SubjectRef`.
 It should point to a YAML-defined workflow entry, not a hardcoded Rust workflow
 type.
 
@@ -199,7 +199,7 @@ tool surface consumes.
 
 - `workflow-runner` as the canonical execution host
 - `agent-runner` as the process supervisor for model CLIs
-- `WorkflowSubject` as the stable identity model
+- `SubjectRef` as the stable identity model
 - YAML as the source of truth for advanced workflows
 
 ### Change

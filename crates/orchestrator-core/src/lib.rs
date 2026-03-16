@@ -43,13 +43,26 @@ pub use domain_state::{
     ReviewStore, ReviewerRole,
 };
 pub use execution_projection::{
+    builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,
     project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_execution_fact,
     project_task_blocked_with_reason, project_task_dispatch_failure, project_task_execution_fact, project_task_status,
-    project_task_terminal_workflow_status, project_task_workflow_start,
+    project_task_terminal_workflow_status, project_task_workflow_start, ExecutionProjector, ExecutionProjectorRegistry,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path, record_model_phase_outcome,
     ModelQualityLedger, ModelQualityRecord, MODEL_QUALITY_LEDGER_FILE_NAME,
+};
+pub use orchestrator_config::{
+    activate_pack_mcp_overlay, apply_pack_mcp_overlay, check_pack_runtime_requirements,
+    ensure_pack_runtime_requirements, load_pack_agent_runtime_overlay, load_pack_manifest,
+    load_pack_manifest_from_file, load_pack_mcp_overlay, load_pack_workflow_overlay, machine_installed_packs_dir,
+    pack_manifest_path, parse_pack_manifest, project_pack_overrides_dir, resolve_pack_registry, validate_pack_manifest,
+    validate_pack_manifest_assets, ExternalRuntimeKind, LoadedPackManifest, PackCompatibility, PackDependency,
+    PackKind, PackManifest, PackMcp, PackMcpOverlay, PackNativeModule, PackOwnership, PackOwnershipMode,
+    PackPermissions, PackRegistrySource, PackRuntime, PackRuntimeCheck, PackRuntimeCheckStatus, PackRuntimeReport,
+    PackRuntimeRequirement, PackSchedules, PackSecrets, PackSubjects, PackWorkflows, ResolvedPackRegistry,
+    ResolvedPackRegistryEntry, BUNDLED_BUILTIN_PACK_ID, BUNDLED_BUILTIN_PACK_VERSION, MACHINE_PACKS_DIR_NAME,
+    PACK_MANIFEST_FILE_NAME, PACK_MANIFEST_SCHEMA_ID, PROJECT_PACKS_DIR_NAME,
 };
 pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, cli_capabilities_from_config,
@@ -77,14 +90,15 @@ pub use types::{
     RequirementFilter, RequirementItem, RequirementLinks, RequirementPriority, RequirementPriorityExt,
     RequirementQuery, RequirementQuerySort, RequirementRange, RequirementStatus, RequirementType,
     RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput, RequirementsExecutionResult,
-    RequirementsRefineInput, ResourceRequirements, RiskLevel, Scope, SubjectDispatch, TaskCreateInput, TaskDensity,
-    TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
+    RequirementsRefineInput, ResourceRequirements, RiskLevel, Scope, SubjectDispatch, SubjectRef, TaskCreateInput,
+    TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
     TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan, TaskQuery, TaskQuerySort,
     TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
     WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
     WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowMetadata,
     WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
-    WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, MAX_DISPATCH_HISTORY_ENTRIES,
+    WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, MAX_DISPATCH_HISTORY_ENTRIES, SUBJECT_KIND_CUSTOM,
+    SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 pub use workflow::{
     phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref, ResumabilityStatus, ResumeConfig,
@@ -101,7 +115,7 @@ pub use workflow_config::{
     resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards,
     resolve_workflow_variables, resolve_workflow_verdict_routing, validate_workflow_and_runtime_configs,
     validate_workflow_config, workflow_config_hash, workflow_config_path, write_workflow_config, yaml_workflows_dir,
-    CompileYamlResult, LoadedWorkflowConfig, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef,
+    CompileYamlResult, LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef,
     WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
     WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowVariable,
     WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,

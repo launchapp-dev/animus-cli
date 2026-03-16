@@ -240,7 +240,7 @@ async fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
 
     assert_eq!(config.schema.as_str(), "ao.workflow-config.v2");
     assert_eq!(config.version, 2);
-    assert_eq!(config.default_workflow_ref.as_str(), "standard");
+    assert_eq!(config.default_workflow_ref.as_str(), "ao.task/standard");
     assert_eq!(config.phase_catalog.get("implementation").map(|phase| phase.label.as_str()), Some("Implementation"));
     assert_eq!(
         config

@@ -89,7 +89,7 @@ pub fn mark_dispatch_queue_entry_assigned(
         if entry.status != DispatchQueueEntryStatus::Pending {
             continue;
         }
-        if entry.subject_id() != dispatch.subject_id() {
+        if entry.subject_id() != dispatch.subject_key() {
             continue;
         }
         if entry.dispatch.as_ref().is_some_and(|existing| existing.workflow_ref != dispatch.workflow_ref) {

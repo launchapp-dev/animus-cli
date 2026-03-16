@@ -89,7 +89,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                 eprintln!(
                     "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
                     protocol::ACTOR_DAEMON,
-                    dispatch.subject_id(),
+                    dispatch.subject_key(),
                     error
                 );
             }
@@ -97,7 +97,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                 eprintln!(
                     "{}: failed to start workflow runner for subject {}: {}",
                     protocol::ACTOR_DAEMON,
-                    dispatch.subject_id(),
+                    dispatch.subject_key(),
                     error
                 );
             }

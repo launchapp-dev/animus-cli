@@ -1,0 +1,144 @@
+tools_allowlist:
+  - ao
+  - Read
+  - Glob
+  - Grep
+  - Bash
+
+phase_catalog:
+  requirements-draft:
+    label: Requirements Draft
+    description: Draft requirements from project vision and codebase analysis.
+    category: planning
+    tags: ["planning", "requirements"]
+  requirements-refine:
+    label: Requirements Refine
+    description: Refine existing requirements with improved detail and acceptance criteria.
+    category: planning
+    tags: ["planning", "requirements"]
+  requirement-task-generation:
+    label: Requirement Task Generation
+    description: Create or refine linked tasks for a requirement through AO MCP.
+    category: planning
+    tags: ["requirements", "planning", "bundled-pack"]
+  requirement-workflow-bootstrap:
+    label: Requirement Workflow Bootstrap
+    description: Start or enqueue execution for eligible tasks linked to the requirement.
+    category: planning
+    tags: ["requirements", "orchestration", "bundled-pack"]
+
+agents:
+  po:
+    description: Product Owner agent for requirement drafting and refinement
+    system_prompt: You are a product owner responsible for shaping project requirements.
+
+phases:
+  requirements-draft:
+    mode: agent
+    agent_id: po
+    directive: |
+      You are drafting project requirements based on the vision and codebase.
+
+      Steps:
+      1. Read the current vision: `ao vision get --json`
+      2. Read existing requirements: `ao requirements list --json`
+      3. If dispatch_input includes "include_codebase_scan": true, scan the codebase
+         to understand current architecture and identify gaps
+      4. Draft new requirements that bridge the gap between the vision and current state
+
+      For each requirement, use `ao requirements create` with:
+      - --title: Clear, actionable title
+      - --description: Detailed scope and motivation
+      - --priority: must/should/could based on vision alignment
+      - --category: usability/runtime/integration/quality/security/release
+      - --type: product/functional/non-functional/technical
+
+      If dispatch_input includes "append_only": true, do not modify existing requirements.
+      If dispatch_input includes "max_requirements", limit to that count.
+
+      Output a JSON summary of requirements created.
+
+  requirements-refine:
+    mode: agent
+    agent_id: po
+    directive: |
+      You are refining existing project requirements.
+
+      Steps:
+      1. Read the current vision: `ao vision get --json`
+      2. If dispatch_input includes "requirement_ids", refine only those.
+         Otherwise, list all requirements: `ao requirements list --json`
+      3. For each requirement to refine:
+         - Improve the description with concrete scope
+         - Add or improve acceptance criteria
+         - Verify priority alignment with vision
+         - Check for missing links or dependencies
+
+      If dispatch_input includes a "focus" field, prioritize that aspect
+      (e.g., "acceptance_criteria", "descriptions", "priorities").
+
+      Use `ao requirements update --id REQ-XXX` to apply refinements.
+
+      Output a JSON summary of what was refined.
+
+workflows:
+  - id: ao.requirement/draft
+    name: AO Requirement Draft
+    description: Canonical pack-qualified requirement drafting workflow ref.
+    phases:
+      - requirements-draft
+
+  - id: ao.requirement/refine
+    name: AO Requirement Refine
+    description: Canonical pack-qualified requirement refinement workflow ref.
+    phases:
+      - requirements-refine
+
+  - id: ao.requirement/plan
+    name: AO Requirement Plan
+    description: Canonical pack-qualified requirement planning workflow ref.
+    phases:
+      - requirement-task-generation
+
+  - id: ao.requirement/execute
+    name: AO Requirement Execute
+    description: Canonical pack-qualified requirement execution workflow ref.
+    phases:
+      - requirement-task-generation
+      - requirement-workflow-bootstrap
+
+  - id: requirement-task-generation
+    name: Requirement Task Generation
+    description: Legacy alias for the canonical requirement planning workflow.
+    phases:
+      - workflow_ref: ao.requirement/plan
+
+  - id: requirement-task-generation-run
+    name: Requirement Task Generation Run
+    description: Legacy alias for the canonical requirement execution workflow.
+    phases:
+      - workflow_ref: ao.requirement/execute
+
+  - id: builtin/requirements-draft
+    name: Builtin Requirements Draft
+    description: Compatibility alias for the pack-owned requirement drafting workflow.
+    phases:
+      - workflow_ref: ao.requirement/draft
+
+  - id: builtin/requirements-refine
+    name: Builtin Requirements Refine
+    description: Compatibility alias for the pack-owned requirement refinement workflow.
+    phases:
+      - workflow_ref: ao.requirement/refine
+
+  - id: builtin/requirement-plan
+    name: Builtin Requirement Plan
+    description: Compatibility alias for the pack-owned requirement planning workflow.
+    phases:
+      - workflow_ref: ao.requirement/plan
+
+  - id: builtin/requirements-execute
+    name: Builtin Requirements Execute
+    description: Compatibility alias for the pack-owned requirement execution workflow.
+    phases:
+      - workflow_ref: ao.requirement/execute
