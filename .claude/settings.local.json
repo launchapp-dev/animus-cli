@@ -115,7 +115,10 @@
       "Bash(cargo clean:*)",
       "Read(//Users/samishukri/.ao/**)",
       "Bash(2)",
-      "Bash(stat:*)"
+      "Bash(stat:*)",
+      "Bash(gh pr:*)",
+      "Bash(for i:*)",
+      "Bash(cat:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

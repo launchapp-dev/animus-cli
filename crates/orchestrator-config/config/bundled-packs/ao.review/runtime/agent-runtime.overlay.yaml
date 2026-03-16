@@ -60,6 +60,8 @@ phases:
     mode: agent
     agent_id: po-reviewer
     directive: Review the delivered work against product intent and acceptance criteria. Do not edit code. If gaps remain, set verdict to rework and update the task/checklist through AO MCP with precise next actions.
+    capabilities:
+      mutates_state: true
     runtime:
       tool: claude
       model: claude-sonnet-4-6

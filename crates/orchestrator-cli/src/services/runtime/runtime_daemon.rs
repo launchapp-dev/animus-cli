@@ -396,6 +396,23 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
     command.env_remove("CLAUDECODE");
     command.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid() detaches the autonomous daemon into its own session so it
+        // survives after the parent CLI exits. The closure runs between fork and exec
+        // and only calls async-signal-safe functions.
+        #[allow(unsafe_code)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
     let child = command.spawn().context("failed to spawn autonomous daemon run")?;
     Ok(AutonomousDaemonSpawn { child, log_path, startup_log_offset })
 }

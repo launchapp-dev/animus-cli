@@ -168,6 +168,8 @@ phases:
     mode: agent
     agent: triager
     directive: "Evaluate whether the current task is still valid, already done, obsolete, or a duplicate."
+    capabilities:
+      mutates_state: true
     decision_contract:
       min_confidence: 0.7
       max_risk: medium
@@ -185,6 +187,8 @@ phases:
     mode: agent
     agent: requirements-refiner
     directive: "Refine the current task into implementation-ready scope with concrete acceptance criteria, checklist items, relevant code references, and constraints."
+    capabilities:
+      mutates_state: true
     decision_contract:
       min_confidence: 0.7
       max_risk: medium
@@ -260,6 +264,8 @@ phases:
     mode: agent
     agent: po-reviewer
     directive: "Review the delivered work against product intent and acceptance criteria. Do not edit code. If gaps remain, set verdict to rework and update the task/checklist through AO MCP with precise next actions."
+    capabilities:
+      mutates_state: true
     decision_contract:
       required_evidence: [requirements_met]
       min_confidence: 0.7
@@ -309,10 +315,14 @@ phases:
     mode: agent
     agent: work-planner
     directive: "Scan the task backlog, check eligibility and dependencies, and enqueue ready work for the daemon via ao.queue.enqueue."
+    capabilities:
+      mutates_state: true
   task-reconciliation:
     mode: agent
     agent: reconciler
     directive: "Detect and fix task state inconsistencies: stale in-progress tasks, resolved dependency gates, and completed-but-unmarked tasks."
+    capabilities:
+      mutates_state: true
   unit-test:
     mode: command
     directive: "Run the workspace test suite"

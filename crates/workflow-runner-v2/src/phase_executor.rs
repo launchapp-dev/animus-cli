@@ -17,8 +17,8 @@ use crate::phase_prompt::{
 };
 use crate::phase_targets::PhaseTargetPlanner;
 use crate::runtime_contract::{
-    inject_agent_tool_policy, inject_default_stdio_mcp, inject_named_mcp_servers, inject_project_mcp_servers,
-    inject_read_only_flag, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
+    apply_phase_capability_launch_flags, inject_agent_tool_policy, inject_default_stdio_mcp, inject_named_mcp_servers,
+    inject_project_mcp_servers, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
     phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
 };
 use crate::runtime_support::{
@@ -38,7 +38,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use protocol::{canonical_model_id, AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
@@ -52,6 +52,10 @@ pub struct PhaseExecuteOverrides {
 
 #[derive(Default)]
 pub struct CliPhaseExecutor;
+
+fn debug_mcp_stdio_enabled() -> bool {
+    protocol::parse_env_bool("AO_DEBUG_MCP_STDIO")
+}
 
 #[async_trait]
 impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
@@ -217,6 +221,30 @@ fn phase_execution_result_values(
     }
 }
 
+fn runtime_contract_string_array(contract: &Value, pointer: &str) -> Vec<String> {
+    contract
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn runtime_contract_additional_server_names(contract: &Value) -> Vec<String> {
+    contract
+        .pointer("/mcp/additional_servers")
+        .and_then(Value::as_object)
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 pub fn load_agent_runtime_config(project_root: &str) -> orchestrator_core::AgentRuntimeConfig {
     orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root))
 }
@@ -374,6 +402,41 @@ pub async fn run_workflow_phase_attempt(
     let ctx = RuntimeConfigContext::load(project_root);
     let parse_commit_message = phase_requires_commit_message_with_ctx(&ctx, phase_id);
     let config_dir = runner_config_dir(Path::new(project_root));
+    let request_mcp_stdio_command = request
+        .context
+        .pointer("/runtime_contract/mcp/stdio/command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let request_mcp_stdio_args = request
+        .context
+        .pointer("/runtime_contract/mcp/stdio/args")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if debug_mcp_stdio_enabled() {
+        eprintln!(
+            "[ao][debug][mcp-stdio] dispatch workflow={} phase={} run_id={} command={:?} args={:?}",
+            workflow_id, phase_id, request.run_id.0, request_mcp_stdio_command, request_mcp_stdio_args
+        );
+    }
+    info!(
+        workflow_id = %workflow_id,
+        phase_id = %phase_id,
+        run_id = %request.run_id.0,
+        request_mcp_stdio_command = ?request_mcp_stdio_command,
+        request_mcp_stdio_args = ?request_mcp_stdio_args,
+        "Dispatching workflow phase request to agent runner"
+    );
     let stream = connect_runner(&config_dir)
         .await
         .with_context(|| format!("failed to connect runner for workflow {} phase {}", workflow_id, phase_id))?;
@@ -613,6 +676,44 @@ struct AgentPhaseRunOutcome {
     applied_skills: skill_dispatch::AppliedPhaseSkills,
 }
 
+fn phase_session_resume_plan(
+    workflow_id: &str,
+    phase_id: &str,
+    session_id: &str,
+    continuation: usize,
+    attempt: usize,
+) -> orchestrator_core::runtime_contract::CliSessionResumePlan {
+    let reuses_existing_session = continuation > 0 || attempt > 1;
+    orchestrator_core::runtime_contract::CliSessionResumePlan {
+        mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
+        session_key: format!("wf:{workflow_id}:{phase_id}"),
+        session_id: Some(session_id.to_string()),
+        summary_seed: None,
+        reused: reuses_existing_session,
+        phase_thread_isolated: true,
+    }
+}
+
+fn phase_requires_structured_completion(ctx: &RuntimeConfigContext, phase_id: &str) -> bool {
+    ctx.phase_decision_contract(phase_id).is_some()
+        || ctx.phase_output_contract(phase_id).is_some()
+        || ctx.phase_output_json_schema(phase_id).is_some()
+        || phase_requires_commit_message_with_ctx(ctx, phase_id)
+}
+
+fn phase_outcome_is_complete(outcome: Option<&PhaseExecutionOutcome>, requires_structured_completion: bool) -> bool {
+    match outcome {
+        Some(PhaseExecutionOutcome::Completed { phase_decision, commit_message, result_payload }) => {
+            !requires_structured_completion
+                || phase_decision.is_some()
+                || commit_message.is_some()
+                || result_payload.is_some()
+        }
+        Some(PhaseExecutionOutcome::ManualPending { .. }) => true,
+        None => false,
+    }
+}
+
 fn resolve_phase_skill_target(
     phase_id: &str,
     target_tool_id: &str,
@@ -753,6 +854,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
         phase_runtime_settings.and_then(|settings| settings.max_continuations).unwrap_or_else(phase_max_continuations);
     let session_id = Uuid::new_v4().to_string();
     let mut fallover_errors: Vec<String> = Vec::new();
+    let requires_structured_completion = phase_requires_structured_completion(ctx, phase_id);
 
     for (target_index, (target_tool_id, target_model_id)) in execution_targets.iter().enumerate() {
         let (effective_tool_id, effective_model_id, effective_caps, applied_skills) = resolve_phase_skill_target(
@@ -779,6 +881,19 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
             .or(applied_skills.application.timeout_secs)
             .or(phase_runtime_settings.and_then(|settings| settings.timeout_secs));
         let mut last_outcome: Option<PhaseExecutionOutcome> = None;
+        let base_context = serde_json::json!({
+            "tool": effective_tool_id,
+            "prompt": prompt,
+            "cwd": execution_cwd,
+            "project_root": project_root,
+            "workflow_id": workflow_id,
+            "subject_id": subject_id,
+            "phase_id": phase_id,
+            "phase_capabilities": serde_json::to_value(&effective_caps)?,
+        });
+        let phase_contract = ctx.phase_output_contract(phase_id).cloned();
+        let phase_output_schema = phase_output_json_schema_for(ctx, phase_id)?;
+        let phase_response_schema = phase_response_json_schema_for(ctx, phase_id)?;
 
         for continuation in 0..=max_continuations {
             let is_continuation = continuation > 0;
@@ -793,96 +908,165 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                 prompt.clone()
             };
 
-            let resume_plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
-                mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
-                session_key: format!("wf:{workflow_id}:{phase_id}"),
-                session_id: Some(session_id.clone()),
-                summary_seed: None,
-                reused: is_continuation,
-                phase_thread_isolated: true,
-            };
-
-            let mut context = serde_json::json!({
-                "tool": effective_tool_id,
-                "prompt": effective_prompt,
-                "cwd": execution_cwd,
-                "project_root": project_root,
-                "workflow_id": workflow_id,
-                "subject_id": subject_id,
-                "phase_id": phase_id,
-                "phase_capabilities": serde_json::to_value(&effective_caps)?,
-            });
-            if let Some(agent_id) = ctx.phase_agent_id(phase_id) {
-                context
-                    .as_object_mut()
-                    .expect("json object")
-                    .insert("agent_id".to_string(), serde_json::json!(agent_id));
-            }
-            let phase_contract = ctx.phase_output_contract(phase_id).cloned();
-            let phase_output_schema = phase_output_json_schema_for(ctx, phase_id)?;
-            let phase_response_schema = phase_response_json_schema_for(ctx, phase_id)?;
-            if let Some(mut runtime_contract) = build_runtime_contract_with_resume(
-                context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
-                &effective_model_id,
-                &effective_prompt,
-                Some(&resume_plan),
-            ) {
-                if let Some(contract) = phase_contract.as_ref() {
-                    let mut policy = serde_json::json!({
-                        "require_commit_message": contract.requires_field("commit_message"),
-                        "required_result_kind": contract.kind.as_str(),
-                        "required_result_fields": contract.required_fields.clone(),
-                    });
-                    if let Some(schema) = phase_response_schema.clone().or(phase_output_schema.clone()) {
-                        policy.as_object_mut().expect("json object").insert("output_json_schema".to_string(), schema);
-                    }
-                    runtime_contract.as_object_mut().expect("json object").insert("policy".to_string(), policy);
-                }
-                if let Some(schema) = phase_response_schema.as_ref() {
-                    inject_response_schema_into_launch_args(&mut runtime_contract, schema, &ctx.agent_runtime_config);
-                }
-                if !effective_caps.writes_files {
-                    inject_read_only_flag(&mut runtime_contract, &ctx.agent_runtime_config);
-                }
-                inject_cli_launch_overrides(&mut runtime_contract, &effective_tool_id, phase_runtime_settings);
-                inject_default_stdio_mcp(&mut runtime_contract, project_root);
-                inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
-                inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
-                inject_workflow_mcp_servers(&mut runtime_contract, ctx, phase_id);
-                if let Some(policy) = applied_skills.application.tool_policy.as_ref() {
-                    set_mcp_tool_policy(&mut runtime_contract, policy);
-                }
-                inject_named_mcp_servers(
-                    &mut runtime_contract,
-                    project_root,
-                    ctx,
-                    phase_id,
-                    &applied_skills.application.mcp_servers,
-                )?;
-                skill_dispatch::inject_skill_overrides(
-                    &mut runtime_contract,
-                    &effective_tool_id,
-                    &applied_skills.application,
-                );
-                context.as_object_mut().expect("json object").insert("runtime_contract".to_string(), runtime_contract);
-            }
-
-            let run_id = RunId(format!(
-                "wf-{workflow_id}-{}-{target_index}-c{continuation}-{}",
-                phase_id,
-                Uuid::new_v4().simple()
-            ));
-            let request = AgentRunRequest {
-                protocol_version: PROTOCOL_VERSION.to_string(),
-                run_id,
-                model: ModelId(effective_model_id.clone()),
-                context,
-                timeout_secs: request_timeout_secs,
-            };
-
             let mut attempt_succeeded = false;
             let mut backoff = Duration::from_millis(200);
             for attempt in 1..=max_attempts {
+                let resume_plan = phase_session_resume_plan(workflow_id, phase_id, &session_id, continuation, attempt);
+                let mut context = base_context.clone();
+                context
+                    .as_object_mut()
+                    .expect("json object")
+                    .insert("prompt".to_string(), serde_json::json!(effective_prompt));
+                if let Some(agent_id) = ctx.phase_agent_id(phase_id) {
+                    context
+                        .as_object_mut()
+                        .expect("json object")
+                        .insert("agent_id".to_string(), serde_json::json!(agent_id));
+                }
+                if let Some(mut runtime_contract) = build_runtime_contract_with_resume(
+                    context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
+                    &effective_model_id,
+                    &effective_prompt,
+                    Some(&resume_plan),
+                ) {
+                    if let Some(contract) = phase_contract.as_ref() {
+                        let mut policy = serde_json::json!({
+                            "require_commit_message": contract.requires_field("commit_message"),
+                            "required_result_kind": contract.kind.as_str(),
+                            "required_result_fields": contract.required_fields.clone(),
+                        });
+                        if let Some(schema) = phase_response_schema.clone().or(phase_output_schema.clone()) {
+                            policy
+                                .as_object_mut()
+                                .expect("json object")
+                                .insert("output_json_schema".to_string(), schema);
+                        }
+                        runtime_contract.as_object_mut().expect("json object").insert("policy".to_string(), policy);
+                    }
+                    if let Some(schema) = phase_response_schema.as_ref() {
+                        inject_response_schema_into_launch_args(
+                            &mut runtime_contract,
+                            schema,
+                            &ctx.agent_runtime_config,
+                        );
+                    }
+                    apply_phase_capability_launch_flags(
+                        &mut runtime_contract,
+                        &effective_caps,
+                        &ctx.agent_runtime_config,
+                    );
+                    inject_cli_launch_overrides(&mut runtime_contract, &effective_tool_id, phase_runtime_settings);
+                    inject_default_stdio_mcp(&mut runtime_contract, project_root);
+                    inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
+                    inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
+                    inject_workflow_mcp_servers(&mut runtime_contract, ctx, phase_id);
+                    if let Some(policy) = applied_skills.application.tool_policy.as_ref() {
+                        set_mcp_tool_policy(&mut runtime_contract, policy);
+                    }
+                    inject_named_mcp_servers(
+                        &mut runtime_contract,
+                        project_root,
+                        ctx,
+                        phase_id,
+                        &applied_skills.application.mcp_servers,
+                    )?;
+                    skill_dispatch::inject_skill_overrides(
+                        &mut runtime_contract,
+                        &effective_tool_id,
+                        &applied_skills.application,
+                    );
+                    let cli_supports_mcp = runtime_contract
+                        .pointer("/cli/capabilities/supports_mcp")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let mcp_enforce_only = runtime_contract.pointer("/mcp/enforce_only").and_then(Value::as_bool);
+                    let mcp_endpoint = runtime_contract
+                        .pointer("/mcp/endpoint")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string);
+                    let mcp_stdio_command = runtime_contract
+                        .pointer("/mcp/stdio/command")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string);
+                    let mcp_stdio_args = runtime_contract_string_array(&runtime_contract, "/mcp/stdio/args");
+                    let mcp_additional_servers = runtime_contract_additional_server_names(&runtime_contract);
+                    let mcp_tool_policy_allow =
+                        runtime_contract_string_array(&runtime_contract, "/mcp/tool_policy/allow");
+                    let mcp_tool_policy_deny =
+                        runtime_contract_string_array(&runtime_contract, "/mcp/tool_policy/deny");
+                    info!(
+                        workflow_id = %workflow_id,
+                        phase_id = %phase_id,
+                        subject_id = %subject_id,
+                        tool = %effective_tool_id,
+                        model = %effective_model_id,
+                        continuation,
+                        attempt,
+                        execution_cwd = %execution_cwd,
+                        project_root = %project_root,
+                        cli_supports_mcp,
+                        mcp_enforce_only = ?mcp_enforce_only,
+                        mcp_endpoint = ?mcp_endpoint,
+                        mcp_stdio_command = ?mcp_stdio_command,
+                        mcp_stdio_args = ?mcp_stdio_args,
+                        mcp_additional_servers = ?mcp_additional_servers,
+                        mcp_tool_policy_allow = ?mcp_tool_policy_allow,
+                        mcp_tool_policy_deny = ?mcp_tool_policy_deny,
+                        "Prepared workflow phase runtime contract"
+                    );
+                    if debug_mcp_stdio_enabled() {
+                        eprintln!(
+                            "[ao][debug][mcp-stdio] prepared workflow={} phase={} command={:?} args={:?} additional={:?}",
+                            workflow_id, phase_id, mcp_stdio_command, mcp_stdio_args, mcp_additional_servers
+                        );
+                    }
+                    context
+                        .as_object_mut()
+                        .expect("json object")
+                        .insert("runtime_contract".to_string(), runtime_contract);
+                } else {
+                    info!(
+                        workflow_id = %workflow_id,
+                        phase_id = %phase_id,
+                        subject_id = %subject_id,
+                        tool = %effective_tool_id,
+                        model = %effective_model_id,
+                        continuation,
+                        attempt,
+                        "Skipping runtime contract injection for workflow phase because no launch contract was built"
+                    );
+                }
+
+                let run_id = RunId(format!(
+                    "wf-{workflow_id}-{}-{target_index}-c{continuation}-a{attempt}-{}",
+                    phase_id,
+                    Uuid::new_v4().simple()
+                ));
+                let request = AgentRunRequest {
+                    protocol_version: PROTOCOL_VERSION.to_string(),
+                    run_id,
+                    model: ModelId(effective_model_id.clone()),
+                    context,
+                    timeout_secs: request_timeout_secs,
+                };
+                debug!(
+                    workflow_id = %workflow_id,
+                    phase_id = %phase_id,
+                    subject_id = %subject_id,
+                    run_id = %request.run_id.0,
+                    tool = %effective_tool_id,
+                    model = %effective_model_id,
+                    timeout_secs = ?request.timeout_secs,
+                    is_continuation,
+                    continuation,
+                    attempt,
+                    "Dispatching workflow phase attempt to agent runner"
+                );
+
                 match run_workflow_phase_attempt(project_root, workflow_id, phase_id, &request).await {
                     Ok(mut outcome) => {
                         if phase_requires_commit_message_with_ctx(ctx, phase_id) {
@@ -940,13 +1124,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                 break;
             }
 
-            let outcome_is_complete = match &last_outcome {
-                Some(PhaseExecutionOutcome::Completed { phase_decision, commit_message, result_payload }) => {
-                    phase_decision.is_some() || commit_message.is_some() || result_payload.is_some()
-                }
-                Some(PhaseExecutionOutcome::ManualPending { .. }) => true,
-                None => false,
-            };
+            let outcome_is_complete = phase_outcome_is_complete(last_outcome.as_ref(), requires_structured_completion);
 
             if outcome_is_complete {
                 let outcome = last_outcome.take().expect("outcome verified above");
@@ -1397,5 +1575,66 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 signals,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{phase_outcome_is_complete, phase_session_resume_plan, PhaseExecutionOutcome};
+
+    #[test]
+    fn initial_attempt_starts_a_fresh_native_session() {
+        let plan = phase_session_resume_plan("wf-1", "requirements", "session-123", 0, 1);
+
+        assert_eq!(plan.session_key, "wf:wf-1:requirements");
+        assert_eq!(plan.session_id.as_deref(), Some("session-123"));
+        assert!(!plan.reused);
+    }
+
+    #[test]
+    fn retry_attempt_reuses_the_existing_native_session() {
+        let plan = phase_session_resume_plan("wf-1", "requirements", "session-123", 0, 2);
+
+        assert!(plan.reused);
+    }
+
+    #[test]
+    fn continuation_reuses_the_existing_native_session() {
+        let plan = phase_session_resume_plan("wf-1", "requirements", "session-123", 1, 1);
+
+        assert!(plan.reused);
+    }
+
+    #[test]
+    fn contractless_phases_complete_after_any_clean_exit() {
+        let outcome =
+            PhaseExecutionOutcome::Completed { commit_message: None, phase_decision: None, result_payload: None };
+
+        assert!(phase_outcome_is_complete(Some(&outcome), false));
+    }
+
+    #[test]
+    fn structured_phases_require_a_result_signal() {
+        let empty_outcome =
+            PhaseExecutionOutcome::Completed { commit_message: None, phase_decision: None, result_payload: None };
+        let decided_outcome = PhaseExecutionOutcome::Completed {
+            commit_message: None,
+            phase_decision: Some(orchestrator_core::PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "requirements".to_string(),
+                verdict: orchestrator_core::PhaseDecisionVerdict::Advance,
+                confidence: 0.9,
+                risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                reason: "Complete".to_string(),
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+                target_phase: None,
+            }),
+            result_payload: None,
+        };
+
+        assert!(!phase_outcome_is_complete(Some(&empty_outcome), true));
+        assert!(phase_outcome_is_complete(Some(&decided_outcome), true));
     }
 }
