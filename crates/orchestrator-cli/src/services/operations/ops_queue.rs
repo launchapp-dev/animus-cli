@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use orchestrator_core::{services::ServiceHub, workflow_ref_for_task, STANDARD_WORKFLOW_REF};
+use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, workflow_ref_for_task};
 use orchestrator_daemon_runtime::{
     enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject, reorder_subjects,
 };
@@ -45,7 +45,9 @@ async fn resolve_enqueue_dispatch(
         (None, None, Some(title)) => Ok(SubjectDispatch::for_custom(
             title,
             description.unwrap_or_default(),
-            workflow_ref.unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string()),
+            workflow_ref.unwrap_or_else(|| {
+                load_workflow_config_or_default(std::path::Path::new(project_root)).config.default_workflow_ref
+            }),
             input,
             "manual-queue-enqueue",
         )),

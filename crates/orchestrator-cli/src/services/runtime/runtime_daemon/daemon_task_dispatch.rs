@@ -1,22 +1,9 @@
 use super::*;
-#[cfg(test)]
-use crate::services::runtime::workflow_mutation_surface::daemon_workflow_assignment;
-#[cfg(test)]
-pub use orchestrator_daemon_runtime::{dispatch_queue_state_path, save_dispatch_queue_state, DispatchQueueEntry};
 use orchestrator_daemon_runtime::{
     execute_dispatch_plan_via_runner, load_dispatch_queue_state, DispatchNoticeSink, DispatchQueueEntryStatus,
     DispatchSelectionSource, PlannedDispatchStart,
 };
 pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
-
-#[cfg(test)]
-pub fn daemon_agent_assignee_for_workflow_start(
-    project_root: &str,
-    workflow: &orchestrator_core::OrchestratorWorkflow,
-    task: &orchestrator_core::OrchestratorTask,
-) -> (String, Option<String>) {
-    daemon_workflow_assignment(project_root, workflow, task)
-}
 
 pub fn dispatch_queued_entries_via_runner(
     root: &str,
@@ -47,7 +34,7 @@ pub fn dispatch_queued_entries_via_runner(
         let Some(dispatch) = &entry.dispatch else {
             continue;
         };
-        if active_subject_ids.contains(dispatch.subject_id()) {
+        if active_subject_ids.contains(&dispatch.subject_key()) {
             continue;
         }
 
@@ -70,7 +57,7 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                 eprintln!(
                     "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
                     protocol::ACTOR_DAEMON,
-                    dispatch.subject_id(),
+                    dispatch.subject_key(),
                     error
                 );
             }
@@ -78,7 +65,7 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                 eprintln!(
                     "{}: failed to start workflow runner for subject {}: {}",
                     protocol::ACTOR_DAEMON,
-                    dispatch.subject_id(),
+                    dispatch.subject_key(),
                     error
                 );
             }

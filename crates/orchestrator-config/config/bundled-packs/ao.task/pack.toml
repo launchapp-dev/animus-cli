@@ -1,0 +1,45 @@
+schema = "ao.pack.v1"
+id = "ao.task"
+version = "0.1.0"
+kind = "domain-pack"
+title = "AO Task"
+description = "Bundled first-party task workflows and subject handling."
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+ao_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["ao.task"]
+default_kind = "ao.task"
+
+[workflows]
+root = "workflows"
+exports = [
+  "ao.task/standard",
+  "ao.task/ui-ux",
+  "ao.task/quick-fix",
+  "ao.task/gated",
+  "ao.task/triage",
+  "ao.task/refine",
+]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+
+[[dependencies]]
+id = "ao.review"
+version = ">=0.1.0"
+reason = "Task delivery flows depend on the review cycle."
+
+[permissions]
+tools = ["ao"]
+
+[native_module]
+feature = "plugin_ao_task"
+module_id = "ao.task"
+optional = true

@@ -2,151 +2,63 @@
 
 ## What MCP Is
 
-MCP (Model Context Protocol) is a standard for connecting AI models to external tools and data sources. In AO, MCP is the mechanism through which [agents](./agents-and-phases.md) observe and mutate state.
+MCP is AO's tool boundary. Agents and workflows use MCP to read and mutate
+state, and packs can contribute additional MCP server descriptors without
+teaching the daemon new behavior.
 
-Rather than giving agents direct filesystem or API access, AO routes all interactions through typed MCP tool calls. This makes every action validated and auditable.
+## AO's Core MCP Surface
 
----
-
-## AO's Built-in MCP Server
-
-AO ships with its own MCP server that exposes AO state operations as tools:
+AO ships an MCP server:
 
 ```bash
 ao mcp serve
 ```
 
-This server provides tools for all core AO operations:
+It exposes AO mutation and query tools such as:
 
-| Tool | Purpose |
-|------|---------|
-| `ao.task.get` | Read task details |
-| `ao.task.create` | Create a new task |
-| `ao.task.update` | Update task fields |
-| `ao.task.status` | Change task status |
-| `ao.task.checklist-add` | Add checklist items to a task |
-| `ao.task.checklist-update` | Update checklist item status |
-| `ao.requirements.list` | List requirements |
-| `ao.requirements.get` | Read requirement details |
-| `ao.workflow.run` | Dispatch a workflow |
-| `ao.daemon.health` | Check daemon status |
+- `ao.task.*`
+- `ao.requirements.*`
+- `ao.workflow.*`
+- `ao.daemon.*`
 
-When an agent needs to create tasks (e.g. during `requirements-execute`), it calls `ao.task.create`. When an engineer marks a checklist item done, it calls `ao.task.checklist-update`. All state changes go through the same validation layer as CLI commands.
+Many of those tools are now conceptually owned by bundled first-party packs
+such as `ao.task` and `ao.requirement`, even though they are exposed through
+the AO MCP server.
 
----
+## Pack-Owned MCP Descriptors
 
-## External MCP Servers
+Packs can also ship MCP descriptors under pack assets. AO loads those
+descriptors, namespaces the resulting server ids by pack id, and makes them
+available to workflows and phases.
 
-AO agents can connect to any MCP-compatible server. Common integrations:
+Examples:
 
-| Server | Use Case |
-|--------|----------|
-| GitHub | Create PRs, read review comments, check CI status |
-| Slack | Notify teams, request input, post summaries |
-| PostgreSQL | Query database schemas, test data |
-| Web Search | Look up documentation, APIs, error messages |
-| Notion | Update wikis, project documentation |
-| Linear / Jira | Sync with external issue trackers |
+- `ao.requirement/github-sync`
+- `vendor.crm/runtime`
 
----
+Pack-owned MCP behavior stays outside the daemon. The daemon only supervises the
+processes and records execution facts.
 
-## Configuring MCP Servers in Workflow YAML
+## Workflow-Level Usage
 
-MCP servers are declared at the workflow level and referenced by name in agent definitions:
+Project YAML can reference MCP servers directly, and pack overlays can inject
+phase bindings and default server sets.
 
-```yaml
-mcp_servers:
-  ao:
-    command: ao
-    args: [mcp, serve]
-  github:
-    command: npx
-    args: [-y, @modelcontextprotocol/server-github]
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_TOKEN}
-  slack:
-    command: npx
-    args: [-y, @anthropic/mcp-server-slack]
-    env:
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-  web-search:
-    command: npx
-    args: [-y, @anthropic/mcp-server-web-search]
+Key rules:
 
-agents:
-  senior-engineer:
-    model: claude-sonnet-4-6
-    system_prompt: |
-      You are a senior software engineer...
-    mcp_servers: [ao, github]
+- project YAML defines repo-specific MCP servers
+- pack overlays can contribute namespaced MCP servers
+- agents and phases only see explicitly allowed tools
+- AO state mutations should go through MCP or CLI mutation surfaces, not direct
+  file edits
 
-  researcher:
-    model: claude-sonnet-4-6
-    system_prompt: |
-      You are a technical researcher...
-    mcp_servers: [ao, web-search]
-```
+## Why This Boundary Exists
 
-Each MCP server entry specifies:
+Tool-driven mutation keeps AO auditable and composable:
 
-| Field | Purpose |
-|-------|---------|
-| `command` | The executable to start the MCP server. |
-| `args` | Command-line arguments. |
-| `env` | Environment variables (supports `${VAR}` substitution from the shell environment). |
-| `assign_to` | (Optional) Restrict this server to specific agent IDs. |
+- state changes flow through validated surfaces
+- external integrations remain process-based
+- packs can add behavior without changing daemon-core
 
-MCP servers can also be configured globally in `.ao/config.json` for project-wide availability.
-
----
-
-## Tool-Driven Mutation
-
-A core architectural principle: agents mutate AO state through MCP tools, not by editing JSON files directly.
-
-```mermaid
-flowchart LR
-    subgraph AGENT["Agent (any phase)"]
-        prompt["System prompt<br/>+ task context<br/>+ prior phase output"]
-    end
-
-    subgraph MCP["MCP Tool Servers"]
-        ao["ao<br/>task.get, task.create<br/>task.update, task.status<br/>requirements.list"]
-        gh["GitHub<br/>create PR, review comments<br/>check CI status"]
-        slack["Slack<br/>notify team<br/>request input"]
-        search["Web Search<br/>look up docs, APIs"]
-    end
-
-    subgraph STATE["Validated State"]
-        tasks["Tasks"]
-        reqs["Requirements"]
-        queue["Dispatch Queue"]
-    end
-
-    AGENT --> ao
-    AGENT --> gh
-    AGENT --> slack
-    AGENT --> search
-
-    ao --> tasks
-    ao --> reqs
-    ao --> queue
-```
-
-This design means:
-- All mutations go through the same validation as CLI commands.
-- State changes are auditable (every tool call is logged).
-- The [daemon](./daemon.md) and workflow-runner stay generic -- they do not contain domain-specific mutation logic.
-- External integrations (GitHub, Slack) are first-class -- agents interact with them the same way they interact with AO state.
-
----
-
-## MCP Tool Prefixes
-
-AO enforces tool prefix whitelisting for security. Agents can only call tools matching their allowed prefixes:
-
-- `ao.` -- AO built-in tools
-- `mcp__ao__` -- MCP-prefixed AO tools
-- Server-specific prefixes based on the agent's `mcp_servers` list
-
-This prevents agents from calling tools they should not have access to.
+See [Workflows](./workflows.md) and [How AO Works](./how-ao-works.md) for how
+MCP fits into execution.

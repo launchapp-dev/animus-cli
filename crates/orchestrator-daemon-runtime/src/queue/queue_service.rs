@@ -55,7 +55,7 @@ pub fn queue_stats(project_root: &str) -> Result<QueueStats> {
 
 pub fn enqueue_subject_dispatch(project_root: &str, dispatch: SubjectDispatch) -> Result<QueueEnqueueResult> {
     let mut state = load_dispatch_queue_state(project_root)?.unwrap_or_default();
-    let subject_id = dispatch.subject_id().to_string();
+    let subject_id = dispatch.subject_key();
 
     if state.entries.iter().any(|entry| {
         entry.subject_id() == subject_id
@@ -187,6 +187,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use protocol::SubjectRef;
 
     #[test]
     fn enqueue_subject_dispatch_is_idempotent_for_same_task_pipeline() {
@@ -272,5 +273,25 @@ mod tests {
         assert_eq!(snapshot.entries[1].subject_id, "TASK-1");
         assert_eq!(snapshot.entries[1].dispatch.as_ref().map(|dispatch| dispatch.workflow_ref.as_str()), Some("ops"));
         assert_eq!(snapshot.entries[2].subject_id, "TASK-2");
+    }
+
+    #[test]
+    fn generic_subjects_use_kind_qualified_queue_ids() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().to_string();
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::new("pack.review", "REV-7"),
+            "review",
+            "manual-queue-enqueue",
+            Utc.with_ymd_and_hms(2026, 3, 8, 8, 0, 0).unwrap(),
+        );
+
+        let result = enqueue_subject_dispatch(&project_root, dispatch).expect("enqueue");
+
+        assert!(result.enqueued);
+        assert_eq!(result.subject_id, "pack.review::REV-7");
+        let snapshot = queue_snapshot(&project_root).expect("snapshot");
+        assert_eq!(snapshot.entries[0].subject_id, "pack.review::REV-7");
+        assert!(snapshot.entries[0].task_id.is_none());
     }
 }

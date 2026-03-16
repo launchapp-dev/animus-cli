@@ -14,7 +14,7 @@ pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
     project_root.join(".ao").join(YAML_WORKFLOWS_DIR)
 }
 
-pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<WorkflowConfig>> {
+pub(crate) fn collect_project_yaml_workflow_sources(project_root: &Path) -> Result<Vec<(PathBuf, String)>> {
     let workflows_dir = yaml_workflows_dir(project_root);
     let single_file = project_root.join(".ao").join("workflows.yaml");
 
@@ -42,13 +42,23 @@ pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<Workflo
     }
 
     if yaml_sources.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(yaml_sources)
+}
+
+pub(crate) fn compile_yaml_sources_with_base(
+    base: &WorkflowConfig,
+    yaml_sources: &[(PathBuf, String)],
+) -> Result<Option<WorkflowConfig>> {
+    if yaml_sources.is_empty() {
         return Ok(None);
     }
 
-    let builtin = builtin_workflow_config();
     let mut merged_config: Option<WorkflowConfig> = None;
-    for (path, content) in &yaml_sources {
-        let overlay_base = merged_config.as_ref().unwrap_or(&builtin);
+    for (path, content) in yaml_sources {
+        let overlay_base = merged_config.as_ref().unwrap_or(base);
         let parsed = parse_yaml_workflow_config_with_base(content, overlay_base)
             .with_context(|| format!("error in YAML file {}", path.display()))?;
         merged_config = Some(match merged_config {
@@ -58,6 +68,11 @@ pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<Workflo
     }
 
     Ok(merged_config)
+}
+
+pub fn compile_yaml_workflow_files(project_root: &Path) -> Result<Option<WorkflowConfig>> {
+    let yaml_sources = collect_project_yaml_workflow_sources(project_root)?;
+    compile_yaml_sources_with_base(&builtin_workflow_config(), &yaml_sources)
 }
 
 pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> WorkflowConfig {
@@ -96,6 +111,11 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
     let mut mcp_servers = base.mcp_servers;
     for (name, definition) in yaml.mcp_servers {
         mcp_servers.insert(name, definition);
+    }
+
+    let mut phase_mcp_bindings = base.phase_mcp_bindings;
+    for (phase_id, binding) in yaml.phase_mcp_bindings {
+        phase_mcp_bindings.insert(phase_id, binding);
     }
 
     let mut tools = base.tools;
@@ -147,6 +167,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         agent_profiles,
         tools_allowlist,
         mcp_servers,
+        phase_mcp_bindings,
         tools,
         integrations,
         schedules,

@@ -48,7 +48,7 @@ pub(crate) fn plan_ready_dispatch(
     }
 
     for candidate in queued_candidates.iter().chain(fallback_candidates.iter()) {
-        let subject_id = candidate.dispatch.subject_id().to_string();
+        let subject_id = candidate.dispatch.subject_key();
         if !seen_subject_ids.insert(subject_id) {
             continue;
         }

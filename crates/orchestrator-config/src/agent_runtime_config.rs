@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
-use crate::skill_scoping::load_builtin_skills;
-
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "ao.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
 pub const AGENT_RUNTIME_CONFIG_FILE_NAME: &str = "agent-runtime-config.v2.json";
@@ -448,6 +445,18 @@ pub struct CliToolConfig {
 pub struct AgentRuntimeConfig {
     pub schema: String,
     pub version: u32,
+    #[serde(default)]
+    pub tools_allowlist: Vec<String>,
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentProfile>,
+    #[serde(default)]
+    pub phases: BTreeMap<String, PhaseExecutionDefinition>,
+    #[serde(default)]
+    pub cli_tools: BTreeMap<String, CliToolConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentRuntimeOverlay {
     #[serde(default)]
     pub tools_allowlist: Vec<String>,
     #[serde(default)]
@@ -1149,58 +1158,6 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     default_tool: None,
                 },
             ),
-            (
-                "code-review".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("swe".to_string()),
-                    directive: Some("Perform a rigorous code review pass. Fix defects, tighten edge cases, and improve maintainability.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: Some(PhaseDecisionContract {
-                        required_evidence: vec![crate::types::PhaseEvidenceKind::CodeReviewClean],
-                        min_confidence: 0.7,
-                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
-                        allow_missing_decision: true,
-                        extra_json_schema: None,
-                        fields: BTreeMap::new(),
-                    }),
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                },
-            ),
-            (
-                "testing".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("swe".to_string()),
-                    directive: Some("Add or update tests and validate behavior. Ensure failures are addressed before finishing.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: Some(PhaseDecisionContract {
-                        required_evidence: vec![crate::types::PhaseEvidenceKind::TestsPassed],
-                        min_confidence: 0.8,
-                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
-                        allow_missing_decision: true,
-                        extra_json_schema: None,
-                        fields: BTreeMap::new(),
-                    }),
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                },
-            ),
         ]),
         cli_tools: BTreeMap::new(),
     }
@@ -1222,8 +1179,44 @@ pub fn load_agent_runtime_config(project_root: &Path) -> Result<AgentRuntimeConf
 pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<LoadedAgentRuntimeConfig> {
     if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root) {
         let mut config = builtin_agent_runtime_config();
+        let registry = crate::resolve_pack_registry(project_root)?;
+        let mut path = loaded_workflow.path.clone();
+
+        for entry in registry.entries_for_source(crate::PackRegistrySource::Bundled) {
+            let Some(pack) = entry.loaded_manifest() else {
+                continue;
+            };
+            if let Some(overlay) = crate::load_pack_agent_runtime_overlay(pack)? {
+                merge_agent_runtime_overlay(&mut config, &overlay);
+                if let Some(pack_root) = entry.pack_root.as_ref() {
+                    path = pack_root.clone();
+                }
+            }
+        }
+
+        for entry in registry.entries_for_source(crate::PackRegistrySource::Installed) {
+            let Some(pack) = entry.loaded_manifest() else {
+                continue;
+            };
+            if let Some(overlay) = crate::load_pack_agent_runtime_overlay(pack)? {
+                merge_agent_runtime_overlay(&mut config, &overlay);
+                path = entry.pack_root.clone().unwrap_or_else(crate::machine_installed_packs_dir);
+            }
+        }
+
         merge_workflow_runtime_overlay(&mut config, &loaded_workflow.config);
-        validate_agent_runtime_config_with_project_root(&config, Some(project_root))?;
+
+        for entry in registry.entries_for_source(crate::PackRegistrySource::ProjectOverride) {
+            let Some(pack) = entry.loaded_manifest() else {
+                continue;
+            };
+            if let Some(overlay) = crate::load_pack_agent_runtime_overlay(pack)? {
+                merge_agent_runtime_overlay(&mut config, &overlay);
+                path = entry.pack_root.clone().unwrap_or_else(|| crate::project_pack_overrides_dir(project_root));
+            }
+        }
+
+        validate_agent_runtime_config(&config)?;
 
         return Ok(LoadedAgentRuntimeConfig {
             metadata: AgentRuntimeMetadata {
@@ -1233,7 +1226,7 @@ pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<Lo
                 source: AgentRuntimeSource::WorkflowYaml,
             },
             config,
-            path: loaded_workflow.path,
+            path,
         });
     }
 
@@ -1282,6 +1275,34 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
         entry.supports_mcp = Some(definition.supports_mcp);
         entry.supports_file_editing = Some(definition.supports_write);
         entry.max_context_tokens = definition.context_window;
+    }
+}
+
+pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay: &AgentRuntimeOverlay) {
+    for tool in &overlay.tools_allowlist {
+        if !tool.trim().is_empty() && !base.tools_allowlist.iter().any(|candidate| candidate.eq_ignore_ascii_case(tool))
+        {
+            base.tools_allowlist.push(tool.clone());
+        }
+    }
+    for (agent_id, profile) in &overlay.agents {
+        match base.agents.get_mut(agent_id) {
+            Some(existing) => merge_agent_profile(existing, profile),
+            None => {
+                base.agents.insert(agent_id.clone(), profile.clone());
+            }
+        }
+    }
+    for (phase_id, definition) in &overlay.phases {
+        base.phases.insert(phase_id.clone(), definition.clone());
+    }
+    for (tool_id, definition) in &overlay.cli_tools {
+        match base.cli_tools.get_mut(tool_id) {
+            Some(existing) => merge_cli_tool_config(existing, definition),
+            None => {
+                base.cli_tools.insert(tool_id.clone(), definition.clone());
+            }
+        }
     }
 }
 
@@ -1351,8 +1372,41 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     }
 }
 
+fn merge_cli_tool_config(base: &mut CliToolConfig, overlay: &CliToolConfig) {
+    if overlay.executable.is_some() {
+        base.executable = overlay.executable.clone();
+    }
+    if overlay.supports_file_editing.is_some() {
+        base.supports_file_editing = overlay.supports_file_editing;
+    }
+    if overlay.supports_streaming.is_some() {
+        base.supports_streaming = overlay.supports_streaming;
+    }
+    if overlay.supports_tool_use.is_some() {
+        base.supports_tool_use = overlay.supports_tool_use;
+    }
+    if overlay.supports_vision.is_some() {
+        base.supports_vision = overlay.supports_vision;
+    }
+    if overlay.supports_long_context.is_some() {
+        base.supports_long_context = overlay.supports_long_context;
+    }
+    if overlay.max_context_tokens.is_some() {
+        base.max_context_tokens = overlay.max_context_tokens;
+    }
+    if overlay.supports_mcp.is_some() {
+        base.supports_mcp = overlay.supports_mcp;
+    }
+    if overlay.read_only_flag.is_some() {
+        base.read_only_flag = overlay.read_only_flag.clone();
+    }
+    if overlay.response_schema_flag.is_some() {
+        base.response_schema_flag = overlay.response_schema_flag.clone();
+    }
+}
+
 pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConfig) -> Result<()> {
-    validate_agent_runtime_config_with_project_root(config, Some(project_root))?;
+    validate_agent_runtime_config(config)?;
     let workflow_overlay = crate::workflow_config::WorkflowConfig {
         schema: crate::workflow_config::WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: crate::workflow_config::WORKFLOW_CONFIG_VERSION,
@@ -1364,6 +1418,7 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
         agent_profiles: config.agents.clone(),
         tools_allowlist: config.tools_allowlist.clone(),
         mcp_servers: BTreeMap::new(),
+        phase_mcp_bindings: BTreeMap::new(),
         tools: config
             .cli_tools
             .iter()
@@ -1405,7 +1460,6 @@ fn validate_phase_definition(
     phase_id: &str,
     definition: &PhaseExecutionDefinition,
     config: &AgentRuntimeConfig,
-    project_root: Option<&Path>,
 ) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
@@ -1578,43 +1632,10 @@ fn validate_phase_definition(
         }
     }
 
-    validate_skill_references(format!("phases['{}'].skills", phase_id).as_str(), &definition.skills, project_root)?;
-
-    Ok(())
-}
-
-fn validate_skill_references(field_path: &str, skills: &[String], project_root: Option<&Path>) -> Result<()> {
-    let mut requested_skills = Vec::with_capacity(skills.len());
-    for skill_name in skills {
-        let trimmed = skill_name.trim();
-        if trimmed.is_empty() {
-            return Err(anyhow!("{field_path} must not contain empty values"));
-        }
-        requested_skills.push(trimmed.to_string());
-    }
-
-    let result = if let Some(project_root) = project_root {
-        resolve_skills_for_project(&requested_skills, project_root).map(|_| ())
-    } else {
-        let builtin = load_builtin_skills()?;
-        resolve_skills(&requested_skills, &[builtin]).map(|_| ())
-    };
-
-    if let Err(error) = result {
-        return Err(anyhow!("{field_path} validation failed: {error}"));
-    }
-
     Ok(())
 }
 
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
-    validate_agent_runtime_config_with_project_root(config, None)
-}
-
-fn validate_agent_runtime_config_with_project_root(
-    config: &AgentRuntimeConfig,
-    project_root: Option<&Path>,
-) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
             return false;
@@ -1691,7 +1712,6 @@ fn validate_agent_runtime_config_with_project_root(
         if profile.skills.iter().any(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].skills must not contain empty values", agent_id));
         }
-        validate_skill_references(format!("agents['{}'].skills", agent_id).as_str(), &profile.skills, project_root)?;
 
         if profile.capabilities.keys().any(|capability| capability.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].capabilities must not contain empty capability keys", agent_id));
@@ -1706,11 +1726,1441 @@ fn validate_agent_runtime_config_with_project_root(
         if phase_id.trim().is_empty() {
             return Err(anyhow!("phases contains empty phase id"));
         }
-        validate_phase_definition(phase_id, definition, config, project_root)?;
+        validate_phase_definition(phase_id, definition, config)?;
     }
 
     Ok(())
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::test_support::{env_lock, EnvVarGuard};
+    use std::fs;
+
+    fn write_pack_agent_overlay_fixture(root: &std::path::Path, pack_id: &str, version: &str) {
+        fs::create_dir_all(root.join("workflows")).expect("create workflows");
+        fs::create_dir_all(root.join("runtime")).expect("create runtime");
+        fs::create_dir_all(root.join("assets")).expect("create assets");
+        fs::write(root.join("assets/review-helper.sh"), "#!/bin/sh\nexit 0\n").expect("write helper");
+        fs::write(
+            root.join(crate::PACK_MANIFEST_FILE_NAME),
+            format!(
+                r#"
+schema = "ao.pack.v1"
+id = "{pack_id}"
+version = "{version}"
+kind = "domain-pack"
+title = "{pack_id}"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+ao_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["ao.task"]
+default_kind = "ao.task"
+
+[workflows]
+root = "workflows"
+exports = ["{pack_id}/cycle"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
+
+[permissions]
+tools = ["review_helper"]
+"#
+            ),
+        )
+        .expect("write manifest");
+        fs::write(
+            root.join("runtime/workflow-runtime.overlay.yaml"),
+            format!(
+                r#"
+phase_catalog:
+  code-review:
+    label: Code Review
+    description: Review implementation quality, correctness, and maintainability.
+    category: review
+    tags: ["review", "code", "fixture"]
+  testing:
+    label: Testing
+    description: Validate the implementation by running or inspecting the relevant test suite.
+    category: verification
+    tags: ["testing", "verification", "fixture"]
+  po-review:
+    label: PO Review
+    description: Validate delivered work against product intent and acceptance criteria.
+    category: review
+    tags: ["review", "acceptance", "fixture"]
+  unit-test:
+    label: Unit Test
+    description: Run the workspace test suite as a deterministic gate.
+    category: verification
+    tags: ["testing", "gate", "fixture"]
+  lint:
+    label: Lint
+    description: Run the linter as a deterministic gate.
+    category: verification
+    tags: ["lint", "gate", "fixture"]
+
+workflows:
+  - id: {pack_id}/cycle
+    name: "{pack_id}/cycle"
+    phases:
+      - code-review:
+          on_verdict:
+            rework:
+              target: code-review
+      - testing
+  - id: builtin/review-cycle
+    name: "builtin/review-cycle"
+    phases:
+      - workflow_ref: {pack_id}/cycle
+"#,
+            ),
+        )
+        .expect("write workflow overlay");
+        fs::write(
+            root.join("runtime/agent-runtime.overlay.yaml"),
+            r#"
+tools_allowlist:
+  - review_helper
+phases:
+  pack-review:
+    mode: command
+    command:
+      program: ./assets/review-helper.sh
+      cwd_mode: path
+      cwd_path: workspace/scripts
+cli_tools:
+  pack-tool:
+    executable: ./assets/review-helper.sh
+    supports_mcp: false
+    supports_file_editing: false
+"#,
+        )
+        .expect("write agent runtime overlay");
+    }
+
+    #[test]
+    fn empty_project_loads_bundled_pack_runtime_defaults() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+
+        assert_eq!(config.phase_agent_id("requirements"), Some("po"));
+        assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
+        assert_eq!(config.phase_agent_id("triage"), Some("triager"));
+        assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));
+        assert_eq!(config.phase_agent_id("requirement-task-generation"), Some("requirements-planner"));
+        assert_eq!(config.phase_agent_id("requirement-workflow-bootstrap"), Some("requirements-planner"));
+        assert_eq!(config.phase_agent_id("po-review"), Some("po-reviewer"));
+        assert_eq!(config.phase_agent_id("code-review"), Some("swe"));
+        assert_eq!(config.phase_agent_id("testing"), Some("swe"));
+        assert_eq!(config.phase_mode("unit-test"), Some(PhaseExecutionMode::Command));
+        assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
+    }
+
+    #[test]
+    fn ensure_creates_config_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        ensure_agent_runtime_config_file(temp.path()).expect("ensure file");
+
+        let workflows_dir = crate::workflow_config::yaml_workflows_dir(temp.path());
+        assert!(workflows_dir.join("custom.yaml").exists());
+        assert!(workflows_dir.join("standard-workflow.yaml").exists());
+        assert!(workflows_dir.join("hotfix-workflow.yaml").exists());
+        assert!(workflows_dir.join("research-workflow.yaml").exists());
+    }
+
+    #[test]
+    fn runtime_resolution_merges_workflow_config_overlays() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow = crate::workflow_config::builtin_workflow_config();
+        let builtin = builtin_agent_runtime_config();
+        let mut overlay_agent = builtin.agent_profile("po").expect("builtin po profile should exist").clone();
+        overlay_agent.mcp_servers.clear();
+        overlay_agent.skills.clear();
+        workflow.agent_profiles.insert("workflow-test-agent".to_string(), overlay_agent);
+        workflow.phase_definitions.insert(
+            "workflow-test-phase".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("workflow-test-agent".to_string()),
+                directive: Some("workflow test".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.7,
+                    max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: false,
+                    extra_json_schema: None,
+                    fields: BTreeMap::new(),
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        workflow.tools.insert(
+            "custom-runner".to_string(),
+            crate::workflow_config::ToolDefinition {
+                executable: "custom-runner-bin".to_string(),
+                supports_mcp: true,
+                supports_write: true,
+                context_window: Some(42_000),
+                base_args: vec![],
+            },
+        );
+        crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
+
+        let resolved = load_agent_runtime_config_or_default(temp.path());
+        let phase = resolved.phase_decision_contract("workflow-test-phase").expect("workflow phase contract");
+        assert!(!phase.allow_missing_decision);
+    }
+
+    #[test]
+    fn runtime_resolution_merges_pack_agent_overlays_and_rebases_assets() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let temp = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        write_pack_agent_overlay_fixture(
+            &crate::machine_installed_packs_dir().join("ao.review").join("0.2.0"),
+            "ao.review",
+            "0.2.0",
+        );
+
+        crate::workflow_config::load_workflow_config_with_metadata(temp.path()).expect("workflow config should load");
+        let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
+        let command = resolved.config.phase_command("pack-review").expect("pack review command");
+        let tool = resolved.config.cli_tools.get("pack-tool").expect("pack tool");
+
+        assert!(command.program.ends_with("assets/review-helper.sh"));
+        assert_eq!(command.cwd_mode, CommandCwdMode::Path);
+        assert_eq!(command.cwd_path.as_deref(), Some("workspace/scripts"));
+        assert_eq!(tool.executable.as_deref().is_some_and(|value| value.ends_with("assets/review-helper.sh")), true);
+    }
+
+    #[test]
+    fn runtime_resolution_prefers_project_workflow_over_installed_pack_runtime_overlay() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let temp = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        write_pack_agent_overlay_fixture(
+            &crate::machine_installed_packs_dir().join("ao.review").join("0.2.0"),
+            "ao.review",
+            "0.2.0",
+        );
+
+        let mut workflow = crate::workflow_config::builtin_workflow_config();
+        workflow.phase_catalog.insert(
+            "pack-review".to_string(),
+            crate::workflow_config::PhaseUiDefinition {
+                label: "Pack Review".to_string(),
+                description: "Project override".to_string(),
+                category: "verification".to_string(),
+                icon: None,
+                docs_url: None,
+                tags: vec!["override".to_string()],
+                visible: true,
+            },
+        );
+        let mut project_agent = builtin_agent_runtime_config().agent_profile("po").expect("builtin po profile").clone();
+        project_agent.description = "Project agent".to_string();
+        project_agent.system_prompt = "Project prompt".to_string();
+        project_agent.mcp_servers.clear();
+        project_agent.skills.clear();
+        project_agent.capabilities.clear();
+        workflow.agent_profiles.insert("project-agent".to_string(), project_agent);
+        workflow.phase_definitions.insert(
+            "pack-review".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("project-agent".to_string()),
+                directive: Some("project override".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        workflow.workflows.push(crate::workflow_config::WorkflowDefinition {
+            id: "project-override-check".to_string(),
+            name: "Project Override Check".to_string(),
+            description: String::new(),
+            phases: vec!["pack-review".to_string().into()],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
+
+        let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
+        let phase = resolved.config.phase_execution("pack-review").expect("pack-review phase should exist");
+        assert_eq!(phase.mode, PhaseExecutionMode::Agent);
+        assert_eq!(phase.agent_id.as_deref(), Some("project-agent"));
+        assert!(phase.command.is_none(), "project workflow phase should override installed pack command phase");
+    }
+
+    #[test]
+    fn builtin_defaults_expose_phase_definitions() {
+        let config = builtin_agent_runtime_config();
+        assert_eq!(config.phase_agent_id("requirements"), Some("po"));
+        assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
+        assert!(!config.phases.contains_key("code-review"));
+        assert!(!config.phases.contains_key("testing"));
+        assert!(config.phase_output_json_schema("implementation").is_some());
+    }
+
+    #[test]
+    fn builtin_phase_prompts_resolve_to_expected_personas() {
+        let config = builtin_agent_runtime_config();
+        for (phase_id, agent_id) in [("requirements", "po"), ("implementation", "swe")] {
+            let expected_prompt = config
+                .agent_profile(agent_id)
+                .expect("phase agent profile should exist")
+                .system_prompt
+                .trim()
+                .to_string();
+            assert_eq!(config.phase_agent_id(phase_id), Some(agent_id));
+            assert_eq!(config.phase_system_prompt(phase_id), Some(expected_prompt.as_str()));
+        }
+    }
+
+    #[test]
+    fn builtin_phase_decision_contracts_match_expected_evidence_requirements() {
+        let config = builtin_agent_runtime_config();
+
+        assert_eq!(
+            config.phase_decision_contract("requirements").map(|contract| contract.required_evidence.clone()),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            config.phase_decision_contract("implementation").map(|contract| contract.required_evidence.clone()),
+            Some(vec![crate::types::PhaseEvidenceKind::FilesModified])
+        );
+    }
+
+    #[test]
+    fn builtin_defaults_include_em_po_and_swe_profiles() {
+        let config = builtin_agent_runtime_config();
+        for agent_id in ["em", "po", "swe"] {
+            let profile = config.agent_profile(agent_id).expect("builtin profile should exist");
+            assert!(!profile.description.trim().is_empty());
+            assert!(!profile.system_prompt.trim().is_empty());
+            assert!(profile.role.as_deref().is_some_and(|role| !role.is_empty()));
+            assert!(!profile.capabilities.is_empty());
+            assert!(!profile.mcp_servers.is_empty());
+        }
+    }
+
+    #[test]
+    fn builtin_persona_capabilities_and_tool_patterns_are_role_specific() {
+        let config = builtin_agent_runtime_config();
+        let em = config.agent_profile("em").expect("em profile should exist");
+        let po = config.agent_profile("po").expect("po profile should exist");
+        let swe = config.agent_profile("swe").expect("swe profile should exist");
+
+        assert_eq!(em.capabilities.get("queue_management"), Some(&true));
+        assert_eq!(em.capabilities.get("scheduling"), Some(&true));
+        assert_eq!(em.capabilities.get("implementation"), Some(&false));
+
+        assert_eq!(po.capabilities.get("requirements_authoring"), Some(&true));
+        assert_eq!(po.capabilities.get("acceptance_validation"), Some(&true));
+        assert_eq!(po.capabilities.get("implementation"), Some(&false));
+
+        assert_eq!(swe.capabilities.get("implementation"), Some(&true));
+        assert_eq!(swe.capabilities.get("testing"), Some(&true));
+        assert_eq!(swe.capabilities.get("code_review"), Some(&true));
+        assert_eq!(swe.capabilities.get("planning"), Some(&false));
+
+        assert!(em.mcp_servers.iter().any(|server| server == "ao"));
+        assert!(po.mcp_servers.iter().any(|server| server == "ao"));
+        assert!(swe.mcp_servers.iter().any(|server| server == "ao"));
+    }
+
+    #[test]
+    fn builtin_json_and_fallback_match_persona_phase_defaults() {
+        let from_json = serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
+            .expect("builtin json should deserialize");
+        validate_agent_runtime_config(&from_json).expect("builtin json should validate");
+        let fallback = hardcoded_builtin_agent_runtime_config();
+
+        for phase_id in ["requirements", "implementation"] {
+            assert_eq!(from_json.phase_agent_id(phase_id), fallback.phase_agent_id(phase_id));
+            assert_eq!(
+                from_json.phase_decision_contract(phase_id).map(|contract| (
+                    contract.required_evidence.clone(),
+                    contract.min_confidence,
+                    contract.max_risk.clone(),
+                    contract.allow_missing_decision,
+                    contract.extra_json_schema.clone()
+                )),
+                fallback.phase_decision_contract(phase_id).map(|contract| (
+                    contract.required_evidence.clone(),
+                    contract.min_confidence,
+                    contract.max_risk.clone(),
+                    contract.allow_missing_decision,
+                    contract.extra_json_schema.clone()
+                ))
+            );
+        }
+
+        for agent_id in ["em", "po", "swe"] {
+            let json_profile = from_json.agent_profile(agent_id).expect("json profile should exist");
+            let fallback_profile = fallback.agent_profile(agent_id).expect("fallback profile should exist");
+            assert_eq!(json_profile.role, fallback_profile.role);
+            assert_eq!(json_profile.mcp_servers, fallback_profile.mcp_servers);
+            assert_eq!(json_profile.tool_policy, fallback_profile.tool_policy);
+            assert_eq!(json_profile.skills, fallback_profile.skills);
+            assert_eq!(json_profile.capabilities, fallback_profile.capabilities);
+        }
+    }
+
+    #[test]
+    fn phase_decision_contract_lookup_is_case_insensitive() {
+        let config = builtin_agent_runtime_config();
+        assert!(config.phase_decision_contract("implementation").is_some());
+        assert!(config.phase_decision_contract("IMPLEMENTATION").is_some());
+    }
+
+    #[test]
+    fn builtin_defaults_mark_review_as_structured_output() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        assert!(config.is_structured_output_phase("code-review"));
+        assert!(config.is_structured_output_phase("implementation"));
+        assert!(config.is_structured_output_phase("testing"));
+    }
+
+    #[test]
+    fn structured_output_phase_accepts_trimmed_phase_ids() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        assert!(config.is_structured_output_phase(" implementation "));
+        assert!(config.is_structured_output_phase(" CODE-REVIEW "));
+        assert!(config.is_structured_output_phase(" testing "));
+    }
+
+    #[test]
+    fn bundled_pack_runtime_supports_extended_task_requirement_and_review_phases() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+
+        assert_eq!(config.phase_agent_id("triage"), Some("triager"));
+        assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));
+        assert_eq!(config.phase_agent_id("requirement-task-generation"), Some("requirements-planner"));
+        assert_eq!(config.phase_agent_id("requirement-workflow-bootstrap"), Some("requirements-planner"));
+        assert_eq!(config.phase_agent_id("po-review"), Some("po-reviewer"));
+        assert_eq!(config.phase_mode("unit-test"), Some(PhaseExecutionMode::Command));
+        assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
+    }
+
+    #[test]
+    fn structured_output_phase_rejects_empty_phase_even_with_structured_default() {
+        let mut config = builtin_agent_runtime_config();
+        let default_phase = config.phases.get_mut("default").expect("builtin config includes default phase");
+        default_phase.output_contract = Some(PhaseOutputContract {
+            kind: "phase_result".to_string(),
+            required_fields: Vec::new(),
+            fields: BTreeMap::new(),
+        });
+
+        assert!(config.is_structured_output_phase("custom-phase"));
+        assert!(!config.is_structured_output_phase("   "));
+    }
+
+    fn make_minimal_config_with_phase(phase_id: &str, definition: PhaseExecutionDefinition) -> AgentRuntimeConfig {
+        let mut config = builtin_agent_runtime_config();
+        config.phases.insert(phase_id.to_string(), definition);
+        config
+    }
+
+    #[test]
+    fn command_mode_phase_roundtrips_through_json() {
+        let definition = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Command,
+            agent_id: None,
+            directive: Some("Run cargo test".to_string()),
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: Some(PhaseCommandDefinition {
+                program: "cargo".to_string(),
+                args: vec!["test".to_string(), "--workspace".to_string()],
+                env: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
+                cwd_mode: CommandCwdMode::ProjectRoot,
+                cwd_path: None,
+                timeout_secs: Some(300),
+                success_exit_codes: vec![0],
+                parse_json_output: false,
+                expected_result_kind: None,
+                expected_schema: None,
+                category: None,
+                failure_pattern: None,
+                excerpt_max_chars: None,
+                on_success_verdict: None,
+                on_failure_verdict: None,
+                confidence: None,
+                failure_risk: None,
+            }),
+            manual: None,
+            default_tool: None,
+        };
+
+        let json = serde_json::to_string(&definition).expect("serialize");
+        let restored: PhaseExecutionDefinition = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.mode, PhaseExecutionMode::Command);
+        assert!(restored.agent_id.is_none());
+        let cmd = restored.command.expect("command block present");
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(cmd.args, vec!["test", "--workspace"]);
+        assert_eq!(cmd.timeout_secs, Some(300));
+        assert_eq!(cmd.success_exit_codes, vec![0]);
+        assert!(!cmd.parse_json_output);
+    }
+
+    #[test]
+    fn command_mode_phase_validates_successfully() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: Some("Run linter".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["clippy".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        validate_agent_runtime_config(&config).expect("valid command-mode config");
+    }
+
+    #[test]
+    fn command_mode_rejects_missing_command_block() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("requires command block"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_program() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "  ".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("program must not be empty"));
+    }
+
+    #[test]
+    fn command_mode_rejects_agent_id() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: Some("swe".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must not include agent_id"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_success_exit_codes() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("success_exit_codes must include at least one code"));
+    }
+
+    #[test]
+    fn command_mode_cwd_path_required_for_path_mode() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::Path,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("cwd_path must be set"));
+    }
+
+    #[test]
+    fn command_mode_rejects_manual_block() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: Some(PhaseManualDefinition {
+                    instructions: "Wait for approval".to_string(),
+                    approval_note_required: false,
+                    timeout_secs: None,
+                }),
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must not include manual block"));
+    }
+
+    #[test]
+    fn phase_mode_returns_command_for_command_phase() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: Some("Run linter".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["clippy".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
+        let cmd = config.phase_command("lint").expect("command block present");
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(cmd.args, vec!["clippy"]);
+    }
+
+    #[test]
+    fn command_mode_with_json_output_parsing_roundtrips() {
+        let definition = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Command,
+            agent_id: None,
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: Some(PhaseCommandDefinition {
+                program: "bash".to_string(),
+                args: vec!["-c".to_string(), "echo '{\"kind\":\"test_result\",\"passed\":true}'".to_string()],
+                env: BTreeMap::new(),
+                cwd_mode: CommandCwdMode::TaskRoot,
+                cwd_path: None,
+                timeout_secs: Some(60),
+                success_exit_codes: vec![0, 1],
+                parse_json_output: true,
+                expected_result_kind: Some("test_result".to_string()),
+                expected_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "required": ["kind", "passed"],
+                    "properties": {
+                        "kind": {"const": "test_result"},
+                        "passed": {"type": "boolean"}
+                    }
+                })),
+                category: None,
+                failure_pattern: None,
+                excerpt_max_chars: None,
+                on_success_verdict: None,
+                on_failure_verdict: None,
+                confidence: None,
+                failure_risk: None,
+            }),
+            manual: None,
+            default_tool: None,
+        };
+
+        let json = serde_json::to_string_pretty(&definition).expect("serialize");
+        let restored: PhaseExecutionDefinition = serde_json::from_str(&json).expect("deserialize");
+
+        let cmd = restored.command.expect("command present");
+        assert!(cmd.parse_json_output);
+        assert_eq!(cmd.expected_result_kind.as_deref(), Some("test_result"));
+        assert!(cmd.expected_schema.is_some());
+        assert_eq!(cmd.success_exit_codes, vec![0, 1]);
+        assert_eq!(cmd.cwd_mode, CommandCwdMode::TaskRoot);
+    }
+
+    #[test]
+    fn command_mode_defaults_cwd_to_project_root_and_exit_code_zero() {
+        let json = r#"{
+            "mode": "command",
+            "command": {
+                "program": "make"
+            }
+        }"#;
+        let definition: PhaseExecutionDefinition =
+            serde_json::from_str(json).expect("deserialize minimal command phase");
+        assert_eq!(definition.mode, PhaseExecutionMode::Command);
+        let cmd = definition.command.expect("command present");
+        assert_eq!(cmd.program, "make");
+        assert_eq!(cmd.cwd_mode, CommandCwdMode::ProjectRoot);
+        assert_eq!(cmd.success_exit_codes, vec![0]);
+        assert!(cmd.args.is_empty());
+        assert!(cmd.env.is_empty());
+        assert!(cmd.timeout_secs.is_none());
+        assert!(!cmd.parse_json_output);
+    }
+
+    #[test]
+    fn builtin_kernel_config_all_phases_are_agent_mode() {
+        let config = builtin_agent_runtime_config();
+        for (phase_id, definition) in &config.phases {
+            assert_eq!(definition.mode, PhaseExecutionMode::Agent, "builtin phase '{}' should be agent mode", phase_id);
+            assert!(definition.command.is_none(), "builtin phase '{}' should have no command block", phase_id);
+        }
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_args() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["test".to_string(), "  ".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("args must not contain empty values"));
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_env_keys() {
+        let config = make_minimal_config_with_phase(
+            "lint",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec![],
+                    env: BTreeMap::from([("  ".to_string(), "value".to_string())]),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("env must not contain empty keys"));
+    }
+
+    #[test]
+    fn legacy_config_without_new_fields_deserializes_with_none_defaults() {
+        let json = r#"{
+            "schema": "ao.agent-runtime-config.v2",
+            "version": 2,
+            "tools_allowlist": ["cargo"],
+            "agents": {
+                "default": {
+                    "description": "Test agent",
+                    "system_prompt": "You are a test agent.",
+                    "tool": null,
+                    "model": null,
+                    "fallback_models": [],
+                    "reasoning_effort": null,
+                    "web_search": null,
+                    "network_access": null,
+                    "timeout_secs": null,
+                    "max_attempts": null,
+                    "extra_args": [],
+                    "codex_config_overrides": []
+                }
+            },
+            "phases": {
+                "default": {
+                    "mode": "agent",
+                    "agent_id": "default",
+                    "directive": "Do work."
+                }
+            }
+        }"#;
+
+        let config: AgentRuntimeConfig = serde_json::from_str(json).expect("deserialize");
+        validate_agent_runtime_config(&config).expect("validate");
+        let profile = config.agent_profile("default").expect("default profile");
+        assert!(profile.role.is_none());
+        assert!(profile.mcp_servers.is_empty());
+        assert!(profile.skills.is_empty());
+        assert!(profile.capabilities.is_empty());
+        assert_eq!(profile.tool_policy, AgentToolPolicy::default());
+        assert!(profile.mcp_server_configs.is_none());
+        assert!(profile.structured_capabilities.is_none());
+        assert!(profile.project_overrides.is_none());
+    }
+
+    #[test]
+    fn agent_tool_policy_roundtrips() {
+        let policy = AgentToolPolicy {
+            allow: vec!["task.*".to_string(), "workflow.*".to_string()],
+            deny: vec!["project.remove".to_string()],
+        };
+        let json = serde_json::to_string(&policy).expect("serialize");
+        let restored: AgentToolPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn agent_mcp_server_config_roundtrips() {
+        let config = AgentMcpServerConfig {
+            source: AgentMcpServerSource::Custom,
+            tool_policy: AgentToolPolicy { allow: vec!["read.*".to_string()], deny: vec!["write.*".to_string()] },
+            env: BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]),
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        let restored: AgentMcpServerConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn agent_mcp_server_source_defaults_to_builtin() {
+        let config: AgentMcpServerConfig = serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(config.source, AgentMcpServerSource::Builtin);
+        assert!(config.tool_policy.allow.is_empty());
+        assert!(config.tool_policy.deny.is_empty());
+        assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn agent_capabilities_flattens_bool_map() {
+        let caps = AgentCapabilities {
+            flags: BTreeMap::from([("planning".to_string(), true), ("implementation".to_string(), false)]),
+        };
+        let json = serde_json::to_string(&caps).expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("parse value");
+        assert_eq!(value["planning"], json!(true));
+        assert_eq!(value["implementation"], json!(false));
+
+        let restored: AgentCapabilities = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, caps);
+    }
+
+    #[test]
+    fn agent_project_overrides_roundtrips() {
+        let overrides = AgentProjectOverrides {
+            tool: Some("codex".to_string()),
+            model: Some("gpt-4".to_string()),
+            extra_args: vec!["--verbose".to_string()],
+            env: BTreeMap::from([("DEBUG".to_string(), "1".to_string())]),
+        };
+        let json = serde_json::to_string(&overrides).expect("serialize");
+        let restored: AgentProjectOverrides = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.tool, overrides.tool);
+        assert_eq!(restored.model, overrides.model);
+        assert_eq!(restored.extra_args, overrides.extra_args);
+        assert_eq!(restored.env, overrides.env);
+    }
+
+    #[test]
+    fn profile_with_new_fields_roundtrips_through_json() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("default profile");
+        profile.mcp_server_configs = Some(BTreeMap::from([(
+            "ao".to_string(),
+            AgentMcpServerConfig {
+                source: AgentMcpServerSource::Builtin,
+                tool_policy: AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec![] },
+                env: BTreeMap::new(),
+            },
+        )]));
+        profile.structured_capabilities =
+            Some(AgentCapabilities { flags: BTreeMap::from([("planning".to_string(), true)]) });
+        profile.project_overrides = Some(BTreeMap::from([(
+            "my-project".to_string(),
+            AgentProjectOverrides {
+                tool: Some("codex".to_string()),
+                model: None,
+                extra_args: vec![],
+                env: BTreeMap::new(),
+            },
+        )]));
+
+        let json = serde_json::to_string_pretty(&config).expect("serialize");
+        let restored: AgentRuntimeConfig = serde_json::from_str(&json).expect("deserialize");
+        validate_agent_runtime_config(&restored).expect("validate");
+
+        let restored_profile = restored.agent_profile("default").expect("default profile");
+        assert!(restored_profile.mcp_server_configs.is_some());
+        let mcp_configs = restored_profile.mcp_server_configs.as_ref().unwrap();
+        assert_eq!(mcp_configs.len(), 1);
+        assert_eq!(mcp_configs["ao"].source, AgentMcpServerSource::Builtin);
+
+        assert!(restored_profile.structured_capabilities.is_some());
+        let caps = restored_profile.structured_capabilities.as_ref().unwrap();
+        assert_eq!(caps.flags.get("planning"), Some(&true));
+
+        assert!(restored_profile.project_overrides.is_some());
+        let overrides = restored_profile.project_overrides.as_ref().unwrap();
+        assert_eq!(overrides["my-project"].tool.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn new_fields_skipped_in_serialization_when_none() {
+        let config = builtin_agent_runtime_config();
+        let json = serde_json::to_string_pretty(&config).expect("serialize");
+        assert!(!json.contains("mcp_server_configs"));
+        assert!(!json.contains("structured_capabilities"));
+        assert!(!json.contains("project_overrides"));
+    }
+
+    #[test]
+    fn tool_policy_empty_permits_all() {
+        let policy = AgentToolPolicy::default();
+        assert!(policy.is_tool_permitted("task.list"));
+        assert!(policy.is_tool_permitted("anything"));
+        assert!(policy.is_tool_permitted(""));
+    }
+
+    #[test]
+    fn tool_policy_allowlist_only() {
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string(), "workflow.run".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("task.list"));
+        assert!(policy.is_tool_permitted("task.create"));
+        assert!(policy.is_tool_permitted("task.get"));
+        assert!(policy.is_tool_permitted("workflow.run"));
+        assert!(!policy.is_tool_permitted("workflow.cancel"));
+        assert!(!policy.is_tool_permitted("daemon.stop"));
+        assert!(!policy.is_tool_permitted(""));
+    }
+
+    #[test]
+    fn tool_policy_denylist_only() {
+        let policy =
+            AgentToolPolicy { allow: vec![], deny: vec!["daemon.*".to_string(), "project.remove".to_string()] };
+        assert!(policy.is_tool_permitted("task.list"));
+        assert!(policy.is_tool_permitted("workflow.run"));
+        assert!(!policy.is_tool_permitted("daemon.stop"));
+        assert!(!policy.is_tool_permitted("daemon.start"));
+        assert!(!policy.is_tool_permitted("project.remove"));
+        assert!(policy.is_tool_permitted("project.list"));
+    }
+
+    #[test]
+    fn tool_policy_combined_allow_and_deny() {
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec!["task.delete".to_string()] };
+        assert!(policy.is_tool_permitted("task.list"));
+        assert!(policy.is_tool_permitted("task.create"));
+        assert!(!policy.is_tool_permitted("task.delete"));
+        assert!(!policy.is_tool_permitted("workflow.run"));
+    }
+
+    #[test]
+    fn tool_policy_glob_wildcard_matches_across_dots() {
+        let policy = AgentToolPolicy { allow: vec!["ao.*".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("ao.task.list"));
+        assert!(policy.is_tool_permitted("ao.workflow.run"));
+        assert!(policy.is_tool_permitted("ao.x"));
+        assert!(!policy.is_tool_permitted("other.thing"));
+    }
+
+    #[test]
+    fn tool_policy_exact_match() {
+        let policy = AgentToolPolicy { allow: vec!["task.list".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("task.list"));
+        assert!(!policy.is_tool_permitted("task.create"));
+        assert!(!policy.is_tool_permitted("task.list.extra"));
+    }
+
+    #[test]
+    fn tool_policy_wildcard_only_pattern() {
+        let policy = AgentToolPolicy { allow: vec!["*".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("anything"));
+        assert!(policy.is_tool_permitted("a.b.c"));
+        assert!(policy.is_tool_permitted(""));
+    }
+
+    #[test]
+    fn tool_policy_empty_tool_name() {
+        let policy = AgentToolPolicy { allow: vec!["task.*".to_string()], deny: vec![] };
+        assert!(!policy.is_tool_permitted(""));
+
+        let deny_policy = AgentToolPolicy { allow: vec![], deny: vec!["*".to_string()] };
+        assert!(!deny_policy.is_tool_permitted(""));
+    }
+
+    #[test]
+    fn tool_policy_multiple_wildcards() {
+        let policy = AgentToolPolicy { allow: vec!["a.*.c".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("a.b.c"));
+        assert!(policy.is_tool_permitted("a.x.y.c"));
+        assert!(!policy.is_tool_permitted("a.b.d"));
+    }
+
+    #[test]
+    fn tool_policy_prefix_wildcard() {
+        let policy = AgentToolPolicy { allow: vec!["task.get*".to_string()], deny: vec![] };
+        assert!(policy.is_tool_permitted("task.get"));
+        assert!(policy.is_tool_permitted("task.get_by_id"));
+        assert!(!policy.is_tool_permitted("task.list"));
+    }
+
+    #[test]
+    fn glob_match_basic() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("abc", "abc"));
+        assert!(!glob_match("abc", "abcd"));
+        assert!(!glob_match("abcd", "abc"));
+        assert!(glob_match("a*c", "abc"));
+        assert!(glob_match("a*c", "aXYZc"));
+        assert!(!glob_match("a*c", "aXYZd"));
+        assert!(glob_match("*.*", "a.b"));
+        assert!(glob_match("task.*", "task.list"));
+        assert!(glob_match("task.*", "task.list.nested"));
+    }
+
+    fn make_agent_profile_with_system_prompt(prompt: &str) -> AgentProfile {
+        serde_json::from_value(serde_json::json!({
+            "system_prompt": prompt
+        }))
+        .expect("deserialize agent profile")
+    }
+
+    #[test]
+    fn phase_system_prompt_override_takes_precedence_over_agent_profile() {
+        let mut config = builtin_agent_runtime_config();
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
+        config.phases.insert(
+            "custom-phase".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("test-agent".to_string()),
+                directive: Some("Do the thing".to_string()),
+                system_prompt: Some("Phase-level prompt override".to_string()),
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Phase-level prompt override"));
+    }
+
+    #[test]
+    fn phase_system_prompt_falls_back_to_agent_profile() {
+        let mut config = builtin_agent_runtime_config();
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
+        config.phases.insert(
+            "custom-phase".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("test-agent".to_string()),
+                directive: Some("Do the thing".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
+    }
+
+    #[test]
+    fn phase_system_prompt_ignores_empty_override() {
+        let mut config = builtin_agent_runtime_config();
+        config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
+        config.phases.insert(
+            "custom-phase".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("test-agent".to_string()),
+                directive: None,
+                system_prompt: Some("   ".to_string()),
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
+    }
+
+    #[test]
+    fn phase_system_prompt_deserializes_with_and_without_field() {
+        let with_prompt: PhaseExecutionDefinition = serde_json::from_str(
+            r#"{
+            "mode": "agent",
+            "agent_id": "default",
+            "system_prompt": "Custom prompt from JSON"
+        }"#,
+        )
+        .expect("deserialize with system_prompt");
+        assert_eq!(with_prompt.system_prompt.as_deref(), Some("Custom prompt from JSON"));
+
+        let without_prompt: PhaseExecutionDefinition = serde_json::from_str(
+            r#"{
+            "mode": "agent",
+            "agent_id": "default"
+        }"#,
+        )
+        .expect("deserialize without system_prompt");
+        assert!(without_prompt.system_prompt.is_none());
+    }
+
+    #[test]
+    fn phase_system_prompt_skips_serialization_when_none() {
+        let definition = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some("default".to_string()),
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+        };
+        let json = serde_json::to_string(&definition).expect("serialize");
+        assert!(!json.contains("system_prompt"));
+
+        let with_prompt =
+            PhaseExecutionDefinition { system_prompt: Some("My custom prompt".to_string()), ..definition };
+        let json = serde_json::to_string(&with_prompt).expect("serialize");
+        assert!(json.contains("system_prompt"));
+        assert!(json.contains("My custom prompt"));
+    }
+}

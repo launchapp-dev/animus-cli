@@ -1,0 +1,109 @@
+phase_catalog:
+  triage:
+    label: Triage
+    description: Evaluate whether a task is still valid, already done, or obsolete.
+    category: planning
+    tags: ["triage", "planning", "bundled-pack"]
+  refine-requirements:
+    label: Refine Requirements
+    description: Turn vague tasks into implementation-ready work with concrete acceptance criteria.
+    category: planning
+    tags: ["requirements", "planning", "bundled-pack"]
+
+workflows:
+  - id: ao.task/standard
+    name: AO Task Standard
+    description: Canonical pack-qualified task workflow ref.
+    phases:
+      - requirements
+      - implementation
+      - workflow_ref: ao.review/cycle
+
+  - id: ao.task/ui-ux
+    name: AO Task UI UX
+    description: Canonical pack-qualified frontend task workflow ref.
+    phases:
+      - requirements
+      - ux-research
+      - wireframe
+      - mockup-review
+      - implementation
+      - workflow_ref: ao.review/cycle
+
+  - id: ao.task/quick-fix
+    name: AO Task Quick Fix
+    description: Canonical pack-qualified quick-fix workflow ref.
+    phases:
+      - implementation
+      - testing
+
+  - id: ao.task/gated
+    name: AO Task Gated
+    description: Canonical pack-qualified gated workflow ref.
+    phases:
+      - requirements
+      - implementation
+      - unit-test:
+          on_verdict:
+            rework:
+              target: implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: implementation
+      - code-review:
+          on_verdict:
+            rework:
+              target: implementation
+      - po-review:
+          on_verdict:
+            rework:
+              target: implementation
+
+  - id: ao.task/triage
+    name: AO Task Triage
+    description: Canonical pack-qualified triage workflow ref.
+    phases:
+      - triage
+
+  - id: ao.task/refine
+    name: AO Task Refine
+    description: Canonical pack-qualified task refinement workflow ref.
+    phases:
+      - refine-requirements
+
+  - id: builtin/task-standard
+    name: Builtin Task Standard
+    description: Compatibility alias for the pack-owned default task workflow.
+    phases:
+      - workflow_ref: ao.task/standard
+
+  - id: builtin/task-ui-ux
+    name: Builtin Task UI UX
+    description: Compatibility alias for the pack-owned frontend task workflow.
+    phases:
+      - workflow_ref: ao.task/ui-ux
+
+  - id: builtin/task-quick-fix
+    name: Builtin Task Quick Fix
+    description: Compatibility alias for the pack-owned quick-fix workflow.
+    phases:
+      - workflow_ref: ao.task/quick-fix
+
+  - id: builtin/task-gated
+    name: Builtin Task Gated
+    description: Compatibility alias for the pack-owned gated workflow.
+    phases:
+      - workflow_ref: ao.task/gated
+
+  - id: builtin/task-triage
+    name: Builtin Task Triage
+    description: Compatibility alias for the pack-owned triage workflow.
+    phases:
+      - workflow_ref: ao.task/triage
+
+  - id: builtin/task-refine
+    name: Builtin Task Refine
+    description: Compatibility alias for the pack-owned task refinement workflow.
+    phases:
+      - workflow_ref: ao.task/refine

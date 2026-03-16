@@ -1,0 +1,43 @@
+phase_catalog:
+  code-review:
+    label: Code Review
+    description: Review implementation quality, correctness, and maintainability.
+    category: review
+    tags: ["review", "code", "bundled-pack"]
+  testing:
+    label: Testing
+    description: Validate the implementation by running or inspecting the relevant test suite.
+    category: verification
+    tags: ["testing", "verification", "bundled-pack"]
+  po-review:
+    label: PO Review
+    description: Validate delivered work against product intent and acceptance criteria.
+    category: review
+    tags: ["review", "acceptance", "bundled-pack"]
+  unit-test:
+    label: Unit Test
+    description: Run the workspace test suite as a deterministic gate.
+    category: verification
+    tags: ["testing", "gate", "bundled-pack"]
+  lint:
+    label: Lint
+    description: Run the linter as a deterministic gate.
+    category: verification
+    tags: ["lint", "gate", "bundled-pack"]
+
+workflows:
+  - id: ao.review/cycle
+    name: AO Review Cycle
+    description: Reusable review-and-test loop for completed implementation work.
+    phases:
+      - code-review:
+          on_verdict:
+            rework:
+              target: code-review
+      - testing
+
+  - id: builtin/review-cycle
+    name: Builtin Review Cycle
+    description: Compatibility alias for the pack-owned AO review cycle workflow.
+    phases:
+      - workflow_ref: ao.review/cycle

@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use crate::agent_runtime_config::{PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS};
+use crate::providers::SubjectContext;
 use crate::state_machines::{builtin_compiled_state_machines, evaluate_guard, CompiledStateMachines, GuardContext};
 use crate::types::{
-    OrchestratorTask, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction,
-    WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState,
-    WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
+    OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction, WorkflowDecisionRecord,
+    WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
+    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
 };
 use crate::workflow_config::PhaseTransitionConfig;
 
@@ -84,26 +85,26 @@ pub type VerdictRouting = HashMap<String, HashMap<String, PhaseTransitionConfig>
 use super::phase_plan::{phase_plan_for_workflow_ref, STANDARD_WORKFLOW_REF};
 use super::state_machine::WorkflowStateMachine;
 
-pub fn evaluate_skip_guard(guard: &str, task: &OrchestratorTask) -> bool {
+pub fn evaluate_skip_guard(guard: &str, subject_context: &SubjectContext) -> bool {
     let guard = guard.trim();
     if let Some((lhs, rhs)) = guard.split_once("!=") {
         let field = lhs.trim();
         let value = rhs.trim().trim_matches('\'').trim_matches('"');
-        match field {
-            "task_type" => task.task_type.as_str() != value,
-            "priority" => task.priority.as_str() != value,
-            _ => false,
-        }
+        return subject_attribute(subject_context, field).map(|actual| actual != value).unwrap_or(false);
     } else if let Some((lhs, rhs)) = guard.split_once("==") {
         let field = lhs.trim();
         let value = rhs.trim().trim_matches('\'').trim_matches('"');
-        match field {
-            "task_type" => task.task_type.as_str() == value,
-            "priority" => task.priority.as_str() == value,
-            _ => false,
-        }
-    } else {
-        false
+        return subject_attribute(subject_context, field).map(|actual| actual == value).unwrap_or(false);
+    }
+
+    false
+}
+
+fn subject_attribute<'a>(subject_context: &'a SubjectContext, field: &str) -> Option<&'a str> {
+    match field {
+        "subject_kind" => Some(subject_context.subject_kind.as_str()),
+        "subject_id" => Some(subject_context.subject_id.as_str()),
+        _ => subject_context.attributes.get(field).map(String::as_str),
     }
 }
 
@@ -265,7 +266,7 @@ impl WorkflowLifecycleExecutor {
         }
     }
 
-    pub fn skip_guarded_phases(&self, workflow: &mut OrchestratorWorkflow, task: &OrchestratorTask) {
+    pub fn skip_guarded_phases(&self, workflow: &mut OrchestratorWorkflow, subject_context: &SubjectContext) {
         if !matches!(workflow.status, WorkflowStatus::Running) {
             return;
         }
@@ -283,7 +284,7 @@ impl WorkflowLifecycleExecutor {
                 _ => break,
             };
 
-            let matched_guard = guards.iter().find(|guard| evaluate_skip_guard(guard, task));
+            let matched_guard = guards.iter().find(|guard| evaluate_skip_guard(guard, subject_context));
 
             let matched_guard = match matched_guard {
                 Some(g) => g.clone(),

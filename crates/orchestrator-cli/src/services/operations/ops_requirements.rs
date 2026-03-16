@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use orchestrator_core::{
     services::ServiceHub, ListPageRequest, RequirementFilter, RequirementQuery, RequirementsExecutionInput,
-    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+    REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
 };
 
 mod graph;
@@ -20,8 +20,6 @@ use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphS
 use mockups::handle_requirement_mockups;
 use recommendations::handle_requirement_recommendations;
 use state::{create_requirement_cli, delete_requirement_cli, update_requirement_cli};
-
-const BUILTIN_REQUIREMENTS_EXECUTE_WORKFLOW_REF: &str = "builtin/requirements-execute";
 
 fn build_requirements_query(args: crate::RequirementsListArgs) -> Result<RequirementQuery> {
     Ok(RequirementQuery {
@@ -114,7 +112,7 @@ fn build_requirements_execute_args(args: RequirementsExecuteArgs) -> Result<Work
         })?),
     };
     let workflow_ref = if args.start_workflows {
-        BUILTIN_REQUIREMENTS_EXECUTE_WORKFLOW_REF.to_string()
+        REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF.to_string()
     } else {
         REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string()
     };

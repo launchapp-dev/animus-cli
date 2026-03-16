@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn test_build_workflow_pipeline_context_returns_structured_json() {
         use protocol::orchestrator::{
-            WorkflowCheckpointMetadata, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
-            WorkflowStatus, WorkflowSubject,
+            SubjectRef, WorkflowCheckpointMetadata, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
+            WorkflowStatus,
         };
 
         let tmp = std::env::temp_dir().join(format!("ao-test-pipeline-context-{}", Uuid::new_v4()));
@@ -397,7 +397,7 @@ mod tests {
             id: workflow_id.to_string(),
             task_id: "TASK-1".to_string(),
             workflow_ref: None,
-            subject: WorkflowSubject::Task { id: "TASK-1".to_string() },
+            subject: SubjectRef::task("TASK-1".to_string()),
             input: None,
             vars: std::collections::HashMap::new(),
             status: WorkflowStatus::Running,

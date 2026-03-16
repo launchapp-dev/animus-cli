@@ -2341,6 +2341,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "fs2",
  "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",
@@ -2371,6 +2372,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "croner",
+ "dirs",
  "protocol",
  "semver",
  "serde",
@@ -2378,6 +2380,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
+ "toml",
  "uuid",
 ]
 

@@ -1,131 +1,86 @@
 # Subject Dispatch
 
-## What SubjectDispatch Is
+## What `SubjectDispatch` Is
 
-`SubjectDispatch` is the universal work envelope in AO. Every workflow execution -- whether triggered by a CLI command, a cron schedule, the ready queue, or an MCP tool call -- starts as a `SubjectDispatch`. It is the single contract between ingress surfaces and the [daemon](./daemon.md) runtime.
+`SubjectDispatch` is AO's universal work envelope. Every workflow start,
+whether it comes from the CLI, a queue tick, a schedule, or MCP, enters the
+runtime through the same contract.
 
-The daemon does not care what kind of work is being done. It only processes `SubjectDispatch` envelopes.
+The daemon only needs this envelope plus execution facts. It does not need to
+understand task rules, requirement rules, or pack-specific behavior.
 
----
+## Subject Identity
 
-## WorkflowSubject: Identity Only
+AO has moved from a task-shaped subject model toward a generic subject identity
+contract:
 
-A `WorkflowSubject` identifies *what* the work is about. It carries no execution configuration -- that belongs on the dispatch envelope.
-
-There are three variants:
-
-| Variant | Fields | Used For |
-|---------|--------|----------|
-| `Task` | `id` | Task-driven workflows (e.g. `TASK-001`) |
-| `Requirement` | `id` | Requirement workflows (e.g. `REQ-003`) |
-| `Custom` | `title`, `description` | Ad-hoc work like vision drafts, one-off agents |
-
-The subject type determines how projectors interpret execution facts. A `Task` subject's completion fact is handled by the task projector. A `Requirement` subject's completion fact is handled by the requirement projector.
-
----
-
-## SubjectDispatch Fields
-
+```text
+SubjectRef {
+  kind: String,
+  id: String,
+  title: Option<String>,
+  description: Option<String>,
+  labels: Vec<String>,
+  metadata: Value,
+}
 ```
+
+Common subject kinds today:
+
+| Kind | Example |
+|---|---|
+| `ao.task` | `TASK-042` |
+| `ao.requirement` | `REQ-007` |
+| `custom` | `vision-draft` |
+
+Compatibility adapters still preserve the existing task and requirement flows,
+but routing is now keyed by generic `kind` and `id`.
+
+## Dispatch Shape
+
+```text
 SubjectDispatch {
-    subject:        WorkflowSubject,
-    workflow_ref:   String,
-    input:          Option<Value>,
-    trigger_source: String,
-    priority:       Option<String>,
-    requested_at:   DateTime<Utc>,
+  subject: SubjectRef,
+  workflow_ref: String,
+  input: Option<Value>,
+  vars: HashMap<String, String>,
+  priority: Option<String>,
+  trigger_source: String,
+  requested_at: DateTime<Utc>,
 }
 ```
 
 | Field | Purpose |
-|-------|---------|
-| `subject` | The `WorkflowSubject` -- identity of the work item. |
-| `workflow_ref` | Points to a YAML workflow definition (e.g. `"builtin/vision-draft"`, `"standard-workflow"`). |
-| `input` | Optional JSON payload with variables, context, or overrides for the workflow. |
-| `trigger_source` | How the dispatch was created: `"manual"`, `"ready-queue"`, `"schedule"`, `"mcp"`. |
-| `priority` | Optional priority hint used by the daemon for queue ordering. |
-| `requested_at` | UTC timestamp of when the dispatch was requested. |
+|---|---|
+| `subject` | Identity of the work item |
+| `workflow_ref` | Workflow to execute, usually a pack-qualified ref |
+| `input` | Optional JSON payload for the workflow |
+| `vars` | Explicit string variables passed to the workflow |
+| `priority` | Optional queue priority hint |
+| `trigger_source` | Dispatch origin such as `manual`, `ready-queue`, `schedule`, or `mcp` |
+| `requested_at` | UTC timestamp for auditability and queue ordering |
 
-The `workflow_ref` belongs on the dispatch, not on the subject. The same task can be dispatched through different workflows at different times.
+## Canonical Workflow Refs
 
----
+Examples of current workflow refs:
 
-## How Every Workflow Start Produces the Same Envelope
+| Use Case | Subject | Workflow Ref |
+|---|---|---|
+| Vision draft | `custom:vision-draft` | `ao.vision/draft` |
+| Requirement execution | `ao.requirement:REQ-007` | `ao.requirement/execute` |
+| Standard task delivery | `ao.task:TASK-042` | `ao.task/standard` |
 
-No matter how work enters the system, the result is a `SubjectDispatch`:
+Legacy aliases such as `builtin/requirements-execute` still resolve, but they
+are compatibility shims rather than the preferred surface.
 
-```mermaid
-flowchart TB
-    subgraph SURFACES["Ingress Surfaces"]
-        cli["ao CLI<br/>ao vision draft<br/>ao workflow run"]
-        web["Web API<br/>POST /api/dispatch"]
-        mcp["MCP Tools<br/>ao.workflow.run"]
-        cron["Cron Schedules<br/>nightly-ci at 02:00"]
-        queue["Ready Queue<br/>task becomes ready"]
-    end
+## Why This Boundary Matters
 
-    sd["SubjectDispatch<br/>subject + workflow_ref + input<br/>+ trigger_source + priority + requested_at"]
+The single dispatch contract lets AO keep clean boundaries:
 
-    daemon["Daemon Runtime<br/>(processes all dispatches identically)"]
+- the daemon schedules and supervises subprocesses
+- subject adapters resolve subject-specific context and cwd policy
+- workflows and packs define behavior
+- execution projectors map facts back onto subject state
 
-    cli --> sd
-    web --> sd
-    mcp --> sd
-    cron --> sd
-    queue --> sd
-    sd --> daemon
-```
-
-### Examples
-
-**CLI: vision draft**
-
-```
-SubjectDispatch {
-    subject: Custom { title: "vision-draft", description: "" },
-    workflow_ref: "builtin/vision-draft",
-    input: None,
-    trigger_source: "manual",
-    priority: None,
-    requested_at: "2026-03-09T10:00:00Z",
-}
-```
-
-**Ready queue: task picked up by daemon**
-
-```
-SubjectDispatch {
-    subject: Task { id: "TASK-042" },
-    workflow_ref: "standard-workflow",
-    input: None,
-    trigger_source: "ready-queue",
-    priority: Some("high"),
-    requested_at: "2026-03-09T10:05:00Z",
-}
-```
-
-**MCP tool call: requirement execution**
-
-```
-SubjectDispatch {
-    subject: Requirement { id: "REQ-007" },
-    workflow_ref: "builtin/requirements-execute",
-    input: Some({"include_codebase_scan": true}),
-    trigger_source: "mcp",
-    priority: None,
-    requested_at: "2026-03-09T10:10:00Z",
-}
-```
-
----
-
-## Why a Single Envelope Matters
-
-A unified dispatch contract means:
-
-- The daemon is generic. It does not need task-specific or requirement-specific code paths.
-- New workflow types can be added by writing YAML, not Rust.
-- Monitoring, queuing, and capacity management work the same for all work types.
-- Every dispatch is auditable through the same event log.
-
-See [The Daemon](./daemon.md) for how dispatches are consumed and [Workflows](./workflows.md) for how `workflow_ref` resolves to YAML.
+That is how AO can add new domains without pushing more branching logic into the
+daemon.

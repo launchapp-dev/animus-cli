@@ -2,108 +2,130 @@
 
 ## The `.ao/` Directory
 
-All AO runtime state lives under `.ao/` at the project root. This directory is CLI-managed -- you should never hand-edit the JSON files inside it. Use `ao` commands or [MCP tools](./mcp-tools.md) to make changes.
+`.ao/` is AO-managed project state. Treat it as application state, not as a
+hand-edited config folder. Use `ao` commands or AO MCP tools for mutations.
 
-```
+Typical layout:
+
+```text
 .ao/
-├── config.json              # Project configuration (MCP servers, tokens)
-├── state/
-│   ├── core-state.json      # Tasks, requirements, project metadata
-│   ├── vision.json          # Vision document
-│   ├── agent-runtime-config.v2.json  # Agent profiles, model overrides
-│   └── schedule-state.json  # Cron schedule state
-├── workflows/               # YAML workflow definitions
-│   ├── builtin/             # Built-in workflows (vision, requirements)
-│   └── custom/              # User-defined workflows
-├── docs/                    # Generated documentation artifacts
-├── requirements/            # Requirement details and acceptance criteria
-├── execution/               # Workflow execution records and logs
-└── daemon.log               # Daemon process log (when running autonomous)
+├── config.json
+├── core-state.json
+├── resume-config.json
+├── docs/
+├── requirements/
+├── tasks/
+├── plugins/
+├── workflows.yaml
+├── workflows/
+│   ├── custom.yaml
+│   ├── standard-workflow.yaml
+│   ├── hotfix-workflow.yaml
+│   └── research-workflow.yaml
+├── runs/
+├── artifacts/
+└── state/
+    ├── pack-selection.v1.json
+    ├── state-machines.v1.json
+    ├── reviews.json
+    ├── handoffs.json
+    ├── history.json
+    ├── errors.json
+    ├── qa-results.json
+    └── qa-review-approvals.json
 ```
 
----
+## What Lives Where
 
-## State File Categories
+### Project YAML
 
-### Core State
+Project-authored workflow configuration lives in:
 
-`core-state.json` is the primary state file. It contains tasks, requirements, project metadata, and workflow references. All reads and writes to this file go through the `ServiceHub` trait, which provides locking and atomic write guarantees.
+- `.ao/workflows.yaml`
+- `.ao/workflows/*.yaml`
 
-### Agent Runtime Config
+These files are the editable source of truth for project-local workflows and
+overrides.
 
-`agent-runtime-config.v2.json` defines agent profiles and model routing overrides. Agent profiles set `model` and `tool` fields that override the compiled defaults in `protocol/src/model_routing.rs`. Setting a field to `null` lets the compiled default take over.
+### Project Pack Overrides
 
-### Workflow Definitions
+Per-project pack overrides live in:
 
-YAML files under `.ao/workflows/` define workflow pipelines, agents, phases, and post-success actions. See [Workflows](./workflows.md).
+- `.ao/plugins/<pack-id>/`
 
-### Execution Records
+These directories can override installed or bundled pack workflows and runtime
+assets without changing the daemon or core code.
 
-Each workflow run produces execution records under `.ao/execution/`. These contain phase-by-phase results, timing, verdicts, and output artifacts.
+### Pack Selection State
 
----
+Project pack selection is stored in:
 
-## Atomic Writes
+- `.ao/state/pack-selection.v1.json`
 
-AO uses atomic writes for all state persistence to prevent corruption from crashes or concurrent access:
+This is managed by `ao pack pin`, `ao pack install --activate`, and related AO
+commands.
 
-1. Write the new state to a temporary file in the same directory.
-2. `fsync` the temporary file to ensure data is flushed to disk.
-3. Rename the temporary file to the target path (atomic on POSIX systems).
+### Domain State
 
-This pattern is implemented in `write_json_atomic` (and related helpers in `orchestrator-store`). A partial write or crash during step 1 or 2 leaves the original file intact.
+AO domain records remain under:
 
-File-level locking (`fs2::FileExt`) is used for concurrent access protection when multiple processes (e.g. daemon and CLI) may write to the same state file.
+- `requirements/`
+- `tasks/`
+- `docs/`
 
----
+Those files are still AO-managed state, even though task and requirement
+behavior now resolves through bundled first-party packs.
 
-## Repository Scoping
+### Execution Data
 
-AO supports multiple projects on the same machine. Each project's runtime state is scoped to avoid collisions.
+Transient and historical execution data lives in:
 
-### Project-local state
+- `.ao/runs/<run_id>/events.jsonl`
+- `.ao/artifacts/<execution_id>/...`
+- `.ao/state/history.json`
+- `.ao/state/errors.json`
 
-The `.ao/` directory at the project root holds project-specific configuration and workflow definitions.
+## Machine-Level Pack Storage
 
-### Global scoped state
+Machine-installed packs live outside the project:
 
-Worktrees, execution artifacts, and other runtime data live under:
-
+```text
+~/.ao/packs/<pack-id>/<version>/
 ```
-~/.ao/<repo-scope>/
+
+AO also uses a repo-scoped machine directory for worktrees and related runtime
+state:
+
+```text
+~/.ao/<repo-scope>/worktrees/
 ```
 
-Where `<repo-scope>` is computed as:
+These are distinct concerns:
 
-```
-<sanitized-repo-name>-<sha256-hash-prefix>
-```
-
-For example, a project at `/Users/alice/my-saas` might have scope `my-saas-a1b2c3d4e5f6`. The hash is computed from the canonical (resolved symlinks) absolute path, using the first 6 bytes (12 hex characters) of the SHA-256 digest.
-
-This means two checkouts of the same repo at different paths get separate scoped state, and there are no collisions between projects with the same directory name.
-
-### Global configuration
-
-Machine-wide settings (agent runner tokens, global MCP servers) live at:
-
-- macOS: `~/Library/Application Support/com.launchpad.agent-orchestrator/`
-- Linux: `~/.config/agent-orchestrator/`
-
-The `AO_CONFIG_DIR` environment variable can override this path.
-
----
+- `~/.ao/packs/` stores reusable installed packs
+- `~/.ao/<repo-scope>/...` stores repository-scoped runtime data
 
 ## Mutation Policy
 
-State changes must go through validated surfaces:
+Never hand-edit `.ao/*.json` files unless you are explicitly working on AO's
+own persistence layer as part of a migration.
 
-| Surface | Example |
-|---------|---------|
-| CLI commands | `ao task status --id TASK-001 --status done` |
-| MCP tools | Agent calls `ao.task.update` |
-| Projectors | Daemon emits execution fact, task projector updates status |
+Approved mutation surfaces:
 
-Never edit `.ao/*.json` files by hand. The CLI applies validation, status transition rules, and side effects (e.g. clearing `paused`/`blocked` flags when a task transitions to `ready`) that hand-edits would skip.
+- CLI commands such as `ao task status`
+- AO MCP tools such as `ao.task.update`
+- projectors consuming execution facts
+- pack commands such as `ao pack pin`
 
-The `ServiceHub` trait enforces this boundary. `FileServiceHub` is the production implementation that reads and writes to disk. `InMemoryServiceHub` is the test implementation that operates on in-memory state.
+## Configuration Precedence
+
+At a high level, AO resolves behavior in this order:
+
+1. CLI flags and environment variables
+2. Project pack overrides in `.ao/plugins/`
+3. Project-local YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
+4. Installed packs in `~/.ao/packs/`
+5. Bundled kernel workflows and bundled first-party packs
+
+This keeps local control in the repository while preserving a stable bundled
+baseline.

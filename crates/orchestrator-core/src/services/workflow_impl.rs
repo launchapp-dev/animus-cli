@@ -3,7 +3,11 @@ use crate::types::PhaseDecision;
 
 use super::query_support::paginate_items;
 
-fn effective_workflow_ref(requested: Option<&str>, task: Option<&crate::types::OrchestratorTask>) -> String {
+fn effective_workflow_ref(
+    requested: Option<&str>,
+    project_default_workflow_ref: &str,
+    task: Option<&crate::types::OrchestratorTask>,
+) -> String {
     if let Some(workflow_ref) = requested.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned) {
         return workflow_ref;
     }
@@ -12,7 +16,7 @@ fn effective_workflow_ref(requested: Option<&str>, task: Option<&crate::types::O
         return crate::workflow::UI_UX_WORKFLOW_REF.to_string();
     }
 
-    crate::workflow::STANDARD_WORKFLOW_REF.to_string()
+    project_default_workflow_ref.to_string()
 }
 
 fn load_phase_retry_configs(
@@ -176,9 +180,9 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let id = Uuid::new_v4().to_string();
         let workflow = {
             let mut lock = self.state.write().await;
-            let task =
-                if let WorkflowSubject::Task { ref id } = input.subject { lock.tasks.get(id).cloned() } else { None };
-            let workflow_ref = effective_workflow_ref(input.workflow_ref(), task.as_ref());
+            let task = input.subject.task_id().and_then(|id| lock.tasks.get(id).cloned());
+            let workflow_ref =
+                effective_workflow_ref(input.workflow_ref(), crate::workflow::STANDARD_WORKFLOW_REF, task.as_ref());
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref(
                 None,
                 Some(workflow_ref.as_str()),
@@ -320,13 +324,14 @@ impl WorkflowServiceApi for FileServiceHub {
         let id = Uuid::new_v4().to_string();
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let retry_configs = load_phase_retry_configs(self.project_root.as_path());
-        let task = if let WorkflowSubject::Task { ref id } = input.subject {
-            self.state.read().await.tasks.get(id).cloned()
+        let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
+        let task = if let Some(task_id) = input.subject.task_id() {
+            self.state.read().await.tasks.get(task_id).cloned()
         } else {
             None
         };
-        let workflow_ref = effective_workflow_ref(input.workflow_ref(), task.as_ref());
-        let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
+        let workflow_ref =
+            effective_workflow_ref(input.workflow_ref(), &workflow_config.config.default_workflow_ref, task.as_ref());
         let skip_guards = crate::resolve_workflow_skip_guards(&workflow_config.config, Some(workflow_ref.as_str()));
         let executor = WorkflowLifecycleExecutor::with_state_machines(
             crate::resolve_phase_plan_for_workflow_ref(Some(self.project_root.as_path()), Some(workflow_ref.as_str()))?,
@@ -335,8 +340,10 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         let mut workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
-        if let Some(ref task) = task {
-            executor.skip_guarded_phases(&mut workflow, task);
+        if let Ok(subject_context) =
+            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
+        {
+            executor.skip_guarded_phases(&mut workflow, &subject_context);
         }
 
         let manager = self.workflow_manager();
@@ -446,10 +453,10 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision);
-        let task_id =
-            if let WorkflowSubject::Task { ref id } = workflow.subject { id.clone() } else { workflow.task_id.clone() };
-        if let Some(task) = self.state.read().await.tasks.get(&task_id).cloned() {
-            executor.skip_guarded_phases(&mut workflow, &task);
+        if let Ok(subject_context) =
+            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
+        {
+            executor.skip_guarded_phases(&mut workflow, &subject_context);
         }
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;

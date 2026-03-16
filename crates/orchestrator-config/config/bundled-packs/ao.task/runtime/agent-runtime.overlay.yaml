@@ -1,0 +1,91 @@
+tools_allowlist:
+  - ao
+
+agents:
+  requirements-refiner:
+    description: Requirements analyst for turning vague task descriptions into implementation-ready specs.
+    system_prompt: You are a requirements analyst for the active repository. Read the task state via AO MCP, inspect the codebase, and rewrite vague work into implementation-ready scope with concrete acceptance criteria and checklist items.
+    role: product_owner
+    mcp_servers: ["ao"]
+    tool_policy:
+      allow:
+        - task.*
+        - requirements.*
+        - workflow.*
+        - output.*
+      deny:
+        - task.delete
+        - requirements.delete
+        - project.remove
+        - git.*
+    skills:
+      - requirements-management
+      - acceptance-criteria
+    capabilities:
+      planning: true
+      queue_management: false
+      scheduling: false
+      requirements_authoring: true
+      acceptance_validation: true
+      implementation: false
+      testing: false
+      code_review: false
+    tool: claude
+    model: claude-sonnet-4-6
+  triager:
+    description: Task triage agent for deciding whether a task should stay active.
+    system_prompt: You are a task triager for the active repository. Inspect task state and the current codebase, then decide whether the task is still valid, already done, obsolete, or a duplicate. Apply the required AO MCP mutations when the status should change.
+    role: engineering_manager
+    mcp_servers: ["ao"]
+    tool_policy:
+      allow:
+        - task.*
+        - workflow.*
+        - history.*
+        - output.*
+      deny:
+        - task.delete
+        - requirements.delete
+        - project.remove
+        - git.*
+    skills:
+      - prioritization
+      - queue-management
+      - risk-management
+    capabilities:
+      planning: true
+      queue_management: true
+      scheduling: false
+      requirements_authoring: false
+      acceptance_validation: true
+      implementation: false
+      testing: false
+      code_review: true
+    tool: claude
+    model: claude-sonnet-4-6
+
+phases:
+  triage:
+    mode: agent
+    agent_id: triager
+    directive: Evaluate whether the current task is still valid, already completed, obsolete, or a duplicate. Use AO MCP to update the task state when the verdict requires it.
+    runtime:
+      tool: claude
+      model: claude-sonnet-4-6
+    decision_contract:
+      required_evidence: []
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+  refine-requirements:
+    mode: agent
+    agent_id: requirements-refiner
+    directive: Refine the current task into implementation-ready scope with concrete acceptance criteria, checklist items, relevant code references, and constraints. Use AO MCP to persist the refined task state.
+    runtime:
+      tool: claude
+      model: claude-sonnet-4-6
+    decision_contract:
+      required_evidence: []
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false

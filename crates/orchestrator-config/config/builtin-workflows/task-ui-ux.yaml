@@ -3,4 +3,4 @@ workflows:
     name: Builtin Task UI UX
     description: Run the frontend-oriented built-in task workflow.
     phases:
-      - workflow_ref: ui-ux-standard
+      - workflow_ref: ao.task/ui-ux

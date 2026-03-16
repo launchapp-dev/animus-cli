@@ -11,7 +11,9 @@ use tokio::task::JoinHandle;
 use crate::{build_runner_command, CompletedProcess, RunnerEvent};
 
 struct WorkflowProcess {
+    subject_key: String,
     subject_id: String,
+    subject_kind: String,
     task_id: Option<String>,
     workflow_ref: String,
     schedule_id: Option<String>,
@@ -74,7 +76,9 @@ impl ProcessManager {
         let schedule_id = dispatch.schedule_id().map(String::from);
 
         self.processes.push(WorkflowProcess {
+            subject_key: dispatch.subject_key(),
             subject_id: dispatch.subject_id().to_string(),
+            subject_kind: dispatch.subject_kind().to_string(),
             task_id,
             workflow_ref,
             schedule_id,
@@ -105,7 +109,8 @@ impl ProcessManager {
                     }
                     drain_stderr_reader(&mut process.stderr_reader).await;
                     completed.push(CompletedProcess {
-                        subject_id: process.subject_id,
+                        subject_id: process.subject_key,
+                        subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
                         workflow_id: None,
                         workflow_ref: Some(process.workflow_ref),
@@ -124,7 +129,8 @@ impl ProcessManager {
                     Ok(guard) => guard,
                     Err(error) => {
                         completed.push(CompletedProcess {
-                            subject_id: process.subject_id,
+                            subject_id: process.subject_key,
+                            subject_kind: Some(process.subject_kind),
                             task_id: process.task_id,
                             workflow_id: None,
                             workflow_ref: Some(process.workflow_ref),
@@ -156,7 +162,8 @@ impl ProcessManager {
                     };
 
                     completed.push(CompletedProcess {
-                        subject_id: process.subject_id,
+                        subject_id: process.subject_key,
+                        subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
                         workflow_id,
                         workflow_ref: Some(process.workflow_ref),
@@ -171,7 +178,8 @@ impl ProcessManager {
                 Ok(None) => active.push(process),
                 Err(error) => {
                     completed.push(CompletedProcess {
-                        subject_id: process.subject_id,
+                        subject_id: process.subject_key,
+                        subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
                         workflow_id: None,
                         workflow_ref: Some(process.workflow_ref),
@@ -195,7 +203,7 @@ impl ProcessManager {
     }
 
     pub fn active_subject_ids(&self) -> HashSet<String> {
-        self.processes.iter().map(|process| process.subject_id.clone()).collect()
+        self.processes.iter().flat_map(|process| [process.subject_key.clone(), process.subject_id.clone()]).collect()
     }
 }
 
@@ -380,5 +388,57 @@ mod tests {
         assert!(completed.workflow_status.is_none());
         assert_eq!(completed.events[0].workflow_ref.as_deref(), Some("standard"));
         assert_eq!(completed.events[1].workflow_ref.as_deref(), Some("standard"));
+    }
+
+    #[tokio::test]
+    async fn generic_subjects_keep_kind_qualified_completion_identity() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let temp_dir = TempDir::new().expect("temp directory should be created");
+        let runner_path = temp_dir.path().join("ao-workflow-runner");
+        fs::write(&runner_path, "#!/bin/sh\nexit 0\n").expect("mock runner should be written");
+        #[cfg(unix)]
+        {
+            let mut permissions =
+                fs::metadata(&runner_path).expect("mock runner metadata should be available").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
+        }
+
+        let original_path = env::var_os("PATH").unwrap_or_default();
+        let mut paths = env::split_paths(&original_path).collect::<Vec<_>>();
+        paths.insert(0, temp_dir.path().to_path_buf());
+        let candidate_path = env::join_paths(paths).expect("path list should join");
+        let candidate_path = candidate_path.to_string_lossy();
+        let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
+
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            protocol::SubjectRef::new("pack.review", "REV-7"),
+            "review",
+            "manual",
+            chrono::Utc::now(),
+        );
+
+        let mut manager = ProcessManager::new();
+        manager
+            .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
+            .expect("mock runner should spawn");
+
+        let active_subject_ids = manager.active_subject_ids();
+        assert!(active_subject_ids.contains("REV-7"));
+        assert!(active_subject_ids.contains("pack.review::REV-7"));
+
+        let mut completed = Vec::new();
+        for _ in 0..100 {
+            completed = manager.check_running().await;
+            if !completed.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].subject_id, "pack.review::REV-7");
+        assert_eq!(completed[0].subject_kind.as_deref(), Some("pack.review"));
     }
 }

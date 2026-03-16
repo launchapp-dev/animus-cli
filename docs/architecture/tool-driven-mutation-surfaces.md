@@ -28,7 +28,7 @@ behavior.
 The daemon and workflow execution layers should know about:
 
 - `ProjectRef` and canonical project-root resolution
-- `WorkflowSubject`
+- `SubjectRef`
 - `SubjectDispatch`
 - execution facts and workflow events
 - slots, capacity, and subprocess lifecycle

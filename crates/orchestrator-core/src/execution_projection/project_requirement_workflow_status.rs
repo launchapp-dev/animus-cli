@@ -9,11 +9,17 @@ use crate::{
 };
 
 fn projected_requirement_status(workflow_ref: &str) -> Option<RequirementStatus> {
-    if workflow_ref.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF) {
+    if workflow_ref.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)
+        || workflow_ref.eq_ignore_ascii_case("requirement-task-generation")
+        || workflow_ref.eq_ignore_ascii_case("builtin/requirement-plan")
+    {
         return Some(RequirementStatus::Planned);
     }
 
-    if workflow_ref.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF) {
+    if workflow_ref.eq_ignore_ascii_case(REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF)
+        || workflow_ref.eq_ignore_ascii_case("requirement-task-generation-run")
+        || workflow_ref.eq_ignore_ascii_case("builtin/requirements-execute")
+    {
         return Some(RequirementStatus::InProgress);
     }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -7,15 +7,19 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
 
-use orchestrator_config::workflow_config::MergeStrategy;
+use orchestrator_config::{
+    collect_workflow_refs, ensure_pack_execution_requirements, resolve_active_pack_for_workflow_ref,
+    resolve_pack_registry, workflow_config::MergeStrategy,
+};
 use orchestrator_core::{
     dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
     project_requirement_workflow_status,
+    providers::SubjectContext,
     providers::{BuiltinGitProvider, GitProvider},
     register_workflow_runner_pid,
     services::ServiceHub,
     unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow, PhaseDecisionVerdict,
-    WorkflowEvent, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
+    SubjectRef, WorkflowEvent, WorkflowRunInput, WorkflowStatus, SUBJECT_KIND_CUSTOM,
 };
 
 use crate::ensure_execution_cwd::ensure_execution_cwd;
@@ -65,12 +69,6 @@ pub struct WorkflowExecuteResult {
     pub post_success: Value,
 }
 
-struct ExecutionSubjectContext {
-    subject_title: String,
-    subject_description: String,
-    task: Option<OrchestratorTask>,
-}
-
 #[derive(Clone, Default)]
 struct WorkflowPhaseInputs {
     dispatch_input: Option<String>,
@@ -93,6 +91,39 @@ impl Drop for WorkflowRunnerPidGuard {
     fn drop(&mut self) {
         let _ = unregister_workflow_runner_pid(Path::new(&self.project_root), &self.workflow_id);
     }
+}
+
+fn ensure_workflow_pack_execution_requirements(
+    pack_registry: &orchestrator_config::ResolvedPackRegistry,
+    workflow_config: &orchestrator_config::WorkflowConfig,
+    workflow_ref: &str,
+) -> Result<()> {
+    let workflow_refs = collect_workflow_refs(&workflow_config.workflows, workflow_ref)
+        .with_context(|| format!("failed to resolve workflow activation graph for '{}'", workflow_ref))?;
+    let mut validated_pack_ids = HashSet::new();
+
+    for referenced_workflow_ref in workflow_refs {
+        let Some(entry) = resolve_active_pack_for_workflow_ref(pack_registry, &referenced_workflow_ref) else {
+            continue;
+        };
+        if !validated_pack_ids.insert(entry.pack_id.to_ascii_lowercase()) {
+            continue;
+        }
+        let Some(pack) = entry.loaded_manifest() else {
+            continue;
+        };
+        ensure_pack_execution_requirements(pack).with_context(|| {
+            format!(
+                "workflow '{}' cannot activate pack '{}' required by workflow '{}' from {}",
+                workflow_ref,
+                pack.manifest.id,
+                referenced_workflow_ref,
+                pack.pack_root.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn workflow_phase_inputs(workflow: &OrchestratorWorkflow) -> WorkflowPhaseInputs {
@@ -120,7 +151,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             let subject = input.subject().clone();
             let subject_id = subject.id().to_string();
             hub.workflows().run(input).await.or_else(|run_err| {
-                if matches!(subject, WorkflowSubject::Custom { .. }) {
+                if subject.kind().eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM) {
                     return Err(run_err);
                 }
                 let all =
@@ -142,7 +173,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
     .await?;
     let mut task = subject_context.task.take();
 
-    let execution_cwd = ensure_execution_cwd(hub.clone(), &params.project_root, task.as_ref())
+    let execution_cwd = ensure_execution_cwd(hub.clone(), &params.project_root, &workflow.subject, &subject_context)
         .await
         .context("failed to resolve execution cwd")?;
 
@@ -182,6 +213,8 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
     ensure_workflow_config_compiled(Path::new(&params.project_root))?;
     let workflow_config = load_workflow_config(Path::new(&params.project_root))?;
     let workflow_ref = workflow.workflow_ref.clone().unwrap_or_else(|| workflow_config.default_workflow_ref.clone());
+    let pack_registry = resolve_pack_registry(Path::new(&params.project_root))?;
+    ensure_workflow_pack_execution_requirements(&pack_registry, &workflow_config, &workflow_ref)?;
     let phase_inputs = workflow_phase_inputs(&workflow);
     let workflow_vars = workflow.vars.clone();
     let mut rework_context: Option<String> = None;
@@ -518,36 +551,31 @@ async fn load_existing_workflow(
 
 fn validate_existing_workflow_subject(workflow: &OrchestratorWorkflow, params: &WorkflowExecuteParams) -> Result<()> {
     if let Some(task_id) = params.task_id.as_deref() {
-        let workflow_task_id = match &workflow.subject {
-            WorkflowSubject::Task { id } => id.as_str(),
-            _ => workflow.task_id.as_str(),
-        };
+        let workflow_task_id = workflow.subject.task_id().unwrap_or_else(|| workflow.task_id.as_str());
         if workflow_task_id != task_id {
             return Err(anyhow!("workflow '{}' is for task '{}' not '{}'", workflow.id, workflow_task_id, task_id));
         }
     }
 
     if let Some(requirement_id) = params.requirement_id.as_deref() {
-        match &workflow.subject {
-            WorkflowSubject::Requirement { id } if id == requirement_id => {}
-            WorkflowSubject::Requirement { id } => {
+        match workflow.subject.requirement_id() {
+            Some(id) if id == requirement_id => {}
+            Some(id) => {
                 return Err(anyhow!("workflow '{}' is for requirement '{}' not '{}'", workflow.id, id, requirement_id));
             }
-            _ => {
+            None => {
                 return Err(anyhow!("workflow '{}' is not a requirement workflow", workflow.id));
             }
         }
     }
 
     if let Some(title) = params.title.as_deref() {
-        match &workflow.subject {
-            WorkflowSubject::Custom { title: actual, .. } if actual == title => {}
-            WorkflowSubject::Custom { title: actual, .. } => {
-                return Err(anyhow!("workflow '{}' is for custom subject '{}' not '{}'", workflow.id, actual, title));
-            }
-            _ => {
-                return Err(anyhow!("workflow '{}' is not a custom workflow", workflow.id));
-            }
+        if !workflow.subject.kind().eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM) {
+            return Err(anyhow!("workflow '{}' is not a custom workflow", workflow.id));
+        }
+        let actual = workflow.subject.title.as_deref().unwrap_or_else(|| workflow.subject.id());
+        if actual != title {
+            return Err(anyhow!("workflow '{}' is for custom subject '{}' not '{}'", workflow.id, actual, title));
         }
     }
 
@@ -576,28 +604,22 @@ fn resolve_input(params: &WorkflowExecuteParams) -> Result<WorkflowRunInput> {
 
 async fn resolve_execution_subject_context(
     hub: Arc<dyn ServiceHub>,
-    subject: &WorkflowSubject,
+    subject: &SubjectRef,
     fallback_title: Option<&str>,
     fallback_description: Option<&str>,
-) -> Result<ExecutionSubjectContext> {
-    let resolved = hub
-        .subject_resolver()
+) -> Result<SubjectContext> {
+    hub.subject_resolver()
         .resolve_subject_context(subject, fallback_title, fallback_description)
         .await
-        .with_context(|| format!("failed to resolve subject context for '{}'", subject.id()))?;
-    Ok(ExecutionSubjectContext {
-        subject_title: resolved.subject_title,
-        subject_description: resolved.subject_description,
-        task: resolved.task,
-    })
+        .with_context(|| format!("failed to resolve subject context for '{}'", subject.id()))
 }
 
 async fn project_requirement_success_status(
     hub: Arc<dyn ServiceHub>,
-    subject: &WorkflowSubject,
+    subject: &SubjectRef,
     workflow_ref: &str,
 ) -> Result<()> {
-    let WorkflowSubject::Requirement { id } = subject else {
+    let Some(id) = subject.requirement_id() else {
         return Ok(());
     };
 
@@ -750,8 +772,14 @@ async fn execute_post_success_actions(
     }
 
     if merge_cfg.auto_merge {
-        action_result["actions"]["merge"] =
-            perform_auto_merge_with_git(project_root, &source_branch, &target_branch, &merge_cfg.strategy).await;
+        action_result["actions"]["merge"] = perform_auto_merge_with_git(
+            project_root,
+            execution_cwd,
+            &source_branch,
+            &target_branch,
+            &merge_cfg.strategy,
+        )
+        .await;
         action_result["status"] = action_result["actions"]["merge"]["status"].clone();
     }
 
@@ -924,15 +952,15 @@ async fn create_pull_request_via_gh(
     }
 }
 
-async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Result<()> {
-    let checkout_output = run_git_output("git", execution_cwd, &["checkout", target_branch]).await;
+async fn checkout_target_branch(git_cwd: &str, target_branch: &str) -> Result<()> {
+    let checkout_output = run_git_output("git", git_cwd, &["checkout", target_branch]).await;
     match checkout_output {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
             let primary_error = command_summary(&output);
             let fallback_ref = format!("origin/{target_branch}");
             let fallback =
-                run_git_output("git", execution_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
+                run_git_output("git", git_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
             match fallback {
                 Ok(fb_output) if fb_output.status.success() => Ok(()),
                 Ok(fb_output) => anyhow::bail!(
@@ -947,7 +975,7 @@ async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Res
         Err(error) => {
             let fallback_ref = format!("origin/{target_branch}");
             let fallback =
-                run_git_output("git", execution_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
+                run_git_output("git", git_cwd, &["checkout", "-b", target_branch, fallback_ref.as_str()]).await;
             match fallback {
                 Ok(fb_output) if fb_output.status.success() => Ok(()),
                 Ok(fb_output) => anyhow::bail!(
@@ -962,11 +990,103 @@ async fn checkout_target_branch(execution_cwd: &str, target_branch: &str) -> Res
     }
 }
 
-async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, target_branch: &str) -> Value {
-    let rebase_output = run_git_output("git", execution_cwd, &["rebase", target_branch, source_branch]).await;
+fn parse_worktree_path_for_branch(raw: &str, target_branch: &str) -> Option<String> {
+    let target_ref = format!("refs/heads/{target_branch}");
+    let mut current_path: Option<String> = None;
+    let mut current_branch: Option<String> = None;
+
+    for line in raw.lines().chain(std::iter::once("")) {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(path.trim().to_string());
+            continue;
+        }
+        if let Some(branch) = line.strip_prefix("branch ") {
+            current_branch = Some(branch.trim().to_string());
+            continue;
+        }
+        if line.trim().is_empty() {
+            if current_branch.as_deref() == Some(target_ref.as_str()) {
+                return current_path;
+            }
+            current_path = None;
+            current_branch = None;
+        }
+    }
+
+    None
+}
+
+async fn resolve_target_merge_cwd(project_root: &str, target_branch: &str) -> Result<String> {
+    let worktree_list = run_git_output("git", project_root, &["worktree", "list", "--porcelain"]).await?;
+    if !worktree_list.status.success() {
+        anyhow::bail!(
+            "failed to inspect git worktrees while resolving target branch '{}': {}",
+            target_branch,
+            command_summary(&worktree_list)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&worktree_list.stdout);
+    if let Some(path) = parse_worktree_path_for_branch(&stdout, target_branch) {
+        return Ok(path);
+    }
+
+    checkout_target_branch(project_root, target_branch).await?;
+    Ok(project_root.to_string())
+}
+
+async fn current_branch(cwd: &str) -> Result<String> {
+    let output = run_git_output("git", cwd, &["branch", "--show-current"]).await?;
+    if !output.status.success() {
+        anyhow::bail!("failed to resolve current branch in {}: {}", cwd, command_summary(&output));
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        anyhow::bail!("git reported an empty current branch in {}", cwd);
+    }
+
+    Ok(branch)
+}
+
+async fn perform_rebase_strategy(
+    source_execution_cwd: &str,
+    target_execution_cwd: &str,
+    source_branch: &str,
+    target_branch: &str,
+) -> Value {
+    let current_source_branch = match current_branch(source_execution_cwd).await {
+        Ok(branch) => branch,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "failed",
+                "method": "git",
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "strategy": "rebase",
+                "error": error.to_string(),
+            });
+        }
+    };
+
+    if current_source_branch != source_branch {
+        return serde_json::json!({
+            "status": "failed",
+            "method": "git",
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "strategy": "rebase",
+            "error": format!(
+                "source execution cwd '{}' is on branch '{}' instead of '{}'",
+                source_execution_cwd, current_source_branch, source_branch
+            ),
+        });
+    }
+
+    let rebase_output = run_git_output("git", source_execution_cwd, &["rebase", target_branch]).await;
     match rebase_output {
         Ok(output) if output.status.success() => {
-            let ff_merge = run_git_output("git", execution_cwd, &["merge", "--ff-only", source_branch]).await;
+            let ff_merge = run_git_output("git", target_execution_cwd, &["merge", "--ff-only", source_branch]).await;
             match ff_merge {
                 Ok(merge_out) if merge_out.status.success() => serde_json::json!({
                     "status": "completed",
@@ -994,7 +1114,7 @@ async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, targe
             }
         }
         Ok(output) => {
-            let _ = run_git_output("git", execution_cwd, &["rebase", "--abort"]).await;
+            let _ = run_git_output("git", source_execution_cwd, &["rebase", "--abort"]).await;
             let summary = command_summary(&output);
             let status = if looks_like_merge_conflict(&summary) { "conflict" } else { "failed" };
             serde_json::json!({
@@ -1017,41 +1137,102 @@ async fn perform_rebase_strategy(execution_cwd: &str, source_branch: &str, targe
     }
 }
 
+async fn has_staged_changes(cwd: &str) -> Result<bool> {
+    let output = run_git_output("git", cwd, &["diff", "--cached", "--quiet"]).await?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => anyhow::bail!("failed to inspect staged changes in {}: {}", cwd, command_summary(&output)),
+    }
+}
+
 async fn perform_auto_merge_with_git(
-    execution_cwd: &str,
+    project_root: &str,
+    source_execution_cwd: &str,
     source_branch: &str,
     target_branch: &str,
     strategy: &MergeStrategy,
 ) -> Value {
-    if let Err(error) = checkout_target_branch(execution_cwd, target_branch).await {
-        return serde_json::json!({
-            "status": "failed",
-            "method": "git",
-            "source_branch": source_branch,
-            "target_branch": target_branch,
-            "strategy": merge_strategy_name(strategy),
-            "error": error.to_string(),
-        });
-    }
+    let target_execution_cwd = match resolve_target_merge_cwd(project_root, target_branch).await {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            return serde_json::json!({
+                "status": "failed",
+                "method": "git",
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "strategy": merge_strategy_name(strategy),
+                "error": error.to_string(),
+            });
+        }
+    };
 
     if matches!(strategy, MergeStrategy::Rebase) {
-        return perform_rebase_strategy(execution_cwd, source_branch, target_branch).await;
+        return perform_rebase_strategy(source_execution_cwd, &target_execution_cwd, source_branch, target_branch)
+            .await;
     }
 
-    let merge_args = {
-        let mut args: Vec<String> = vec!["merge".to_string()];
-        match strategy {
-            MergeStrategy::Squash => args.push("--squash".to_string()),
-            MergeStrategy::Merge => args.push("--no-ff".to_string()),
-            MergeStrategy::Rebase => unreachable!(),
-        };
-        args.push("--no-edit".to_string());
-        args.push(source_branch.to_string());
-        args
+    let mut merge_args: Vec<&str> = vec!["merge"];
+    match strategy {
+        MergeStrategy::Squash => merge_args.push("--squash"),
+        MergeStrategy::Merge => merge_args.push("--no-ff"),
+        MergeStrategy::Rebase => unreachable!(),
     };
-    let arg_refs: Vec<&str> = merge_args.iter().map(String::as_str).collect();
-    let output = run_git_output("git", execution_cwd, &arg_refs).await;
+    merge_args.push("--no-edit");
+    merge_args.push(source_branch);
+
+    let output = run_git_output("git", &target_execution_cwd, &merge_args).await;
     match output {
+        Ok(output) if output.status.success() && matches!(strategy, MergeStrategy::Squash) => {
+            match has_staged_changes(&target_execution_cwd).await {
+                Ok(true) => {
+                    let message = format!("Squash merge branch '{source_branch}' into '{target_branch}'");
+                    let commit =
+                        run_git_output("git", &target_execution_cwd, &["commit", "-m", message.as_str()]).await;
+                    match commit {
+                        Ok(commit_output) if commit_output.status.success() => serde_json::json!({
+                            "status": "completed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                        }),
+                        Ok(commit_output) => serde_json::json!({
+                            "status": "failed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                            "error": format!("squash merge staged changes but commit failed: {}", command_summary(&commit_output)),
+                        }),
+                        Err(error) => serde_json::json!({
+                            "status": "failed",
+                            "method": "git",
+                            "source_branch": source_branch,
+                            "target_branch": target_branch,
+                            "strategy": merge_strategy_name(strategy),
+                            "error": format!("squash merge staged changes but commit failed: {error}"),
+                        }),
+                    }
+                }
+                Ok(false) => serde_json::json!({
+                    "status": "completed",
+                    "method": "git",
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "strategy": merge_strategy_name(strategy),
+                    "result": "no-op",
+                }),
+                Err(error) => serde_json::json!({
+                    "status": "failed",
+                    "method": "git",
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "strategy": merge_strategy_name(strategy),
+                    "error": error.to_string(),
+                }),
+            }
+        }
         Ok(output) if output.status.success() => serde_json::json!({
             "status": "completed",
             "method": "git",
@@ -1128,4 +1309,976 @@ async fn cleanup_worktree_with_fallback(
 }
 
 #[cfg(test)]
-mod tests;
+mod requirement_workflow_tests {
+    use super::{execute_workflow, workflow_exit_success, WorkflowExecuteParams};
+    use orchestrator_core::{
+        load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config, FileServiceHub,
+        PhaseExecutionMode, PhaseManualDefinition, Priority, TaskCreateInput, TaskStatus, TaskType, WorkflowRunInput,
+        WorkflowStatus,
+    };
+    use std::collections::HashMap;
+    use std::process::Command as ProcessCommand;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn init_git_repo(temp: &TempDir) {
+        let init_main = ProcessCommand::new("git")
+            .arg("init")
+            .arg("-b")
+            .arg("main")
+            .current_dir(temp.path())
+            .status()
+            .expect("git init should run");
+        if !init_main.success() {
+            let init =
+                ProcessCommand::new("git").arg("init").current_dir(temp.path()).status().expect("git init should run");
+            assert!(init.success(), "git init should succeed");
+            let rename = ProcessCommand::new("git")
+                .args(["branch", "-M", "main"])
+                .current_dir(temp.path())
+                .status()
+                .expect("git branch -M should run");
+            assert!(rename.success(), "git branch -M main should succeed");
+        }
+
+        let email = ProcessCommand::new("git")
+            .args(["config", "user.email", "ao-test@example.com"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git config user.email should run");
+        assert!(email.success(), "git config user.email should succeed");
+        let name = ProcessCommand::new("git")
+            .args(["config", "user.name", "AO Test"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git config user.name should run");
+        assert!(name.success(), "git config user.name should succeed");
+
+        std::fs::write(temp.path().join("README.md"), "# test\n").expect("readme should be written");
+        let add = ProcessCommand::new("git")
+            .args(["add", "README.md"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git add should run");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "initial commit should succeed");
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_pauses_manual_pending_workflows() {
+        let temp = TempDir::new().expect("temp dir");
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "manual gate".to_string(),
+                description: "waits for approval".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::High),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+
+        let current_phase = workflow.current_phase.clone().expect("workflow should have a current phase");
+        let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
+        let mut definition = runtime.phase_execution(&current_phase).cloned().expect("current phase should exist");
+        definition.mode = PhaseExecutionMode::Manual;
+        definition.agent_id = None;
+        definition.command = None;
+        definition.manual = Some(PhaseManualDefinition {
+            instructions: "Wait for approval".to_string(),
+            approval_note_required: false,
+            timeout_secs: None,
+        });
+        runtime.phases.insert(current_phase.clone(), definition);
+        write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project_root.clone(),
+            workflow_id: None,
+            task_id: Some(task.id.clone()),
+            requirement_id: None,
+            title: None,
+            description: None,
+            workflow_ref: None,
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: Some(hub.clone()),
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await
+        .expect("workflow execution should succeed");
+
+        assert!(result.success, "manual wait should not exit as a runner failure");
+        assert_eq!(result.workflow_status, WorkflowStatus::Paused);
+        assert_eq!(result.phase_results[0]["status"].as_str(), Some("manual_pending"));
+        assert_eq!(result.phase_results[0]["workflow_status"].as_str(), Some("paused"));
+
+        let updated = hub.workflows().get(&result.workflow_id).await.expect("workflow should reload");
+        assert_eq!(updated.status, WorkflowStatus::Paused);
+    }
+
+    #[test]
+    fn cancelled_workflows_exit_unsuccessfully() {
+        assert!(workflow_exit_success(WorkflowStatus::Completed));
+        assert!(workflow_exit_success(WorkflowStatus::Paused));
+        assert!(!workflow_exit_success(WorkflowStatus::Cancelled));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use orchestrator_core::{
+        InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
+        REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+    };
+
+    #[tokio::test]
+    async fn resolve_execution_subject_context_uses_requirement_metadata() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-123".to_string(),
+                title: "Generate linked tasks".to_string(),
+                description: "Create implementation-ready tasks from this requirement.".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: vec!["Derived tasks exist".to_string()],
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        let context = resolve_execution_subject_context(
+            hub as Arc<dyn ServiceHub>,
+            &SubjectRef::requirement("REQ-123".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect("resolve requirement context");
+
+        assert_eq!(context.subject_title, "Generate linked tasks");
+        assert_eq!(context.subject_description, "Create implementation-ready tasks from this requirement.");
+        assert!(context.task.is_none());
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_planned_for_plan_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-200".to_string(),
+                title: "Plan requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &SubjectRef::requirement("REQ-200".to_string()),
+            REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub.planning().get_requirement("REQ-200").await.expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::Planned);
+    }
+
+    #[tokio::test]
+    async fn project_requirement_success_status_projects_in_progress_for_run_workflow() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let now = Utc::now();
+
+        hub.planning()
+            .upsert_requirement(RequirementItem {
+                id: "REQ-201".to_string(),
+                title: "Run requirement".to_string(),
+                description: "Requirement lifecycle parity".to_string(),
+                body: None,
+                legacy_id: None,
+                category: None,
+                requirement_type: None,
+                acceptance_criteria: Vec::new(),
+                priority: RequirementPriority::Should,
+                status: RequirementStatus::Refined,
+                source: "test".to_string(),
+                tags: Vec::new(),
+                links: RequirementLinks::default(),
+                comments: Vec::new(),
+                relative_path: None,
+                linked_task_ids: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("upsert requirement");
+
+        project_requirement_success_status(
+            hub.clone(),
+            &SubjectRef::requirement("REQ-201".to_string()),
+            REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+        )
+        .await
+        .expect("projection should succeed");
+
+        let updated = hub.planning().get_requirement("REQ-201").await.expect("requirement should exist");
+        assert_eq!(updated.status, RequirementStatus::InProgress);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod plugin_pack_fixture_tests {
+    use super::{execute_workflow, WorkflowExecuteParams};
+    use orchestrator_config::{
+        activate_pack_mcp_overlay, load_pack_manifest, load_pack_mcp_overlay, load_workflow_config_with_metadata,
+        machine_installed_packs_dir, workflow_config::builtin_workflow_config, PackRuntimeCheckStatus,
+    };
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::env;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+
+        fn set_raw(key: &'static str, value: &str) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_deref() {
+                Some(value) => env::set_var(self.key, value),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        fs::write(path, body).expect("fixture executable should be written");
+        let mut perms = fs::metadata(path).expect("fixture executable metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("fixture executable should be chmod +x");
+    }
+
+    fn write_project_runtime_scripts(project_root: &Path) {
+        fs::create_dir_all(project_root.join("scripts")).expect("scripts dir should exist");
+        fs::write(project_root.join("scripts/node-fixture.js"), "console.log('node fixture');\n")
+            .expect("node fixture source should be written");
+        fs::write(project_root.join("scripts/python-fixture.py"), "print('python fixture')\n")
+            .expect("python fixture source should be written");
+    }
+
+    fn write_runtime_pack_fixture(
+        root: &Path,
+        pack_id: &str,
+        runtime_kind: &str,
+        runtime_version: &str,
+        runtime_binary_name: &str,
+        phase_id: &str,
+        workflow_ref: &str,
+        project_script: &str,
+        output_file_name: &str,
+        include_mcp_overlay: bool,
+    ) {
+        fs::create_dir_all(root.join("workflows")).expect("pack workflows dir should exist");
+        fs::create_dir_all(root.join("runtime")).expect("pack runtime dir should exist");
+        fs::create_dir_all(root.join("bin")).expect("pack bin dir should exist");
+        if include_mcp_overlay {
+            fs::create_dir_all(root.join("mcp")).expect("pack mcp dir should exist");
+        }
+
+        let runtime_binary = root.join("bin").join(runtime_binary_name);
+        write_executable(
+            &runtime_binary,
+            &format!(
+                r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "{runtime_version}"
+  exit 0
+fi
+script_path="$1"
+output_path="$2"
+subject_id="$3"
+printf '{runtime_kind}:%s\n' "$script_path" > "$output_path"
+printf '{{"kind":"phase_result","runtime":"{runtime_kind}","script":"%s","subject_id":"%s"}}\n' "$script_path" "$subject_id"
+"#
+            ),
+        );
+
+        let manifest = format!(
+            r#"
+schema = "ao.pack.v1"
+id = "{pack_id}"
+version = "0.1.0"
+kind = "domain-pack"
+title = "{pack_id}"
+description = "{runtime_kind} subprocess fixture."
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+ao_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["custom"]
+default_kind = "custom"
+
+[workflows]
+root = "workflows"
+exports = ["{workflow_ref}"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
+
+[[runtime.requirements]]
+runtime = "{runtime_kind}"
+binary = "{runtime_binary_name}"
+version = ">=0.0.1"
+optional = false
+reason = "Fixture pack validates external runtime probing."
+
+{mcp_block}
+[permissions]
+tools = ["{runtime_binary_name}"]
+{mcp_permissions}
+"#,
+            mcp_block = if include_mcp_overlay {
+                r#"[mcp]
+servers = "mcp/servers.toml"
+tools = "mcp/tools.toml"
+"#
+            } else {
+                ""
+            },
+            mcp_permissions =
+                if include_mcp_overlay { format!(r#"mcp_namespaces = ["{pack_id}"]"#) } else { String::new() },
+        );
+        fs::write(root.join(orchestrator_config::PACK_MANIFEST_FILE_NAME), manifest)
+            .expect("pack manifest should write");
+
+        fs::write(
+            root.join("runtime/agent-runtime.overlay.yaml"),
+            format!(
+                r#"
+tools_allowlist:
+  - {runtime_binary_name}
+phases:
+  {phase_id}:
+    mode: command
+    command:
+      program: ./bin/{runtime_binary_name}
+      args:
+        - "{project_script}"
+        - "{{{{project_root}}}}/{output_file_name}"
+        - "{{{{subject_id}}}}"
+      cwd_mode: project_root
+      parse_json_output: true
+      expected_result_kind: phase_result
+"#
+            ),
+        )
+        .expect("agent runtime overlay should write");
+
+        fs::write(
+            root.join("runtime/workflow-runtime.overlay.yaml"),
+            format!(
+                r#"
+phase_catalog:
+  {phase_id}:
+    label: "{phase_id}"
+    description: "{runtime_kind} fixture phase"
+    category: verification
+    tags: ["fixture", "{runtime_kind}"]
+workflows:
+  - id: {workflow_ref}
+    name: "{workflow_ref}"
+    phases:
+      - {phase_id}
+"#
+            ),
+        )
+        .expect("workflow runtime overlay should write");
+
+        if include_mcp_overlay {
+            fs::write(
+                root.join("mcp/servers.toml"),
+                format!(
+                    r#"[[server]]
+id = "runtime"
+command = "{runtime_binary_name}"
+args = ["mcp-server.js"]
+"#,
+                ),
+            )
+            .expect("mcp servers should write");
+            fs::write(
+                root.join("mcp/tools.toml"),
+                format!(
+                    r#"[phase.{phase_id}]
+servers = ["runtime"]
+"#
+                ),
+            )
+            .expect("mcp tools should write");
+        }
+    }
+
+    fn write_delegating_pack_fixture(root: &Path, pack_id: &str, workflow_ref: &str, sub_workflow_ref: &str) {
+        fs::create_dir_all(root.join("workflows")).expect("pack workflows dir should exist");
+        fs::create_dir_all(root.join("runtime")).expect("pack runtime dir should exist");
+
+        let manifest = format!(
+            r#"
+schema = "ao.pack.v1"
+id = "{pack_id}"
+version = "0.1.0"
+kind = "domain-pack"
+title = "{pack_id}"
+description = "delegating pack fixture."
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+ao_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["custom"]
+default_kind = "custom"
+
+[workflows]
+root = "workflows"
+exports = ["{workflow_ref}"]
+
+[runtime]
+workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
+
+[[dependencies]]
+id = "ao.node-fixture"
+version = ">=0.1.0"
+optional = false
+
+[permissions]
+tools = []
+"#
+        );
+        fs::write(root.join(orchestrator_config::PACK_MANIFEST_FILE_NAME), manifest)
+            .expect("delegating pack manifest should write");
+        fs::write(
+            root.join("runtime/workflow-runtime.overlay.yaml"),
+            format!(
+                r#"
+workflows:
+  - id: {workflow_ref}
+    name: "{workflow_ref}"
+    phases:
+      - workflow_ref: {sub_workflow_ref}
+"#
+            ),
+        )
+        .expect("delegating workflow overlay should write");
+    }
+
+    fn phase_result_payload(phase_result: &Value) -> &Value {
+        phase_result
+            .get("outcome")
+            .and_then(|outcome| outcome.get("result_payload"))
+            .or_else(|| {
+                phase_result
+                    .get("outcome")
+                    .and_then(|outcome| outcome.get("Completed"))
+                    .and_then(|completed| completed.get("result_payload"))
+            })
+            .unwrap_or(&Value::Null)
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_runs_node_pack_fixture_and_namespaces_pack_mcp() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        write_project_runtime_scripts(project.path());
+
+        let pack_root = machine_installed_packs_dir().join("ao.node-fixture").join("0.1.0");
+        let path = env::var("PATH").unwrap_or_default();
+        let _path_guard = EnvVarGuard::set_raw("PATH", &format!("{}:{}", pack_root.join("bin").display(), path));
+        write_runtime_pack_fixture(
+            &pack_root,
+            "ao.node-fixture",
+            "node",
+            "v20.11.1",
+            "node-fixture-runtime",
+            "node-command",
+            "ao.node-fixture/run",
+            "scripts/node-fixture.js",
+            "node-pack-output.txt",
+            true,
+        );
+
+        let pack = load_pack_manifest(&pack_root).expect("node fixture pack should load");
+        let overlay = load_pack_mcp_overlay(&pack).expect("node fixture MCP overlay should load");
+        assert!(overlay.servers.contains_key("ao.node-fixture/runtime"));
+        assert_eq!(
+            overlay.phase_mcp_bindings.get("node-command").expect("node phase MCP binding should exist").servers,
+            vec!["ao.node-fixture/runtime".to_string()]
+        );
+
+        let mut workflow = builtin_workflow_config();
+        let report = activate_pack_mcp_overlay(&mut workflow, &pack).expect("node fixture MCP overlay should activate");
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].status, PackRuntimeCheckStatus::Satisfied);
+        assert_eq!(
+            workflow.phase_mcp_bindings.get("node-command").expect("node phase MCP binding should merge").servers,
+            vec!["ao.node-fixture/runtime".to_string()]
+        );
+
+        let loaded = load_workflow_config_with_metadata(project.path()).expect("effective workflow config should load");
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.node-fixture/run"),
+            "node fixture workflow should be discoverable"
+        );
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project.path().display().to_string(),
+            workflow_id: None,
+            task_id: None,
+            requirement_id: None,
+            title: Some("node-fixture-subject".to_string()),
+            description: Some("node fixture workflow".to_string()),
+            workflow_ref: Some("ao.node-fixture/run".to_string()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: None,
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await
+        .expect("node fixture workflow should execute");
+
+        assert!(result.success);
+        assert_eq!(result.workflow_ref, "ao.node-fixture/run");
+        assert_eq!(result.execution_cwd, project.path().display().to_string());
+        assert_eq!(result.phase_results[0]["status"].as_str(), Some("completed"));
+        let payload = phase_result_payload(&result.phase_results[0]);
+        assert_eq!(payload.get("runtime").and_then(Value::as_str), Some("node"));
+        assert_eq!(payload.get("subject_id").and_then(Value::as_str), Some("node-fixture-subject"));
+
+        let output = fs::read_to_string(project.path().join("node-pack-output.txt"))
+            .expect("node fixture command output should be written");
+        assert_eq!(output.trim(), "node:scripts/node-fixture.js");
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_defers_pack_runtime_checks_until_execution() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        write_project_runtime_scripts(project.path());
+
+        let pack_root = machine_installed_packs_dir().join("ao.node-fixture").join("0.1.0");
+        write_runtime_pack_fixture(
+            &pack_root,
+            "ao.node-fixture",
+            "node",
+            "v20.11.1",
+            "node-fixture-runtime",
+            "node-command",
+            "ao.node-fixture/run",
+            "scripts/node-fixture.js",
+            "node-pack-output.txt",
+            false,
+        );
+
+        let loaded = load_workflow_config_with_metadata(project.path()).expect("workflow config should load");
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.node-fixture/run"),
+            "fixture workflow should be discoverable before execution"
+        );
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project.path().display().to_string(),
+            workflow_id: None,
+            task_id: None,
+            requirement_id: None,
+            title: Some("node-fixture-subject".to_string()),
+            description: Some("node fixture workflow".to_string()),
+            workflow_ref: Some("ao.node-fixture/run".to_string()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: None,
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await;
+        let error = match result {
+            Ok(_) => panic!("execution should fail when runtime requirement is unavailable"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("cannot activate pack 'ao.node-fixture'"),
+            "unexpected execution error: {error}"
+        );
+        assert!(
+            error.chain().any(|cause| cause.to_string().contains("requires runtime 'node'")),
+            "runtime requirement failure should remain in the error chain: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_checks_dependent_pack_requirements_before_phase_execution() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        write_project_runtime_scripts(project.path());
+
+        let runtime_pack_root = machine_installed_packs_dir().join("ao.node-fixture").join("0.1.0");
+        write_runtime_pack_fixture(
+            &runtime_pack_root,
+            "ao.node-fixture",
+            "node",
+            "v20.11.1",
+            "node-fixture-runtime",
+            "node-command",
+            "ao.node-fixture/cycle",
+            "scripts/node-fixture.js",
+            "node-pack-output.txt",
+            false,
+        );
+        let delegating_pack_root = machine_installed_packs_dir().join("ao.composite").join("0.1.0");
+        write_delegating_pack_fixture(
+            &delegating_pack_root,
+            "ao.composite",
+            "ao.composite/run",
+            "ao.node-fixture/cycle",
+        );
+
+        let loaded = load_workflow_config_with_metadata(project.path()).expect("workflow config should load");
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.composite/run"),
+            "delegating workflow should be discoverable before execution"
+        );
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.node-fixture/cycle"),
+            "dependent workflow should be discoverable before execution"
+        );
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project.path().display().to_string(),
+            workflow_id: None,
+            task_id: None,
+            requirement_id: None,
+            title: Some("composite-fixture-subject".to_string()),
+            description: Some("delegating fixture workflow".to_string()),
+            workflow_ref: Some("ao.composite/run".to_string()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: None,
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await;
+        let error = match result {
+            Ok(_) => panic!("execution should fail when dependent runtime requirement is unavailable"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("cannot activate pack 'ao.node-fixture'"),
+            "unexpected execution error: {error}"
+        );
+        assert!(
+            error.chain().any(|cause| cause.to_string().contains("required by workflow 'ao.node-fixture/cycle'")),
+            "dependent workflow context should remain in the error chain: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_runs_python_pack_fixture_with_external_runtime() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        write_project_runtime_scripts(project.path());
+
+        let pack_root = machine_installed_packs_dir().join("ao.python-fixture").join("0.1.0");
+        let path = env::var("PATH").unwrap_or_default();
+        let _path_guard = EnvVarGuard::set_raw("PATH", &format!("{}:{}", pack_root.join("bin").display(), path));
+        write_runtime_pack_fixture(
+            &pack_root,
+            "ao.python-fixture",
+            "python",
+            "Python 3.11.8",
+            "python-fixture-runtime",
+            "python-command",
+            "ao.python-fixture/run",
+            "scripts/python-fixture.py",
+            "python-pack-output.txt",
+            false,
+        );
+
+        let loaded = load_workflow_config_with_metadata(project.path()).expect("effective workflow config should load");
+        assert!(
+            loaded.config.workflows.iter().any(|workflow| workflow.id == "ao.python-fixture/run"),
+            "python fixture workflow should be discoverable"
+        );
+
+        let result = execute_workflow(WorkflowExecuteParams {
+            project_root: project.path().display().to_string(),
+            workflow_id: None,
+            task_id: None,
+            requirement_id: None,
+            title: Some("python-fixture-subject".to_string()),
+            description: Some("python fixture workflow".to_string()),
+            workflow_ref: Some("ao.python-fixture/run".to_string()),
+            input: None,
+            vars: HashMap::new(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            phase_filter: None,
+            on_phase_event: None,
+            hub: None,
+            phase_routing: None,
+            mcp_config: None,
+        })
+        .await
+        .expect("python fixture workflow should execute");
+
+        assert!(result.success);
+        assert_eq!(result.workflow_ref, "ao.python-fixture/run");
+        assert_eq!(result.phase_results[0]["status"].as_str(), Some("completed"));
+        let payload = phase_result_payload(&result.phase_results[0]);
+        assert_eq!(payload.get("runtime").and_then(Value::as_str), Some("python"));
+        assert_eq!(payload.get("subject_id").and_then(Value::as_str), Some("python-fixture-subject"));
+
+        let output = fs::read_to_string(project.path().join("python-pack-output.txt"))
+            .expect("python fixture command output should be written");
+        assert_eq!(output.trim(), "python:scripts/python-fixture.py");
+    }
+}
+
+#[cfg(test)]
+mod post_success_merge_tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command as ProcessCommand;
+    use tempfile::TempDir;
+
+    fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        ProcessCommand::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("git {:?} failed to start in {}: {error}", args, cwd.display()))
+    }
+
+    fn run_git_ok(cwd: &Path, args: &[&str]) {
+        let output = run_git(cwd, args);
+        assert!(output.status.success(), "git {:?} failed in {}: {}", args, cwd.display(), command_summary(&output));
+    }
+
+    fn git_stdout(cwd: &Path, args: &[&str]) -> String {
+        let output = run_git(cwd, args);
+        assert!(output.status.success(), "git {:?} failed in {}: {}", args, cwd.display(), command_summary(&output));
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn init_repo() -> (TempDir, PathBuf) {
+        let temp = TempDir::new().expect("temp dir");
+        run_git_ok(temp.path(), &["init", "--initial-branch=main"]);
+        run_git_ok(temp.path(), &["config", "user.email", "ao@example.com"]);
+        run_git_ok(temp.path(), &["config", "user.name", "AO"]);
+        fs::write(temp.path().join("README.md"), "base\n").expect("write base file");
+        run_git_ok(temp.path(), &["add", "README.md"]);
+        run_git_ok(temp.path(), &["commit", "-m", "initial"]);
+
+        let worktree_path = temp.path().join(".ao").join("worktrees").join("task-task-1");
+        fs::create_dir_all(worktree_path.parent().expect("worktree parent")).expect("create worktree parent");
+        run_git_ok(
+            temp.path(),
+            &["worktree", "add", "-b", "ao/task-1", worktree_path.to_str().expect("worktree path"), "main"],
+        );
+
+        (temp, worktree_path)
+    }
+
+    fn commit_file(cwd: &Path, file_name: &str, contents: &str, message: &str) {
+        fs::write(cwd.join(file_name), contents).expect("write fixture file");
+        run_git_ok(cwd, &["add", file_name]);
+        run_git_ok(cwd, &["commit", "-m", message]);
+    }
+
+    #[tokio::test]
+    async fn auto_merge_uses_target_branch_worktree_for_standard_merge() {
+        let (repo, source_worktree) = init_repo();
+        commit_file(&source_worktree, "feature.txt", "merged\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Merge,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_eq!(git_stdout(repo.path(), &["branch", "--show-current"]), "main");
+        assert_eq!(git_stdout(&source_worktree, &["branch", "--show-current"]), "ao/task-1");
+        assert_eq!(fs::read_to_string(repo.path().join("feature.txt")).expect("merged file"), "merged\n");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_rebase_advances_target_branch() {
+        let (repo, source_worktree) = init_repo();
+        commit_file(repo.path(), "main.txt", "target\n", "target change");
+        commit_file(&source_worktree, "feature.txt", "rebased\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Rebase,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_eq!(
+            git_stdout(repo.path(), &["rev-parse", "main"]),
+            git_stdout(repo.path(), &["rev-parse", "ao/task-1"])
+        );
+        assert_eq!(git_stdout(repo.path(), &["log", "--format=%s", "-2", "main"]), "source change\ntarget change");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_squash_creates_commit_and_leaves_target_clean() {
+        let (repo, source_worktree) = init_repo();
+        let before = git_stdout(repo.path(), &["rev-parse", "main"]);
+        commit_file(&source_worktree, "feature.txt", "squashed\n", "source change");
+
+        let result = perform_auto_merge_with_git(
+            repo.path().to_str().expect("repo path"),
+            source_worktree.to_str().expect("worktree path"),
+            "ao/task-1",
+            "main",
+            &MergeStrategy::Squash,
+        )
+        .await;
+
+        assert_eq!(result["status"].as_str(), Some("completed"));
+        assert_ne!(before, git_stdout(repo.path(), &["rev-parse", "main"]));
+        assert_eq!(
+            git_stdout(repo.path(), &["log", "--format=%s", "-1", "main"]),
+            "Squash merge branch 'ao/task-1' into 'main'"
+        );
+        assert_eq!(git_stdout(repo.path(), &["status", "--porcelain", "--untracked-files=no"]), "");
+        assert_eq!(fs::read_to_string(repo.path().join("feature.txt")).expect("squashed file"), "squashed\n");
+    }
+}

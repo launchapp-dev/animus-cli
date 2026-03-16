@@ -105,6 +105,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
+    /// Install, inspect, and pin workflow packs.
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
     /// Inspect runner health and orphaned runs.
     Runner {
         #[command(subcommand)]

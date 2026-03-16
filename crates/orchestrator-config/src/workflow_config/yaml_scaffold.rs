@@ -22,7 +22,7 @@ tools_allowlist:
     name: Standard Workflow
     description: Default task delivery workflow for this repository.
     phases:
-      - workflow_ref: builtin/task-standard
+      - workflow_ref: ao.task/standard
 "#,
         ),
         (
@@ -32,7 +32,7 @@ tools_allowlist:
     name: Hotfix Workflow
     description: Fast-track workflow for urgent fixes.
     phases:
-      - workflow_ref: builtin/task-quick-fix
+      - workflow_ref: ao.task/quick-fix
 "#,
         ),
         (
@@ -42,7 +42,7 @@ tools_allowlist:
     name: Research Workflow
     description: Validate scope and produce findings without landing implementation changes.
     phases:
-      - workflow_ref: builtin/task-triage
+      - workflow_ref: ao.task/triage
       - requirements
 "#,
         ),

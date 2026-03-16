@@ -381,6 +381,29 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         }
     }
 
+    for (phase_id, binding) in &config.phase_mcp_bindings {
+        if phase_id.trim().is_empty() {
+            errors.push("phase_mcp_bindings contains an empty phase id".to_string());
+            continue;
+        }
+        if binding.servers.is_empty() {
+            errors.push(format!("phase_mcp_bindings['{}'].servers must include at least one MCP server", phase_id));
+            continue;
+        }
+        for server in &binding.servers {
+            if server.trim().is_empty() {
+                errors.push(format!("phase_mcp_bindings['{}'].servers must not contain empty values", phase_id));
+                continue;
+            }
+            if !config.mcp_servers.contains_key(server) {
+                errors.push(format!(
+                    "phase_mcp_bindings['{}'].servers references unknown MCP server '{}'",
+                    phase_id, server
+                ));
+            }
+        }
+    }
+
     for (name, definition) in &config.tools {
         if name.trim().is_empty() {
             errors.push("tools contains an empty tool name".to_string());

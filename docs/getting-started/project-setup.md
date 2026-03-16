@@ -2,106 +2,114 @@
 
 ## What `ao setup` Does
 
-The `ao setup` command is an interactive wizard that initializes AO for your project. It:
+`ao setup` initializes the repository-scoped AO workspace. It:
 
-1. Detects your project root (git repository root)
-2. Prompts for tech stack, language, and framework details
-3. Configures workflow definitions (builtin + task workflows)
-4. Sets up MCP server references
-5. Configures agent profiles and model preferences
-6. Creates the `.ao/` directory tree with all necessary files
+1. resolves the project root
+2. creates the `.ao/` directory tree
+3. scaffolds project-local workflow YAML
+4. prepares AO-managed state files
+5. leaves bundled workflows and bundled first-party packs available by default
 
-## The `.ao/` Directory
+`ao setup` does not copy bundled task or requirement logic into your repo. That
+behavior is resolved from bundled sources and pack overlays unless you override
+it locally.
 
-After setup, your project root contains a `.ao/` directory with this structure:
+## What Gets Created
 
-```
+Typical project-local files after setup:
+
+```text
 .ao/
-├── workflows/                  # Workflow YAML definitions
-│   ├── builtin/                # Planning workflows (shipped with AO)
-│   │   ├── vision-draft.yaml
-│   │   ├── vision-refine.yaml
-│   │   ├── requirements-draft.yaml
-│   │   ├── requirements-refine.yaml
-│   │   └── requirements-execute.yaml
-│   ├── standard-workflow.yaml  # Default task workflow
-│   ├── hotfix-workflow.yaml    # Fast-track workflow
-│   └── research-workflow.yaml  # Research-only workflow
-│
-├── state/                      # Runtime state (managed by AO)
-│   ├── vision.json             # Vision document
-│   ├── requirements.json       # Requirements with acceptance criteria
-│   ├── tasks.json              # Task registry
-│   ├── agent-runtime-config.v2.json  # Agent profiles and model routing
-│   └── ...                     # Other state files
-│
-├── daemon.log                  # Daemon log output
-└── daemon.log.1                # Rotated log (at 10MB)
+├── config.json
+├── core-state.json
+├── resume-config.json
+├── workflows/
+│   ├── custom.yaml
+│   ├── standard-workflow.yaml
+│   ├── hotfix-workflow.yaml
+│   └── research-workflow.yaml
+├── plugins/
+├── requirements/
+├── tasks/
+├── docs/
+├── runs/
+├── artifacts/
+└── state/
+    ├── pack-selection.v1.json
+    ├── state-machines.v1.json
+    ├── reviews.json
+    ├── handoffs.json
+    ├── history.json
+    ├── errors.json
+    ├── qa-results.json
+    └── qa-review-approvals.json
 ```
 
 ### `workflows/`
 
-Contains all YAML workflow definitions. AO distinguishes three categories:
+These are project-local YAML entry points. The default scaffold wraps bundled
+pack workflows such as `ao.task/standard` rather than duplicating task logic in
+the repository.
 
-- **Builtin workflows** (`builtin/`): Planning-lifecycle workflows that ship with AO. These handle vision drafting, requirements generation, and task creation.
-- **Task workflows**: Workflows assigned to tasks (e.g., `standard-workflow`, `hotfix-workflow`). These define the phase pipeline an agent follows to implement a task.
-- **Custom workflows**: Any workflow you define for your own purposes (incident response, lead qualification, nightly CI, etc.).
+### `plugins/`
 
-### `state/`
+This is the project override location for pack assets:
 
-Runtime state managed exclusively by AO commands and MCP tools. These are JSON files that track vision, requirements, tasks, workflow execution state, and agent configuration.
-
-**Do not hand-edit files in `.ao/state/`.** Always use `ao` commands or MCP tools to modify state. Direct edits bypass validation and can corrupt state.
-
-## Repository Scoping
-
-AO scopes runtime data to each repository. Worktrees and execution artifacts live at:
-
-```
-~/.ao/<repo-scope>/worktrees/<task-id>/
+```text
+.ao/plugins/<pack-id>/
 ```
 
-The `<repo-scope>` is derived from your repository's git remote URL or directory path. This means multiple clones of the same repository share the same AO state scope.
+Use it when you want a repository-specific override of an installed or bundled
+pack.
 
-Each task gets its own isolated git worktree, so agents can write code, run tests, and commit without interfering with each other or your working copy.
+### `state/pack-selection.v1.json`
 
-## Global Configuration
-
-Machine-wide AO configuration lives at:
-
-```
-~/.config/agent-orchestrator/
-```
-
-This includes global preferences, default model settings, and credential references. Project-level configuration in `.ao/` takes precedence over global settings.
-
-## Agent Runtime Configuration
-
-The agent runtime config at `.ao/state/agent-runtime-config.v2.json` controls:
-
-- **Agent profiles**: Default model and tool for each agent persona
-- **Model routing**: Which model handles which workflow phase
-- **Capacity settings**: Max concurrent workflows, slot headroom
-
-The config cascade for model selection is:
-
-1. Phase-level `runtime.model` override (highest priority)
-2. Agent profile `model` field
-3. Compiled defaults in `protocol/src/model_routing.rs` (lowest priority)
-
-Set agent profile fields to `null` to fall through to compiled defaults.
-
-## Project Root Override
-
-In scripts and automation, always specify the project root explicitly:
+This file records project pack pins and enablement state. Manage it through
+pack commands, not by editing it directly:
 
 ```bash
-ao --project-root "$(pwd)" task list
+ao pack list
+ao pack inspect --pack-id ao.task
+ao pack pin --pack-id ao.task --version =0.1.0
 ```
 
-AO also reads the `PROJECT_ROOT` environment variable as a fallback.
+## Bundled vs Installed Packs
+
+AO resolves workflows from multiple layers:
+
+1. project overrides in `.ao/plugins/`
+2. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
+3. installed packs in `~/.ao/packs/<pack-id>/<version>/`
+4. bundled kernel workflows and bundled first-party packs
+
+Bundled first-party packs currently own task, requirement, review, and QA
+behavior. Canonical refs include:
+
+- `ao.task/standard`
+- `ao.requirement/draft`
+- `ao.requirement/execute`
+
+Legacy `builtin/*` refs still resolve, but they are compatibility aliases.
+
+## Machine-Scoped Storage
+
+AO also uses machine-scoped directories outside the repo:
+
+- `~/.ao/packs/` for installed packs
+- `~/.ao/<repo-scope>/worktrees/` for task worktrees and repo-scoped runtime data
+
+## Mutation Policy
+
+Do not hand-edit `.ao` state files. Use:
+
+- `ao task ...`
+- `ao requirements ...`
+- `ao workflow ...`
+- `ao pack ...`
+- AO MCP tools
 
 ## Next Steps
 
-- [Quick Start](quick-start.md) -- Run your first autonomous workflow.
-- [A Typical Day](typical-day.md) -- See the full lifecycle in action.
+- [Quick Start](quick-start.md)
+- [A Typical Day](typical-day.md)
+- [Workflows](../concepts/workflows.md)
