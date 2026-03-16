@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::skill_definition::SkillDefinition;
-use crate::skill_scoping::{load_skill_sources, SkillSource, SkillSourceOrigin};
+use crate::skill_scoping::{load_installed_skill_entries, load_skill_sources, SkillSource, SkillSourceOrigin};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedSkill {
     pub definition: SkillDefinition,
     pub source: SkillSourceOrigin,
@@ -38,7 +39,28 @@ pub fn resolve_skills(names: &[String], sources: &[SkillSource]) -> Result<Vec<R
 
 pub fn resolve_skills_for_project(names: &[String], project_root: &Path) -> Result<Vec<ResolvedSkill>> {
     let sources = load_skill_sources(project_root, None)?;
-    resolve_skills(names, &sources)
+    let mut resolved = Vec::with_capacity(names.len());
+    for name in names {
+        match resolve_skill(name, &sources) {
+            Ok(skill) => resolved.push(skill),
+            Err(error) => {
+                if let Some(installed) = load_installed_skill_entries(project_root)?
+                    .into_iter()
+                    .find(|entry| entry.name.eq_ignore_ascii_case(name.trim()) && entry.definition.is_none())
+                {
+                    bail!(
+                        "skill '{}' is installed from registry '{}' (source '{}', version '{}') but has no stored definition snapshot. Reinstall or republish it with a newer AO version so runtime can apply it.",
+                        name.trim(),
+                        installed.registry,
+                        installed.source,
+                        installed.version
+                    );
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 pub fn list_available_skills(sources: &[SkillSource]) -> Vec<ResolvedSkill> {
@@ -115,6 +137,33 @@ mod tests {
 
         let resolved = resolve_skill("shared", &sources).unwrap();
         assert_eq!(resolved.source, SkillSourceOrigin::User);
+    }
+
+    #[test]
+    fn test_priority_installed_over_builtin_but_under_user_and_project() {
+        let installed = make_source(
+            SkillSourceOrigin::Installed {
+                registry: "project".to_string(),
+                source: "acme".to_string(),
+                version: "1.0.0".to_string(),
+                integrity: "sha256:test".to_string(),
+                artifact: "shared-1.0.0.tgz".to_string(),
+            },
+            &["shared"],
+        );
+        let sources = vec![
+            make_source(SkillSourceOrigin::Builtin, &["shared"]),
+            installed.clone(),
+            make_source(SkillSourceOrigin::User, &["shared"]),
+            make_source(SkillSourceOrigin::Project, &["shared"]),
+        ];
+
+        let resolved = resolve_skill("shared", &sources).unwrap();
+        assert_eq!(resolved.source, SkillSourceOrigin::Project);
+
+        let sources = vec![make_source(SkillSourceOrigin::Builtin, &["shared"]), installed];
+        let resolved = resolve_skill("shared", &sources).unwrap();
+        assert!(matches!(resolved.source, SkillSourceOrigin::Installed { .. }));
     }
 
     #[test]

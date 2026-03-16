@@ -114,7 +114,8 @@
       "mcp__ao__ao_daemon_logs",
       "Bash(cargo clean:*)",
       "Read(//Users/samishukri/.ao/**)",
-      "Bash(2)"
+      "Bash(2)",
+      "Bash(stat:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

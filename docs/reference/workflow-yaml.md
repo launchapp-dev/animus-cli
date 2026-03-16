@@ -111,6 +111,52 @@ Agent profiles defined in YAML are merged into the agent runtime config during c
 
 ---
 
+## phases
+
+Declares reusable phase execution definitions. Workflow phase entries reference these definitions by ID.
+
+```yaml
+phases:
+  implementation:
+    mode: agent
+    agent: default
+    directive: "Implement the change."
+    skills:
+      - implementation
+      - code-review
+    runtime:
+      tool: codex
+      model: gpt-5.3-codex
+  code-review:
+    mode: agent
+    agent: po-reviewer
+    skills:
+      - code-review
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mode` | string | yes | Execution mode: `agent`, `command`, or `manual` |
+| `agent` | string | no | Agent profile name to use for the phase |
+| `directive` | string | no | Phase-specific instruction appended to the prompt contract |
+| `system_prompt` | string | no | Phase-specific system prompt |
+| `skills` | string[] | no | Skill identifiers to resolve, validate, and apply at phase runtime |
+| `runtime` | object | no | Tool/model/runtime overrides for the phase |
+| `capabilities` | object | no | Structured phase capability flags |
+| `output_contract` | object | no | Structured result contract for the phase |
+| `output_json_schema` | object | no | Additional JSON schema constraints for the result |
+| `decision_contract` | object | no | Structured phase decision contract |
+| `retry` | object | no | Retry policy for the phase |
+| `command` | object | no | Command execution definition when `mode: command` |
+| `manual` | object | no | Manual gate definition when `mode: manual` |
+| `default_tool` | string | no | Default tool hint for the phase |
+
+Phase `skills` are validated during config load. At runtime they can inject prompt fragments, model/tool policy overrides, MCP attachments, timeout overrides, launch args/env, and capability overrides. Installed registry skills work the same as local skills when a definition snapshot is present in AO state.
+
+---
+
 ## variables
 
 Declares variables that can be used throughout the workflow. Variables support defaults and can be overridden at runtime via `--input-json`.

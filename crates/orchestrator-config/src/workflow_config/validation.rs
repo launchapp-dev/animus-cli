@@ -65,10 +65,6 @@ pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime:
     }
 }
 
-pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
-    validate_workflow_config_with_project_root(config, None)
-}
-
 fn validate_skill_references(
     field_path: &str,
     skills: &[String],
@@ -94,6 +90,10 @@ fn validate_skill_references(
     if let Err(error) = result {
         errors.push(format!("{field_path} validation failed: {error}"));
     }
+}
+
+pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
+    validate_workflow_config_with_project_root(config, None)
 }
 
 pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, project_root: Option<&Path>) -> Result<()> {
@@ -367,6 +367,18 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             project_root,
             &mut errors,
         );
+        for server in &profile.mcp_servers {
+            if server.trim().is_empty() {
+                errors.push(format!("agent_profiles['{}'].mcp_servers must not contain empty values", agent_id));
+                continue;
+            }
+            if !config.mcp_servers.contains_key(server) {
+                errors.push(format!(
+                    "agent_profiles['{}'].mcp_servers references unknown MCP server '{}'",
+                    agent_id, server
+                ));
+            }
+        }
     }
 
     for (phase_id, binding) in &config.phase_mcp_bindings {
@@ -387,21 +399,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 errors.push(format!(
                     "phase_mcp_bindings['{}'].servers references unknown MCP server '{}'",
                     phase_id, server
-                ));
-            }
-        }
-    }
-
-    for (agent_id, profile) in &config.agent_profiles {
-        for server in &profile.mcp_servers {
-            if server.trim().is_empty() {
-                errors.push(format!("agent_profiles['{}'].mcp_servers must not contain empty values", agent_id));
-                continue;
-            }
-            if !config.mcp_servers.contains_key(server) {
-                errors.push(format!(
-                    "agent_profiles['{}'].mcp_servers references unknown MCP server '{}'",
-                    agent_id, server
                 ));
             }
         }

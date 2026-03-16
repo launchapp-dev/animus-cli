@@ -179,7 +179,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation { command: "claude".to_string(), args, prompt_via_stdin: false }
+            LaunchInvocation { command: "claude".to_string(), args, env: Default::default(), prompt_via_stdin: false }
         }
         Some(CliType::Codex) => {
             let mut args = vec!["exec".to_string(), "--skip-git-repo-check".to_string()];
@@ -188,7 +188,7 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation { command: "codex".to_string(), args, prompt_via_stdin: false }
+            LaunchInvocation { command: "codex".to_string(), args, env: Default::default(), prompt_via_stdin: false }
         }
         Some(CliType::Gemini) => {
             let mut args = Vec::new();
@@ -198,11 +198,12 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
             }
             args.push("-p".to_string());
             args.push(request.prompt.clone());
-            LaunchInvocation { command: "gemini".to_string(), args, prompt_via_stdin: false }
+            LaunchInvocation { command: "gemini".to_string(), args, env: Default::default(), prompt_via_stdin: false }
         }
         Some(CliType::OpenCode) => LaunchInvocation {
             command: "opencode".to_string(),
             args: vec!["run".to_string(), request.prompt.clone()],
+            env: Default::default(),
             prompt_via_stdin: false,
         },
         Some(CliType::OaiRunner) => {
@@ -212,11 +213,17 @@ fn launch_invocation_for_request(request: &SessionRequest) -> Result<LaunchInvoc
                 args.push(request.model.clone());
             }
             args.push(request.prompt.clone());
-            LaunchInvocation { command: "ao-oai-runner".to_string(), args, prompt_via_stdin: false }
+            LaunchInvocation {
+                command: "ao-oai-runner".to_string(),
+                args,
+                env: Default::default(),
+                prompt_via_stdin: false,
+            }
         }
         _ => LaunchInvocation {
             command: request.tool.clone(),
             args: vec![request.prompt.clone()],
+            env: Default::default(),
             prompt_via_stdin: false,
         },
     };

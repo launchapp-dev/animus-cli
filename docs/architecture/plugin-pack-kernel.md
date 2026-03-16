@@ -32,6 +32,7 @@ This is not a proposal for:
 
 - runtime-loaded Rust `.so` / `.dylib` / `.dll` plugins in the daemon
 - embedding third-party Rust code into the daemon process at runtime
+- embedding Python or Node.js interpreters into the AO kernel
 - letting workflows mutate AO state through hidden daemon-only side effects
 
 Those choices would weaken isolation and make the daemon harder to keep dumb.
@@ -53,6 +54,10 @@ Ships only data and configuration:
 
 This should cover most AO extensions.
 
+These packs may still rely on external runtimes such as Node.js or Python by
+declaring command-phase programs or MCP server commands that execute outside the
+AO process.
+
 ### Tier 2: Connector Pack
 
 A declarative pack plus MCP-backed integration behavior:
@@ -64,6 +69,14 @@ A declarative pack plus MCP-backed integration behavior:
 
 This should cover Jira, Linear, GitHub, CRM, incident, and support-style
 extensions.
+
+Node.js and Python should be first-class citizens at this tier.
+
+Examples:
+
+- a Node.js MCP server launched via `node` or `npx`
+- a Python MCP server launched via `python`, `python3`, `uv run`, or `pipx run`
+- command phases that invoke TypeScript, JavaScript, or Python utilities
 
 ### Tier 3: Native Module
 
@@ -79,6 +92,9 @@ Examples:
 
 Native modules should be rare and treated as bundled or feature-gated modules,
 not arbitrary runtime-loaded code.
+
+If a plugin can be expressed as workflows plus an external Python or Node.js
+process, AO should prefer that over a native Rust module.
 
 ## Kernel Boundary
 
@@ -173,6 +189,14 @@ ui/
   labels.yaml
 ```
 
+Optional runtime-owned directories are also valid:
+
+```text
+python/
+node/
+bin/
+```
+
 ### Manifest Example
 
 ```toml
@@ -207,6 +231,14 @@ exports = [
 agent_overlay = "runtime/agent-runtime.overlay.yaml"
 workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
 
+[[runtime_requirements]]
+kind = "node"
+version = ">=20"
+
+[[runtime_requirements]]
+kind = "python"
+version = ">=3.11"
+
 [mcp]
 servers = "mcp/servers.toml"
 tools = "mcp/tools.toml"
@@ -219,6 +251,21 @@ feature = "plugin-ao-requirements"
 module_id = "ao.requirements"
 optional = true
 ```
+
+### Runtime Requirements
+
+Plugin packs should be able to declare required external runtimes without
+making AO itself depend on those runtimes.
+
+Examples:
+
+- `node >=20`
+- `python >=3.11`
+- `uv`
+- `npm` or `pnpm`
+
+AO should validate these requirements at install or activation time and surface
+clear diagnostics when a pack cannot run because the local runtime is missing.
 
 ## Workflow Pack Loading
 
@@ -272,6 +319,18 @@ tool_namespace = "jira"
 startup = "phase-local"
 ```
 
+Python-backed example:
+
+```toml
+[[server]]
+id = "mlops"
+command = "uv"
+args = ["run", "python", "-m", "ao_mlops_mcp"]
+required_env = ["OPENAI_API_KEY"]
+tool_namespace = "mlops"
+startup = "phase-local"
+```
+
 ### Hosting Rule
 
 The daemon should not become an integration host. MCP servers should be started
@@ -279,6 +338,36 @@ by the workflow execution layer or a dedicated MCP host layer, scoped to the
 workflow or phase as policy requires.
 
 This preserves the dumb-daemon boundary.
+
+The same rule applies to Python and Node.js runtimes: they can participate as
+plugin-owned subprocesses, but they should not be linked into daemon-core.
+
+## Command-Phase Runtime Support
+
+Workflow command phases already model arbitrary subprocess execution, which
+makes them a natural extension point for Python and Node.js support.
+
+Examples:
+
+```yaml
+phases:
+  build-web-assets:
+    mode: command
+    command:
+      program: node
+      args: ["scripts/build.mjs"]
+      cwd_mode: project_root
+
+  classify-dataset:
+    mode: command
+    command:
+      program: python3
+      args: ["scripts/classify.py", "--input", "data/train.jsonl"]
+      cwd_mode: project_root
+```
+
+This allows plugin packs to add Node.js or Python capabilities without changing
+AO core language or daemon responsibilities.
 
 ## Native Module Surface
 
@@ -451,6 +540,8 @@ The architecture is correct when:
 - AO can install and resolve pack-qualified workflows without daemon changes
 - a pack can ship workflows, runtime overlays, MCP server descriptors, and
   schedules as one unit
+- a pack can declare external runtime requirements such as Node.js or Python
+  and execute them through command phases or MCP server processes
 - `ao.task` and `ao.requirement` behave as bundled packs rather than kernel
   special cases
 - new subject kinds can be added without editing daemon-core dispatch logic

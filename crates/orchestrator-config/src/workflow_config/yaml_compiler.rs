@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 
 use super::builtins::builtin_workflow_config;
 use super::types::*;
+use super::validation::validate_workflow_config_with_project_root;
 use super::yaml_parser::{parse_yaml_workflow_config_with_base, workflow_config_to_yaml_file};
 use super::yaml_types::*;
 
@@ -226,7 +227,7 @@ pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<Co
         compile_yaml_workflow_files(project_root)?.ok_or_else(|| anyhow!("no YAML workflow files found"))?;
     let final_config = merge_yaml_into_config(builtin_workflow_config(), yaml_config);
 
-    crate::workflow_config::validate_workflow_config_with_project_root(&final_config, Some(project_root))?;
+    validate_workflow_config_with_project_root(&final_config, Some(project_root))?;
     let output_path = if single_file.exists() { single_file } else { workflows_dir };
     Ok(Some(CompileYamlResult { config: final_config, source_files, output_path }))
 }

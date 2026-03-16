@@ -317,6 +317,13 @@ pub fn inject_agent_tool_policy(runtime_contract: &mut Value, ctx: &RuntimeConfi
     let Some(policy) = policy else {
         return;
     };
+    set_mcp_tool_policy(runtime_contract, policy);
+}
+
+pub fn set_mcp_tool_policy(
+    runtime_contract: &mut Value,
+    policy: &orchestrator_core::agent_runtime_config::AgentToolPolicy,
+) {
     if policy.allow.is_empty() && policy.deny.is_empty() {
         return;
     }
@@ -422,6 +429,69 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
     if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert("additional_servers".to_string(), Value::Object(servers));
     }
+}
+
+pub fn inject_named_mcp_servers(
+    runtime_contract: &mut Value,
+    project_root: &str,
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+    names: &[String],
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let project_config =
+        protocol::Config::load_or_default(project_root).map_err(|error| anyhow!("failed to load project config: {error}"))?;
+    let existing =
+        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut servers = existing;
+
+    for raw_name in names {
+        let name = raw_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+
+        if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
+            servers.insert(
+                name.to_string(),
+                serde_json::json!({
+                    "command": definition.command,
+                    "args": definition.args,
+                    "env": definition.env,
+                }),
+            );
+            continue;
+        }
+
+        if let Some(definition) = project_config.mcp_servers.get(name) {
+            servers.insert(
+                name.to_string(),
+                serde_json::json!({
+                    "command": definition.command,
+                    "args": definition.args,
+                    "env": definition.env,
+                }),
+            );
+            continue;
+        }
+
+        return Err(anyhow!(
+            "skill requested MCP server '{}' for phase '{}' but no matching server is defined in workflow YAML or project config",
+            name,
+            phase_id
+        ));
+    }
+
+    if servers.is_empty() {
+        return Ok(());
+    }
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
+        mcp.insert("additional_servers".to_string(), Value::Object(servers));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -12,14 +12,14 @@ use crate::phase_failover::PhaseFailureClassifier;
 use crate::phase_git::commit_implementation_changes;
 use crate::phase_output::persist_phase_output;
 use crate::phase_prompt::{
-    phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx, PhasePromptInputs,
-    PhaseRenderParams,
+    phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt_with_ctx_overrides,
+    PhasePromptInputs, PhaseRenderParams,
 };
 use crate::phase_targets::PhaseTargetPlanner;
 use crate::runtime_contract::{
-    inject_agent_tool_policy, inject_default_stdio_mcp, inject_project_mcp_servers, inject_read_only_flag,
-    inject_response_schema_into_launch_args, inject_workflow_mcp_servers, phase_output_json_schema_for,
-    phase_response_json_schema_for,
+    inject_agent_tool_policy, inject_default_stdio_mcp, inject_named_mcp_servers, inject_project_mcp_servers,
+    inject_read_only_flag, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
+    phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
 };
 use crate::runtime_support::{
     inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts, WorkflowPhaseRuntimeSettings,
@@ -28,6 +28,7 @@ use crate::skill_dispatch;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use orchestrator_config::{skill_resolution::ResolvedSkill, SkillApplicationResult};
 use orchestrator_core::ServiceHub;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,9 +38,10 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::time::sleep;
+use tracing::warn;
 use uuid::Uuid;
 
-use protocol::{AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
+use protocol::{canonical_model_id, AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Default)]
 pub struct PhaseExecuteOverrides {
@@ -102,7 +104,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             dispatch_input: None,
             schedule_input: None,
             routing: &routing,
-            phase_timeout_secs: phase_timeout_secs,
+            phase_timeout_secs,
         })
         .await;
 
@@ -251,6 +253,16 @@ pub struct PhaseExecutionMetadata {
     pub selected_tool: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_model: Option<String>,
+    #[serde(default)]
+    pub effective_capabilities: protocol::PhaseCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_skills: Vec<ResolvedSkill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_skills: Vec<ResolvedSkill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_application: Option<SkillApplicationResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -589,9 +601,103 @@ struct PhaseAgentParams<'a> {
     dispatch_input: Option<&'a str>,
     schedule_input: Option<&'a str>,
     routing: &'a protocol::PhaseRoutingConfig,
+    resolved_phase_skills: &'a skill_dispatch::ResolvedPhaseSkillSet,
+    phase_timeout_secs: Option<u64>,
 }
 
-async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<PhaseExecutionOutcome> {
+struct AgentPhaseRunOutcome {
+    outcome: PhaseExecutionOutcome,
+    selected_tool: Option<String>,
+    selected_model: Option<String>,
+    effective_capabilities: protocol::PhaseCapabilities,
+    applied_skills: skill_dispatch::AppliedPhaseSkills,
+}
+
+fn resolve_phase_skill_target(
+    phase_id: &str,
+    target_tool_id: &str,
+    target_model_id: &str,
+    explicit_tool_override: Option<&str>,
+    explicit_model_override: Option<&str>,
+    base_caps: &protocol::PhaseCapabilities,
+    resolved_phase_skills: &skill_dispatch::ResolvedPhaseSkillSet,
+    routing_complexity: Option<protocol::ModelRoutingComplexity>,
+    routing: &protocol::PhaseRoutingConfig,
+) -> Result<(String, String, protocol::PhaseCapabilities, skill_dispatch::AppliedPhaseSkills)> {
+    const MAX_SKILL_TARGET_RESOLUTION_PASSES: usize = 3;
+
+    let initial_tool_id = target_tool_id.to_string();
+    let initial_model_id = canonical_model_id(target_model_id);
+    let mut tool_id = target_tool_id.to_string();
+    let mut model_id = canonical_model_id(target_model_id);
+    let mut exhausted_iteration_budget = false;
+    let explicit_tool_override =
+        explicit_tool_override.map(protocol::normalize_tool_id).filter(|value| !value.trim().is_empty());
+    let explicit_model_override =
+        explicit_model_override.map(canonical_model_id).filter(|value| !value.trim().is_empty());
+
+    for iteration in 0..MAX_SKILL_TARGET_RESOLUTION_PASSES {
+        let applied_skills = skill_dispatch::apply_phase_skills(resolved_phase_skills, &tool_id, &model_id);
+        let effective_caps =
+            skill_dispatch::apply_skill_capability_overrides(base_caps, &applied_skills.application.capabilities);
+        let requested_model = explicit_model_override
+            .clone()
+            .or_else(|| applied_skills.application.model.as_deref().map(canonical_model_id));
+        let mut requested_tool = explicit_tool_override.clone().unwrap_or_else(|| tool_id.clone());
+        let requested_model = requested_model.unwrap_or_else(|| model_id.clone());
+        let model_tool = PhaseTargetPlanner::tool_for_model_id(&requested_model).to_string();
+
+        if explicit_model_override.is_none() {
+            if let Some(pinned_tool) = explicit_tool_override.as_ref() {
+                if !model_tool.eq_ignore_ascii_case(pinned_tool) && applied_skills.application.model.is_some() {
+                    return Err(anyhow!(
+                        "phase '{}' skill selected model '{}' which requires tool '{}' but the run is pinned to tool '{}'",
+                        phase_id,
+                        requested_model,
+                        model_tool,
+                        pinned_tool
+                    ));
+                }
+            } else if applied_skills.application.model.is_some() {
+                requested_tool = model_tool;
+            }
+        }
+
+        let (next_tool, next_model) = PhaseTargetPlanner::resolve_phase_execution_target(
+            phase_id,
+            Some(&requested_model),
+            Some(&requested_tool),
+            routing_complexity,
+            &effective_caps,
+            routing,
+        );
+
+        if next_tool.eq_ignore_ascii_case(&tool_id) && next_model.eq_ignore_ascii_case(&model_id) {
+            return Ok((next_tool, next_model, effective_caps, applied_skills));
+        }
+
+        tool_id = next_tool;
+        model_id = next_model;
+        exhausted_iteration_budget = iteration + 1 == MAX_SKILL_TARGET_RESOLUTION_PASSES;
+    }
+
+    let applied_skills = skill_dispatch::apply_phase_skills(resolved_phase_skills, &tool_id, &model_id);
+    let effective_caps =
+        skill_dispatch::apply_skill_capability_overrides(base_caps, &applied_skills.application.capabilities);
+    if exhausted_iteration_budget {
+        warn!(
+            phase_id,
+            initial_tool = %initial_tool_id,
+            initial_model = %initial_model_id,
+            final_tool = %tool_id,
+            final_model = %model_id,
+            "phase skill target resolution exhausted iteration budget without convergence"
+        );
+    }
+    Ok((tool_id, model_id, effective_caps, applied_skills))
+}
+
+async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<AgentPhaseRunOutcome> {
     let ctx = params.ctx;
     let project_root = params.project_root;
     let execution_cwd = params.execution_cwd;
@@ -603,7 +709,8 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
     let phase_runtime_settings = params.phase_runtime_settings;
     let overrides = params.overrides;
     let pipeline_vars = params.pipeline_vars;
-    let caps = ctx.phase_capabilities(phase_id);
+    let base_caps = ctx.phase_capabilities(phase_id);
+    let planning_caps = skill_dispatch::preview_phase_capabilities(&base_caps, params.resolved_phase_skills);
     let routing_complexity = routing_complexity(params.task_complexity);
     let settings_tool = phase_runtime_settings.and_then(|s| s.tool.as_deref());
     let settings_model = phase_runtime_settings.and_then(|s| s.model.as_deref());
@@ -622,7 +729,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
         configured_fallback_models.as_slice(),
         routing_complexity,
         Some(project_root),
-        &caps,
+        &planning_caps,
         params.routing,
     );
     let prompt_inputs = PhasePromptInputs {
@@ -631,20 +738,15 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
         dispatch_input: params.dispatch_input.map(ToOwned::to_owned),
         schedule_input: params.schedule_input.map(ToOwned::to_owned),
     };
-    let prompt = render_phase_prompt_with_ctx(
-        ctx,
-        &PhaseRenderParams {
-            project_root,
-            execution_cwd,
-            workflow_id,
-            subject_id,
-            subject_title,
-            subject_description,
-            phase_id,
-        },
-        prompt_inputs,
-    )
-    .final_prompt;
+    let phase_render_params = PhaseRenderParams {
+        project_root,
+        execution_cwd,
+        workflow_id,
+        subject_id,
+        subject_title,
+        subject_description,
+        phase_id,
+    };
     let max_attempts =
         phase_runtime_settings.and_then(|settings| settings.max_attempts).unwrap_or_else(phase_runner_attempts);
     let max_continuations =
@@ -653,6 +755,29 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
     let mut fallover_errors: Vec<String> = Vec::new();
 
     for (target_index, (target_tool_id, target_model_id)) in execution_targets.iter().enumerate() {
+        let (effective_tool_id, effective_model_id, effective_caps, applied_skills) = resolve_phase_skill_target(
+            phase_id,
+            target_tool_id,
+            target_model_id,
+            overrides.and_then(|value| value.tool.as_deref()),
+            overrides.and_then(|value| value.model.as_deref()),
+            &planning_caps,
+            params.resolved_phase_skills,
+            routing_complexity,
+            params.routing,
+        )?;
+        let prompt = render_phase_prompt_with_ctx_overrides(
+            ctx,
+            &phase_render_params,
+            prompt_inputs.clone(),
+            Some(effective_caps.clone()),
+            (!applied_skills.application.is_empty()).then_some(&applied_skills.application),
+        )
+        .final_prompt;
+        let request_timeout_secs = params
+            .phase_timeout_secs
+            .or(applied_skills.application.timeout_secs)
+            .or(phase_runtime_settings.and_then(|settings| settings.timeout_secs));
         let mut last_outcome: Option<PhaseExecutionOutcome> = None;
 
         for continuation in 0..=max_continuations {
@@ -678,13 +803,14 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
             };
 
             let mut context = serde_json::json!({
-                "tool": target_tool_id,
+                "tool": effective_tool_id,
                 "prompt": effective_prompt,
                 "cwd": execution_cwd,
                 "project_root": project_root,
                 "workflow_id": workflow_id,
                 "subject_id": subject_id,
                 "phase_id": phase_id,
+                "phase_capabilities": serde_json::to_value(&effective_caps)?,
             });
             if let Some(agent_id) = ctx.phase_agent_id(phase_id) {
                 context
@@ -697,7 +823,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
             let phase_response_schema = phase_response_json_schema_for(ctx, phase_id)?;
             if let Some(mut runtime_contract) = build_runtime_contract_with_resume(
                 context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
-                target_model_id,
+                &effective_model_id,
                 &effective_prompt,
                 Some(&resume_plan),
             ) {
@@ -715,23 +841,29 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
                 if let Some(schema) = phase_response_schema.as_ref() {
                     inject_response_schema_into_launch_args(&mut runtime_contract, schema, &ctx.agent_runtime_config);
                 }
-                if !caps.writes_files {
+                if !effective_caps.writes_files {
                     inject_read_only_flag(&mut runtime_contract, &ctx.agent_runtime_config);
                 }
-                inject_cli_launch_overrides(
-                    &mut runtime_contract,
-                    context.get("tool").and_then(Value::as_str).unwrap_or("codex"),
-                    phase_runtime_settings,
-                );
+                inject_cli_launch_overrides(&mut runtime_contract, &effective_tool_id, phase_runtime_settings);
                 inject_default_stdio_mcp(&mut runtime_contract, project_root);
                 inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
                 inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
                 inject_workflow_mcp_servers(&mut runtime_contract, ctx, phase_id);
-                if let Some(skill_result) =
-                    skill_dispatch::resolve_and_apply_phase_skills(ctx, project_root, phase_id, target_tool_id)
-                {
-                    skill_dispatch::inject_skill_overrides(&mut runtime_contract, target_tool_id, &skill_result);
+                if let Some(policy) = applied_skills.application.tool_policy.as_ref() {
+                    set_mcp_tool_policy(&mut runtime_contract, policy);
                 }
+                inject_named_mcp_servers(
+                    &mut runtime_contract,
+                    project_root,
+                    ctx,
+                    phase_id,
+                    &applied_skills.application.mcp_servers,
+                )?;
+                skill_dispatch::inject_skill_overrides(
+                    &mut runtime_contract,
+                    &effective_tool_id,
+                    &applied_skills.application,
+                );
                 context.as_object_mut().expect("json object").insert("runtime_contract".to_string(), runtime_contract);
             }
 
@@ -743,9 +875,9 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
             let request = AgentRunRequest {
                 protocol_version: PROTOCOL_VERSION.to_string(),
                 run_id,
-                model: ModelId(target_model_id.clone()),
+                model: ModelId(effective_model_id.clone()),
                 context,
-                timeout_secs: phase_runtime_settings.and_then(|settings| settings.timeout_secs),
+                timeout_secs: request_timeout_secs,
             };
 
             let mut attempt_succeeded = false;
@@ -781,11 +913,13 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
 
                         let has_fallback_target = target_index + 1 < execution_targets.len();
                         if has_fallback_target && PhaseFailureClassifier::should_failover_target(&message) {
-                            fallover_errors
-                                .push(format!("target {}:{} failed: {}", target_tool_id, target_model_id, message));
+                            fallover_errors.push(format!(
+                                "target {}:{} failed: {}",
+                                effective_tool_id, effective_model_id, message
+                            ));
                             orchestrator_core::record_model_phase_outcome(
                                 std::path::Path::new(project_root),
-                                target_model_id,
+                                &effective_model_id,
                                 phase_id,
                                 orchestrator_core::PhaseDecisionVerdict::Fail,
                             );
@@ -793,7 +927,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
                         }
                         orchestrator_core::record_model_phase_outcome(
                             std::path::Path::new(project_root),
-                            target_model_id,
+                            &effective_model_id,
                             phase_id,
                             orchestrator_core::PhaseDecisionVerdict::Fail,
                         );
@@ -818,11 +952,17 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
                 let outcome = last_outcome.take().expect("outcome verified above");
                 orchestrator_core::record_model_phase_outcome(
                     std::path::Path::new(project_root),
-                    target_model_id,
+                    &effective_model_id,
                     phase_id,
                     outcome_verdict(&outcome),
                 );
-                return Ok(outcome);
+                return Ok(AgentPhaseRunOutcome {
+                    outcome,
+                    selected_tool: Some(effective_tool_id.clone()),
+                    selected_model: Some(effective_model_id.clone()),
+                    effective_capabilities: effective_caps.clone(),
+                    applied_skills: applied_skills.clone(),
+                });
             }
 
             if continuation < max_continuations {
@@ -840,11 +980,17 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<P
         if let Some(outcome) = last_outcome {
             orchestrator_core::record_model_phase_outcome(
                 std::path::Path::new(project_root),
-                target_model_id,
+                &effective_model_id,
                 phase_id,
                 outcome_verdict(&outcome),
             );
-            return Ok(outcome);
+            return Ok(AgentPhaseRunOutcome {
+                outcome,
+                selected_tool: Some(effective_tool_id),
+                selected_model: Some(effective_model_id),
+                effective_capabilities: effective_caps,
+                applied_skills,
+            });
         }
     }
 
@@ -976,6 +1122,11 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
         agent_profile_hash,
         selected_tool: None,
         selected_model: None,
+        effective_capabilities: ctx.phase_capabilities(phase_id),
+        requested_skills: Vec::new(),
+        resolved_skills: Vec::new(),
+        applied_skills: Vec::new(),
+        skill_application: None,
     };
 
     let mut signals = vec![PhaseExecutionSignal {
@@ -997,6 +1148,9 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
     match definition.mode {
         orchestrator_core::PhaseExecutionMode::Agent => {
+            let resolved_phase_skills = skill_dispatch::resolve_phase_skills(&ctx, Path::new(project_root), phase_id)?;
+            metadata.requested_skills = resolved_phase_skills.requested_skills.clone();
+            metadata.resolved_skills = resolved_phase_skills.resolved_skills.clone();
             let cli_tool_override = overrides.and_then(|o| o.tool.as_deref());
             let cli_model_override = overrides.and_then(|o| o.model.as_deref());
 
@@ -1015,29 +1169,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 codex_config_overrides: merged_runtime.phase_codex_config_overrides(phase_id),
                 max_continuations: merged_runtime.phase_max_continuations(phase_id),
             });
-
-            let routing_complexity = routing_complexity(task_complexity);
-            let exec_caps = ctx.phase_capabilities(phase_id);
-            let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
-                phase_id,
-                cli_model_override
-                    .or_else(|| merged_runtime.phase_model_override(phase_id))
-                    .or_else(|| runtime_settings.as_ref().and_then(|settings| settings.model.as_deref())),
-                cli_tool_override
-                    .or_else(|| merged_runtime.phase_tool_override(phase_id))
-                    .or_else(|| runtime_settings.as_ref().and_then(|settings| settings.tool.as_deref())),
-                merged_runtime.phase_fallback_models(phase_id).as_slice(),
-                routing_complexity,
-                Some(project_root),
-                &exec_caps,
-                params.routing,
-            );
-            if let Some((tool, model)) = execution_targets.first() {
-                metadata.selected_tool = Some(tool.clone());
-                metadata.selected_model = Some(model.clone());
-            }
-
-            let outcome = run_workflow_phase_with_agent(PhaseAgentParams {
+            let agent_result = run_workflow_phase_with_agent(PhaseAgentParams {
                 ctx: &ctx,
                 project_root,
                 execution_cwd,
@@ -1053,8 +1185,31 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 dispatch_input,
                 schedule_input,
                 routing: params.routing,
+                resolved_phase_skills: &resolved_phase_skills,
+                phase_timeout_secs: params.phase_timeout_secs,
             })
             .await?;
+            metadata.selected_tool = agent_result.selected_tool.clone();
+            metadata.selected_model = agent_result.selected_model.clone();
+            metadata.effective_capabilities = agent_result.effective_capabilities.clone();
+            metadata.applied_skills = agent_result.applied_skills.applied_skills.clone();
+            metadata.skill_application = (!agent_result.applied_skills.application.is_empty())
+                .then_some(agent_result.applied_skills.application.clone());
+            if !metadata.requested_skills.is_empty() {
+                signals.push(PhaseExecutionSignal {
+                    event_type: "workflow-phase-skills-resolved".to_string(),
+                    payload: serde_json::json!({
+                        "workflow_id": workflow_id,
+                        "phase_id": phase_id,
+                        "requested_skills": metadata.requested_skills,
+                        "resolved_skills": metadata.resolved_skills,
+                        "applied_skills": metadata.applied_skills,
+                        "skill_application": metadata.skill_application,
+                        "effective_capabilities": metadata.effective_capabilities,
+                    }),
+                });
+            }
+            let outcome = agent_result.outcome;
 
             if definition.output_contract.is_some() || definition.output_json_schema.is_some() {
                 if let PhaseExecutionOutcome::Completed { commit_message, result_payload, .. } = &outcome {

@@ -1,5 +1,5 @@
 use async_graphql::{Context, Error, Object, Result, ID};
-use orchestrator_core::{ListPage, ListPageRequest, RequirementQuery, TaskQuery, WorkflowFilter, WorkflowQuery};
+use orchestrator_core::{ListPage, ListPageRequest};
 use orchestrator_web_api::WebApiService;
 use serde::de::DeserializeOwned;
 
@@ -36,6 +36,10 @@ fn gql_workflows_from_page<T: serde::Serialize>(page: ListPage<T>) -> Result<Vec
     Ok(decode_items(page.items, "workflows")?.into_iter().map(GqlWorkflow).collect())
 }
 
+fn gql_i32(value: usize) -> i32 {
+    value.min(i32::MAX as usize) as i32
+}
+
 #[Object]
 impl QueryRoot {
     async fn tasks(
@@ -44,29 +48,31 @@ impl QueryRoot {
         status: Option<String>,
         task_type: Option<String>,
         priority: Option<String>,
+        risk: Option<String>,
+        assignee_type: Option<String>,
+        tags: Option<Vec<String>>,
+        linked_requirement: Option<String>,
+        linked_architecture_entity: Option<String>,
         search: Option<String>,
+        sort: Option<String>,
     ) -> Result<Vec<GqlTask>> {
         let api = ctx.data::<WebApiService>()?;
-        let filter = api
+        let query = api
             .build_task_query(
                 task_type,
                 status,
                 priority,
-                None,
-                None,
-                vec![],
-                None,
-                None,
+                risk,
+                assignee_type,
+                tags.unwrap_or_default(),
+                linked_requirement,
+                linked_architecture_entity,
                 search,
                 ListPageRequest::unbounded(),
-                None,
+                sort,
             )
-            .map_err(gql_err)?
-            .filter;
-        let page = api
-            .tasks_list(TaskQuery { filter, page: ListPageRequest::unbounded(), ..Default::default() })
-            .await
             .map_err(gql_err)?;
+        let page = api.tasks_list(query).await.map_err(gql_err)?;
         gql_tasks_from_page(page)
     }
 
@@ -109,12 +115,34 @@ impl QueryRoot {
         Ok(GqlTaskStats(val))
     }
 
-    async fn requirements(&self, ctx: &Context<'_>) -> Result<Vec<GqlRequirement>> {
+    #[allow(clippy::too_many_arguments)]
+    async fn requirements(
+        &self,
+        ctx: &Context<'_>,
+        status: Option<String>,
+        priority: Option<String>,
+        category: Option<String>,
+        requirement_type: Option<String>,
+        tags: Option<Vec<String>>,
+        linked_task_id: Option<String>,
+        search: Option<String>,
+        sort: Option<String>,
+    ) -> Result<Vec<GqlRequirement>> {
         let api = ctx.data::<WebApiService>()?;
-        let page = api
-            .requirements_list(RequirementQuery { page: ListPageRequest::unbounded(), ..Default::default() })
-            .await
+        let query = api
+            .build_requirement_query(
+                status,
+                priority,
+                category,
+                requirement_type,
+                tags.unwrap_or_default(),
+                linked_task_id,
+                search,
+                ListPageRequest::unbounded(),
+                sort,
+            )
             .map_err(gql_err)?;
+        let page = api.requirements_list(query).await.map_err(gql_err)?;
         gql_requirements_from_page(page)
     }
 
@@ -131,19 +159,21 @@ impl QueryRoot {
         }
     }
 
-    async fn workflows(&self, ctx: &Context<'_>, status: Option<String>) -> Result<Vec<GqlWorkflow>> {
+    async fn workflows(
+        &self,
+        ctx: &Context<'_>,
+        status: Option<String>,
+        workflow_ref: Option<String>,
+        task_id: Option<String>,
+        phase_id: Option<String>,
+        search: Option<String>,
+        sort: Option<String>,
+    ) -> Result<Vec<GqlWorkflow>> {
         let api = ctx.data::<WebApiService>()?;
-        let filter = if let Some(status) = status {
-            api.build_workflow_query(Some(status), None, None, None, None, ListPageRequest::unbounded(), None)
-                .map_err(gql_err)?
-                .filter
-        } else {
-            WorkflowFilter::default()
-        };
-        let page = api
-            .workflows_list(WorkflowQuery { filter, page: ListPageRequest::unbounded(), ..Default::default() })
-            .await
+        let query = api
+            .build_workflow_query(status, workflow_ref, task_id, phase_id, search, ListPageRequest::unbounded(), sort)
             .map_err(gql_err)?;
+        let page = api.workflows_list(query).await.map_err(gql_err)?;
         gql_workflows_from_page(page)
     }
 
@@ -167,48 +197,82 @@ impl QueryRoot {
         status: Option<String>,
         task_type: Option<String>,
         priority: Option<String>,
+        risk: Option<String>,
+        assignee_type: Option<String>,
+        tags: Option<Vec<String>>,
+        linked_requirement: Option<String>,
+        linked_architecture_entity: Option<String>,
         search: Option<String>,
+        sort: Option<String>,
         #[graphql(default = 50)] limit: i32,
         #[graphql(default = 0)] offset: i32,
     ) -> Result<GqlTaskConnection> {
         let api = ctx.data::<WebApiService>()?;
-        let filter = api
+        let query = api
             .build_task_query(
                 task_type,
                 status,
                 priority,
-                None,
-                None,
-                vec![],
-                None,
-                None,
+                risk,
+                assignee_type,
+                tags.unwrap_or_default(),
+                linked_requirement,
+                linked_architecture_entity,
                 search,
                 bounded_page(limit, offset),
-                None,
+                sort,
             )
-            .map_err(gql_err)?
-            .filter;
-        let page = api
-            .tasks_list(TaskQuery { filter, page: bounded_page(limit, offset), ..Default::default() })
-            .await
             .map_err(gql_err)?;
-        Ok(GqlTaskConnection { items: gql_tasks_from_page(page.clone())?, total_count: page.total as i32 })
+        let page = api.tasks_list(query).await.map_err(gql_err)?;
+        Ok(GqlTaskConnection {
+            items: gql_tasks_from_page(page.clone())?,
+            total_count: gql_i32(page.total),
+            limit: gql_i32(page.limit.unwrap_or(page.returned)),
+            offset: gql_i32(page.offset),
+            returned: gql_i32(page.returned),
+            has_more: page.has_more,
+            next_offset: page.next_offset.map(gql_i32),
+        })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn requirements_paginated(
         &self,
         ctx: &Context<'_>,
+        status: Option<String>,
+        priority: Option<String>,
+        category: Option<String>,
+        requirement_type: Option<String>,
+        tags: Option<Vec<String>>,
+        linked_task_id: Option<String>,
+        search: Option<String>,
+        sort: Option<String>,
         #[graphql(default = 50)] limit: i32,
         #[graphql(default = 0)] offset: i32,
     ) -> Result<GqlRequirementConnection> {
         let api = ctx.data::<WebApiService>()?;
-        let page = api
-            .requirements_list(RequirementQuery { page: bounded_page(limit, offset), ..Default::default() })
-            .await
+        let query = api
+            .build_requirement_query(
+                status,
+                priority,
+                category,
+                requirement_type,
+                tags.unwrap_or_default(),
+                linked_task_id,
+                search,
+                bounded_page(limit, offset),
+                sort,
+            )
             .map_err(gql_err)?;
+        let page = api.requirements_list(query).await.map_err(gql_err)?;
         Ok(GqlRequirementConnection {
             items: gql_requirements_from_page(page.clone())?,
-            total_count: page.total as i32,
+            total_count: gql_i32(page.total),
+            limit: gql_i32(page.limit.unwrap_or(page.returned)),
+            offset: gql_i32(page.offset),
+            returned: gql_i32(page.returned),
+            has_more: page.has_more,
+            next_offset: page.next_offset.map(gql_i32),
         })
     }
 
@@ -216,22 +280,28 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         status: Option<String>,
+        workflow_ref: Option<String>,
+        task_id: Option<String>,
+        phase_id: Option<String>,
+        search: Option<String>,
+        sort: Option<String>,
         #[graphql(default = 50)] limit: i32,
         #[graphql(default = 0)] offset: i32,
     ) -> Result<GqlWorkflowConnection> {
         let api = ctx.data::<WebApiService>()?;
-        let filter = if let Some(status) = status {
-            api.build_workflow_query(Some(status), None, None, None, None, bounded_page(limit, offset), None)
-                .map_err(gql_err)?
-                .filter
-        } else {
-            WorkflowFilter::default()
-        };
-        let page = api
-            .workflows_list(WorkflowQuery { filter, page: bounded_page(limit, offset), ..Default::default() })
-            .await
+        let query = api
+            .build_workflow_query(status, workflow_ref, task_id, phase_id, search, bounded_page(limit, offset), sort)
             .map_err(gql_err)?;
-        Ok(GqlWorkflowConnection { items: gql_workflows_from_page(page.clone())?, total_count: page.total as i32 })
+        let page = api.workflows_list(query).await.map_err(gql_err)?;
+        Ok(GqlWorkflowConnection {
+            items: gql_workflows_from_page(page.clone())?,
+            total_count: gql_i32(page.total),
+            limit: gql_i32(page.limit.unwrap_or(page.returned)),
+            offset: gql_i32(page.offset),
+            returned: gql_i32(page.returned),
+            has_more: page.has_more,
+            next_offset: page.next_offset.map(gql_i32),
+        })
     }
 
     async fn workflow_checkpoints(&self, ctx: &Context<'_>, workflow_id: ID) -> Result<Vec<GqlWorkflowCheckpoint>> {
@@ -270,7 +340,7 @@ impl QueryRoot {
 
     async fn ready_tasks(&self, ctx: &Context<'_>, search: Option<String>, limit: Option<i32>) -> Result<Vec<GqlTask>> {
         let api = ctx.data::<WebApiService>()?;
-        let filter = api
+        let query = api
             .build_task_query(
                 None,
                 None,
@@ -284,12 +354,8 @@ impl QueryRoot {
                 ListPageRequest::unbounded(),
                 None,
             )
-            .map_err(gql_err)?
-            .filter;
-        let page = api
-            .tasks_list(TaskQuery { filter, page: ListPageRequest::unbounded(), ..Default::default() })
-            .await
             .map_err(gql_err)?;
+        let page = api.tasks_list(query).await.map_err(gql_err)?;
         let all_tasks: Vec<RawTask> = decode_items(page.items, "tasks")?;
         let priority_order = |p: &str| -> u8 {
             match p.to_lowercase().as_str() {

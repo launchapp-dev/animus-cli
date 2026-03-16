@@ -51,7 +51,8 @@ fn ledger_key(model_id: &str, phase_id: &str) -> String {
 }
 
 pub fn model_quality_ledger_path(project_root: &Path) -> PathBuf {
-    project_root.join(".ao").join("state").join(MODEL_QUALITY_LEDGER_FILE_NAME)
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    base.join("state").join(MODEL_QUALITY_LEDGER_FILE_NAME)
 }
 
 pub fn load_model_quality_ledger(project_root: &Path) -> ModelQualityLedger {

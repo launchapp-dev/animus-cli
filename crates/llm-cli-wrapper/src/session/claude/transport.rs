@@ -90,7 +90,8 @@ pub(crate) fn claude_invocation_for_request(
 
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation { command: "claude".to_string(), args, prompt_via_stdin: false };
+    let mut invocation =
+        LaunchInvocation { command: "claude".to_string(), args, env: Default::default(), prompt_via_stdin: false };
     ensure_flag(&mut invocation.args, "--verbose", 1);
     ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", 2);
 

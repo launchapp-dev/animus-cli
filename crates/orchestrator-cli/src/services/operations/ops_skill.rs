@@ -129,6 +129,7 @@ fn upsert_installed(state: &mut SkillRegistryStateV1, selected: &SkillVersionRec
         registry: selected.registry.clone(),
         integrity: selected.integrity.clone(),
         artifact: selected.artifact.clone(),
+        definition: selected.definition.clone(),
     };
     state.installed.retain(|item| !(item.name == entry.name && item.source == entry.source));
     state.installed.push(entry);
@@ -145,6 +146,11 @@ fn upsert_lock_entry(lock_state: &mut SkillLockStateV1, selected: &SkillVersionR
     };
     lock_state.entries.retain(|item| !(item.name == entry.name && item.source == entry.source));
     lock_state.entries.push(entry);
+}
+
+fn local_skill_definition_snapshot(project_root: &str, name: &str) -> Option<orchestrator_config::SkillDefinition> {
+    let sources = load_skill_sources(Path::new(project_root), None).ok()?;
+    resolve_skill(name, &sources).ok().map(|resolved| resolved.definition)
 }
 
 fn lock_status_for(entry: &ResolvedSkillEntry, lock_state: &SkillLockStateV1) -> &'static str {
@@ -334,6 +340,7 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
                 "registry": entry.registry,
                 "integrity": entry.integrity,
                 "artifact": entry.artifact,
+                "definition_snapshot": entry.definition.is_some(),
                 "lock_status": lock_status_for(entry, &lock_state),
                 "type": "installed",
             }));
@@ -469,7 +476,8 @@ fn handle_publish(args: SkillPublishArgs, project_root: &str, json: bool) -> Res
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| build_integrity(&name, &version, &source, &artifact));
 
-    let record = SkillVersionRecord { name, version, source, registry, integrity, artifact };
+    let definition = local_skill_definition_snapshot(project_root, &name);
+    let record = SkillVersionRecord { name, version, source, registry, integrity, artifact, definition };
     state.catalog.push(record.clone());
     let registry_changed = save_skill_registry_state_if_changed(project_root, &state)?;
 
@@ -569,6 +577,8 @@ fn handle_show(args: SkillShowArgs, project_root: &str, json: bool) -> Result<()
                         "registry": entry.registry,
                         "integrity": entry.integrity,
                         "artifact": entry.artifact,
+                        "definition_snapshot": entry.definition.is_some(),
+                        "definition": entry.definition.clone(),
                         "type": "installed",
                     }),
                     json,

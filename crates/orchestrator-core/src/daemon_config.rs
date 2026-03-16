@@ -70,7 +70,10 @@ fn default_auto_cleanup_worktree_enabled() -> bool {
 }
 
 pub fn daemon_project_config_path(project_root: &Path) -> PathBuf {
-    project_root.join(".ao").join(DAEMON_PROJECT_CONFIG_FILE_NAME)
+    let base = protocol::scoped_state_root(project_root)
+        .map(|root| root.join("daemon"))
+        .unwrap_or_else(|| project_root.join(".ao"));
+    base.join(DAEMON_PROJECT_CONFIG_FILE_NAME)
 }
 
 pub fn load_daemon_project_config(project_root: &Path) -> Result<DaemonProjectConfig> {

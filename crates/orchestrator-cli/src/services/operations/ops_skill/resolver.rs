@@ -197,6 +197,7 @@ mod tests {
             registry: registry.to_string(),
             integrity: format!("sha256:{name}:{version}:{source}"),
             artifact: format!("{name}-{version}.tgz"),
+            definition: None,
         }
     }
 

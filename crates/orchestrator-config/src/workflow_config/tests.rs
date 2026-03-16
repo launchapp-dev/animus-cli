@@ -9,7 +9,9 @@ use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
 use super::loading::load_workflow_config;
 use super::resolution::{resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards};
 use super::types::*;
-use super::validation::{validate_workflow_and_runtime_configs, validate_workflow_config};
+use super::validation::{
+    validate_workflow_and_runtime_configs, validate_workflow_config, validate_workflow_config_with_project_root,
+};
 use super::yaml_compiler::{compile_and_write_yaml_workflows, compile_yaml_workflow_files, merge_yaml_into_config};
 use super::yaml_parser::parse_yaml_workflow_config;
 
@@ -1049,6 +1051,78 @@ workflows:
     assert_eq!(researcher.web_search, Some(true));
     assert_eq!(researcher.skills, vec!["deep-search"]);
     assert_eq!(researcher.capabilities.get("code_execution"), Some(&false));
+}
+
+#[test]
+fn yaml_parses_phase_level_skills() {
+    let yaml = r#"
+phases:
+  research:
+    mode: agent
+    agent: default
+    skills:
+      - deep-search
+      - code-analysis
+
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - research
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with phase skills");
+    let research = &config.phase_definitions["research"];
+    assert_eq!(research.skills, vec!["deep-search", "code-analysis"]);
+}
+
+#[test]
+fn yaml_phase_skills_roundtrip_through_overlay_writer() {
+    let yaml = r#"
+phases:
+  research:
+    mode: agent
+    agent: default
+    skills:
+      - deep-search
+
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - research
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let temp = tempfile::tempdir().expect("tempdir");
+    super::yaml_compiler::write_workflow_yaml_overlay(temp.path(), "roundtrip.yaml", &config).expect("write overlay");
+    let written = fs::read_to_string(super::yaml_compiler::yaml_workflows_dir(temp.path()).join("roundtrip.yaml"))
+        .expect("read overlay");
+    assert!(written.contains("skills:"), "round-tripped yaml should contain skills: {written}");
+    let reparsed = parse_yaml_workflow_config(&written).expect("reparse round-tripped yaml");
+    assert_eq!(reparsed.phase_definitions["research"].skills, vec!["deep-search"]);
+}
+
+#[test]
+fn validate_rejects_unknown_phase_skill_for_project_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let yaml = r#"
+phases:
+  research:
+    mode: agent
+    agent: default
+    skills:
+      - not-a-real-skill
+
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - research
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let err = validate_workflow_config_with_project_root(&config, Some(temp.path()))
+        .expect_err("unknown phase skill should fail validation");
+    assert!(err.to_string().contains("phase_definitions['research'].skills"));
+    assert!(err.to_string().contains("not-a-real-skill"));
 }
 
 #[test]

@@ -73,7 +73,7 @@ pub(super) fn set_shutdown_requested(project_root: &str, requested: bool, timeou
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("pm-config.json")
+    orchestrator_core::daemon_project_config_path(std::path::Path::new(project_root))
 }
 
 fn write_daemon_pid(project_root: &str, pid: u32) {

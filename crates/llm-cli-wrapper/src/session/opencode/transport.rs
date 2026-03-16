@@ -80,7 +80,8 @@ pub(crate) fn opencode_invocation_for_request(
     args.push("json".to_string());
     args.push(request.prompt.clone());
 
-    let mut invocation = LaunchInvocation { command: "opencode".to_string(), args, prompt_via_stdin: false };
+    let mut invocation =
+        LaunchInvocation { command: "opencode".to_string(), args, env: Default::default(), prompt_via_stdin: false };
     ensure_flag_value(&mut invocation.args, "--format", "json", 1);
     Ok(invocation)
 }
