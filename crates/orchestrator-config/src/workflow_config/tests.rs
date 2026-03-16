@@ -1695,6 +1695,12 @@ fn validate_rejects_invalid_unified_sections() {
             supports_write: false,
             context_window: Some(0),
             base_args: vec!["".to_string()],
+            supports_streaming: None,
+            supports_tool_use: None,
+            supports_vision: None,
+            supports_long_context: None,
+            read_only_flag: None,
+            response_schema_flag: None,
         },
     );
     config.mcp_servers.insert(
