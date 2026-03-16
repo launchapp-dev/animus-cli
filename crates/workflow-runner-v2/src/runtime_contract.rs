@@ -442,8 +442,8 @@ pub fn inject_named_mcp_servers(
         return Ok(());
     }
 
-    let project_config =
-        protocol::Config::load_or_default(project_root).map_err(|error| anyhow!("failed to load project config: {error}"))?;
+    let project_config = protocol::Config::load_or_default(project_root)
+        .map_err(|error| anyhow!("failed to load project config: {error}"))?;
     let existing =
         runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut servers = existing;

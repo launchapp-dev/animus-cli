@@ -1,8 +1,8 @@
 use super::*;
 use orchestrator_core::{
-    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, TaskDependency,
-    TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowMachineState, WorkflowMetadata,
-    WorkflowPhaseExecution, SubjectRef,
+    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef,
+    TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowMachineState,
+    WorkflowMetadata, WorkflowPhaseExecution,
 };
 use std::collections::HashMap;
 
