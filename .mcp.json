@@ -1,15 +1,13 @@
 {
   "mcpServers": {
     "ao": {
-      "command": "cargo",
       "args": [
-        "run",
-        "-p",
-        "orchestrator-cli",
-        "--",
+        "--project-root",
+        "/Users/samishukri/ao-cli",
         "mcp",
         "serve"
-      ]
+      ],
+      "command": "/Users/samishukri/ao-cli/target/debug/ao"
     }
   }
 }
