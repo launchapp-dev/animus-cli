@@ -180,6 +180,7 @@ fn default_manifest_schema() -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillCapabilityKey {
     WritesFiles,
+    MutatesState,
     RequiresCommit,
     EnforceProductChanges,
     IsResearch,
@@ -196,6 +197,7 @@ pub fn parse_skill_capability_key(name: &str) -> Option<SkillCapabilityKey> {
         "writes_files" | "write_files" | "file_write" | "file_writes" | "can_write" => {
             Some(SkillCapabilityKey::WritesFiles)
         }
+        "mutates_state" | "state_mutation" | "managed_state_mutation" => Some(SkillCapabilityKey::MutatesState),
         "requires_commit" | "require_commit" => Some(SkillCapabilityKey::RequiresCommit),
         "enforce_product_changes" | "product_changes" => Some(SkillCapabilityKey::EnforceProductChanges),
         "is_research" | "research" => Some(SkillCapabilityKey::IsResearch),
@@ -623,6 +625,12 @@ adapters:
         let merged = merge_skill_applications(&[]);
         assert!(merged.system_prompt_fragments.is_empty());
         assert!(merged.model.is_none());
+    }
+
+    #[test]
+    fn test_parse_mutates_state_skill_capability_aliases() {
+        assert_eq!(parse_skill_capability_key("mutates_state"), Some(SkillCapabilityKey::MutatesState));
+        assert_eq!(parse_skill_capability_key("managed_state_mutation"), Some(SkillCapabilityKey::MutatesState));
     }
 
     #[test]

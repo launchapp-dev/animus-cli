@@ -2342,6 +2342,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "fs2",
+ "libc",
  "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",

@@ -127,11 +127,7 @@ pub(crate) fn render_phase_prompt_with_ctx_overrides(
     let phase_id = params.phase_id;
     let caps = capabilities_override.unwrap_or_else(|| ctx.phase_capabilities(phase_id));
     let phase_decision_contract = ctx.phase_decision_contract(phase_id).cloned();
-    let phase_action_rule = if caps.writes_files {
-        "Requirements:\n- Make concrete file changes in this repository."
-    } else {
-        "Requirements:\n- This is a READ-ONLY phase. Do NOT create, edit, or write any files. Do NOT run commands that modify the repository.\n- Read and analyze the codebase to assess the task. Your only output should be your assessment and phase decision."
-    };
+    let phase_action_rule = phase_action_rule(&caps);
     let phase_contract = ctx.phase_output_contract(phase_id).cloned();
     let require_commit_message = phase_requires_commit_message_with_ctx(ctx, phase_id);
     let product_change_rule = if caps.enforce_product_changes {
@@ -533,6 +529,18 @@ pub(crate) fn phase_safety_rules(caps: &protocol::PhaseCapabilities) -> &'static
     ""
 }
 
+pub(crate) fn phase_action_rule(caps: &protocol::PhaseCapabilities) -> &'static str {
+    if caps.writes_files {
+        return "Requirements:\n- Make concrete file changes in this repository.";
+    }
+
+    if caps.mutates_state {
+        return "Requirements:\n- Do NOT create, edit, or write repository files.\n- You may use approved AO/MCP/runtime operations to perform the state mutations required by this phase.\n- Keep those mutations scoped to the current task, workflow, or managed system state, then emit the required structured phase result.";
+    }
+
+    "Requirements:\n- This is a READ-ONLY phase. Do NOT create, edit, or write any files. Do NOT run commands that modify the repository.\n- Read and analyze the codebase to assess the task. Your only output should be your assessment and phase decision."
+}
+
 pub fn phase_requires_commit_message(phase_id: &str) -> bool {
     protocol::PhaseCapabilities::defaults_for_phase(phase_id).requires_commit
 }
@@ -553,4 +561,22 @@ pub(crate) fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &s
         .map(|contract| contract.kind.clone())
         .filter(|kind| !kind.trim().is_empty())
         .unwrap_or_else(|| "implementation_result".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::phase_action_rule;
+
+    #[test]
+    fn mutating_state_phases_are_not_rendered_as_strictly_read_only() {
+        let rule = phase_action_rule(&protocol::PhaseCapabilities { mutates_state: true, ..Default::default() });
+        assert!(rule.contains("AO/MCP/runtime operations"));
+        assert!(!rule.contains("READ-ONLY phase"));
+    }
+
+    #[test]
+    fn strict_read_only_phases_keep_read_only_guidance() {
+        let rule = phase_action_rule(&protocol::PhaseCapabilities::default());
+        assert!(rule.contains("READ-ONLY phase"));
+    }
 }

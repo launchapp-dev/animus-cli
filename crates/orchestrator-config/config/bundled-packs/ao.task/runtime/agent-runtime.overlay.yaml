@@ -69,6 +69,8 @@ phases:
     mode: agent
     agent_id: triager
     directive: Evaluate whether the current task is still valid, already completed, obsolete, or a duplicate. Use AO MCP to update the task state when the verdict requires it.
+    capabilities:
+      mutates_state: true
     runtime:
       tool: claude
       model: claude-sonnet-4-6
@@ -81,6 +83,8 @@ phases:
     mode: agent
     agent_id: requirements-refiner
     directive: Refine the current task into implementation-ready scope with concrete acceptance criteria, checklist items, relevant code references, and constraints. Use AO MCP to persist the refined task state.
+    capabilities:
+      mutates_state: true
     runtime:
       tool: claude
       model: claude-sonnet-4-6

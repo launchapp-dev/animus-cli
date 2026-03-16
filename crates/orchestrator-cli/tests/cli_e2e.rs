@@ -562,7 +562,7 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
 fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let lock_path = harness.project_root().join(".ao").join("daemon.lock");
+    let lock_path = harness.scoped_root().join("daemon").join("daemon.lock");
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent).context("daemon lock parent should be created")?;
     }
