@@ -291,6 +291,79 @@ fn workflow_config_validate_passes() -> Result<()> {
 }
 
 #[test]
+fn workflow_definitions_list_includes_all_builtin_planning_workflows() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["workflow", "definitions", "list"])?;
+    let definitions = payload
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .expect("workflow definitions list should return /data as array");
+
+    let ids: Vec<&str> = definitions
+        .iter()
+        .filter_map(|d| d.get("id").and_then(Value::as_str))
+        .collect();
+
+    let planning_workflow_refs = [
+        "builtin/vision-draft",
+        "builtin/vision-refine",
+        "builtin/requirements-draft",
+        "builtin/requirements-refine",
+        "builtin/requirements-execute",
+        "builtin/requirement-plan",
+    ];
+    for expected_id in &planning_workflow_refs {
+        assert!(
+            ids.contains(expected_id),
+            "workflow definitions list should include planning workflow '{expected_id}'"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn workflow_run_with_planning_workflow_ref_for_task_registers_with_correct_ref() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "Planning workflow dispatch test",
+        "--description",
+        "Task for planning workflow_ref dispatch regression",
+    ])?;
+
+    let workflow = harness.run_json_ok(&[
+        "workflow",
+        "run",
+        "--task-id",
+        "TASK-001",
+        "--workflow-ref",
+        "builtin/requirement-plan",
+    ])?;
+    let workflow_id = workflow
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .expect("workflow run should return data.id")
+        .to_string();
+
+    let fetched = harness.run_json_ok(&["workflow", "get", "--id", &workflow_id])?;
+    let stored_ref = fetched
+        .pointer("/data/workflow_ref")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert_eq!(
+        stored_ref, "builtin/requirement-plan",
+        "workflow should be stored with the planning workflow_ref"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn daemon_run_once_with_stale_reconciliation_handles_stale_in_progress_tasks() -> Result<()> {
     let harness = CliHarness::new()?;
 

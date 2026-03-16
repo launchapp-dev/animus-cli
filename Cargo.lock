@@ -2055,15 +2055,6 @@ dependencies = [
 
 [[package]]
 name = "minimad"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9c5d708226d186590a7b6d4a9780e2bdda5f689e0d58cd17012a298efd745d2"
-dependencies = [
- "once_cell",
-]
-
-[[package]]
-name = "minimad"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df8b688969b16915f3ecadc7829d5b7779dee4977e503f767f34136803d5c06f"
@@ -2350,12 +2341,10 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
- "fs2",
  "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",
  "orchestrator-daemon-runtime",
- "orchestrator-git-ops",
  "orchestrator-notifications",
  "orchestrator-web-api",
  "orchestrator-web-server",
@@ -2368,7 +2357,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "termimad 0.34.1",
+ "termimad",
  "tokio",
  "toml",
  "uuid",
@@ -3778,22 +3767,6 @@ dependencies = [
 
 [[package]]
 name = "termimad"
-version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22117210909e9dfff30a558f554c7fb3edb198ef614e7691386785fb7679677c"
-dependencies = [
- "coolor",
- "crokey",
- "crossbeam",
- "lazy-regex",
- "minimad 0.13.1",
- "serde",
- "thiserror 1.0.69",
- "unicode-width 0.1.14",
-]
-
-[[package]]
-name = "termimad"
 version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "889a9370996b74cf46016ce35b96c248a9ac36d69aab1d112b3e09bc33affa49"
@@ -3802,7 +3775,7 @@ dependencies = [
  "crokey",
  "crossbeam",
  "lazy-regex",
- "minimad 0.14.0",
+ "minimad",
  "serde",
  "thiserror 2.0.18",
  "unicode-width 0.1.14",
@@ -5081,7 +5054,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
- "dirs",
  "orchestrator-config",
  "orchestrator-core",
  "protocol",
@@ -5090,7 +5062,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "termimad 0.30.1",
  "tokio",
  "uuid",
 ]

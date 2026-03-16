@@ -2285,3 +2285,63 @@ fn repo_custom_yaml_parses_requirement_task_generation_workflows() {
         .phase_catalog
         .contains_key("requirement-workflow-bootstrap"));
 }
+
+#[test]
+fn resolve_phase_plan_for_builtin_requirement_plan() {
+    let config = builtin_workflow_config();
+    let phases = resolve_workflow_phase_plan(&config, Some("builtin/requirement-plan"))
+        .expect("builtin/requirement-plan should resolve to a phase list");
+    assert_eq!(
+        phases,
+        vec!["requirement-task-generation"],
+        "builtin/requirement-plan should expand to a single requirement-task-generation phase"
+    );
+}
+
+#[test]
+fn resolve_phase_plan_for_each_builtin_planning_workflow() {
+    let config = builtin_workflow_config();
+
+    let cases: &[(&str, &[&str])] = &[
+        ("builtin/vision-draft", &["vision-draft"]),
+        ("builtin/vision-refine", &["vision-refine"]),
+        ("builtin/requirements-draft", &["requirements-draft"]),
+        ("builtin/requirements-refine", &["requirements-refine"]),
+        (
+            "builtin/requirements-execute",
+            &["requirement-task-generation", "requirement-workflow-bootstrap"],
+        ),
+        ("builtin/requirement-plan", &["requirement-task-generation"]),
+    ];
+
+    for (workflow_ref, expected_phases) in cases {
+        let phases = resolve_workflow_phase_plan(&config, Some(workflow_ref))
+            .unwrap_or_else(|| panic!("{workflow_ref} should resolve to a non-empty phase list"));
+        assert_eq!(
+            phases.iter().map(String::as_str).collect::<Vec<_>>(),
+            *expected_phases,
+            "{workflow_ref} resolved to unexpected phases"
+        );
+    }
+}
+
+#[test]
+fn resolve_phase_plan_returns_none_for_unknown_workflow_ref() {
+    let config = builtin_workflow_config();
+    let result = resolve_workflow_phase_plan(&config, Some("builtin/nonexistent-planning-workflow"));
+    assert!(
+        result.is_none(),
+        "unknown workflow_ref should return None (fail-closed), got: {result:?}"
+    );
+}
+
+#[test]
+fn resolve_phase_plan_returns_none_when_both_workflow_ref_and_default_are_empty() {
+    let mut config = builtin_workflow_config();
+    config.default_workflow_ref = String::new();
+    let result = resolve_workflow_phase_plan(&config, None);
+    assert!(
+        result.is_none(),
+        "None workflow_ref with empty default should return None (fail-closed)"
+    );
+}
