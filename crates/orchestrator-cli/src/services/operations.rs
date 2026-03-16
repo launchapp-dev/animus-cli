@@ -1,5 +1,6 @@
 mod ops_architecture;
 mod ops_common;
+mod ops_config;
 mod ops_doctor;
 mod ops_errors;
 mod ops_git;
@@ -21,6 +22,7 @@ mod ops_workflow;
 
 pub(crate) use ops_architecture::*;
 use ops_common::*;
+pub(crate) use ops_config::*;
 pub(crate) use ops_doctor::*;
 pub(crate) use ops_errors::*;
 pub(crate) use ops_git::*;

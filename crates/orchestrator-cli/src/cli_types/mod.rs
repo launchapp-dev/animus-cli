@@ -1,5 +1,6 @@
 mod agent_types;
 mod architecture_types;
+mod config_types;
 mod daemon_types;
 mod doctor_types;
 mod errors_types;
@@ -27,6 +28,7 @@ mod workflow_types;
 
 pub(crate) use agent_types::*;
 pub(crate) use architecture_types::*;
+pub(crate) use config_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
 pub(crate) use errors_types::*;
@@ -57,6 +59,17 @@ mod tests {
     use super::*;
     use clap::error::ErrorKind;
     use clap::Parser;
+
+    #[test]
+    fn parses_config_list_command() {
+        let cli = Cli::try_parse_from(["ao", "config", "list"]).expect("config list should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::List
+            }
+        ));
+    }
 
     #[test]
     fn agent_run_help_includes_actionable_field_descriptions() {

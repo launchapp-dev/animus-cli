@@ -137,4 +137,9 @@ pub(crate) enum Command {
     Tui(TuiArgs),
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
+    /// Inspect effective configuration resolved from all config layers.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
 }

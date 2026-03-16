@@ -171,6 +171,9 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Tui(args) => {
                     services::tui::handle_tui(args, hub.clone(), &project_root, cli.json).await
                 }
+                Command::Config { command } => {
+                    services::operations::handle_config(command, &project_root, cli.json).await
+                }
                 Command::Version => {
                     unreachable!("version command handled before runtime initialization")
                 }
