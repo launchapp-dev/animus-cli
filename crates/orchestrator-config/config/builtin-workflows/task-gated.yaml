@@ -4,11 +4,31 @@ phase_catalog:
     description: Run the workspace test suite as a deterministic gate.
     category: verification
     tags: ["testing", "gate", "builtin"]
+  diagnose-test-failures:
+    label: Diagnose Test Failures
+    description: Analyze unit-test gate failures and produce a targeted repair plan.
+    category: verification
+    tags: ["testing", "diagnosis", "repair", "builtin"]
+  fix-test-failures:
+    label: Fix Test Failures
+    description: Apply targeted fixes from the test failure repair plan.
+    category: build
+    tags: ["testing", "fix", "repair", "builtin"]
   lint:
     label: Lint
     description: Run the linter as a deterministic gate.
     category: verification
     tags: ["lint", "gate", "builtin"]
+  diagnose-lint-failures:
+    label: Diagnose Lint Failures
+    description: Analyze lint gate failures and produce a targeted repair plan.
+    category: verification
+    tags: ["lint", "diagnosis", "repair", "builtin"]
+  fix-lint-failures:
+    label: Fix Lint Failures
+    description: Apply targeted fixes from the lint failure repair plan.
+    category: build
+    tags: ["lint", "fix", "repair", "builtin"]
   po-review:
     label: PO Review
     description: Validate the delivered work against product intent and acceptance criteria.
@@ -25,9 +45,37 @@ workflows:
       - unit-test:
           on_verdict:
             rework:
+              target: diagnose-test-failures
+            advance:
+              target: lint
+      - diagnose-test-failures:
+          on_verdict:
+            advance:
+              target: fix-test-failures
+            rework:
+              target: implementation
+      - fix-test-failures:
+          on_verdict:
+            advance:
+              target: unit-test
+            rework:
               target: implementation
       - lint:
           on_verdict:
+            rework:
+              target: diagnose-lint-failures
+            advance:
+              target: code-review
+      - diagnose-lint-failures:
+          on_verdict:
+            advance:
+              target: fix-lint-failures
+            rework:
+              target: implementation
+      - fix-lint-failures:
+          on_verdict:
+            advance:
+              target: lint
             rework:
               target: implementation
       - code-review:

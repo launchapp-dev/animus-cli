@@ -8,6 +8,7 @@ use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
 use super::loading::load_workflow_config;
 use super::resolution::{
     resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards,
+    resolve_workflow_verdict_routing,
 };
 use super::types::*;
 use super::validation::{validate_workflow_and_runtime_configs, validate_workflow_config};
@@ -2284,4 +2285,204 @@ fn repo_custom_yaml_parses_requirement_task_generation_workflows() {
     assert!(config
         .phase_catalog
         .contains_key("requirement-workflow-bootstrap"));
+}
+
+#[test]
+fn task_gated_workflow_includes_diagnose_fix_phases() {
+    let config = builtin_workflow_config();
+    let phases = resolve_workflow_phase_plan(&config, Some("builtin/task-gated"))
+        .expect("task-gated phase plan should resolve");
+    assert!(
+        phases.contains(&"diagnose-test-failures".to_string()),
+        "task-gated should include diagnose-test-failures"
+    );
+    assert!(
+        phases.contains(&"fix-test-failures".to_string()),
+        "task-gated should include fix-test-failures"
+    );
+    assert!(
+        phases.contains(&"diagnose-lint-failures".to_string()),
+        "task-gated should include diagnose-lint-failures"
+    );
+    assert!(
+        phases.contains(&"fix-lint-failures".to_string()),
+        "task-gated should include fix-lint-failures"
+    );
+}
+
+#[test]
+fn task_gated_unit_test_rework_routes_to_diagnose_test_failures() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let unit_test_verdicts = routing
+        .get("unit-test")
+        .expect("unit-test should have verdict routing");
+    let rework = unit_test_verdicts
+        .get("rework")
+        .expect("unit-test should have rework routing");
+    assert_eq!(
+        rework.target, "diagnose-test-failures",
+        "unit-test rework should route to diagnose-test-failures, got '{}'",
+        rework.target
+    );
+}
+
+#[test]
+fn task_gated_unit_test_advance_routes_to_lint() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let unit_test_verdicts = routing
+        .get("unit-test")
+        .expect("unit-test should have verdict routing");
+    let advance = unit_test_verdicts
+        .get("advance")
+        .expect("unit-test should have advance routing");
+    assert_eq!(
+        advance.target, "lint",
+        "unit-test advance should route to lint, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_diagnose_test_failures_advance_routes_to_fix_test_failures() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let verdicts = routing
+        .get("diagnose-test-failures")
+        .expect("diagnose-test-failures should have verdict routing");
+    let advance = verdicts
+        .get("advance")
+        .expect("diagnose-test-failures should have advance routing");
+    assert_eq!(
+        advance.target, "fix-test-failures",
+        "diagnose-test-failures advance should route to fix-test-failures, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_fix_test_failures_advance_routes_back_to_unit_test() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let verdicts = routing
+        .get("fix-test-failures")
+        .expect("fix-test-failures should have verdict routing");
+    let advance = verdicts
+        .get("advance")
+        .expect("fix-test-failures should have advance routing");
+    assert_eq!(
+        advance.target, "unit-test",
+        "fix-test-failures advance should route back to unit-test, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_fix_test_failures_rework_routes_to_implementation() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let verdicts = routing
+        .get("fix-test-failures")
+        .expect("fix-test-failures should have verdict routing");
+    let rework = verdicts
+        .get("rework")
+        .expect("fix-test-failures should have rework routing");
+    assert_eq!(
+        rework.target, "implementation",
+        "fix-test-failures rework should route to implementation, got '{}'",
+        rework.target
+    );
+}
+
+#[test]
+fn task_gated_lint_rework_routes_to_diagnose_lint_failures() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let lint_verdicts = routing
+        .get("lint")
+        .expect("lint should have verdict routing");
+    let rework = lint_verdicts
+        .get("rework")
+        .expect("lint should have rework routing");
+    assert_eq!(
+        rework.target, "diagnose-lint-failures",
+        "lint rework should route to diagnose-lint-failures, got '{}'",
+        rework.target
+    );
+}
+
+#[test]
+fn task_gated_lint_advance_routes_to_code_review() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let lint_verdicts = routing
+        .get("lint")
+        .expect("lint should have verdict routing");
+    let advance = lint_verdicts
+        .get("advance")
+        .expect("lint should have advance routing");
+    assert_eq!(
+        advance.target, "code-review",
+        "lint advance should route to code-review, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_diagnose_lint_failures_advance_routes_to_fix_lint_failures() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let verdicts = routing
+        .get("diagnose-lint-failures")
+        .expect("diagnose-lint-failures should have verdict routing");
+    let advance = verdicts
+        .get("advance")
+        .expect("diagnose-lint-failures should have advance routing");
+    assert_eq!(
+        advance.target, "fix-lint-failures",
+        "diagnose-lint-failures advance should route to fix-lint-failures, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_fix_lint_failures_advance_routes_back_to_lint() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+    let verdicts = routing
+        .get("fix-lint-failures")
+        .expect("fix-lint-failures should have verdict routing");
+    let advance = verdicts
+        .get("advance")
+        .expect("fix-lint-failures should have advance routing");
+    assert_eq!(
+        advance.target, "lint",
+        "fix-lint-failures advance should route back to lint, got '{}'",
+        advance.target
+    );
+}
+
+#[test]
+fn task_gated_rework_budget_tracked_on_diagnose_phases() {
+    let config = builtin_workflow_config();
+    let routing = resolve_workflow_verdict_routing(&config, Some("builtin/task-gated"));
+
+    let unit_test_rework = routing
+        .get("unit-test")
+        .and_then(|v| v.get("rework"))
+        .expect("unit-test rework routing should exist");
+    assert_eq!(
+        unit_test_rework.target, "diagnose-test-failures",
+        "rework budget is tracked on diagnose-test-failures (target), not unit-test"
+    );
+
+    let lint_rework = routing
+        .get("lint")
+        .and_then(|v| v.get("rework"))
+        .expect("lint rework routing should exist");
+    assert_eq!(
+        lint_rework.target, "diagnose-lint-failures",
+        "rework budget is tracked on diagnose-lint-failures (target), not lint"
+    );
 }

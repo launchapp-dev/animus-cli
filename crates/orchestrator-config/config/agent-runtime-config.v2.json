@@ -655,6 +655,102 @@
       "command": null,
       "manual": null
     },
+    "diagnose-test-failures": {
+      "mode": "agent",
+      "agent_id": "swe",
+      "directive": "Analyze the unit-test gate failure from the prior phase output in the pipeline context. Identify the root causes, list the specific failing tests and error messages, and produce a concrete repair plan. Do NOT edit any code. Set verdict to advance with the repair plan described in the reason field.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "decision_contract": {
+        "required_evidence": ["code_review_clean"],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": false
+      },
+      "command": null,
+      "manual": null
+    },
+    "fix-test-failures": {
+      "mode": "agent",
+      "agent_id": "swe",
+      "directive": "Implement the targeted fixes specified in the diagnose-test-failures repair plan from the prior phase output. Apply only the minimal changes required to resolve the failing tests. Commit the changes. Set verdict to advance if all targeted fixes are applied, or rework if the repair plan cannot be fully executed.",
+      "runtime": null,
+      "capabilities": {
+        "writes_files": true,
+        "requires_commit": true,
+        "enforce_product_changes": true
+      },
+      "output_contract": {
+        "kind": "implementation_result",
+        "required_fields": ["commit_message"]
+      },
+      "output_json_schema": {
+        "type": "object",
+        "required": ["kind", "commit_message"],
+        "properties": {
+          "kind": { "const": "implementation_result" },
+          "commit_message": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      },
+      "decision_contract": {
+        "required_evidence": ["files_modified"],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": false
+      },
+      "command": null,
+      "manual": null
+    },
+    "diagnose-lint-failures": {
+      "mode": "agent",
+      "agent_id": "swe",
+      "directive": "Analyze the lint gate failure from the prior phase output in the pipeline context. Identify each lint error or warning, map them to their source locations, and produce a concrete repair plan. Do NOT edit any code. Set verdict to advance with the repair plan described in the reason field.",
+      "runtime": null,
+      "output_contract": null,
+      "output_json_schema": null,
+      "decision_contract": {
+        "required_evidence": ["code_review_clean"],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": false
+      },
+      "command": null,
+      "manual": null
+    },
+    "fix-lint-failures": {
+      "mode": "agent",
+      "agent_id": "swe",
+      "directive": "Implement the targeted fixes specified in the diagnose-lint-failures repair plan from the prior phase output. Apply only the minimal changes required to resolve the lint errors. Commit the changes. Set verdict to advance if all targeted fixes are applied, or rework if the repair plan cannot be fully executed.",
+      "runtime": null,
+      "capabilities": {
+        "writes_files": true,
+        "requires_commit": true,
+        "enforce_product_changes": true
+      },
+      "output_contract": {
+        "kind": "implementation_result",
+        "required_fields": ["commit_message"]
+      },
+      "output_json_schema": {
+        "type": "object",
+        "required": ["kind", "commit_message"],
+        "properties": {
+          "kind": { "const": "implementation_result" },
+          "commit_message": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      },
+      "decision_contract": {
+        "required_evidence": ["files_modified"],
+        "min_confidence": 0.7,
+        "max_risk": "medium",
+        "allow_missing_decision": false
+      },
+      "command": null,
+      "manual": null
+    },
     "unit-test": {
       "mode": "command",
       "directive": "Run the workspace test suite.",
