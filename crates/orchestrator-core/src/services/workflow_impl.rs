@@ -284,15 +284,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl WorkflowServiceApi for FileServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        let workflows = self.workflow_manager().list()?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows = workflows.iter().cloned().map(|workflow| (workflow.id.clone(), workflow)).collect();
-            Ok(())
-        })
-        .await?;
-
-        Ok(workflows)
+        Ok(self.workflow_manager().list()?)
     }
 
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
@@ -349,12 +341,6 @@ impl WorkflowServiceApi for FileServiceHub {
         let manager = self.workflow_manager();
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Start)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id, workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -372,12 +358,6 @@ impl WorkflowServiceApi for FileServiceHub {
         executor.resume(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Resume)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -395,12 +375,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .pause(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Pause)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -418,12 +392,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .cancel(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Cancel)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -495,11 +463,6 @@ impl WorkflowServiceApi for FileServiceHub {
             }
         }
 
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -517,12 +480,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .mark_current_phase_failed(&mut workflow, error);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -540,12 +497,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .mark_completed_failed(&mut workflow, error);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
-
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(workflow)
     }
 
@@ -563,14 +514,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .mark_merge_conflict(&mut workflow, error);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
-
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.workflows.insert(id.to_string(), workflow.clone());
-            lock.clone()
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
         Ok(workflow)
     }
 
@@ -588,14 +531,6 @@ impl WorkflowServiceApi for FileServiceHub {
         .resolve_merge_conflict(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
-
-        let snapshot = {
-            let mut lock = self.state.write().await;
-            lock.workflows.insert(id.to_string(), workflow.clone());
-            lock.clone()
-        };
-
-        Self::persist_snapshot(&self.state_file, &snapshot)?;
         Ok(workflow)
     }
 
@@ -618,11 +553,6 @@ impl WorkflowServiceApi for FileServiceHub {
             machine_source: Some("human-feedback".to_string()),
         });
         manager.save(&workflow)?;
-        self.mutate_persistent_state(|state| {
-            state.workflows.insert(id.to_string(), workflow.clone());
-            Ok(())
-        })
-        .await?;
         Ok(())
     }
 }

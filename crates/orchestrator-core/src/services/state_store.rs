@@ -12,6 +12,7 @@ pub(super) struct CoreState {
     pub(super) active_project_id: Option<String>,
     pub(super) projects: HashMap<String, OrchestratorProject>,
     pub(super) tasks: HashMap<String, OrchestratorTask>,
+    #[serde(skip)]
     pub(super) workflows: HashMap<String, OrchestratorWorkflow>,
     #[serde(default)]
     pub(super) vision: Option<VisionDocument>,

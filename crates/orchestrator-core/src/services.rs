@@ -249,6 +249,8 @@ impl FileServiceHub {
         let scoped_root = protocol::scoped_state_root(&project_root).unwrap_or_else(|| project_root.join(".ao"));
         let state_file = scoped_root.join("core-state.json");
 
+        Self::migrate_workflows_from_core_state(&state_file, &project_root);
+
         let mut state = load_core_state(&state_file);
 
         let workflow_manager = WorkflowStateManager::new(&project_root);
@@ -688,6 +690,30 @@ impl FileServiceHub {
         copy("workflow-state")?;
         std::fs::write(scoped_root.join(".migrated-from-repo"), project_root.display().to_string())?;
         Ok(())
+    }
+
+    fn migrate_workflows_from_core_state(state_file: &Path, project_root: &Path) {
+        let Ok(contents) = std::fs::read_to_string(state_file) else {
+            return;
+        };
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&contents) else {
+            return;
+        };
+        let Some(workflows) = raw.get("workflows").and_then(|v| v.as_object()) else {
+            return;
+        };
+        if workflows.is_empty() {
+            return;
+        }
+        let manager = WorkflowStateManager::new(project_root);
+        for (id, workflow_value) in workflows {
+            if manager.load(id).is_ok() {
+                continue;
+            }
+            if let Ok(workflow) = serde_json::from_value::<OrchestratorWorkflow>(workflow_value.clone()) {
+                let _ = manager.save(&workflow);
+            }
+        }
     }
 
     fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
