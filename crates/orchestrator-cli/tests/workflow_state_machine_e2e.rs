@@ -153,3 +153,99 @@ fn e2e_workflow_state_machine_json_contract_endpoints() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn e2e_workflow_context_returns_expected_fields() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let created = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "workflow context e2e target",
+        "--description",
+        "e2e test for workflow context surface",
+    ])?;
+    let task_id = created
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("task create should return data.id")?
+        .to_string();
+
+    let started = harness.run_json_ok(&["workflow", "run", "--task-id", &task_id])?;
+    let workflow_id = started
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("workflow run should return data.id")?
+        .to_string();
+
+    let ctx = harness.run_json_ok(&["workflow", "context", "--id", &workflow_id])?;
+    assert_eq!(
+        ctx.pointer("/data/workflow_id").and_then(Value::as_str),
+        Some(workflow_id.as_str())
+    );
+    assert!(
+        ctx.pointer("/data/status").is_some(),
+        "context should include status"
+    );
+    assert!(
+        ctx.pointer("/data/current_phase").is_some(),
+        "context should include current_phase"
+    );
+    assert!(
+        ctx.pointer("/data/pipeline").and_then(Value::as_array).is_some(),
+        "context should include pipeline array"
+    );
+    assert!(
+        ctx.pointer("/data/rework_counts").is_some(),
+        "context should include rework_counts"
+    );
+    assert!(
+        ctx.pointer("/data/total_reworks").is_some(),
+        "context should include total_reworks"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn e2e_workflow_last_phase_returns_expected_fields() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let created = harness.run_json_ok(&[
+        "task",
+        "create",
+        "--title",
+        "workflow last-phase e2e target",
+        "--description",
+        "e2e test for workflow last-phase surface",
+    ])?;
+    let task_id = created
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("task create should return data.id")?
+        .to_string();
+
+    let started = harness.run_json_ok(&["workflow", "run", "--task-id", &task_id])?;
+    let workflow_id = started
+        .pointer("/data/id")
+        .and_then(Value::as_str)
+        .context("workflow run should return data.id")?
+        .to_string();
+
+    let last = harness.run_json_ok(&["workflow", "last-phase", "--id", &workflow_id])?;
+    assert_eq!(
+        last.pointer("/data/workflow_id").and_then(Value::as_str),
+        Some(workflow_id.as_str())
+    );
+    assert!(
+        last.pointer("/data/phase_id").is_some(),
+        "last-phase should include phase_id key"
+    );
+    assert!(
+        last.pointer("/data/status").is_some(),
+        "last-phase should include status key"
+    );
+
+    Ok(())
+}

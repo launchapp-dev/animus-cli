@@ -8,6 +8,10 @@ pub(crate) enum WorkflowCommand {
     List,
     /// Get workflow details.
     Get(IdArgs),
+    /// Show current workflow execution context: current phase, pipeline state, rework counts, and last decision.
+    Context(IdArgs),
+    /// Show the last completed or running phase result, including its phase decision.
+    LastPhase(IdArgs),
     /// Show workflow decisions.
     Decisions(IdArgs),
     /// List and inspect workflow checkpoints.

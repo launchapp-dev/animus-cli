@@ -68,7 +68,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Workflow Operations (14 tools)
+## Workflow Operations (16 tools)
 
 ### Runtime Tools (9)
 
@@ -83,6 +83,13 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | `ao.workflow.cancel` | Cancel a running workflow permanently | `id`, `confirm`, `dry_run` |
 | `ao.workflow.resume` | Resume a paused workflow | `id` |
 | `ao.workflow.phase.approve` | Approve a gated workflow phase | `workflow_id`, `phase_id`, `feedback` |
+
+### Context & Artifact Tools (2)
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `ao.workflow.context` | Get current workflow execution context: current phase, pipeline state, rework counts, and last decision | `id` |
+| `ao.workflow.last-phase` | Get the last completed or running phase result including phase decision, error, and timestamps | `id` |
 
 ### Decision & Checkpoint Tools (2)
 

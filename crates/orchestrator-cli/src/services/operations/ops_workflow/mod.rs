@@ -10,9 +10,9 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
     dispatch_workflow_event, ensure_workflow_config_compiled, load_workflow_config,
-    services::ServiceHub, workflow_ref_for_task, WorkflowEvent, WorkflowResumeManager,
-    WorkflowRunInput, WorkflowSubject, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
-    STANDARD_WORKFLOW_REF,
+    services::ServiceHub, workflow_ref_for_task, OrchestratorWorkflow, WorkflowDecisionAction,
+    WorkflowEvent, WorkflowPhaseStatus, WorkflowResumeManager, WorkflowRunInput, WorkflowSubject,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -23,6 +23,83 @@ use crate::{
     WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand,
     WorkflowStateMachineCommand,
 };
+
+fn workflow_context_payload(workflow: &OrchestratorWorkflow) -> Value {
+    let last_decision = workflow.decision_history.last().cloned();
+    let last_rework_decision = workflow
+        .decision_history
+        .iter()
+        .rev()
+        .find(|d| matches!(d.decision, WorkflowDecisionAction::Rework))
+        .cloned();
+    let pipeline: Vec<Value> = workflow
+        .phases
+        .iter()
+        .map(|phase| {
+            serde_json::json!({
+                "phase_id": phase.phase_id,
+                "status": phase.status,
+                "attempt": phase.attempt,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "workflow_id": workflow.id,
+        "status": workflow.status,
+        "machine_state": workflow.machine_state,
+        "current_phase": workflow.current_phase,
+        "workflow_ref": workflow.workflow_ref,
+        "rework_counts": workflow.rework_counts,
+        "total_reworks": workflow.total_reworks,
+        "pipeline": pipeline,
+        "last_decision": last_decision,
+        "last_rework_decision": last_rework_decision,
+    })
+}
+
+fn workflow_last_phase_payload(workflow: &OrchestratorWorkflow) -> Value {
+    let last_terminal = workflow.phases.iter().rev().find(|phase| {
+        matches!(
+            phase.status,
+            WorkflowPhaseStatus::Success
+                | WorkflowPhaseStatus::Failed
+                | WorkflowPhaseStatus::Skipped
+        )
+    });
+    let phase = last_terminal.or_else(|| {
+        workflow
+            .phases
+            .iter()
+            .rev()
+            .find(|phase| matches!(phase.status, WorkflowPhaseStatus::Running))
+    });
+    match phase {
+        Some(phase) => {
+            let decision = workflow
+                .decision_history
+                .iter()
+                .rev()
+                .find(|d| d.phase_id == phase.phase_id)
+                .cloned();
+            serde_json::json!({
+                "workflow_id": workflow.id,
+                "phase_id": phase.phase_id,
+                "status": phase.status,
+                "attempt": phase.attempt,
+                "started_at": phase.started_at,
+                "completed_at": phase.completed_at,
+                "error_message": phase.error_message,
+                "decision": decision,
+            })
+        }
+        None => serde_json::json!({
+            "workflow_id": workflow.id,
+            "phase_id": null,
+            "status": null,
+            "message": "no phases have been executed yet",
+        }),
+    }
+}
 
 async fn resolve_workflow_run_dispatch(
     hub: Arc<dyn ServiceHub>,
@@ -268,6 +345,14 @@ pub(crate) async fn handle_workflow(
     match command {
         WorkflowCommand::List => print_value(workflows.list().await?, json),
         WorkflowCommand::Get(args) => print_value(workflows.get(&args.id).await?, json),
+        WorkflowCommand::Context(args) => {
+            let workflow = workflows.get(&args.id).await?;
+            print_value(workflow_context_payload(&workflow), json)
+        }
+        WorkflowCommand::LastPhase(args) => {
+            let workflow = workflows.get(&args.id).await?;
+            print_value(workflow_last_phase_payload(&workflow), json)
+        }
         WorkflowCommand::Decisions(args) => print_value(workflows.decisions(&args.id).await?, json),
         WorkflowCommand::Checkpoints { command } => match command {
             WorkflowCheckpointCommand::List(args) => {
@@ -827,5 +912,217 @@ mod tests {
 
         assert_eq!(dispatch.subject_id(), task.id);
         assert_eq!(dispatch.input, Some(serde_json::json!({"k":"v"})));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    use orchestrator_core::{
+        WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord,
+        WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineState, WorkflowPhaseExecution,
+        WorkflowPhaseStatus, WorkflowStatus, WorkflowSubject,
+    };
+    use std::collections::HashMap;
+
+    fn make_minimal_workflow(id: &str) -> OrchestratorWorkflow {
+        OrchestratorWorkflow {
+            id: id.to_string(),
+            task_id: "TASK-1".to_string(),
+            workflow_ref: Some("standard".to_string()),
+            subject: WorkflowSubject::Task {
+                id: "TASK-1".to_string(),
+            },
+            input: None,
+            status: WorkflowStatus::Running,
+            current_phase_index: 0,
+            phases: vec![],
+            machine_state: WorkflowMachineState::RunPhase,
+            current_phase: Some("implementation".to_string()),
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+            rework_counts: HashMap::new(),
+            total_reworks: 0,
+            decision_history: vec![],
+        }
+    }
+
+    fn make_decision(phase_id: &str, action: WorkflowDecisionAction) -> WorkflowDecisionRecord {
+        WorkflowDecisionRecord {
+            timestamp: chrono::Utc::now(),
+            phase_id: phase_id.to_string(),
+            source: WorkflowDecisionSource::Llm,
+            decision: action,
+            target_phase: None,
+            reason: "test reason".to_string(),
+            confidence: 0.9,
+            risk: WorkflowDecisionRisk::Low,
+            guardrail_violations: vec![],
+            machine_version: None,
+            machine_hash: None,
+            machine_source: None,
+        }
+    }
+
+    #[test]
+    fn workflow_context_payload_empty_history() {
+        let wf = make_minimal_workflow("wf-001");
+        let payload = workflow_context_payload(&wf);
+        assert_eq!(payload["workflow_id"], "wf-001");
+        assert_eq!(payload["current_phase"], "implementation");
+        assert_eq!(payload["total_reworks"], 0);
+        assert!(payload["last_decision"].is_null());
+        assert!(payload["last_rework_decision"].is_null());
+        assert!(payload["pipeline"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn workflow_context_payload_with_decisions_and_pipeline() {
+        let mut wf = make_minimal_workflow("wf-002");
+        wf.phases = vec![
+            WorkflowPhaseExecution {
+                phase_id: "requirements".to_string(),
+                status: WorkflowPhaseStatus::Success,
+                started_at: None,
+                completed_at: None,
+                attempt: 1,
+                error_message: None,
+            },
+            WorkflowPhaseExecution {
+                phase_id: "implementation".to_string(),
+                status: WorkflowPhaseStatus::Running,
+                started_at: None,
+                completed_at: None,
+                attempt: 2,
+                error_message: None,
+            },
+        ];
+        wf.rework_counts
+            .insert("implementation".to_string(), 1u32);
+        wf.total_reworks = 1;
+        wf.decision_history = vec![
+            make_decision("requirements", WorkflowDecisionAction::Advance),
+            make_decision("implementation", WorkflowDecisionAction::Rework),
+        ];
+
+        let payload = workflow_context_payload(&wf);
+        assert_eq!(payload["total_reworks"], 1);
+        assert_eq!(payload["rework_counts"]["implementation"], 1);
+        let pipeline = payload["pipeline"].as_array().unwrap();
+        assert_eq!(pipeline.len(), 2);
+        assert_eq!(pipeline[0]["phase_id"], "requirements");
+        assert_eq!(pipeline[1]["status"], "running");
+        assert_eq!(payload["last_decision"]["phase_id"], "implementation");
+        assert_eq!(payload["last_rework_decision"]["phase_id"], "implementation");
+    }
+
+    #[test]
+    fn workflow_context_payload_last_rework_is_not_latest_decision() {
+        let mut wf = make_minimal_workflow("wf-003");
+        wf.decision_history = vec![
+            make_decision("requirements", WorkflowDecisionAction::Rework),
+            make_decision("requirements", WorkflowDecisionAction::Advance),
+        ];
+        let payload = workflow_context_payload(&wf);
+        assert_eq!(payload["last_decision"]["decision"], "advance");
+        assert_eq!(payload["last_rework_decision"]["phase_id"], "requirements");
+        assert_eq!(payload["last_rework_decision"]["decision"], "rework");
+    }
+
+    #[test]
+    fn workflow_last_phase_payload_no_phases() {
+        let wf = make_minimal_workflow("wf-004");
+        let payload = workflow_last_phase_payload(&wf);
+        assert_eq!(payload["workflow_id"], "wf-004");
+        assert!(payload["phase_id"].is_null());
+        assert!(payload["message"].as_str().is_some());
+    }
+
+    #[test]
+    fn workflow_last_phase_payload_returns_last_terminal_phase() {
+        let mut wf = make_minimal_workflow("wf-005");
+        wf.phases = vec![
+            WorkflowPhaseExecution {
+                phase_id: "requirements".to_string(),
+                status: WorkflowPhaseStatus::Success,
+                started_at: None,
+                completed_at: None,
+                attempt: 1,
+                error_message: None,
+            },
+            WorkflowPhaseExecution {
+                phase_id: "implementation".to_string(),
+                status: WorkflowPhaseStatus::Failed,
+                started_at: None,
+                completed_at: None,
+                attempt: 1,
+                error_message: Some("compile error".to_string()),
+            },
+            WorkflowPhaseExecution {
+                phase_id: "unit-test".to_string(),
+                status: WorkflowPhaseStatus::Pending,
+                started_at: None,
+                completed_at: None,
+                attempt: 0,
+                error_message: None,
+            },
+        ];
+        wf.decision_history = vec![make_decision(
+            "implementation",
+            WorkflowDecisionAction::Rework,
+        )];
+
+        let payload = workflow_last_phase_payload(&wf);
+        assert_eq!(payload["phase_id"], "implementation");
+        assert_eq!(payload["status"], "failed");
+        assert_eq!(payload["error_message"], "compile error");
+        assert_eq!(payload["decision"]["decision"], "rework");
+    }
+
+    #[test]
+    fn workflow_last_phase_payload_falls_back_to_running_phase() {
+        let mut wf = make_minimal_workflow("wf-006");
+        wf.phases = vec![
+            WorkflowPhaseExecution {
+                phase_id: "implementation".to_string(),
+                status: WorkflowPhaseStatus::Running,
+                started_at: None,
+                completed_at: None,
+                attempt: 1,
+                error_message: None,
+            },
+            WorkflowPhaseExecution {
+                phase_id: "unit-test".to_string(),
+                status: WorkflowPhaseStatus::Pending,
+                started_at: None,
+                completed_at: None,
+                attempt: 0,
+                error_message: None,
+            },
+        ];
+
+        let payload = workflow_last_phase_payload(&wf);
+        assert_eq!(payload["phase_id"], "implementation");
+        assert_eq!(payload["status"], "running");
+        assert!(payload["decision"].is_null());
+    }
+
+    #[test]
+    fn workflow_last_phase_payload_skipped_phase_is_terminal() {
+        let mut wf = make_minimal_workflow("wf-007");
+        wf.phases = vec![WorkflowPhaseExecution {
+            phase_id: "ui-ux".to_string(),
+            status: WorkflowPhaseStatus::Skipped,
+            started_at: None,
+            completed_at: None,
+            attempt: 0,
+            error_message: None,
+        }];
+
+        let payload = workflow_last_phase_payload(&wf);
+        assert_eq!(payload["phase_id"], "ui-ux");
+        assert_eq!(payload["status"], "skipped");
     }
 }

@@ -260,6 +260,46 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.workflow.context",
+        description = "Get current workflow execution context. Purpose: Retrieve current phase, pipeline state, rework counts, and last decision without reading raw logs. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.list to find workflows; use ao.workflow.last-phase for the last phase artifact.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_context(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "context".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.context", args, input.project_root)
+            .await
+    }
+
+    #[tool(
+        name = "ao.workflow.last-phase",
+        description = "Get the last completed or running phase result. Purpose: Retrieve the last phase ID, status, attempt, timestamps, error, and phase decision — enabling failure inspection without log archaeology. Prerequisites: Workflow must exist and have at least one executed phase. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use after ao.workflow.context to drill into the last phase detail.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_last_phase(
+        &self,
+        params: Parameters<IdInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "last-phase".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("ao.workflow.last-phase", args, input.project_root)
+            .await
+    }
+
+    #[tool(
         name = "ao.workflow.phase.approve",
         description = "Approve a gated workflow phase. Purpose: Unblock gate phases that require manual approval before proceeding. Prerequisites: Workflow must have a pending gate phase. Example: {\"workflow_id\": \"wf-abc123\"} or {\"workflow_id\": \"wf-abc123\", \"phase_id\": \"po-review\", \"feedback\": \"Approved\"}. Sequencing: Use ao.workflow.get first to see pending gates, then ao.workflow.phase.approve to unblock.",
         input_schema = ao_schema_for_type::<WorkflowPhaseApproveInput>()
