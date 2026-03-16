@@ -4,7 +4,7 @@ use std::path::Path;
 use orchestrator_core;
 use protocol::{
     canonical_model_id, default_fallback_models_for_phase, default_model_specs,
-    default_primary_model_for_phase, normalize_tool_id, tool_for_model_id,
+    default_primary_model_for_phase, env_vars, normalize_tool_id, tool_for_model_id,
     tool_supports_repository_writes, ModelRoutingComplexity, PhaseCapabilities,
     PhaseRoutingConfig,
 };
@@ -186,7 +186,7 @@ fn enforce_write_capable_phase_target(
     if !phase_writes_files {
         return (normalized_tool_id, model_id);
     }
-    if !protocol::parse_env_bool("AO_ALLOW_NON_EDITING_PHASE_TOOL")
+    if !protocol::parse_env_bool(env_vars::AO_ALLOW_NON_EDITING_PHASE_TOOL)
         && !tool_supports_repository_writes(&normalized_tool_id)
     {
         let fallback_model = routing.file_edit_model.as_deref()

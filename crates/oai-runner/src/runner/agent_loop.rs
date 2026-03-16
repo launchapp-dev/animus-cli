@@ -1,4 +1,5 @@
 use anyhow::Result;
+use protocol::env_vars;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,7 @@ use super::output::OutputFormatter;
 const SCHEMA_RETRY_LIMIT: usize = 3;
 
 fn config_dir() -> PathBuf {
-    let dir = std::env::var("AO_CONFIG_DIR")
+    let dir = std::env::var(env_vars::AO_CONFIG_DIR)
         .or_else(|_| std::env::var("HOME").map(|h| format!("{}/.ao", h)))
         .unwrap_or_else(|_| ".ao".to_string());
     PathBuf::from(dir)

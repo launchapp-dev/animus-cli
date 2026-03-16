@@ -138,7 +138,7 @@ fn normalize_token(source: &str, raw: String) -> Result<String> {
 }
 
 fn config_dir_override() -> Option<PathBuf> {
-    std::env::var("AO_CONFIG_DIR")
+    std::env::var(crate::env_vars::AO_CONFIG_DIR)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

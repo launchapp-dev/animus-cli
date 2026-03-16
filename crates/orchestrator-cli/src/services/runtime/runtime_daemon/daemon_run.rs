@@ -1,6 +1,7 @@
 use crate::cli_types::DaemonRunArgs;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
 use anyhow::Result;
+use protocol::env_vars;
 use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
@@ -75,7 +76,7 @@ impl DaemonRunHooks for CliDaemonRunHost {
     async fn start_daemon(&mut self, project_root: &str) -> Result<()> {
         let hub = FileServiceHub::new(project_root)?;
         hub.daemon().start(Default::default()).await.or_else(|error| {
-            let skip = std::env::var("AO_SKIP_RUNNER_START")
+            let skip = std::env::var(env_vars::AO_SKIP_RUNNER_START)
                 .ok()
                 .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
                 .unwrap_or(false);
@@ -108,11 +109,11 @@ pub(super) async fn handle_daemon_run(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let _auto_merge_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_MERGE_ENABLED", args.scheduler.auto_merge);
-    let _auto_pr_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_PR_ENABLED", args.scheduler.auto_pr);
-    let _auto_commit_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_COMMIT_BEFORE_MERGE", args.scheduler.auto_commit_before_merge);
-    let _auto_prune_guard = EnvOverrideGuard::set_bool_if("AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE", args.scheduler.auto_prune_worktrees_after_merge);
-    let _phase_timeout_guard = EnvOverrideGuard::set_if("AO_PHASE_TIMEOUT_SECS", args.scheduler.phase_timeout_secs);
+    let _auto_merge_guard = EnvOverrideGuard::set_bool_if(env_vars::AO_AUTO_MERGE_ENABLED, args.scheduler.auto_merge);
+    let _auto_pr_guard = EnvOverrideGuard::set_bool_if(env_vars::AO_AUTO_PR_ENABLED, args.scheduler.auto_pr);
+    let _auto_commit_guard = EnvOverrideGuard::set_bool_if(env_vars::AO_AUTO_COMMIT_BEFORE_MERGE, args.scheduler.auto_commit_before_merge);
+    let _auto_prune_guard = EnvOverrideGuard::set_bool_if(env_vars::AO_AUTO_PRUNE_WORKTREES_AFTER_MERGE, args.scheduler.auto_prune_worktrees_after_merge);
+    let _phase_timeout_guard = EnvOverrideGuard::set_if(env_vars::AO_PHASE_TIMEOUT_SECS, args.scheduler.phase_timeout_secs);
 
     let runtime_options = runtime_options_from_cli(&args);
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));

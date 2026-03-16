@@ -9,6 +9,7 @@ pub mod agent_runner;
 pub mod common;
 pub mod config;
 pub mod credentials;
+pub mod env_vars;
 pub mod daemon;
 pub mod daemon_event_record;
 pub mod error_classification;

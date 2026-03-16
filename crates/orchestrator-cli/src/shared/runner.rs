@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 #[cfg(test)]
 use protocol::RunId;
-use protocol::{AgentRunEvent, OutputStreamType};
+use protocol::{env_vars, AgentRunEvent, OutputStreamType};
 use serde_json::Value;
 
 use cli_wrapper::{extract_text_from_line, NormalizedTextEvent};
@@ -39,9 +39,9 @@ pub(crate) struct RunnerScopeEnvGuard {
 
 impl RunnerScopeEnvGuard {
     pub(crate) fn new(scope: Option<&RunnerScopeArg>) -> Self {
-        let previous = std::env::var("AO_RUNNER_SCOPE").ok();
+        let previous = std::env::var(env_vars::AO_RUNNER_SCOPE).ok();
         if let Some(scope) = scope {
-            std::env::set_var("AO_RUNNER_SCOPE", runner_scope_label(scope));
+            std::env::set_var(env_vars::AO_RUNNER_SCOPE, runner_scope_label(scope));
             Self {
                 previous,
                 changed: true,
@@ -62,9 +62,9 @@ impl Drop for RunnerScopeEnvGuard {
         }
 
         if let Some(value) = &self.previous {
-            std::env::set_var("AO_RUNNER_SCOPE", value);
+            std::env::set_var(env_vars::AO_RUNNER_SCOPE, value);
         } else {
-            std::env::remove_var("AO_RUNNER_SCOPE");
+            std::env::remove_var(env_vars::AO_RUNNER_SCOPE);
         }
     }
 }

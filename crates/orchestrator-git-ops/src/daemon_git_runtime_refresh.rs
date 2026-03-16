@@ -2,7 +2,7 @@ use super::*;
 
 const RUNTIME_BINARY_REFRESH_STATE_FILE: &str = "runtime-binary-refresh.json";
 const RUNTIME_BINARY_REFRESH_RETRY_BACKOFF_SECS: i64 = 300;
-pub const RUNTIME_BINARY_REFRESH_ENABLED_ENV: &str = "AO_AUTO_REBUILD_RUNNER_ON_MAIN_UPDATE";
+pub const RUNTIME_BINARY_REFRESH_ENABLED_ENV: &str = protocol::env_vars::AO_AUTO_REBUILD_RUNNER_ON_MAIN_UPDATE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeBinaryRefreshTrigger {
