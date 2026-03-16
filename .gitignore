@@ -42,3 +42,6 @@ docs/.vitepress/dist/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Managed worktree MCP fallback config
+/.mcp.json

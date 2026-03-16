@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::config_context::RuntimeConfigContext;
 
@@ -242,6 +243,16 @@ pub fn inject_read_only_flag(runtime_contract: &mut Value, config: &orchestrator
     }
 }
 
+pub fn apply_phase_capability_launch_flags(
+    runtime_contract: &mut Value,
+    caps: &protocol::PhaseCapabilities,
+    config: &orchestrator_core::AgentRuntimeConfig,
+) {
+    if caps.is_strictly_read_only() {
+        inject_read_only_flag(runtime_contract, config);
+    }
+}
+
 pub fn inject_response_schema_into_launch_args(
     runtime_contract: &mut Value,
     schema: &Value,
@@ -282,20 +293,16 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     }
 
-    let command = mcp_config
-        .stdio_command
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            let exe = std::env::current_exe().ok()?;
-            let exe_dir = exe.parent()?;
-            let ao_binary = exe_dir.join("ao");
-            if ao_binary.exists() {
-                Some(ao_binary.to_string_lossy().to_string())
-            } else {
-                Some(exe.to_string_lossy().to_string())
-            }
-        });
+    let command = mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(|| {
+        let exe = std::env::current_exe().ok()?;
+        let exe_dir = exe.parent()?;
+        let ao_binary = exe_dir.join("ao");
+        if ao_binary.exists() {
+            Some(ao_binary.to_string_lossy().to_string())
+        } else {
+            Some(exe.to_string_lossy().to_string())
+        }
+    });
     let Some(command) = command else {
         return;
     };
@@ -347,6 +354,40 @@ pub fn set_mcp_tool_policy(
     }
 }
 
+fn primary_mcp_agent_id(runtime_contract: &Value) -> Option<&str> {
+    runtime_contract.pointer("/mcp/agent_id").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn remove_additional_mcp_server_collisions(
+    runtime_contract: &Value,
+    servers: serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    let Some(agent_id) = primary_mcp_agent_id(runtime_contract) else {
+        return servers;
+    };
+
+    let mut filtered = serde_json::Map::new();
+    let mut skipped = Vec::new();
+
+    for (name, value) in servers {
+        if name.eq_ignore_ascii_case(agent_id) {
+            skipped.push(name);
+        } else {
+            filtered.insert(name, value);
+        }
+    }
+
+    if !skipped.is_empty() {
+        warn!(
+            agent_id,
+            skipped_additional_servers = ?skipped,
+            "Ignoring additional MCP servers that collide with the primary agent id while building the runtime contract"
+        );
+    }
+
+    filtered
+}
+
 pub fn inject_project_mcp_servers(
     runtime_contract: &mut Value,
     project_root: &str,
@@ -377,6 +418,7 @@ pub fn inject_project_mcp_servers(
             }),
         );
     }
+    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
     if servers.is_empty() {
         return;
     }
@@ -432,6 +474,7 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
             }),
         );
     }
+    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
     if servers.is_empty() {
         return;
     }
@@ -494,6 +537,7 @@ pub fn inject_named_mcp_servers(
         ));
     }
 
+    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
     if servers.is_empty() {
         return Ok(());
     }
@@ -562,5 +606,107 @@ mod tests {
             .and_then(Value::as_object)
             .expect("additional_servers should be injected");
         assert!(additional_servers.contains_key("ao.requirements/ao"));
+    }
+
+    #[test]
+    fn inject_workflow_mcp_servers_skips_primary_agent_id_collisions() {
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: builtin_workflow_config().schema.clone(),
+                version: builtin_workflow_config().version,
+                hash: workflow_config_hash(&builtin_workflow_config()),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: builtin_workflow_config(),
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {
+                "agent_id": "ao",
+                "stdio": {
+                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
+                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                }
+            }
+        });
+        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "requirements");
+
+        assert!(
+            runtime_contract.pointer("/mcp/additional_servers").is_none(),
+            "built-in workflow MCP injection should not duplicate the primary ao server"
+        );
+    }
+
+    #[test]
+    fn inject_named_mcp_servers_skips_primary_agent_id_collisions() {
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: builtin_workflow_config().schema.clone(),
+                version: builtin_workflow_config().version,
+                hash: workflow_config_hash(&builtin_workflow_config()),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: builtin_workflow_config(),
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {
+                "agent_id": "ao",
+                "stdio": {
+                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
+                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                }
+            }
+        });
+        inject_named_mcp_servers(
+            &mut runtime_contract,
+            "/Users/samishukri/ao-cli",
+            &ctx,
+            "requirements",
+            &["ao".to_string()],
+        )
+        .expect("named MCP injection should succeed");
+
+        assert!(
+            runtime_contract.pointer("/mcp/additional_servers").is_none(),
+            "named MCP injection should not duplicate the primary ao server"
+        );
+    }
+
+    #[test]
+    fn managed_state_phases_do_not_receive_read_only_cli_flags() {
+        let config = builtin_agent_runtime_config();
+        let mut runtime_contract = serde_json::json!({
+            "cli": {
+                "name": "oai-runner",
+                "launch": {
+                    "args": ["run", "prompt"]
+                }
+            }
+        });
+
+        apply_phase_capability_launch_flags(
+            &mut runtime_contract,
+            &protocol::PhaseCapabilities { mutates_state: true, ..Default::default() },
+            &config,
+        );
+
+        let args = runtime_contract.pointer("/cli/launch/args").and_then(Value::as_array).expect("launch args");
+        assert!(
+            !args.iter().any(|value| value.as_str() == Some("--read-only")),
+            "managed state mutation phases should not inject a strict read-only CLI flag"
+        );
     }
 }

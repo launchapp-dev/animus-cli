@@ -4,7 +4,7 @@ use protocol::RunId;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 pub(super) struct McpStdioConfig {
@@ -259,6 +259,15 @@ fn resolve_mcp_server_transport<'a>(enforcement: &'a McpToolEnforcement) -> Resu
     bail!("MCP-only policy is enabled, but neither mcp.endpoint nor mcp.stdio.command is configured");
 }
 
+fn summarize_mcp_transport<'a>(
+    transport: McpServerTransport<'a>,
+) -> (&'static str, Option<&'a str>, Option<&'a str>, Option<&'a [String]>) {
+    match transport {
+        McpServerTransport::Http(endpoint) => ("http", Some(endpoint), None, None),
+        McpServerTransport::Stdio { command, args } => ("stdio", None, Some(command), Some(args)),
+    }
+}
+
 fn sanitize_token_for_filename(raw: &str) -> String {
     raw.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect()
 }
@@ -477,33 +486,94 @@ pub(super) fn apply_native_mcp_policy(
     temp_cleanup: &mut TempPathCleanup,
 ) -> Result<()> {
     if !enforcement.enabled {
+        debug!(
+            command = %invocation.command,
+            "Native MCP policy disabled for CLI invocation"
+        );
         return Ok(());
     }
 
     let transport = resolve_mcp_server_transport(enforcement)?;
     let agent_id = enforcement.agent_id.trim();
     let cli = canonical_cli_name(&invocation.command);
+    let skipped_additional_server_names = enforcement
+        .additional_servers
+        .iter()
+        .filter(|server| server.name.eq_ignore_ascii_case(agent_id))
+        .map(|server| server.name.clone())
+        .collect::<Vec<_>>();
+    if !skipped_additional_server_names.is_empty() {
+        warn!(
+            run_id = %run_id.0.as_str(),
+            agent_id,
+            skipped_additional_servers = ?skipped_additional_server_names,
+            "Ignoring additional MCP servers that collide with the primary agent id"
+        );
+    }
+    let additional = enforcement
+        .additional_servers
+        .iter()
+        .filter(|server| !server.name.eq_ignore_ascii_case(agent_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let additional_server_names = additional.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
+    let (transport_kind, transport_endpoint, transport_command, transport_args) = summarize_mcp_transport(transport);
 
-    let additional = &enforcement.additional_servers;
+    info!(
+        run_id = %run_id.0.as_str(),
+        cli,
+        command = %invocation.command,
+        agent_id,
+        transport_kind,
+        transport_endpoint = ?transport_endpoint,
+        transport_command = ?transport_command,
+        transport_args = ?transport_args,
+        additional_servers = ?additional_server_names,
+        tool_policy_allow = ?enforcement.tool_policy_allow,
+        tool_policy_deny = ?enforcement.tool_policy_deny,
+        "Applying native MCP policy"
+    );
 
     match cli.as_str() {
-        "claude" => apply_claude_native_mcp_lockdown(&mut invocation.args, transport, agent_id, additional),
+        "claude" => {
+            apply_claude_native_mcp_lockdown(&mut invocation.args, transport, agent_id, &additional);
+            info!(run_id = %run_id.0.as_str(), cli = "claude", "Applied Claude native MCP policy");
+        }
         "codex" => {
             let configured_servers = discover_codex_mcp_server_names();
-            apply_codex_native_mcp_lockdown(&mut invocation.args, transport, agent_id, &configured_servers, additional);
+            apply_codex_native_mcp_lockdown(
+                &mut invocation.args,
+                transport,
+                agent_id,
+                &configured_servers,
+                &additional,
+            );
+            info!(
+                run_id = %run_id.0.as_str(),
+                cli = "codex",
+                configured_servers = ?configured_servers,
+                "Applied Codex native MCP policy"
+            );
         }
-        "gemini" => apply_gemini_native_mcp_lockdown(
-            &mut invocation.args,
-            env,
-            transport,
-            agent_id,
-            run_id,
-            temp_cleanup,
-            additional,
-        )?,
-        "opencode" => apply_opencode_native_mcp_lockdown(env, transport, agent_id, additional),
+        "gemini" => {
+            apply_gemini_native_mcp_lockdown(
+                &mut invocation.args,
+                env,
+                transport,
+                agent_id,
+                run_id,
+                temp_cleanup,
+                &additional,
+            )?;
+            info!(run_id = %run_id.0.as_str(), cli = "gemini", "Applied Gemini native MCP policy");
+        }
+        "opencode" => {
+            apply_opencode_native_mcp_lockdown(env, transport, agent_id, &additional);
+            info!(run_id = %run_id.0.as_str(), cli = "opencode", "Applied OpenCode native MCP policy");
+        }
         "ao-oai-runner" => {
             apply_oai_runner_native_mcp_lockdown(&mut invocation.args, transport);
+            info!(run_id = %run_id.0.as_str(), cli = "ao-oai-runner", "Applied AO OAI runner native MCP policy");
         }
         _ => {
             bail!(

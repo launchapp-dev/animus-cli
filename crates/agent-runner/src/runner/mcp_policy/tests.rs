@@ -162,6 +162,66 @@ fn native_mcp_policy_configures_claude_permission_mode() {
 }
 
 #[test]
+fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collides() {
+    let mut invocation = LaunchInvocation {
+        command: "claude".to_string(),
+        args: vec!["--print".to_string(), "hello".to_string()],
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
+    let enforcement = McpToolEnforcement {
+        enabled: true,
+        endpoint: None,
+        stdio: Some(McpStdioConfig {
+            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            args: vec![
+                "--project-root".to_string(),
+                "/Users/samishukri/ao-cli".to_string(),
+                "mcp".to_string(),
+                "serve".to_string(),
+            ],
+        }),
+        agent_id: "ao".to_string(),
+        allowed_prefixes: vec!["ao.".to_string()],
+        tool_policy_allow: Vec::new(),
+        tool_policy_deny: Vec::new(),
+        additional_servers: vec![AdditionalMcpServer {
+            name: "ao".to_string(),
+            command: "ao".to_string(),
+            args: vec!["mcp".to_string(), "serve".to_string()],
+            env: HashMap::new(),
+        }],
+    };
+    let mut env = HashMap::new();
+    let mut cleanup = TempPathCleanup::default();
+    let run_id = RunId("run-claude-collision".to_string());
+
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+        .expect("claude policy should preserve the primary MCP server");
+
+    let mcp_config = invocation
+        .args
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--mcp-config").then(|| pair[1].clone()))
+        .expect("strict claude config should be present");
+    let parsed: serde_json::Value = serde_json::from_str(&mcp_config).expect("claude mcp config should parse");
+
+    assert_eq!(
+        parsed.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str),
+        Some("/Users/samishukri/ao-cli/target/debug/ao")
+    );
+    assert_eq!(
+        parsed.pointer("/mcpServers/ao/args").and_then(serde_json::Value::as_array).cloned(),
+        Some(vec![
+            serde_json::Value::String("--project-root".to_string()),
+            serde_json::Value::String("/Users/samishukri/ao-cli".to_string()),
+            serde_json::Value::String("mcp".to_string()),
+            serde_json::Value::String("serve".to_string()),
+        ])
+    );
+}
+
+#[test]
 fn parse_codex_mcp_server_names_extracts_safe_names() {
     let payload = r#"
             [

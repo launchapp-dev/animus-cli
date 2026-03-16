@@ -44,6 +44,7 @@ phases:
       tool: claude
       model: claude-sonnet-4-6
     capabilities:
+      mutates_state: true
       is_requirements: true
     decision_contract:
       required_evidence: []
@@ -58,6 +59,7 @@ phases:
       tool: claude
       model: claude-sonnet-4-6
     capabilities:
+      mutates_state: true
       is_requirements: true
     decision_contract:
       required_evidence: []

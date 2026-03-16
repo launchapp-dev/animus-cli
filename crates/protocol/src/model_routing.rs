@@ -219,6 +219,8 @@ pub struct PhaseCapabilities {
     #[serde(default)]
     pub writes_files: bool,
     #[serde(default)]
+    pub mutates_state: bool,
+    #[serde(default)]
     pub requires_commit: bool,
     #[serde(default)]
     pub enforce_product_changes: bool,
@@ -257,6 +259,7 @@ impl PhaseCapabilities {
         let defaults = Self::defaults_for_phase(phase_id);
         Self {
             writes_files: self.writes_files || defaults.writes_files,
+            mutates_state: self.mutates_state || defaults.mutates_state,
             requires_commit: self.requires_commit || defaults.requires_commit,
             enforce_product_changes: self.enforce_product_changes || defaults.enforce_product_changes,
             is_research: self.is_research || defaults.is_research,
@@ -265,6 +268,10 @@ impl PhaseCapabilities {
             is_testing: self.is_testing || defaults.is_testing,
             is_requirements: self.is_requirements || defaults.is_requirements,
         }
+    }
+
+    pub fn is_strictly_read_only(&self) -> bool {
+        !self.writes_files && !self.mutates_state
     }
 }
 
@@ -440,11 +447,13 @@ mod tests {
         assert!(impl_caps.writes_files);
         assert!(impl_caps.requires_commit);
         assert!(impl_caps.enforce_product_changes);
+        assert!(impl_caps.is_strictly_read_only() == false);
         assert!(!impl_caps.is_research);
 
         let research_caps = PhaseCapabilities::defaults_for_phase("research");
         assert!(research_caps.is_research);
         assert!(!research_caps.writes_files);
+        assert!(research_caps.is_strictly_read_only());
 
         let design_caps = PhaseCapabilities::defaults_for_phase("design");
         assert!(design_caps.writes_files);
@@ -465,6 +474,12 @@ mod tests {
         let merged = custom.merge_with_defaults("research");
         assert!(merged.writes_files);
         assert!(merged.is_research);
+    }
+
+    #[test]
+    fn mutating_state_capability_prevents_strict_read_only_mode() {
+        let caps = PhaseCapabilities { mutates_state: true, ..Default::default() };
+        assert!(!caps.is_strictly_read_only());
     }
 
     #[test]

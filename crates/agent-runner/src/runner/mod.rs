@@ -275,8 +275,12 @@ fn normalize_terminal_status_for_cleanup(status: AgentStatus, run_id: &RunId) ->
     }
 }
 
+fn normalize_runner_build_id(raw: Option<String>) -> Option<String> {
+    raw.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
 fn runner_build_id() -> Option<String> {
-    option_env!("AO_RUNNER_BUILD_ID").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    normalize_runner_build_id(std::env::var("AO_RUNNER_BUILD_ID").ok())
 }
 
 #[cfg(test)]
@@ -390,5 +394,16 @@ mod tests {
 
         assert!(runner.subscribe_to_run(&run_id).is_some());
         assert!(runner.subscribe_to_run(&RunId("nonexistent".to_string())).is_none());
+    }
+
+    #[test]
+    fn normalize_runner_build_id_trims_runtime_values() {
+        assert_eq!(normalize_runner_build_id(Some("  build-123  ".to_string())), Some("build-123".to_string()));
+    }
+
+    #[test]
+    fn normalize_runner_build_id_rejects_empty_values() {
+        assert_eq!(normalize_runner_build_id(Some("   ".to_string())), None);
+        assert_eq!(normalize_runner_build_id(None), None);
     }
 }

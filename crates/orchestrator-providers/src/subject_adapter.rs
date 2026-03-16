@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use protocol::orchestrator::{SubjectRef, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK};
+use tracing::{debug, info};
 
 use crate::{PlanningServiceApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskServiceApi};
 
@@ -141,6 +142,11 @@ where
         };
 
         if !is_git_repo(project_root) {
+            info!(
+                task_id = %task.id,
+                project_root,
+                "Project root is not a git repository; using project root as execution cwd"
+            );
             return Ok(project_root.to_string());
         }
 
@@ -170,6 +176,14 @@ where
                     updated.branch_name = Some(branch_name.clone());
                     let _ = self.hub.replace(updated).await?;
                 }
+                sync_managed_worktree_mcp_config(project_root, &existing_path)?;
+                info!(
+                    task_id = %task.id,
+                    branch_name,
+                    execution_cwd = %existing_path.display(),
+                    source = "task.worktree_path",
+                    "Using existing managed task worktree as execution cwd"
+                );
                 return Ok(existing_path.to_string_lossy().to_string());
             }
         }
@@ -184,10 +198,18 @@ where
                     worktree_root.display()
                 );
             }
+            sync_managed_worktree_mcp_config(project_root, &worktree_path)?;
             let mut updated = task.clone();
             updated.worktree_path = Some(worktree_path.to_string_lossy().to_string());
-            updated.branch_name = Some(branch_name);
+            updated.branch_name = Some(branch_name.clone());
             let _ = self.hub.replace(updated).await?;
+            info!(
+                task_id = %task.id,
+                branch_name,
+                execution_cwd = %worktree_path.display(),
+                source = "default_task_worktree",
+                "Reusing managed task worktree as execution cwd"
+            );
             return Ok(worktree_path.to_string_lossy().to_string());
         }
 
@@ -198,6 +220,13 @@ where
         let worktree_path_str = worktree_path.to_string_lossy().to_string();
         let branch_ref = format!("refs/heads/{branch_name}");
         let status = if git_ref_exists(project_root, &branch_ref) {
+            info!(
+                task_id = %task.id,
+                branch_name,
+                execution_cwd = %worktree_path_str,
+                source = "existing_branch",
+                "Provisioning managed task worktree from existing branch"
+            );
             ProcessCommand::new("git")
                 .arg("-C")
                 .arg(project_root)
@@ -214,6 +243,14 @@ where
         } else {
             refresh_preferred_worktree_base_refs(project_root);
             let base_ref = preferred_worktree_base_ref(project_root);
+            info!(
+                task_id = %task.id,
+                branch_name,
+                base_ref,
+                execution_cwd = %worktree_path_str,
+                source = "preferred_base_ref",
+                "Provisioning managed task worktree from preferred base ref"
+            );
             ProcessCommand::new("git")
                 .arg("-C")
                 .arg(project_root)
@@ -238,10 +275,18 @@ where
             );
         }
 
+        sync_managed_worktree_mcp_config(project_root, &worktree_path)?;
         let mut updated = task;
+        let task_id = updated.id.clone();
         updated.worktree_path = Some(worktree_path_str.clone());
-        updated.branch_name = Some(branch_name);
+        updated.branch_name = Some(branch_name.clone());
         let _ = self.hub.replace(updated).await?;
+        info!(
+            task_id = %task_id,
+            branch_name,
+            execution_cwd = %worktree_path_str,
+            "Provisioned managed task worktree"
+        );
         Ok(worktree_path_str)
     }
 }
@@ -443,6 +488,111 @@ fn refresh_preferred_worktree_base_refs(project_root: &str) {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ManagedWorktreeMcpLaunch {
+    kind: &'static str,
+    command: String,
+    args: Vec<String>,
+}
+
+impl ManagedWorktreeMcpLaunch {
+    fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "command": self.command,
+            "args": self.args
+        })
+    }
+}
+
+fn sync_managed_worktree_mcp_config(project_root: &str, worktree_path: &Path) -> Result<()> {
+    let canonical_root = Path::new(project_root).canonicalize().unwrap_or_else(|_| PathBuf::from(project_root));
+    let launch = managed_worktree_mcp_server_config(&canonical_root);
+    let mcp_payload = serde_json::json!({
+        "mcpServers": {
+            "ao": launch.as_json()
+        }
+    });
+    let serialized =
+        format!("{}\n", serde_json::to_string_pretty(&mcp_payload).context("failed to serialize worktree MCP config")?);
+    let mcp_path = worktree_path.join(".mcp.json");
+
+    let should_write = std::fs::read_to_string(&mcp_path).map(|existing| existing != serialized).unwrap_or(true);
+    if should_write {
+        std::fs::write(&mcp_path, serialized)
+            .with_context(|| format!("failed to write worktree MCP config at {}", mcp_path.display()))?;
+        info!(
+            project_root = %canonical_root.display(),
+            worktree_path = %worktree_path.display(),
+            mcp_path = %mcp_path.display(),
+            launcher = launch.kind,
+            command = %launch.command,
+            args = ?launch.args,
+            "Rewrote managed worktree MCP config"
+        );
+    } else {
+        debug!(
+            project_root = %canonical_root.display(),
+            worktree_path = %worktree_path.display(),
+            mcp_path = %mcp_path.display(),
+            launcher = launch.kind,
+            command = %launch.command,
+            args = ?launch.args,
+            "Managed worktree MCP config already up to date"
+        );
+    }
+
+    Ok(())
+}
+
+fn managed_worktree_mcp_server_config(project_root: &Path) -> ManagedWorktreeMcpLaunch {
+    if let Some(binary_path) = preferred_repo_ao_binary(project_root) {
+        return ManagedWorktreeMcpLaunch {
+            kind: "repo_binary",
+            command: binary_path.to_string_lossy().to_string(),
+            args: vec![
+                "--project-root".to_string(),
+                project_root.to_string_lossy().to_string(),
+                "mcp".to_string(),
+                "serve".to_string(),
+            ],
+        };
+    }
+
+    ManagedWorktreeMcpLaunch {
+        kind: "cargo_manifest",
+        command: "cargo".to_string(),
+        args: vec![
+            "run".to_string(),
+            "--manifest-path".to_string(),
+            project_root.join("crates/orchestrator-cli/Cargo.toml").to_string_lossy().to_string(),
+            "--".to_string(),
+            "--project-root".to_string(),
+            project_root.to_string_lossy().to_string(),
+            "mcp".to_string(),
+            "serve".to_string(),
+        ],
+    }
+}
+
+fn preferred_repo_ao_binary(project_root: &Path) -> Option<PathBuf> {
+    ["debug", "release"]
+        .into_iter()
+        .map(|profile| project_root.join("target").join(profile).join(repo_ao_binary_name()))
+        .find(|path| path.exists())
+}
+
+fn repo_ao_binary_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "ao.exe"
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "ao"
     }
 }
 
@@ -770,10 +920,14 @@ mod tests {
     #[tokio::test]
     async fn builtin_project_adapter_provisions_task_worktree_via_task_adapter() {
         let project_root = temp_dir("task");
+        let canonical_project_root = project_root.canonicalize().unwrap();
         run_git(&project_root, &["init", "--initial-branch=main"]);
         run_git(&project_root, &["config", "user.email", "ao@example.com"]);
         run_git(&project_root, &["config", "user.name", "AO"]);
         std::fs::write(project_root.join("README.md"), "hello\n").unwrap();
+        let repo_binary_path = canonical_project_root.join("target").join("debug").join(repo_ao_binary_name());
+        std::fs::create_dir_all(repo_binary_path.parent().unwrap()).unwrap();
+        std::fs::write(&repo_binary_path, "#!/bin/sh\n").unwrap();
         run_git(&project_root, &["add", "README.md"]);
         run_git(&project_root, &["commit", "-m", "init"]);
 
@@ -788,9 +942,53 @@ mod tests {
 
         assert!(cwd.contains("task-task-1"), "unexpected worktree path: {cwd}");
         assert!(Path::new(&cwd).exists(), "worktree path should exist: {cwd}");
+        let mcp_config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(Path::new(&cwd).join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            mcp_config.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str),
+            Some(repo_binary_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            mcp_config.pointer("/mcpServers/ao/args").and_then(serde_json::Value::as_array).cloned(),
+            Some(vec![
+                serde_json::Value::String("--project-root".to_string()),
+                serde_json::Value::String(canonical_project_root.to_string_lossy().to_string()),
+                serde_json::Value::String("mcp".to_string()),
+                serde_json::Value::String("serve".to_string()),
+            ])
+        );
 
         let updated = hub.get("TASK-1").await.unwrap();
         assert_eq!(updated.worktree_path.as_deref(), Some(cwd.as_str()));
         assert_eq!(updated.branch_name.as_deref(), Some("ao/task-1"));
+    }
+
+    #[test]
+    fn managed_worktree_mcp_config_falls_back_to_primary_repo_manifest_path() {
+        let project_root = temp_dir("mcp-project");
+        let worktree_path = temp_dir("mcp-worktree");
+
+        let server = managed_worktree_mcp_server_config(&project_root);
+        assert_eq!(server.kind, "cargo_manifest");
+        assert_eq!(server.command, "cargo");
+        assert_eq!(
+            server.args,
+            vec![
+                "run".to_string(),
+                "--manifest-path".to_string(),
+                project_root.join("crates/orchestrator-cli/Cargo.toml").to_string_lossy().to_string(),
+                "--".to_string(),
+                "--project-root".to_string(),
+                project_root.to_string_lossy().to_string(),
+                "mcp".to_string(),
+                "serve".to_string(),
+            ]
+        );
+
+        sync_managed_worktree_mcp_config(project_root.to_str().unwrap(), &worktree_path).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(worktree_path.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(persisted.get("mcpServers").and_then(serde_json::Value::as_object).map(|map| map.len()), Some(1));
+        assert_eq!(persisted.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str), Some("cargo"));
     }
 }

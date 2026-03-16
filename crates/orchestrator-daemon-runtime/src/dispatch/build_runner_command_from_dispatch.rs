@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use protocol::{McpRuntimeConfig, PhaseRoutingConfig, SubjectDispatch};
 
 pub fn build_runner_command_from_dispatch(dispatch: &SubjectDispatch, project_root: &str) -> std::process::Command {
@@ -10,7 +12,7 @@ pub fn build_runner_command(
     phase_routing: Option<&PhaseRoutingConfig>,
     mcp_config: Option<&McpRuntimeConfig>,
 ) -> std::process::Command {
-    let mut cmd = std::process::Command::new("ao-workflow-runner");
+    let mut cmd = std::process::Command::new(resolve_workflow_runner_binary());
     cmd.arg("execute");
 
     match dispatch.subject.to_workflow_subject() {
@@ -45,8 +47,57 @@ pub fn build_runner_command(
     cmd
 }
 
+fn resolve_workflow_runner_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("AO_WORKFLOW_RUNNER_BIN") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    find_workflow_runner_binary().unwrap_or_else(|| PathBuf::from(workflow_runner_binary_name()))
+}
+
+fn find_workflow_runner_binary() -> Option<PathBuf> {
+    let binary_name = workflow_runner_binary_name();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let sibling = exe_dir.join(binary_name);
+            if sibling.exists() {
+                return Some(sibling);
+            }
+
+            if exe_dir.file_name().is_some_and(|name| name == "deps") {
+                if let Some(parent) = exe_dir.parent() {
+                    let parent_sibling = parent.join(binary_name);
+                    if parent_sibling.exists() {
+                        return Some(parent_sibling);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn workflow_runner_binary_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "ao-workflow-runner.exe"
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "ao-workflow-runner"
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use protocol::orchestrator::WorkflowSubject;
     use protocol::SubjectDispatch;
     use serde_json::json;
@@ -66,7 +117,10 @@ mod tests {
         let program = command.get_program().to_string_lossy().into_owned();
         let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
 
-        assert_eq!(program, "ao-workflow-runner");
+        assert_eq!(
+            Path::new(&program).file_name().and_then(|name| name.to_str()),
+            Some(super::workflow_runner_binary_name())
+        );
         assert_eq!(
             args,
             vec![

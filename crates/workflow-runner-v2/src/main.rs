@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use orchestrator_core::WorkflowStatus;
 use serde::Serialize;
+use tracing_subscriber::EnvFilter;
 
 use workflow_runner_v2::workflow_execute::{execute_workflow, WorkflowExecuteParams};
 
@@ -79,6 +80,7 @@ struct RunnerEvent {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    init_tracing();
     let cli = WorkflowRunnerCli::parse();
 
     match cli.command {
@@ -90,6 +92,13 @@ async fn main() -> ExitCode {
             }
         },
     }
+}
+
+fn init_tracing() {
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("workflow_runner_v2=info,orchestrator_providers=info,warn"));
+    let _ =
+        tracing_subscriber::fmt().with_env_filter(env_filter).with_ansi(false).with_target(true).compact().try_init();
 }
 
 async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {

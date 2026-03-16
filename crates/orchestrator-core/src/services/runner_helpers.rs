@@ -293,6 +293,16 @@ fn runner_status_is_compatible(status: &RunnerStatusResponse, expected_build_id:
     }
 }
 
+fn should_defer_runner_refresh(status: &RunnerStatusResponse, expected_build_id: Option<&str>) -> bool {
+    if status.protocol_version != protocol::PROTOCOL_VERSION || status.active_agents == 0 {
+        return false;
+    }
+    match expected_build_id {
+        Some(expected) => status.build_id.as_deref() != Some(expected),
+        None => false,
+    }
+}
+
 pub(super) fn lookup_binary_in_path(binary_name: &str) -> Option<PathBuf> {
     cli_wrapper::lookup_binary_in_path(binary_name)
 }
@@ -356,6 +366,9 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
     if is_agent_runner_ready(&config_dir).await {
         if let Some(status) = query_runner_status(&config_dir).await {
             if runner_status_is_compatible(&status, expected_build_id.as_deref()) {
+                return Ok(read_runner_pid_from_lock(&config_dir));
+            }
+            if should_defer_runner_refresh(&status, expected_build_id.as_deref()) {
                 return Ok(read_runner_pid_from_lock(&config_dir));
             }
             let old_pid = read_runner_pid_from_lock(&config_dir);
@@ -560,6 +573,28 @@ mod tests {
     }
 
     #[test]
+    fn defers_runner_refresh_when_active_agents_are_present() {
+        let status = RunnerStatusResponse {
+            active_agents: 2,
+            protocol_version: protocol::PROTOCOL_VERSION.to_string(),
+            build_id: Some("old-build".to_string()),
+            metrics: None,
+        };
+        assert!(should_defer_runner_refresh(&status, Some("new-build")));
+    }
+
+    #[test]
+    fn does_not_defer_runner_refresh_when_runner_is_idle() {
+        let status = RunnerStatusResponse {
+            active_agents: 0,
+            protocol_version: protocol::PROTOCOL_VERSION.to_string(),
+            build_id: Some("old-build".to_string()),
+            metrics: None,
+        };
+        assert!(!should_defer_runner_refresh(&status, Some("new-build")));
+    }
+
+    #[test]
     fn clear_stale_runner_artifacts_removes_dead_pid_lock_file() {
         let (_temp, config_dir) = new_temp_runner_config_dir();
         let lock_path = runner_lock_path(&config_dir);
@@ -749,6 +784,7 @@ mod tests {
         std::env::remove_var("AGENT_RUNNER_TOKEN");
         std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
 
+        let expected_build_id = runner_binary_build_id(&_binary);
         let startup_result = ensure_agent_runner_running(&project_root).await;
 
         if let Some(cwd) = original_cwd {
@@ -776,6 +812,7 @@ mod tests {
 
         let status = query_runner_status(&runner_config_dir).await.expect("runner status query should succeed");
         assert_eq!(status.active_agents, 0, "runner should have no active agents initially");
+        assert_eq!(status.build_id, expected_build_id, "runner should report the launched build id");
 
         let original_skip_runner2 = std::env::var("AO_SKIP_RUNNER_START").ok();
         let original_token_override2 = std::env::var("AGENT_RUNNER_TOKEN").ok();
@@ -802,7 +839,9 @@ mod tests {
             std::env::remove_var("AGENT_RUNNER_TOKEN");
         }
 
-        second_startup_result.expect("second startup should succeed");
+        let second_pid =
+            second_startup_result.expect("second startup should succeed").expect("second pid should exist");
+        assert_eq!(second_pid, pid, "compatible runner should be reused instead of restarted");
 
         let config_after_second =
             protocol::Config::load_from_dir(&runner_config_dir).expect("load config after second startup");

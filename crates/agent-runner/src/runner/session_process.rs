@@ -14,6 +14,18 @@ use tracing::{debug, info};
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.windows(2).find_map(|pair| (pair[0] == flag).then_some(pair[1].as_str()))
+}
+
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max_chars).collect();
+    format!("{truncated}…")
+}
+
 pub(super) fn use_native_session_backend(tool: &str, _runtime_contract: Option<&Value>) -> bool {
     matches!(
         tool.to_ascii_lowercase().as_str(),
@@ -49,9 +61,28 @@ pub(super) async fn spawn_session_process(
     let mut invocation = build_cli_invocation(tool, model, prompt, runtime_contract).await?;
     let mut env = env;
     merge_launch_env(&mut env, &invocation);
+    debug!(
+        run_id = %run_id.0.as_str(),
+        tool,
+        model,
+        command = %invocation.command,
+        args = ?invocation.args,
+        prompt_via_stdin = invocation.prompt_via_stdin,
+        "Built native session invocation from runtime contract"
+    );
     let enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
     apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, run_id, &mut temp_cleanup)?;
+    let mcp_config_preview = flag_value(&invocation.args, "--mcp-config").map(|value| truncate_for_log(value, 240));
+    info!(
+        run_id = %run_id.0.as_str(),
+        tool,
+        model,
+        command = %invocation.command,
+        args = ?invocation.args,
+        mcp_config_preview = ?mcp_config_preview,
+        "Prepared native session invocation after MCP policy"
+    );
     let session_request =
         build_session_request(tool, model, prompt, runtime_contract, cwd, env, timeout_secs, invocation)?;
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, timeout_secs, runtime_contract);
@@ -153,6 +184,21 @@ fn build_session_request(
         "env": merged_env,
         "prompt_via_stdin": invocation.prompt_via_stdin,
     });
+    let launch_args =
+        merged_contract.pointer("/cli/launch/args").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mcp_config_preview = launch_args.iter().zip(launch_args.iter().skip(1)).find_map(|(flag, value)| {
+        (flag.as_str() == Some("--mcp-config"))
+            .then(|| value.as_str().map(|inner| truncate_for_log(inner, 240)))
+            .flatten()
+    });
+    info!(
+        tool,
+        model,
+        cwd,
+        launch_args = ?launch_args,
+        mcp_config_preview = ?mcp_config_preview,
+        "Built native session request runtime contract launch"
+    );
 
     Ok(SessionRequest {
         tool: tool.to_string(),
@@ -433,6 +479,106 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert!(saw_metadata);
         assert!(saw_output);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn spawn_session_process_passes_claude_mcp_launch_args_and_preserves_primary_server() {
+        let temp_dir = unique_test_dir("claude-mcp");
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let args_capture = temp_dir.join("claude.args");
+        let env_capture = temp_dir.join("claude.env");
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl";
+        write_capture_cli_shim(&temp_dir, "claude", fixture).expect("claude shim should exist");
+
+        let run_id = RunId("run-claude-mcp".to_string());
+        let runtime_contract = json!({
+            "cli": {
+                "name": "claude",
+                "capabilities": { "supports_mcp": true },
+                "launch": {
+                    "command": "claude",
+                    "args": [
+                        "--print",
+                        "--dangerously-skip-permissions",
+                        "--verbose",
+                        "--output-format",
+                        "stream-json",
+                        "--model",
+                        "claude-sonnet-4-6",
+                        "hello"
+                    ],
+                    "prompt_via_stdin": false
+                }
+            },
+            "mcp": {
+                "stdio": {
+                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
+                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                },
+                "agent_id": "ao",
+                "enforce_only": true,
+                "additional_servers": {
+                    "ao": {
+                        "command": "ao",
+                        "args": ["mcp", "serve"]
+                    }
+                }
+            }
+        });
+        let mut env = HashMap::new();
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        env.insert("PATH".to_string(), format!("{}:{original_path}", temp_dir.display()));
+        env.insert("AO_TEST_ARGS_CAPTURE".to_string(), args_capture.to_string_lossy().to_string());
+        env.insert("AO_TEST_ENV_CAPTURE".to_string(), env_capture.to_string_lossy().to_string());
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let exit_code = spawn_session_process(
+            "claude",
+            "claude-sonnet-4-6",
+            "",
+            Some(&runtime_contract),
+            ".",
+            env,
+            Some(30),
+            &run_id,
+            event_tx,
+            cancel_rx,
+        )
+        .await
+        .expect("native claude session should succeed");
+
+        let mut saw_output = false;
+        while let Some(event) = event_rx.recv().await {
+            if let AgentRunEvent::OutputChunk { text, .. } = event {
+                if text.contains("PINEAPPLE_42") {
+                    saw_output = true;
+                }
+            }
+        }
+
+        let args = read_capture_lines(&args_capture);
+        assert_eq!(exit_code, 0);
+        assert!(saw_output, "expected claude fixture output");
+        let mcp_idx =
+            args.iter().position(|arg| arg == "--mcp-config").expect("claude launch should include mcp config");
+        let parsed: serde_json::Value =
+            serde_json::from_str(args.get(mcp_idx + 1).expect("claude mcp config payload should exist"))
+                .expect("claude mcp config should parse");
+        assert_eq!(
+            parsed.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str),
+            Some("/Users/samishukri/ao-cli/target/debug/ao")
+        );
+        assert_eq!(
+            parsed.pointer("/mcpServers/ao/args").and_then(serde_json::Value::as_array).cloned(),
+            Some(vec![
+                serde_json::Value::String("--project-root".to_string()),
+                serde_json::Value::String("/Users/samishukri/ao-cli".to_string()),
+                serde_json::Value::String("mcp".to_string()),
+                serde_json::Value::String("serve".to_string()),
+            ])
+        );
     }
 
     #[tokio::test]
