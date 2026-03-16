@@ -39,6 +39,7 @@ impl Supervisor {
         let timeout_secs = req.timeout_secs.or_else(|| context.get("timeout_secs").and_then(|v| v.as_u64()));
         let model = req.model.0.as_str();
         let runtime_contract = context.get("runtime_contract");
+        let resume_session_id = context.get("resume_session_id").and_then(|v| v.as_str());
 
         info!(
             run_id = %run_id.0.as_str(),
@@ -155,6 +156,7 @@ impl Supervisor {
                 &run_id,
                 event_tx.clone(),
                 cancel_rx,
+                resume_session_id,
             )
             .await
         } else {

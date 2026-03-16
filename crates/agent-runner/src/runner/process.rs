@@ -341,3 +341,57 @@ pub async fn spawn_cli_process(
     info!(run_id = %run_id.0.as_str(), pid, exit_code, "CLI process completed");
     Ok(exit_code)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use protocol::{AgentRunEvent, RunId};
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::spawn_cli_process;
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn spawn_cli_process_subprocess_fallback_streams_output() {
+        let run_id = RunId("run-subprocess-fallback".to_string());
+        let runtime_contract = serde_json::json!({
+            "cli": {
+                "launch": {
+                    "command": "sh",
+                    "args": ["-c", "printf 'FALLBACK_OUTPUT_42\\n'"],
+                    "prompt_via_stdin": false
+                }
+            }
+        });
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let exit_code = spawn_cli_process(
+            "sh",
+            "",
+            "",
+            Some(&runtime_contract),
+            ".",
+            HashMap::new(),
+            Some(30),
+            &run_id,
+            event_tx,
+            cancel_rx,
+        )
+        .await
+        .expect("subprocess fallback should succeed");
+
+        let mut saw_output = false;
+        while let Some(event) = event_rx.recv().await {
+            if let AgentRunEvent::OutputChunk { text, .. } = event {
+                if text.contains("FALLBACK_OUTPUT_42") {
+                    saw_output = true;
+                }
+            }
+        }
+
+        assert_eq!(exit_code, 0);
+        assert!(saw_output, "expected output from subprocess fallback path");
+    }
+}
