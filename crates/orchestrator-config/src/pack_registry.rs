@@ -191,9 +191,9 @@ fn discover_pack_registry_inputs(project_root: &Path) -> Result<PackRegistryInpu
 }
 
 fn resolve_pack_registry_from_inputs(inputs: &PackRegistryInputs) -> Result<ResolvedPackRegistry> {
-    let bundled_by_id = map_bundled_packs_by_id(inputs.bundled_packs.clone())?;
-    let installed_by_id = group_installed_packs_by_id(inputs.installed_versions.clone())?;
-    let overrides_by_id = map_project_overrides_by_id(inputs.project_overrides.clone())?;
+    let bundled_by_id = map_bundled_packs_by_id(&inputs.bundled_packs)?;
+    let installed_by_id = group_installed_packs_by_id(&inputs.installed_versions)?;
+    let overrides_by_id = map_project_overrides_by_id(&inputs.project_overrides)?;
 
     let mut entries = vec![ResolvedPackRegistryEntry::bundled_builtin()];
     let mut pack_ids = installed_by_id
@@ -213,9 +213,9 @@ fn resolve_pack_registry_from_inputs(inputs: &PackRegistryInputs) -> Result<Reso
         let selected = select_resolved_pack(
             &pack_id,
             selection,
-            bundled_by_id.get(&pack_id),
-            installed_by_id.get(&pack_id),
-            overrides_by_id.get(&pack_id),
+            bundled_by_id.get(&pack_id).copied(),
+            installed_by_id.get(&pack_id).map(Vec::as_slice),
+            overrides_by_id.get(&pack_id).copied(),
         )?;
         if let Some(entry) = selected {
             entries.push(entry);
@@ -366,10 +366,10 @@ fn discover_installed_pack_versions() -> Result<Vec<LoadedPackManifest>> {
     Ok(discovered)
 }
 
-fn group_installed_packs_by_id(
-    installed_versions: Vec<LoadedPackManifest>,
-) -> Result<BTreeMap<String, Vec<LoadedPackManifest>>> {
-    let mut grouped = BTreeMap::<String, Vec<LoadedPackManifest>>::new();
+fn group_installed_packs_by_id<'a>(
+    installed_versions: &'a [LoadedPackManifest],
+) -> Result<BTreeMap<String, Vec<&'a LoadedPackManifest>>> {
+    let mut grouped = BTreeMap::<String, Vec<&LoadedPackManifest>>::new();
     for pack in installed_versions {
         grouped.entry(pack.manifest.id.to_ascii_lowercase()).or_default().push(pack);
     }
@@ -389,9 +389,9 @@ fn group_installed_packs_by_id(
     Ok(grouped)
 }
 
-fn map_project_overrides_by_id(
-    project_overrides: Vec<LoadedPackManifest>,
-) -> Result<BTreeMap<String, LoadedPackManifest>> {
+fn map_project_overrides_by_id<'a>(
+    project_overrides: &'a [LoadedPackManifest],
+) -> Result<BTreeMap<String, &'a LoadedPackManifest>> {
     let mut mapped = BTreeMap::new();
     for pack in project_overrides {
         let key = pack.manifest.id.to_ascii_lowercase();
@@ -402,7 +402,9 @@ fn map_project_overrides_by_id(
     Ok(mapped)
 }
 
-fn map_bundled_packs_by_id(bundled_packs: Vec<LoadedPackManifest>) -> Result<BTreeMap<String, LoadedPackManifest>> {
+fn map_bundled_packs_by_id<'a>(
+    bundled_packs: &'a [LoadedPackManifest],
+) -> Result<BTreeMap<String, &'a LoadedPackManifest>> {
     let mut mapped = BTreeMap::new();
     for pack in bundled_packs {
         let key = pack.manifest.id.to_ascii_lowercase();
@@ -417,7 +419,7 @@ fn select_resolved_pack(
     pack_id: &str,
     selection: Option<&PackSelectionEntry>,
     bundled: Option<&LoadedPackManifest>,
-    installed: Option<&Vec<LoadedPackManifest>>,
+    installed: Option<&[&LoadedPackManifest]>,
     project_override: Option<&LoadedPackManifest>,
 ) -> Result<Option<ResolvedPackRegistryEntry>> {
     let source_order =
@@ -442,7 +444,7 @@ fn select_resolved_pack(
                 let Some(installed_versions) = installed else {
                     continue;
                 };
-                for pack in installed_versions {
+                for &pack in installed_versions {
                     if version_matches_selection(selection, &pack.manifest.version)? {
                         return Ok(Some(ResolvedPackRegistryEntry::from_manifest(
                             PackRegistrySource::Installed,
@@ -544,6 +546,8 @@ pub fn resolve_active_pack_for_workflow_ref<'a>(
         return None;
     }
 
+    // Workflow config resolution is case-insensitive today, so ownership lookup stays aligned
+    // here to avoid accepting a ref during config expansion but skipping pack activation checks.
     let direct_match = registry.entries.iter().find(|entry| {
         entry.loaded_manifest().is_some_and(|pack| {
             pack.manifest.workflows.exports.iter().any(|export| export.eq_ignore_ascii_case(trimmed))
@@ -1280,6 +1284,27 @@ workflows:
         let registry = resolve_pack_registry(project.path()).expect("resolve registry");
         let entry = resolve_active_pack_for_workflow_ref(&registry, "ao.review/internal")
             .expect("pack-qualified internal workflow should resolve to owning pack");
+        assert_eq!(entry.pack_id, "ao.review");
+    }
+
+    #[test]
+    fn resolve_active_pack_for_workflow_ref_tracks_case_insensitive_workflow_exports() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        write_pack_fixture(
+            &machine_installed_packs_dir().join("ao.review").join("0.2.0"),
+            "ao.review",
+            "0.2.0",
+            "installed review",
+            "review-installed",
+        );
+
+        let registry = resolve_pack_registry(project.path()).expect("resolve registry");
+        let entry = resolve_active_pack_for_workflow_ref(&registry, "AO.REVIEW/STANDARD")
+            .expect("workflow export matching should remain aligned with workflow config resolution");
         assert_eq!(entry.pack_id, "ao.review");
     }
 
