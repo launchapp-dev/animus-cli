@@ -555,15 +555,18 @@ pub(super) fn apply_native_mcp_policy(
                 "Applied Codex native MCP policy"
             );
         }
-        "gemini" => apply_gemini_native_mcp_lockdown(
-            &mut invocation.args,
-            env,
-            transport,
-            agent_id,
-            run_id,
-            temp_cleanup,
-            &additional,
-        )?,
+        "gemini" => {
+            apply_gemini_native_mcp_lockdown(
+                &mut invocation.args,
+                env,
+                transport,
+                agent_id,
+                run_id,
+                temp_cleanup,
+                &additional,
+            )?;
+            info!(run_id = %run_id.0.as_str(), cli = "gemini", "Applied Gemini native MCP policy");
+        }
         "opencode" => {
             apply_opencode_native_mcp_lockdown(env, transport, agent_id, &additional);
             info!(run_id = %run_id.0.as_str(), cli = "opencode", "Applied OpenCode native MCP policy");
@@ -578,10 +581,6 @@ pub(super) fn apply_native_mcp_policy(
                 invocation.command
             );
         }
-    }
-
-    if cli == "gemini" {
-        info!(run_id = %run_id.0.as_str(), cli = "gemini", "Applied Gemini native MCP policy");
     }
 
     Ok(())

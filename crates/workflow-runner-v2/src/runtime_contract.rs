@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::config_context::RuntimeConfigContext;
 
@@ -354,22 +355,7 @@ pub fn set_mcp_tool_policy(
 }
 
 fn primary_mcp_agent_id(runtime_contract: &Value) -> Option<&str> {
-    runtime_contract
-        .pointer("/mcp/agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            let has_primary_transport = runtime_contract
-                .pointer("/mcp/stdio/command")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.trim().is_empty())
-                || runtime_contract
-                    .pointer("/mcp/endpoint")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| !value.trim().is_empty());
-            has_primary_transport.then_some("ao")
-        })
+    runtime_contract.pointer("/mcp/agent_id").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn remove_additional_mcp_server_collisions(
@@ -380,7 +366,26 @@ fn remove_additional_mcp_server_collisions(
         return servers;
     };
 
-    servers.into_iter().filter(|(name, _)| !name.eq_ignore_ascii_case(agent_id)).collect()
+    let mut filtered = serde_json::Map::new();
+    let mut skipped = Vec::new();
+
+    for (name, value) in servers {
+        if name.eq_ignore_ascii_case(agent_id) {
+            skipped.push(name);
+        } else {
+            filtered.insert(name, value);
+        }
+    }
+
+    if !skipped.is_empty() {
+        warn!(
+            agent_id,
+            skipped_additional_servers = ?skipped,
+            "Ignoring additional MCP servers that collide with the primary agent id while building the runtime contract"
+        );
+    }
+
+    filtered
 }
 
 pub fn inject_project_mcp_servers(

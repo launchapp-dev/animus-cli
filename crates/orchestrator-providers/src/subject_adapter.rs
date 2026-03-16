@@ -201,12 +201,11 @@ where
             sync_managed_worktree_mcp_config(project_root, &worktree_path)?;
             let mut updated = task.clone();
             updated.worktree_path = Some(worktree_path.to_string_lossy().to_string());
-            let resolved_branch_name = branch_name.clone();
-            updated.branch_name = Some(resolved_branch_name.clone());
+            updated.branch_name = Some(branch_name.clone());
             let _ = self.hub.replace(updated).await?;
             info!(
                 task_id = %task.id,
-                branch_name = %resolved_branch_name,
+                branch_name,
                 execution_cwd = %worktree_path.display(),
                 source = "default_task_worktree",
                 "Reusing managed task worktree as execution cwd"
@@ -280,12 +279,11 @@ where
         let mut updated = task;
         let task_id = updated.id.clone();
         updated.worktree_path = Some(worktree_path_str.clone());
-        let resolved_branch_name = branch_name.clone();
-        updated.branch_name = Some(resolved_branch_name.clone());
+        updated.branch_name = Some(branch_name.clone());
         let _ = self.hub.replace(updated).await?;
         info!(
             task_id = %task_id,
-            branch_name = %resolved_branch_name,
+            branch_name,
             execution_cwd = %worktree_path_str,
             "Provisioned managed task worktree"
         );

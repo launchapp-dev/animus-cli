@@ -120,6 +120,7 @@ pub fn apply_skill_capability_overrides(
     for (name, enabled) in overrides {
         match parse_skill_capability_key(name) {
             Some(SkillCapabilityKey::WritesFiles) => caps.writes_files = *enabled,
+            Some(SkillCapabilityKey::MutatesState) => caps.mutates_state = *enabled,
             Some(SkillCapabilityKey::RequiresCommit) => caps.requires_commit = *enabled,
             Some(SkillCapabilityKey::EnforceProductChanges) => caps.enforce_product_changes = *enabled,
             Some(SkillCapabilityKey::IsResearch) => caps.is_research = *enabled,
@@ -177,12 +178,15 @@ mod tests {
     use crate::ipc::build_runtime_contract_with_resume;
     use crate::phase_prompt::{render_phase_prompt_with_ctx_overrides, PhasePromptInputs, PhaseRenderParams};
     use crate::runtime_contract::{inject_named_mcp_servers, set_mcp_tool_policy};
+    use crate::runtime_support::WorkflowRuntimeConfigLite;
     use orchestrator_config::workflow_config::McpServerDefinition;
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
+        builtin_agent_runtime_config, builtin_workflow_config, workflow_config_hash, write_agent_runtime_config,
+        write_workflow_config, LoadedWorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn write_installed_skill(temp: &TempDir) {
@@ -328,11 +332,34 @@ mod tests {
     #[test]
     fn resolve_phase_skills_reports_missing_skill_in_runtime_path() {
         let temp = tempfile::tempdir().expect("tempdir");
-        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("workflow config");
         let mut runtime = builtin_agent_runtime_config();
         runtime.phases.get_mut("implementation").expect("implementation phase").skills =
             vec!["missing-runtime-skill".to_string()];
-        let error = write_agent_runtime_config(temp.path(), &runtime).expect_err("missing skill should fail loudly");
+        let workflow = builtin_workflow_config();
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: runtime,
+            workflow_config: LoadedWorkflowConfig {
+                metadata: WorkflowConfigMetadata {
+                    schema: workflow.schema.clone(),
+                    version: workflow.version,
+                    hash: workflow_config_hash(&workflow),
+                    source: WorkflowConfigSource::Builtin,
+                },
+                config: workflow,
+                path: PathBuf::from("builtin"),
+            },
+            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
+        };
+        let error =
+            resolve_phase_skills(&ctx, temp.path(), "implementation").expect_err("missing skill should fail loudly");
         assert!(error.to_string().contains("missing-runtime-skill"), "error should name missing skill: {error}");
+    }
+
+    #[test]
+    fn skill_capability_overrides_can_enable_state_mutations() {
+        let overrides = BTreeMap::from([("mutates_state".to_string(), true)]);
+        let effective = apply_skill_capability_overrides(&PhaseCapabilities::default(), &overrides);
+        assert!(effective.mutates_state);
+        assert!(!effective.is_strictly_read_only());
     }
 }

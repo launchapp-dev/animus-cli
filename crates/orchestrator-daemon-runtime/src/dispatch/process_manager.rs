@@ -303,18 +303,14 @@ mod tests {
             fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
         }
 
-        let original_path = env::var_os("PATH").unwrap_or_default();
-        let mut paths = env::split_paths(&original_path).collect::<Vec<_>>();
-        paths.insert(0, temp_dir.path().to_path_buf());
-        let candidate_path = env::join_paths(paths).expect("path list should join");
-        let candidate_path = candidate_path.to_string_lossy();
-        let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("AO_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
 
         let mut manager = ProcessManager::new();
         let dispatch = SubjectDispatch::for_task("task-123", "standard");
         manager
             .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
-            .expect("mock runner should be discovered from PATH and spawned");
+            .expect("mock runner should be spawned via explicit workflow runner override");
         assert_eq!(manager.active_count(), 1);
         let _ = manager.check_running().await;
     }
@@ -356,12 +352,8 @@ mod tests {
             fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
         }
 
-        let original_path = env::var_os("PATH").unwrap_or_default();
-        let mut paths = env::split_paths(&original_path).collect::<Vec<_>>();
-        paths.insert(0, temp_dir.path().to_path_buf());
-        let candidate_path = env::join_paths(paths).expect("path list should join");
-        let candidate_path = candidate_path.to_string_lossy();
-        let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("AO_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
 
         let mut manager = ProcessManager::new();
         let dispatch = SubjectDispatch::for_custom("schedule:nightly", "nightly run", "standard", None, "schedule");
@@ -405,12 +397,8 @@ mod tests {
             fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
         }
 
-        let original_path = env::var_os("PATH").unwrap_or_default();
-        let mut paths = env::split_paths(&original_path).collect::<Vec<_>>();
-        paths.insert(0, temp_dir.path().to_path_buf());
-        let candidate_path = env::join_paths(paths).expect("path list should join");
-        let candidate_path = candidate_path.to_string_lossy();
-        let _path_guard = EnvVarGuard::set("PATH", Some(candidate_path.as_ref()));
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("AO_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
 
         let dispatch = SubjectDispatch::for_subject_with_metadata(
             protocol::SubjectRef::new("pack.review", "REV-7"),
