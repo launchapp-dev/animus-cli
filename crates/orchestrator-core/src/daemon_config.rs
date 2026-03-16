@@ -134,6 +134,7 @@ mod tests {
 
     #[test]
     fn load_daemon_project_config_defaults_when_missing() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let loaded = load_daemon_project_config(temp.path()).expect("missing daemon config should default");
         assert_eq!(loaded, DaemonProjectConfig::default());
@@ -141,10 +142,12 @@ mod tests {
 
     #[test]
     fn update_daemon_project_config_preserves_unknown_fields() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
-        let config_dir = temp.path().join(".ao");
-        std::fs::create_dir_all(&config_dir).expect("config dir should be created");
-        let config_path = config_dir.join(DAEMON_PROJECT_CONFIG_FILE_NAME);
+        let config_path = daemon_project_config_path(temp.path());
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).expect("config dir should be created");
+        }
         std::fs::write(
             &config_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -172,6 +175,7 @@ mod tests {
 
     #[test]
     fn update_daemon_project_config_reports_no_change_for_idempotent_patch() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let patch = DaemonProjectConfigPatch {
             auto_merge_enabled: Some(false),

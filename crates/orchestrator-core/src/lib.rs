@@ -127,3 +127,20 @@ pub use workflow_runner_registry::{
 
 #[cfg(test)]
 mod state_machine_parity;
+
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::OnceLock;
+
+    pub fn stable_test_home() -> &'static std::path::Path {
+        static HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
+        HOME.get_or_init(|| {
+            let home_dir = std::env::temp_dir()
+                .join(format!("ao-orchestrator-core-test-config-{}", std::process::id()))
+                .join("home");
+            std::fs::create_dir_all(&home_dir).expect("create shared test home dir");
+            std::env::set_var("HOME", &home_dir);
+            home_dir
+        })
+    }
+}

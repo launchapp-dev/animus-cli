@@ -727,9 +727,11 @@ mod tests {
             return;
         };
 
+        crate::test_env::stable_test_home();
+
         let temp_project = TempDir::new().expect("tempdir for project");
-        let temp_runner_config = TempDir::new().expect("tempdir for runner config");
-        let runner_config_dir = temp_runner_config.path().to_path_buf();
+        let project_root = temp_project.path().to_path_buf();
+        let runner_config_dir = runner_config_dir(&project_root);
 
         std::fs::create_dir_all(&runner_config_dir).expect("create runner config dir");
 
@@ -739,14 +741,10 @@ mod tests {
         let config_before = protocol::Config::load_from_dir(&runner_config_dir).expect("load config before startup");
         assert!(config_before.agent_runner_token.is_none(), "token should be absent before startup");
 
-        let project_root = temp_project.path().to_path_buf();
-
-        let original_runner_config_dir = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
         let original_skip_runner = std::env::var("AO_SKIP_RUNNER_START").ok();
         let original_token_override = std::env::var("AGENT_RUNNER_TOKEN").ok();
         let original_cwd = std::env::current_dir().ok();
 
-        std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
         std::env::remove_var("AO_SKIP_RUNNER_START");
         std::env::remove_var("AGENT_RUNNER_TOKEN");
         std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
@@ -757,11 +755,6 @@ mod tests {
             let _ = std::env::set_current_dir(cwd);
         }
 
-        if let Some(val) = original_runner_config_dir {
-            std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
-        } else {
-            std::env::remove_var("AO_RUNNER_CONFIG_DIR");
-        }
         if let Some(val) = original_skip_runner {
             std::env::set_var("AO_SKIP_RUNNER_START", val);
         } else {
@@ -784,12 +777,10 @@ mod tests {
         let status = query_runner_status(&runner_config_dir).await.expect("runner status query should succeed");
         assert_eq!(status.active_agents, 0, "runner should have no active agents initially");
 
-        let original_runner_config_dir2 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
         let original_skip_runner2 = std::env::var("AO_SKIP_RUNNER_START").ok();
         let original_token_override2 = std::env::var("AGENT_RUNNER_TOKEN").ok();
         let original_cwd2 = std::env::current_dir().ok();
 
-        std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
         std::env::remove_var("AO_SKIP_RUNNER_START");
         std::env::remove_var("AGENT_RUNNER_TOKEN");
         std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
@@ -800,11 +791,6 @@ mod tests {
             let _ = std::env::set_current_dir(cwd);
         }
 
-        if let Some(val) = original_runner_config_dir2 {
-            std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
-        } else {
-            std::env::remove_var("AO_RUNNER_CONFIG_DIR");
-        }
         if let Some(val) = original_skip_runner2 {
             std::env::set_var("AO_SKIP_RUNNER_START", val);
         } else {
@@ -822,16 +808,7 @@ mod tests {
             protocol::Config::load_from_dir(&runner_config_dir).expect("load config after second startup");
         assert_eq!(config_after_second.agent_runner_token, Some(token), "token should be preserved on second startup");
 
-        let original_runner_config_dir3 = std::env::var("AO_RUNNER_CONFIG_DIR").ok();
-        std::env::set_var("AO_RUNNER_CONFIG_DIR", &runner_config_dir);
-
         let stopped = stop_agent_runner_process(&project_root).await.expect("stop runner should succeed");
-
-        if let Some(val) = original_runner_config_dir3 {
-            std::env::set_var("AO_RUNNER_CONFIG_DIR", val);
-        } else {
-            std::env::remove_var("AO_RUNNER_CONFIG_DIR");
-        }
 
         assert!(stopped, "runner should be stopped");
 

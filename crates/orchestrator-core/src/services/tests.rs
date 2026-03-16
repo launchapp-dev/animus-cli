@@ -22,11 +22,9 @@ fn assert_core_state_json_is_valid(project_root: &std::path::Path) {
 fn ensure_test_config_env() {
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
+        crate::test_env::stable_test_home();
         let config_dir = std::env::temp_dir().join(format!("ao-orchestrator-core-test-config-{}", std::process::id()));
-        let home_dir = config_dir.join("home");
         std::fs::create_dir_all(&config_dir).expect("create test AO config dir");
-        std::fs::create_dir_all(&home_dir).expect("create test home dir");
-        std::env::set_var("HOME", &home_dir);
         std::env::set_var("AO_CONFIG_DIR", &config_dir);
         std::env::set_var("AGENT_ORCHESTRATOR_CONFIG_DIR", &config_dir);
         std::env::set_var("AO_RUNNER_CONFIG_DIR", &config_dir);

@@ -170,6 +170,7 @@ mod tests {
 
     #[test]
     fn missing_file_falls_back_in_json_mode() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
         let loaded = load_state_machines_for_project_with_mode(temp.path(), StateMachineMode::Json)
             .expect("load should succeed with fallback");
@@ -180,6 +181,7 @@ mod tests {
 
     #[test]
     fn invalid_file_falls_back_in_json_mode() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
         let path = state_machines_path(temp.path());
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
@@ -194,6 +196,7 @@ mod tests {
 
     #[test]
     fn strict_mode_errors_when_file_is_invalid() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
         let path = state_machines_path(temp.path());
         fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
@@ -207,6 +210,7 @@ mod tests {
 
     #[test]
     fn write_state_machines_document_is_atomic_and_readable() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
         write_state_machines_document(temp.path(), &builtin_state_machines_document()).expect("write should succeed");
 

@@ -180,6 +180,7 @@ fn lifecycle_skip_duplicate_cancels_workflow_early() {
 
 #[test]
 fn state_manager_saves_checkpoints() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
 
@@ -195,6 +196,7 @@ fn state_manager_saves_checkpoints() {
 
 #[test]
 fn state_manager_prunes_to_keep_last_per_phase() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
 
@@ -236,6 +238,7 @@ fn state_manager_prunes_to_keep_last_per_phase() {
 
 #[test]
 fn state_manager_prunes_checkpoints_older_than_age() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
 
@@ -260,6 +263,7 @@ fn state_manager_prunes_checkpoints_older_than_age() {
 
 #[test]
 fn state_manager_prunes_legacy_checkpoints_by_inferred_phase() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
 
@@ -305,6 +309,7 @@ fn state_manager_prunes_legacy_checkpoints_by_inferred_phase() {
 
 #[test]
 fn state_manager_prune_dry_run_keeps_checkpoint_files_and_metadata() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
 

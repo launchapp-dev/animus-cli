@@ -139,35 +139,10 @@ pub fn resolve_phase_plan_for_workflow_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &std::path::Path) -> Self {
-            let original = env::var(key).ok();
-            env::set_var(key, value);
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
+    fn ensure_stable_home() {
+        crate::test_env::stable_test_home();
     }
 
     fn write_pack_fixture(root: &std::path::Path, pack_id: &str, version: &str, workflow_id: &str) {
@@ -224,10 +199,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_falls_back_when_workflow_config_is_missing() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
             .expect("missing config should use fallback");
@@ -254,10 +227,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_errors_when_workflow_config_is_invalid() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let state_dir = crate::workflow_config::workflow_config_path(temp.path())
             .parent()
             .expect("config has parent")
@@ -275,10 +246,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_errors_when_legacy_workflow_config_exists_without_v2() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let legacy_path = crate::legacy_workflow_config_paths(temp.path())[0].clone();
         let parent = legacy_path.parent().expect("legacy parent directory");
         std::fs::create_dir_all(parent).expect("create legacy directory");
@@ -293,10 +262,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_errors_when_pipeline_is_missing_from_config() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
 
@@ -309,10 +276,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_uses_config_phases_for_standard_pipeline() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
 
         let standard_pipeline = workflow_config
@@ -333,10 +298,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_uses_config_default_pipeline_when_none_is_requested() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
         workflow_config.default_workflow_ref = UI_UX_WORKFLOW_REF.to_string();
 
@@ -349,10 +312,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_prefers_explicit_config_pipeline_before_alias_normalization() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let mut workflow_config = crate::builtin_workflow_config();
 
         let ui_ux_pipeline = workflow_config
@@ -374,10 +335,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_uses_canonical_requirement_workflow_refs_from_builtin_config() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
 
@@ -389,10 +348,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_uses_machine_installed_pack_workflows() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("project tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         write_pack_fixture(
             &crate::machine_installed_packs_dir().join("ao.custom").join("0.2.0"),
@@ -408,10 +365,8 @@ workflows:
 
     #[test]
     fn resolve_phase_plan_uses_bundled_pack_workflows_without_project_yaml() {
-        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = tempfile::tempdir().expect("home tempdir");
+        ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
 
         let quick_fix = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.task/quick-fix"))
             .expect("bundled quick-fix workflow should resolve from bundled pack config");

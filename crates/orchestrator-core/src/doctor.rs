@@ -390,6 +390,7 @@ mod tests {
 
     #[test]
     fn run_for_project_reports_warns_for_missing_bootstrap_files() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let report = DoctorReport::run_for_project(temp.path());
 
@@ -405,10 +406,13 @@ mod tests {
 
     #[test]
     fn run_for_project_marks_invalid_daemon_config_as_fail() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let ao_dir = temp.path().join(".ao");
         std::fs::create_dir_all(&ao_dir).expect("ao dir should be created");
-        std::fs::write(ao_dir.join("pm-config.json"), "{not-json").expect("file should be written");
+        let daemon_cfg = daemon_project_config_path(temp.path());
+        std::fs::create_dir_all(daemon_cfg.parent().unwrap()).expect("daemon config dir should be created");
+        std::fs::write(&daemon_cfg, "{not-json").expect("file should be written");
 
         let report = DoctorReport::run_for_project(temp.path());
         let daemon_check = report
@@ -422,6 +426,7 @@ mod tests {
 
     #[test]
     fn run_for_project_marks_project_root_file_as_fail() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let root_file = temp.path().join("project-root-file");
         std::fs::write(&root_file, "not a directory").expect("root file should be written");
@@ -441,6 +446,7 @@ mod tests {
 
     #[test]
     fn run_for_project_marks_non_directory_ao_path_as_fail() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let ao_path = temp.path().join(".ao");
         std::fs::write(&ao_path, "not a directory").expect("ao file should be written");
@@ -464,13 +470,16 @@ mod tests {
 
     #[test]
     fn run_for_project_marks_expected_core_files_as_ok_when_present() {
+        crate::test_env::stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let ao_dir = temp.path().join(".ao");
         std::fs::create_dir_all(&ao_dir).expect("ao dir should be created");
         std::fs::write(ao_dir.join("core-state.json"), "{}").expect("core state should be written");
         std::fs::write(ao_dir.join("config.json"), "{}").expect("config should be written");
         std::fs::write(ao_dir.join("resume-config.json"), "{}").expect("resume config should be written");
-        std::fs::write(ao_dir.join("pm-config.json"), "{}").expect("daemon config should be written");
+        let daemon_cfg = daemon_project_config_path(temp.path());
+        std::fs::create_dir_all(daemon_cfg.parent().unwrap()).expect("daemon config dir should be created");
+        std::fs::write(&daemon_cfg, "{}").expect("daemon config should be written");
 
         let report = DoctorReport::run_for_project(temp.path());
         for id in [
