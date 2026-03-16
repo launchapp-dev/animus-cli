@@ -7,63 +7,39 @@
 ///   - Agent runner must be running (`ao runner start`) or will auto-start
 ///   - CLI tools must be installed (claude, codex, gemini)
 ///   - API credentials must be configured for each tool
-///   - Set `AO_E2E_SESSION_CONTINUATION=1` to enable (skipped by default)
 ///
 /// Run with:
-///   AO_E2E_SESSION_CONTINUATION=1 cargo test -p orchestrator-cli --test session_continuation_e2e -- --nocapture
+///   cargo test -p orchestrator-cli --test session_continuation_e2e -- --ignored --nocapture
 ///
-/// Environment variables:
-///   AO_E2E_SESSION_CONTINUATION=1  — required to run (skipped otherwise)
-///   AO_E2E_TOOLS=claude,codex      — comma-separated list of tools to test (default: claude)
-///   AO_E2E_PROJECT_ROOT=<path>     — project root (default: current directory)
-///   AO_E2E_TIMEOUT=120             — agent timeout in seconds (default: 120)
+/// Configuration via `E2eConfig::default()`:
+///   project_root  — defaults to current working directory
+///   tools         — defaults to ["claude"]
+///   timeout_secs  — defaults to 120
 use anyhow::{Context, Result};
 use cli_wrapper::{extract_text_from_line, NormalizedTextEvent};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use uuid::Uuid;
 
-fn is_enabled() -> bool {
-    std::env::var("AO_E2E_SESSION_CONTINUATION")
-        .ok()
-        .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+struct E2eConfig {
+    project_root: PathBuf,
+    tools: Vec<String>,
+    timeout_secs: u64,
+}
+
+impl Default for E2eConfig {
+    fn default() -> Self {
+        Self {
+            project_root: std::env::current_dir().expect("current dir"),
+            tools: vec!["claude".to_string()],
+            timeout_secs: 120,
+        }
+    }
 }
 
 fn ao_binary() -> PathBuf {
     assert_cmd::cargo::cargo_bin!("ao").to_path_buf()
-}
-
-fn project_root() -> String {
-    std::env::var("AO_E2E_PROJECT_ROOT")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .expect("current dir")
-                .to_string_lossy()
-                .to_string()
-        })
-}
-
-fn e2e_tools() -> Vec<String> {
-    std::env::var("AO_E2E_TOOLS")
-        .ok()
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_else(|| vec!["claude".to_string()])
-}
-
-fn timeout_secs() -> String {
-    std::env::var("AO_E2E_TIMEOUT")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "120".to_string())
 }
 
 fn default_model_for_tool(tool: &str) -> &'static str {
@@ -201,15 +177,15 @@ fn run_agent(
     prompt: &str,
     session_id: Option<&str>,
     reused: bool,
-    timeout: &str,
+    project_root: &Path,
+    timeout_secs: u64,
 ) -> Result<AgentRunResult> {
-    let root = project_root();
     let contract = build_launch_args(tool, model, prompt, session_id, reused);
 
     let output = Command::new(ao_binary())
         .arg("--json")
         .arg("--project-root")
-        .arg(&root)
+        .arg(project_root)
         .arg("agent")
         .arg("run")
         .arg("--tool")
@@ -219,7 +195,7 @@ fn run_agent(
         .arg("--prompt")
         .arg(prompt)
         .arg("--timeout-secs")
-        .arg(timeout)
+        .arg(timeout_secs.to_string())
         .arg("--runtime-contract-json")
         .arg(serde_json::to_string(&contract)?)
         .output()
@@ -302,14 +278,13 @@ fn extract_text_from_agent_output(agent_text: &str, tool: &str) -> String {
     extracted
 }
 
-fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
+fn test_session_continuation_for_tool(tool: &str, config: &E2eConfig) -> Result<()> {
     let session_id = Uuid::new_v4().to_string();
     let model = default_model_for_tool(tool);
-    let timeout = timeout_secs();
 
     eprintln!(
         "[e2e] tool={} model={} session_id={} timeout={}s",
-        tool, model, session_id, timeout
+        tool, model, session_id, config.timeout_secs
     );
 
     let first_prompt = "Reply with exactly: PINEAPPLE_SESSION_MARKER_42. Nothing else.";
@@ -321,7 +296,8 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
         first_prompt,
         Some(&session_id),
         false,
-        &timeout,
+        &config.project_root,
+        config.timeout_secs,
     )?;
 
     eprintln!(
@@ -380,7 +356,8 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
         second_prompt,
         Some(&session_id),
         true,
-        &timeout,
+        &config.project_root,
+        config.timeout_secs,
     )?;
 
     eprintln!(
@@ -447,21 +424,18 @@ fn test_session_continuation_for_tool(tool: &str) -> Result<()> {
 }
 
 #[test]
+#[ignore = "e2e test requiring live agent runner — run with `cargo test -p orchestrator-cli --test session_continuation_e2e -- --ignored --nocapture`"]
 fn e2e_session_continuation_agent_run() {
-    if !is_enabled() {
-        eprintln!(
-            "skipping session continuation e2e (set AO_E2E_SESSION_CONTINUATION=1 to enable)"
-        );
-        return;
-    }
-
-    let tools = e2e_tools();
-    eprintln!("[e2e] testing session continuation for tools: {:?}", tools);
+    let config = E2eConfig::default();
+    eprintln!(
+        "[e2e] testing session continuation for tools: {:?}",
+        config.tools
+    );
 
     let mut failures: Vec<(String, String)> = Vec::new();
 
-    for tool in &tools {
-        match test_session_continuation_for_tool(tool) {
+    for tool in &config.tools {
+        match test_session_continuation_for_tool(tool, &config) {
             Ok(()) => {}
             Err(error) => {
                 eprintln!("[e2e] tool={} — FAILED: {}", tool, error);
@@ -479,7 +453,7 @@ fn e2e_session_continuation_agent_run() {
         panic!(
             "[e2e] {} of {} tools failed:\n{}",
             failures.len(),
-            tools.len(),
+            config.tools.len(),
             summary
         );
     }
