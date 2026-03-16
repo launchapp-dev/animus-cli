@@ -13,5 +13,6 @@ Formal specifications and exhaustive listings for the AO CLI.
 | [Workflow YAML Schema](workflow-yaml.md) | Full specification of `.ao/workflows/*.yaml` files |
 | [MCP Tools](mcp-tools.md) | All MCP tools exposed by `ao mcp serve` |
 | [Configuration](configuration.md) | Config files, environment variables, and precedence |
+| [Environment Variables](env-vars.md) | Complete inventory of all env vars with migration targets |
 | [Data Layout](data-layout.md) | The `.ao/` directory structure |
 | [Status Values & Enums](status-values.md) | All accepted enum values across the system |

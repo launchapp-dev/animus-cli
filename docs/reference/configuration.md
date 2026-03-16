@@ -116,6 +116,8 @@ Registry of all known AO projects. Updated when running `ao setup`, `ao project 
 
 ## Environment Variables
 
+Key variables for common use cases:
+
 | Variable | Description |
 |---|---|
 | `PROJECT_ROOT` | Override project root directory (alternative to `--project-root`) |
@@ -123,7 +125,11 @@ Registry of all known AO projects. Updated when running `ao setup`, `ao project 
 | `AO_RUNNER_CONFIG_DIR` | Override the runner configuration directory (falls back to `AO_CONFIG_DIR`) |
 | `AO_ALLOW_NON_EDITING_PHASE_TOOL` | When `true`, allow non-write-capable tools (e.g., gemini) to handle any phase without fallback redirection |
 | `AO_MCP_SCHEMA_DRAFT` | Set to `07`, `draft07`, `draft-07`, or `draft_07` to use JSON Schema Draft-07 for MCP tool input schemas |
+| `AO_NOTIFY_WEBHOOK_URL` | Webhook URL for task/workflow event notifications |
+| `AO_NOTIFY_BEARER_TOKEN` | Bearer token for webhook authorization (optional) |
 | `CLAUDECODE` | When set to `1`, indicates running inside Claude Code. The `claude` CLI refuses to start in this context. Unset before daemon start if needed. |
+
+For the complete inventory of all ~38 environment variables with migration targets, see [Environment Variables Reference](env-vars.md).
 
 ---
 
