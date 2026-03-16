@@ -5060,6 +5060,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "llm-cli-wrapper",
  "orchestrator-config",
  "orchestrator-core",
  "protocol",

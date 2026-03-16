@@ -2,6 +2,7 @@ pub mod config_context;
 pub mod ensure_execution_cwd;
 pub mod ipc;
 pub mod payload_traversal;
+pub mod phase_session;
 pub mod phase_command;
 pub mod phase_executor;
 pub mod phase_failover;

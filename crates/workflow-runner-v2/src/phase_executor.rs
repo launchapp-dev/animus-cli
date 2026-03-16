@@ -1,8 +1,5 @@
 use crate::config_context::RuntimeConfigContext;
-use crate::ipc::{
-    build_runtime_contract_with_resume, collect_json_payload_lines, connect_runner, event_matches_run,
-    runner_config_dir, write_json_line,
-};
+use crate::ipc::{build_runtime_contract_with_resume, collect_json_payload_lines};
 use crate::payload_traversal::{parse_commit_message_from_text, parse_phase_decision_from_text};
 use crate::phase_command::{
     build_command_phase_decision, build_command_result_payload, run_workflow_phase_with_command,
@@ -26,7 +23,7 @@ use crate::runtime_support::{
 };
 use crate::skill_dispatch;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use orchestrator_config::{skill_resolution::ResolvedSkill, SkillApplicationResult};
 use orchestrator_core::ServiceHub;
@@ -36,12 +33,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use protocol::{canonical_model_id, AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
+use protocol::{canonical_model_id, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Default)]
 pub struct PhaseExecuteOverrides {
@@ -401,71 +397,92 @@ pub async fn run_workflow_phase_attempt(
 ) -> Result<PhaseExecutionOutcome> {
     let ctx = RuntimeConfigContext::load(project_root);
     let parse_commit_message = phase_requires_commit_message_with_ctx(&ctx, phase_id);
-    let config_dir = runner_config_dir(Path::new(project_root));
-    let request_mcp_stdio_command = request
+    let parse_phase_decision = ctx.phase_decision_contract(phase_id).is_some();
+    let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
+
+    let tool = request.context.get("tool").and_then(Value::as_str).unwrap_or("claude").to_string();
+    let model = request.model.0.clone();
+    let prompt = request.context.get("prompt").and_then(Value::as_str).unwrap_or("").to_string();
+    let cwd = request
         .context
-        .pointer("/runtime_contract/mcp/stdio/command")
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or(project_root)
+        .to_string();
+    let runtime_contract = request.context.get("runtime_contract").cloned();
+
+    let mcp_stdio_command = runtime_contract
+        .as_ref()
+        .and_then(|c| c.pointer("/mcp/stdio/command"))
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|v| !v.is_empty())
         .map(ToString::to_string);
-    let request_mcp_stdio_args = request
-        .context
-        .pointer("/runtime_contract/mcp/stdio/args")
+    let mcp_stdio_args: Vec<String> = runtime_contract
+        .as_ref()
+        .and_then(|c| c.pointer("/mcp/stdio/args"))
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::trim)
-                .filter(|value| !value.is_empty())
+                .filter(|v| !v.is_empty())
                 .map(ToString::to_string)
-                .collect::<Vec<_>>()
+                .collect()
         })
         .unwrap_or_default();
+
     if debug_mcp_stdio_enabled() {
         eprintln!(
             "[ao][debug][mcp-stdio] dispatch workflow={} phase={} run_id={} command={:?} args={:?}",
-            workflow_id, phase_id, request.run_id.0, request_mcp_stdio_command, request_mcp_stdio_args
+            workflow_id, phase_id, request.run_id.0, mcp_stdio_command, mcp_stdio_args
         );
     }
     info!(
         workflow_id = %workflow_id,
         phase_id = %phase_id,
         run_id = %request.run_id.0,
-        request_mcp_stdio_command = ?request_mcp_stdio_command,
-        request_mcp_stdio_args = ?request_mcp_stdio_args,
-        "Dispatching workflow phase request to agent runner"
+        tool = %tool,
+        mcp_stdio_command = ?mcp_stdio_command,
+        mcp_stdio_args = ?mcp_stdio_args,
+        "Dispatching workflow phase to native session backend"
     );
-    let stream = connect_runner(&config_dir)
-        .await
-        .with_context(|| format!("failed to connect runner for workflow {} phase {}", workflow_id, phase_id))?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    write_json_line(&mut write_half, request).await?;
 
-    let mut lines = tokio::io::BufReader::new(read_half).lines();
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<protocol::AgentRunEvent>(64);
+    let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let run_id = request.run_id.clone();
+    let timeout_secs = request.timeout_secs;
+    let tool_owned = tool.clone();
+    let model_owned = model.clone();
+
+    let session_handle = tokio::spawn(async move {
+        crate::phase_session::spawn_session_process(
+            &tool_owned,
+            &model_owned,
+            &prompt,
+            runtime_contract.as_ref(),
+            &cwd,
+            std::collections::HashMap::new(),
+            timeout_secs,
+            &run_id,
+            event_tx,
+            cancel_rx,
+        )
+        .await
+    });
+
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
     let mut pending_result_payload: Option<Value> = None;
-    let parse_phase_decision = ctx.phase_decision_contract(phase_id).is_some();
-    let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    let mut session_error: Option<String> = None;
 
-        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
-            continue;
-        };
-        if !event_matches_run(&event, &request.run_id) {
-            continue;
-        }
-
+    while let Some(event) = event_rx.recv().await {
         match event {
-            AgentRunEvent::OutputChunk { text, .. } => {
+            protocol::AgentRunEvent::OutputChunk { text, .. } => {
                 if provider_exhaustion_reason.is_none() {
                     provider_exhaustion_reason = PhaseFailureClassifier::provider_exhaustion_reason_from_text(&text);
                 }
@@ -490,9 +507,10 @@ pub async fn run_workflow_phase_attempt(
                     pending_result_payload = parse_decision_payload_from_text(&text, phase_id);
                 }
             }
-            AgentRunEvent::Thinking { content, .. } => {
+            protocol::AgentRunEvent::Thinking { content, .. } => {
                 if provider_exhaustion_reason.is_none() {
-                    provider_exhaustion_reason = PhaseFailureClassifier::provider_exhaustion_reason_from_text(&content);
+                    provider_exhaustion_reason =
+                        PhaseFailureClassifier::provider_exhaustion_reason_from_text(&content);
                 }
                 PhaseFailureClassifier::push_phase_diagnostic_line(&mut diagnostics, &content);
                 if parse_commit_message && pending_commit_message.is_none() {
@@ -515,57 +533,71 @@ pub async fn run_workflow_phase_attempt(
                     pending_result_payload = parse_decision_payload_from_text(&content, phase_id);
                 }
             }
-            AgentRunEvent::Error { error, .. } => {
+            protocol::AgentRunEvent::Error { error, .. } => {
                 PhaseFailureClassifier::push_phase_diagnostic_line(&mut diagnostics, &error);
-                let exhaustion_reason = provider_exhaustion_reason
-                    .clone()
-                    .or_else(|| PhaseFailureClassifier::provider_exhaustion_reason_from_text(&error));
-                return Err(anyhow!(
-                    "workflow {} phase {} error: {}{}",
-                    workflow_id,
-                    phase_id,
-                    error,
-                    exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default()
-                ));
+                session_error = Some(error);
             }
-            AgentRunEvent::Finished { exit_code, .. } => {
-                if exit_code.unwrap_or_default() != 0 {
-                    let diagnostics_summary = PhaseFailureClassifier::summarize_phase_diagnostics(&diagnostics);
-                    let exhaustion_reason = provider_exhaustion_reason.clone().or_else(|| {
-                        diagnostics_summary
-                            .as_deref()
-                            .and_then(PhaseFailureClassifier::provider_exhaustion_reason_from_text)
-                    });
-                    return Err(anyhow!(
-                        "workflow {} phase {} exited with code {:?}{}{}",
-                        workflow_id,
-                        phase_id,
-                        exit_code,
-                        exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default(),
-                        diagnostics_summary.map(|summary| format!("; diagnostics: {summary}")).unwrap_or_default(),
-                    ));
-                }
-                return Ok(PhaseExecutionOutcome::Completed {
-                    commit_message: pending_commit_message,
-                    phase_decision: pending_phase_decision,
-                    result_payload: pending_result_payload,
-                });
-            }
-            AgentRunEvent::ToolCall { .. } => {}
-            AgentRunEvent::Artifact { .. } => {}
+            protocol::AgentRunEvent::ToolCall { .. } => {}
+            protocol::AgentRunEvent::Artifact { .. } => {}
             _ => {}
         }
     }
 
-    let diagnostics_suffix = PhaseFailureClassifier::summarize_phase_diagnostics(&diagnostics)
-        .map(|summary| format!("; diagnostics: {summary}"))
-        .unwrap_or_default();
-    Err(anyhow!(
-        "runner disconnected before workflow {} phase {} completed{}",
-        workflow_id,
-        phase_id,
-        diagnostics_suffix
-    ))
+    if let Some(error) = session_error {
+        let exhaustion_reason = provider_exhaustion_reason
+            .clone()
+            .or_else(|| PhaseFailureClassifier::provider_exhaustion_reason_from_text(&error));
+        return Err(anyhow!(
+            "workflow {} phase {} error: {}{}",
+            workflow_id,
+            phase_id,
+            error,
+            exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default()
+        ));
+    }
+
+    let exit_code = match session_handle.await {
+        Ok(Ok(code)) => code,
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let exhaustion_reason = provider_exhaustion_reason
+                .clone()
+                .or_else(|| PhaseFailureClassifier::provider_exhaustion_reason_from_text(&msg));
+            return Err(anyhow!(
+                "workflow {} phase {} session failed: {}{}",
+                workflow_id,
+                phase_id,
+                msg,
+                exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default()
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow!("workflow {} phase {} session task panicked: {}", workflow_id, phase_id, e));
+        }
+    };
+
+    if exit_code != 0 {
+        let diagnostics_summary = PhaseFailureClassifier::summarize_phase_diagnostics(&diagnostics);
+        let exhaustion_reason = provider_exhaustion_reason.clone().or_else(|| {
+            diagnostics_summary
+                .as_deref()
+                .and_then(PhaseFailureClassifier::provider_exhaustion_reason_from_text)
+        });
+        return Err(anyhow!(
+            "workflow {} phase {} exited with code {}{}{}",
+            workflow_id,
+            phase_id,
+            exit_code,
+            exhaustion_reason.map(|reason| format!(" (provider_exhausted: {reason})")).unwrap_or_default(),
+            diagnostics_summary.map(|summary| format!("; diagnostics: {summary}")).unwrap_or_default(),
+        ));
+    }
+
+    Ok(PhaseExecutionOutcome::Completed {
+        commit_message: pending_commit_message,
+        phase_decision: pending_phase_decision,
+        result_payload: pending_result_payload,
+    })
 }
 
 fn parse_result_payload_from_text(text: &str, expected_kind: &str) -> Option<Value> {

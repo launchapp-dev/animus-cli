@@ -44,13 +44,12 @@ pub fn classify_phase_failure(message: &str) -> PhaseFailureKind {
 
 fn is_transient_runner_pattern(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
-    normalized.contains("failed to connect runner")
-        || normalized.contains("runner disconnected before workflow")
-        || normalized.contains("connection refused")
-        || normalized.contains("connection reset by peer")
-        || normalized.contains("broken pipe")
+    normalized.contains("failed to start native session backend")
+        || normalized.contains("native session backend closed event stream unexpectedly")
+        || normalized.contains("process idle timeout")
         || normalized.contains("timed out")
         || normalized.contains("timeout")
+        || normalized.contains("session task panicked")
 }
 
 fn is_target_unavailable_pattern(message: &str) -> bool {
