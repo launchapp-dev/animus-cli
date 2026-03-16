@@ -2,6 +2,7 @@ pub use protocol::orchestrator::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,
     ArchitectureEntity, ArchitectureGraph, Assignee, CheckpointReason, Complexity,
     ComplexityAssessment, ComplexityTier, DaemonHealth, DaemonStatus, ImpactArea, LogEntry,
+    McpServerHealth, McpServerHealthStatus,
     LogLevel, OrchestratorProject, OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict,
     PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits, ProjectConfig,
     ProjectCreateInput, ProjectMetadata, ProjectModelPreferences, ProjectType, RequirementRange,

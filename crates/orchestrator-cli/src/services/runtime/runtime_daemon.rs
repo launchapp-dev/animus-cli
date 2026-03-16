@@ -21,6 +21,7 @@ use crate::{
 };
 
 mod daemon_events;
+mod mcp_server_manager;
 pub(crate) mod daemon_reconciliation;
 mod daemon_run;
 mod daemon_run_host;

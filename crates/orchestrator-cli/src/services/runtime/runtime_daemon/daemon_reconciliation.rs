@@ -4,7 +4,8 @@ use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running
 use anyhow::Result;
 use orchestrator_core::{
     active_workflow_runner_ids, dispatch_workflow_event, load_agent_runtime_config_or_default,
-    services::ServiceHub, WorkflowEvent, WorkflowMachineState, WorkflowStatus,
+    project_task_terminal_workflow_status, services::ServiceHub, TaskStatus, WorkflowEvent,
+    WorkflowMachineState, WorkflowStatus,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -208,4 +209,87 @@ fn workflow_is_waiting_on_manual_phase(
             )
         })
         .unwrap_or(false)
+}
+
+pub async fn reconcile_stale_in_progress_tasks(
+    hub: Arc<dyn ServiceHub>,
+) -> Result<usize> {
+    let tasks = match hub.tasks().list().await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to list tasks for stale reconciliation: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            return Ok(0);
+        }
+    };
+    let workflows = match hub.workflows().list().await {
+        Ok(workflows) => workflows,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to list workflows for stale reconciliation: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            return Ok(0);
+        }
+    };
+
+    let in_progress_task_ids: Vec<&str> = tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InProgress)
+        .map(|task| task.id.as_str())
+        .collect();
+
+    if in_progress_task_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut reconciled = 0usize;
+
+    for task_id in in_progress_task_ids {
+        let task_workflows: Vec<_> = workflows
+            .iter()
+            .filter(|workflow| workflow.task_id == task_id)
+            .collect();
+
+        let has_active_workflow = task_workflows.iter().any(|workflow| {
+            matches!(
+                workflow.status,
+                WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending
+            )
+        });
+
+        if has_active_workflow {
+            continue;
+        }
+
+        let terminal_workflow = task_workflows
+            .iter()
+            .filter(|workflow| {
+                matches!(
+                    workflow.status,
+                    WorkflowStatus::Completed
+                        | WorkflowStatus::Failed
+                        | WorkflowStatus::Cancelled
+                        | WorkflowStatus::Escalated
+                )
+            })
+            .max_by_key(|workflow| workflow.completed_at.or(Some(workflow.started_at)));
+
+        if let Some(workflow) = terminal_workflow {
+            project_task_terminal_workflow_status(
+                hub.clone(),
+                task_id,
+                workflow.status,
+                workflow.failure_reason.clone(),
+            )
+            .await;
+            reconciled = reconciled.saturating_add(1);
+        }
+    }
+
+    Ok(reconciled)
 }

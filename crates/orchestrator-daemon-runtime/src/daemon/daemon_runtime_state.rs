@@ -55,6 +55,36 @@ impl DaemonRuntimeState {
         Ok((state.shutdown_requested, state.shutdown_timeout_secs))
     }
 
+    pub fn write_mcp_server_health(
+        project_root: &str,
+        health: &[protocol::orchestrator::McpServerHealth],
+    ) {
+        let path = mcp_server_health_path(project_root);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_string(health) {
+            let tmp_path = path.with_extension("tmp");
+            if fs::write(&tmp_path, content).is_ok() {
+                let _ = fs::rename(&tmp_path, &path);
+            }
+        }
+    }
+
+    pub fn read_mcp_server_health(
+        project_root: &str,
+    ) -> Vec<protocol::orchestrator::McpServerHealth> {
+        let path = mcp_server_health_path(project_root);
+        let Ok(content) = fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        serde_json::from_str(&content).unwrap_or_default()
+    }
+
+    pub fn clear_mcp_server_health(project_root: &str) {
+        let _ = fs::remove_file(mcp_server_health_path(project_root));
+    }
+
     pub fn write_daemon_pid_file(project_root: &str, pid: u32) {
         let path = daemon_pid_path(project_root);
         let _ = fs::write(path, pid.to_string());
@@ -90,6 +120,12 @@ fn daemon_pid_path(project_root: &str) -> PathBuf {
     PathBuf::from(canonicalize_lossy(project_root))
         .join(".ao")
         .join("daemon.pid")
+}
+
+fn mcp_server_health_path(project_root: &str) -> PathBuf {
+    PathBuf::from(canonicalize_lossy(project_root))
+        .join(".ao")
+        .join("mcp-servers-health.json")
 }
 
 fn load_daemon_runtime_state(project_root: &str) -> Result<DaemonRuntimeStateRecord> {

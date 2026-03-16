@@ -1,10 +1,11 @@
 use crate::cli_types::DaemonRunArgs;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
+use crate::services::runtime::runtime_daemon::mcp_server_manager::McpServerManager;
 use anyhow::Result;
 use orchestrator_core::DaemonStatus;
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
-use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager};
+use orchestrator_daemon_runtime::{run_daemon, DaemonRunEvent, DaemonRunHooks, DaemonRuntimeState, ProcessManager};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -117,9 +118,36 @@ pub(super) async fn handle_daemon_run(
     let runtime_options = runtime_options_from_cli(&args);
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
     let daemon_config = workflow_config.config.daemon.as_ref();
+
+    let mcp_server_defs = workflow_config.config.mcp_servers.clone();
+    let mut mcp_manager = McpServerManager::new(mcp_server_defs);
+    mcp_manager.start_all().await;
+
+    let initial_mcp_health = mcp_manager.health();
+    DaemonRuntimeState::write_mcp_server_health(project_root, &initial_mcp_health);
+
+    let mcp_runtime_config = daemon_config
+        .and_then(|d| d.mcp.clone())
+        .or_else(|| mcp_manager.first_mcp_runtime_config());
+
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
-    process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
+    process_manager.mcp_config = mcp_runtime_config;
+
+    let project_root_for_tick = project_root.to_string();
+    let mcp_manager = Arc::new(tokio::sync::Mutex::new(mcp_manager));
+    let tick_manager = mcp_manager.clone();
+    let mcp_tick_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let mut mgr = tick_manager.lock().await;
+            mgr.tick().await;
+            let health = mgr.health();
+            DaemonRuntimeState::write_mcp_server_health(&project_root_for_tick, &health);
+        }
+    });
+
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager);
     let mut host = CliDaemonRunHost::new(project_root, json);
@@ -132,6 +160,10 @@ pub(super) async fn handle_daemon_run(
         |driver| driver.active_process_count(),
     )
     .await;
+
+    mcp_tick_handle.abort();
+    mcp_manager.lock().await.stop_all().await;
+    DaemonRuntimeState::clear_mcp_server_health(project_root);
 
     run_result
 }

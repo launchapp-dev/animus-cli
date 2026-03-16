@@ -1320,6 +1320,7 @@ mod tests {
                     total_agents_spawned: None,
                     total_agents_completed: None,
                     total_agents_failed: None,
+                    mcp_servers: Vec::new(),
                 }),
                 None,
             ),

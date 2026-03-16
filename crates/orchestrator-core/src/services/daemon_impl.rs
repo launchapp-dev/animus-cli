@@ -1,5 +1,19 @@
 use super::*;
 
+fn mcp_server_health_path(project_root: &Path) -> std::path::PathBuf {
+    project_root.join(".ao").join("mcp-servers-health.json")
+}
+
+fn read_mcp_server_health_from_file(
+    project_root: &Path,
+) -> Vec<protocol::orchestrator::McpServerHealth> {
+    let path = mcp_server_health_path(project_root);
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
 async fn ensure_runner_started(project_root: &Path) -> Result<Option<u32>> {
     #[cfg(test)]
     if let Some(result) = take_test_ensure_result() {
@@ -137,6 +151,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            mcp_servers: Vec::new(),
         })
     }
 
@@ -326,6 +341,8 @@ impl DaemonServiceApi for FileServiceHub {
             .filter(|t| t.status == TaskStatus::Ready)
             .count() as u32;
 
+        let mcp_servers = read_mcp_server_health_from_file(&self.project_root);
+
         Ok(DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused)
                 && runner_connected,
@@ -343,6 +360,7 @@ impl DaemonServiceApi for FileServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            mcp_servers,
         })
     }
 
@@ -506,7 +524,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed");
 
@@ -533,7 +551,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed after retry");
 
@@ -560,7 +578,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub)
+        DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect("daemon start should succeed on retry even if stop fails");
 
@@ -587,7 +605,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        let error = DaemonServiceApi::start(&hub)
+        let error = DaemonServiceApi::start(&hub, Default::default())
             .await
             .expect_err("daemon start should fail when retry fails");
 

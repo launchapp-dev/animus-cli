@@ -690,6 +690,28 @@ pub enum DaemonStatus {
     Crashed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerHealthStatus {
+    #[default]
+    Starting,
+    Running,
+    Restarting,
+    Unhealthy,
+    Dead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerHealth {
+    pub name: String,
+    pub healthy: bool,
+    pub status: McpServerHealthStatus,
+    #[serde(default)]
+    pub restart_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonHealth {
     pub healthy: bool,
@@ -719,6 +741,8 @@ pub struct DaemonHealth {
     pub total_agents_completed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_agents_failed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerHealth>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

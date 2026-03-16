@@ -82,6 +82,7 @@ pub use types::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge,
     ArchitectureEntity, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
     CodebaseInsight, Complexity, ComplexityAssessment, ComplexityTier, DaemonHealth, DaemonStatus,
+    McpServerHealth, McpServerHealthStatus,
     DependencyType, DispatchHistoryEntry, HandoffTargetRole, ImpactArea, LogEntry, LogLevel,
     OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision,
     PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits,

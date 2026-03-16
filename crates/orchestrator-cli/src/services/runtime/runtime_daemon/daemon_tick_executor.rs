@@ -2,7 +2,9 @@ use super::*;
 use std::sync::Arc;
 use anyhow::Result;
 use crate::services::runtime::execution_fact_projection::reconcile_completed_processes;
-use crate::services::runtime::runtime_daemon::daemon_reconciliation::reconcile_manual_phase_timeouts;
+use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
+    reconcile_manual_phase_timeouts, reconcile_stale_in_progress_tasks,
+};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices,
@@ -10,11 +12,15 @@ use orchestrator_daemon_runtime::{
     ProjectTickSnapshot,
 };
 
-pub(crate) struct CliProjectTickServices;
+pub(crate) struct CliProjectTickServices {
+    reconcile_stale: bool,
+}
 
 impl CliProjectTickServices {
-    fn new(_args: &DaemonRuntimeOptions) -> Self {
-        Self
+    fn new(args: &DaemonRuntimeOptions) -> Self {
+        Self {
+            reconcile_stale: args.reconcile_stale,
+        }
     }
 }
 
@@ -50,7 +56,13 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         hub: Arc<dyn ServiceHub>,
         root: &str,
     ) -> Result<usize> {
-        reconcile_manual_phase_timeouts(hub, root).await
+        let phase_timeouts = reconcile_manual_phase_timeouts(hub.clone(), root).await?;
+        let stale_tasks = if self.reconcile_stale {
+            reconcile_stale_in_progress_tasks(hub).await?
+        } else {
+            0
+        };
+        Ok(phase_timeouts.saturating_add(stale_tasks))
     }
 
     async fn dispatch_ready_tasks(
