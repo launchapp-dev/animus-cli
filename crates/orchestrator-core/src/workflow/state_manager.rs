@@ -306,7 +306,7 @@ impl WorkflowStateManager {
 
     fn workflows_dir(&self) -> PathBuf {
         let base = protocol::scoped_state_root(&self.project_root).unwrap_or_else(|| self.project_root.join(".ao"));
-        base.join("workflow-state")
+        base.join("state").join("workflows")
     }
 
     fn workflow_path(&self, workflow_id: &str) -> PathBuf {

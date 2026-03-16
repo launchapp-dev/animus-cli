@@ -1923,7 +1923,7 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
     let requirement_relative_path = requirement.relative_path.clone().expect("relative path should be set");
 
     let scoped = scoped_ao_root(temp.path());
-    let requirement_file_path = scoped.join("requirements").join(requirement_relative_path);
+    let requirement_file_path = scoped.join("state").join("requirements").join(requirement_relative_path);
     assert!(requirement_file_path.exists());
 
     let requirement_file_json: serde_json::Value = serde_json::from_str(
@@ -1935,7 +1935,7 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
     let requirement_index_path = global_requirements_index_dir(temp.path()).join("index.json");
     assert!(requirement_index_path.exists());
 
-    let task_file_path = scoped.join("tasks").join(format!("{}.json", task_id));
+    let task_file_path = scoped.join("state").join("tasks").join(format!("{}.json", task_id));
     assert!(task_file_path.exists());
     let task_file_json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&task_file_path).expect("task file should be readable"))
@@ -1943,6 +1943,19 @@ async fn file_hub_writes_legacy_style_requirement_and_task_files() {
     let task_description = task_file_json.get("description").and_then(serde_json::Value::as_str).unwrap_or_default();
     assert!(!task_description.trim().is_empty());
     assert!(task_description.contains("Acceptance Criteria") || task_description.contains("## Implementation Notes"));
+
+    let core_state_raw: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(scoped.join("core-state.json")).expect("core-state should be readable"),
+    )
+    .expect("core-state should be json");
+    assert!(
+        core_state_raw.get("tasks").is_none(),
+        "core-state.json should not contain tasks (entity files are authoritative)"
+    );
+    assert!(
+        core_state_raw.get("requirements").is_none(),
+        "core-state.json should not contain requirements (entity files are authoritative)"
+    );
 }
 
 #[tokio::test]

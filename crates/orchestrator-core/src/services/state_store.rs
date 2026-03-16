@@ -11,11 +11,12 @@ pub(super) struct CoreState {
     pub(super) logs: Vec<LogEntry>,
     pub(super) active_project_id: Option<String>,
     pub(super) projects: HashMap<String, OrchestratorProject>,
+    #[serde(default, skip_serializing)]
     pub(super) tasks: HashMap<String, OrchestratorTask>,
     pub(super) workflows: HashMap<String, OrchestratorWorkflow>,
     #[serde(default)]
     pub(super) vision: Option<VisionDocument>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(super) requirements: HashMap<String, RequirementItem>,
     #[serde(default)]
     pub(super) architecture: ArchitectureGraph,
@@ -144,6 +145,72 @@ fn deserialize_core_state(contents: &str) -> Result<CoreState> {
     serde_json::from_value::<CoreState>(raw).context("core-state JSON does not match expected schema")
 }
 
+fn load_tasks_from_entity_files(state_dir: &Path) -> Option<HashMap<String, OrchestratorTask>> {
+    let tasks_dir = state_dir.join("tasks");
+    if !tasks_dir.is_dir() {
+        return None;
+    }
+    let mut tasks = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(mut raw) = serde_json::from_str::<serde_json::Value>(&content) {
+                    normalize_legacy_task(&mut raw);
+                    if let Ok(task) = serde_json::from_value::<OrchestratorTask>(raw) {
+                        tasks.insert(task.id.clone(), task);
+                    }
+                }
+            }
+        }
+    }
+    Some(tasks)
+}
+
+fn load_requirements_from_entity_files(state_dir: &Path) -> Option<HashMap<String, RequirementItem>> {
+    let requirements_dir = state_dir.join("requirements");
+    if !requirements_dir.is_dir() {
+        return None;
+    }
+    let mut requirements = HashMap::new();
+    load_requirement_json_files_recursive(&requirements_dir, &mut requirements);
+    Some(requirements)
+}
+
+fn load_requirement_json_files_recursive(dir: &Path, requirements: &mut HashMap<String, RequirementItem>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            load_requirement_json_files_recursive(&path, requirements);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(req) = serde_json::from_str::<RequirementItem>(&content) {
+                    requirements.insert(req.id.clone(), req);
+                }
+            }
+        }
+    }
+}
+
+fn overlay_entity_files(state: &mut CoreState, state_file: &Path) {
+    let Some(scoped_root) = state_file.parent() else {
+        return;
+    };
+    let state_dir = scoped_root.join("state");
+    if let Some(tasks) = load_tasks_from_entity_files(&state_dir) {
+        state.tasks = tasks;
+    }
+    if let Some(requirements) = load_requirements_from_entity_files(&state_dir) {
+        state.requirements = requirements;
+    }
+}
+
 pub(super) fn load_core_state(state_file: &Path) -> CoreState {
     if !state_file.exists() {
         return CoreState::default_with_stopped();
@@ -153,7 +220,9 @@ pub(super) fn load_core_state(state_file: &Path) -> CoreState {
         return CoreState::default_with_stopped();
     };
 
-    deserialize_core_state(&contents).unwrap_or_else(|_| CoreState::default_with_stopped())
+    let mut state = deserialize_core_state(&contents).unwrap_or_else(|_| CoreState::default_with_stopped());
+    overlay_entity_files(&mut state, state_file);
+    state
 }
 
 pub(super) fn load_core_state_for_mutation(state_file: &Path) -> Result<CoreState> {
@@ -163,9 +232,11 @@ pub(super) fn load_core_state_for_mutation(state_file: &Path) -> Result<CoreStat
 
     let contents = std::fs::read_to_string(state_file)
         .with_context(|| format!("failed to read core-state at {}", state_file.display()))?;
-    deserialize_core_state(&contents).with_context(|| {
+    let mut state = deserialize_core_state(&contents).with_context(|| {
         format!("failed to parse core-state at {}; refusing mutation to avoid data loss", state_file.display())
-    })
+    })?;
+    overlay_entity_files(&mut state, state_file);
+    Ok(state)
 }
 
 #[cfg(test)]

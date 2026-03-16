@@ -356,42 +356,11 @@ impl FileServiceHub {
         }
     }
 
-    fn legacy_requirement_payload(requirement: &RequirementItem) -> serde_json::Value {
-        let mut tasks = requirement.links.tasks.clone();
-        tasks.extend(requirement.linked_task_ids.clone());
-        tasks.sort();
-        tasks.dedup();
-
-        serde_json::json!({
-            "id": requirement.id,
-            "title": requirement.title,
-            "description": if requirement.description.trim().is_empty() { serde_json::Value::Null } else { serde_json::Value::String(requirement.description.clone()) },
-            "legacy_id": requirement.legacy_id,
-            "category": requirement.category,
-            "type": requirement.requirement_type,
-            "priority": requirement.priority,
-            "status": Self::legacy_requirement_status(requirement.status),
-            "acceptance_criteria": requirement.acceptance_criteria,
-            "tags": requirement.tags,
-            "links": {
-                "tasks": tasks,
-                "workflows": requirement.links.workflows,
-                "tests": requirement.links.tests,
-                "mockups": requirement.links.mockups,
-                "flows": requirement.links.flows,
-                "related_requirements": requirement.links.related_requirements,
-            },
-            "comments": requirement.comments,
-            "created_at": requirement.created_at,
-            "updated_at": requirement.updated_at,
-        })
-    }
-
     fn write_requirement_files(path: &Path, snapshot: &CoreState, only_ids: Option<&HashSet<String>>) -> Result<()> {
         let Some(ao_dir) = Self::ao_dir_for_state_file(path) else {
             return Ok(());
         };
-        let requirements_dir = ao_dir.join("requirements");
+        let requirements_dir = ao_dir.join("state").join("requirements");
         std::fs::create_dir_all(&requirements_dir)?;
 
         let mut requirements: Vec<_> = snapshot.requirements.values().cloned().collect();
@@ -408,9 +377,8 @@ impl FileServiceHub {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let payload = Self::legacy_requirement_payload(&requirement);
             if only_ids.is_none() || only_ids.is_some_and(|ids| ids.contains(&requirement.id)) {
-                std::fs::write(&full_path, serde_json::to_string_pretty(&payload)?)?;
+                std::fs::write(&full_path, serde_json::to_string_pretty(&requirement)?)?;
             }
 
             let mut linked_tasks = requirement.links.tasks.clone();
@@ -459,7 +427,7 @@ impl FileServiceHub {
         let Some(ao_dir) = Self::ao_dir_for_state_file(path) else {
             return Ok(());
         };
-        let tasks_dir = ao_dir.join("tasks");
+        let tasks_dir = ao_dir.join("state").join("tasks");
         std::fs::create_dir_all(&tasks_dir)?;
 
         let mut tasks: Vec<_> = snapshot.tasks.values().cloned().collect();
@@ -473,45 +441,8 @@ impl FileServiceHub {
                 last_sequence = last_sequence.max(seq);
             }
 
-            let deadline = task
-                .deadline
-                .as_ref()
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc).to_rfc3339());
-
-            let payload = serde_json::json!({
-                "id": task.id,
-                "title": task.title,
-                "description": task.description,
-                "type": task.task_type,
-                "status": task.status,
-                "blocked_reason": task.blocked_reason,
-                "blocked_at": task.blocked_at,
-                "blocked_phase": task.blocked_phase,
-                "blocked_by": task.blocked_by,
-                "priority": task.priority,
-                "risk": task.risk,
-                "scope": task.scope,
-                "complexity": task.complexity,
-                "impact_area": task.impact_area,
-                "assignee": task.assignee,
-                "estimated_effort": task.estimated_effort,
-                "linked_requirements": task.linked_requirements,
-                "linked_architecture_entities": task.linked_architecture_entities,
-                "dependencies": task.dependencies,
-                "checklist": task.checklist,
-                "tags": task.tags,
-                "workflow_metadata": task.workflow_metadata,
-                "worktree_path": task.worktree_path,
-                "branch_name": task.branch_name,
-                "metadata": task.metadata,
-                "deadline": deadline,
-                "paused": task.paused,
-                "cancelled": task.cancelled,
-                "resource_requirements": task.resource_requirements,
-            });
             if only_ids.is_none() || only_ids.is_some_and(|ids| ids.contains(&task.id)) {
-                std::fs::write(tasks_dir.join(format!("{}.json", task.id)), serde_json::to_string_pretty(&payload)?)?;
+                std::fs::write(tasks_dir.join(format!("{}.json", task.id)), serde_json::to_string_pretty(&task)?)?;
             }
 
             index_entries.push(serde_json::json!({
@@ -664,30 +595,47 @@ impl FileServiceHub {
             return Ok(());
         }
         std::fs::create_dir_all(&scoped_root)?;
-        let copy = |name: &str| -> Result<()> {
-            let src = legacy_ao.join(name);
+        let copy_to = |src: &Path, dst: &Path| -> Result<()> {
             if src.exists() {
-                let dst = scoped_root.join(name);
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
                 if src.is_dir() {
-                    Self::copy_dir_recursive(&src, &dst)?;
+                    Self::copy_dir_recursive(src, dst)?;
                 } else {
-                    if let Some(parent) = dst.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::copy(&src, &dst)?;
+                    std::fs::copy(src, dst)?;
                 }
             }
             Ok(())
         };
-        copy("core-state.json")?;
-        copy("resume-config.json")?;
-        copy("state")?;
-        copy("tasks")?;
-        copy("requirements")?;
-        copy("docs")?;
-        copy("workflow-state")?;
+        let state_dir = scoped_root.join("state");
+        copy_to(&legacy_ao.join("core-state.json"), &scoped_root.join("core-state.json"))?;
+        copy_to(&legacy_ao.join("resume-config.json"), &scoped_root.join("resume-config.json"))?;
+        copy_to(&legacy_ao.join("state"), &state_dir)?;
+        copy_to(&legacy_ao.join("tasks"), &state_dir.join("tasks"))?;
+        copy_to(&legacy_ao.join("requirements"), &state_dir.join("requirements"))?;
+        copy_to(&legacy_ao.join("docs"), &scoped_root.join("docs"))?;
+        copy_to(&legacy_ao.join("workflow-state"), &state_dir.join("workflows"))?;
         std::fs::write(scoped_root.join(".migrated-from-repo"), project_root.display().to_string())?;
         Ok(())
+    }
+
+    fn maybe_migrate_entity_dirs_to_state_subdir(scoped_root: &Path) {
+        let state_dir = scoped_root.join("state");
+        for name in &["tasks", "requirements"] {
+            let old = scoped_root.join(name);
+            let new = state_dir.join(name);
+            if old.is_dir() && !new.exists() {
+                let _ = std::fs::create_dir_all(&state_dir);
+                let _ = std::fs::rename(&old, &new);
+            }
+        }
+        let old_workflow = scoped_root.join("workflow-state");
+        let new_workflow = state_dir.join("workflows");
+        if old_workflow.is_dir() && !new_workflow.exists() {
+            let _ = std::fs::create_dir_all(&state_dir);
+            let _ = Self::copy_dir_recursive(&old_workflow, &new_workflow);
+        }
     }
 
     fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -714,8 +662,12 @@ impl FileServiceHub {
         Self::maybe_migrate_state_to_scoped_root(project_root)?;
 
         let scoped_root = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+        Self::maybe_migrate_entity_dirs_to_state_subdir(&scoped_root);
         let state_dir = scoped_root.join("state");
         std::fs::create_dir_all(&state_dir)?;
+        std::fs::create_dir_all(state_dir.join("tasks"))?;
+        std::fs::create_dir_all(state_dir.join("requirements"))?;
+        std::fs::create_dir_all(state_dir.join("workflows"))?;
 
         let core_state_path = scoped_root.join("core-state.json");
         let is_new_project = !core_state_path.exists();
