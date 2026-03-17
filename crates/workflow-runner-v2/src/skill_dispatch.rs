@@ -348,7 +348,6 @@ mod tests {
                 config: workflow,
                 path: PathBuf::from("builtin"),
             },
-
         };
         let error =
             resolve_phase_skills(&ctx, temp.path(), "implementation").expect_err("missing skill should fail loudly");

@@ -5,8 +5,8 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_config::{
     add_marketplace_registry, check_pack_runtime_requirements, clone_marketplace_pack, load_marketplace_state,
     load_pack_inventory, load_pack_manifest, load_pack_selection_state, machine_installed_packs_dir,
-    remove_marketplace_registry, save_pack_selection_state, search_marketplace_packs, sync_all_registries, sync_registry,
-    PackInventoryEntry, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
+    remove_marketplace_registry, save_pack_selection_state, search_marketplace_packs, sync_all_registries,
+    sync_registry, PackInventoryEntry, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
 };
 use serde::Serialize;
 
@@ -196,11 +196,8 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
         }
         PackCommand::Inspect(args) => print_value(inspect_pack(project_root, args)?, json),
         PackCommand::Search(args) => {
-            let results = search_marketplace_packs(
-                args.query.as_deref(),
-                args.category.as_deref(),
-                args.registry.as_deref(),
-            )?;
+            let results =
+                search_marketplace_packs(args.query.as_deref(), args.category.as_deref(), args.registry.as_deref())?;
             if results.is_empty() && !json {
                 print_ok("no packs found matching the query", false);
                 return Ok(());

@@ -134,7 +134,15 @@
       "mcp__ao__ao_queue_stats",
       "Bash(for pr:*)",
       "Bash(gh run:*)",
-      "Bash(./target/release/ao --version 2>&1)"
+      "Bash(./target/release/ao --version 2>&1)",
+      "Bash(npm install:*)",
+      "Bash(npx vitest:*)",
+      "Bash(node -e \":*)",
+      "Bash(node:*)",
+      "Bash(echo:*)",
+      "Bash(git tag:*)",
+      "Bash(for d:*)",
+      "Bash(npm run:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -506,7 +506,12 @@ pub(crate) async fn handle_daemon(
 
             let _ = set_daemon_pid(project_root, None);
             handle_daemon_run(
-                DaemonRunArgs { scheduler: args.scheduler, skip_runner: args.skip_runner, runner_scope: args.runner_scope, once: false },
+                DaemonRunArgs {
+                    scheduler: args.scheduler,
+                    skip_runner: args.skip_runner,
+                    runner_scope: args.runner_scope,
+                    once: false,
+                },
                 project_root,
                 json,
             )

@@ -64,10 +64,12 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
                             tool_name = %tool_name,
                             "CLI stdout closed with tool call in-flight; process likely crashed"
                         );
-                        let _ = output_tx.send(AgentRunEvent::Error {
-                            run_id: run_id.clone(),
-                            error: format!("CLI process stdout closed while '{tool_name}' tool call was in-flight"),
-                        }).await;
+                        let _ = output_tx
+                            .send(AgentRunEvent::Error {
+                                run_id: run_id.clone(),
+                                error: format!("CLI process stdout closed while '{tool_name}' tool call was in-flight"),
+                            })
+                            .await;
                     } else {
                         warn!(run_id = %run_id.0.as_str(), "CLI stdout stream closed");
                     }

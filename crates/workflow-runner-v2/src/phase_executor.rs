@@ -1317,10 +1317,8 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
         merged_runtime.tools_allowlist.sort();
     }
 
-    let ctx = RuntimeConfigContext {
-        agent_runtime_config: merged_runtime.clone(),
-        workflow_config: workflow_config.clone(),
-    };
+    let ctx =
+        RuntimeConfigContext { agent_runtime_config: merged_runtime.clone(), workflow_config: workflow_config.clone() };
 
     let definition = ctx
         .phase_execution(phase_id)
@@ -1620,7 +1618,9 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
 #[cfg(test)]
 mod tests {
-    use super::{phase_outcome_is_complete, phase_session_resume_plan, process_phase_event_stream, PhaseExecutionOutcome};
+    use super::{
+        phase_outcome_is_complete, phase_session_resume_plan, process_phase_event_stream, PhaseExecutionOutcome,
+    };
 
     #[test]
     fn initial_attempt_starts_a_fresh_native_session() {
@@ -1736,10 +1736,8 @@ mod tests {
     #[tokio::test]
     async fn event_stream_error_event_returns_error() {
         let run_id = RunId("run-error-001".to_string());
-        let events = vec![protocol::AgentRunEvent::Error {
-            run_id: run_id.clone(),
-            error: "unexpected failure".to_string(),
-        }];
+        let events =
+            vec![protocol::AgentRunEvent::Error { run_id: run_id.clone(), error: "unexpected failure".to_string() }];
         let err = run_stream(&events, &run_id, None).await.expect_err("should be an error");
         assert!(err.to_string().contains("unexpected failure"), "got: {}", err);
     }
@@ -1755,8 +1753,7 @@ mod tests {
     #[tokio::test]
     async fn event_stream_provider_exhaustion_is_annotated_in_error() {
         let run_id = RunId("run-exhaust-001".to_string());
-        let exhaustion_text =
-            "Error: 429 Too Many Requests\nyour account has exceeded its usage limit\nplease upgrade";
+        let exhaustion_text = "Error: 429 Too Many Requests\nyour account has exceeded its usage limit\nplease upgrade";
         let events = vec![
             protocol::AgentRunEvent::OutputChunk {
                 run_id: run_id.clone(),
@@ -1875,18 +1872,25 @@ mod tests {
     #[tokio::test]
     async fn event_stream_malformed_lines_are_skipped() {
         let run_id = RunId("run-malformed-001".to_string());
-        let mut bytes =
-            b"not json at all\n{\"garbage\": true}\n".to_vec();
+        let mut bytes = b"not json at all\n{\"garbage\": true}\n".to_vec();
         let finished_event =
             protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 10 };
         bytes.extend(serde_json::to_string(&finished_event).unwrap().as_bytes());
         bytes.push(b'\n');
 
         let reader = tokio::io::BufReader::new(bytes.as_slice());
-        let outcome =
-            process_phase_event_stream(reader.lines(), &run_id, "wf-test", "impl", false, false, "", None::<&std::path::Path>)
-                .await
-                .expect("malformed lines should be skipped, not cause failure");
+        let outcome = process_phase_event_stream(
+            reader.lines(),
+            &run_id,
+            "wf-test",
+            "impl",
+            false,
+            false,
+            "",
+            None::<&std::path::Path>,
+        )
+        .await
+        .expect("malformed lines should be skipped, not cause failure");
         assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
     }
 }
