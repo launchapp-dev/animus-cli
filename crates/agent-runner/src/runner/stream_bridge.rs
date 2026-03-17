@@ -22,6 +22,7 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
         let mut parser = OutputParser::new(&tool);
+        let mut last_tool_call_name: Option<String> = None;
 
         loop {
             match lines.next_line().await {
@@ -35,10 +36,13 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
 
                     for parsed in parser.parse_line(&line) {
                         let event = match parsed {
-                            ParsedEvent::ToolCall { tool_name, parameters, .. } => Some(AgentRunEvent::ToolCall {
-                                run_id: run_id.clone(),
-                                tool_info: ToolCallInfo { tool_name, parameters, timestamp: Timestamp::now() },
-                            }),
+                            ParsedEvent::ToolCall { tool_name, parameters, .. } => {
+                                last_tool_call_name = Some(tool_name.clone());
+                                Some(AgentRunEvent::ToolCall {
+                                    run_id: run_id.clone(),
+                                    tool_info: ToolCallInfo { tool_name, parameters, timestamp: Timestamp::now() },
+                                })
+                            }
                             ParsedEvent::Artifact(artifact_info) => {
                                 Some(AgentRunEvent::Artifact { run_id: run_id.clone(), artifact_info })
                             }
@@ -54,7 +58,19 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
                     }
                 }
                 Ok(None) => {
-                    debug!(run_id = %run_id.0.as_str(), "CLI stdout stream closed");
+                    if let Some(ref tool_name) = last_tool_call_name {
+                        warn!(
+                            run_id = %run_id.0.as_str(),
+                            tool_name = %tool_name,
+                            "CLI stdout closed with tool call in-flight; process likely crashed"
+                        );
+                        let _ = output_tx.send(AgentRunEvent::Error {
+                            run_id: run_id.clone(),
+                            error: format!("CLI process stdout closed while '{tool_name}' tool call was in-flight"),
+                        }).await;
+                    } else {
+                        warn!(run_id = %run_id.0.as_str(), "CLI stdout stream closed");
+                    }
                     break;
                 }
                 Err(e) => {

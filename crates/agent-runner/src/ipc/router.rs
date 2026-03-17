@@ -230,7 +230,7 @@ where
                         );
                     }
                     Err(broadcast::error::RecvError::Closed) => {
-                        debug!(connection_id, "Run event broadcast closed");
+                        info!(connection_id, "Run event broadcast closed; runner finished event may have been missed");
                         *active_broadcast_rx = None;
                     }
                 }

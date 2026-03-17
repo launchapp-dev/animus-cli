@@ -579,7 +579,12 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     result_payload: pending_result_payload,
                 });
             }
-            AgentRunEvent::ToolCall { .. } => {}
+            AgentRunEvent::ToolCall { tool_info, .. } => {
+                PhaseFailureClassifier::push_phase_diagnostic_line(
+                    &mut diagnostics,
+                    &format!("tool_call: {}", tool_info.tool_name),
+                );
+            }
             AgentRunEvent::Artifact { .. } => {}
             _ => {}
         }
@@ -1118,6 +1123,14 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         let should_retry = attempt < max_attempts
                             && PhaseFailureClassifier::is_transient_runner_error_message(&message);
                         if should_retry {
+                            warn!(
+                                workflow_id = %workflow_id,
+                                phase_id = %phase_id,
+                                attempt,
+                                max_attempts,
+                                error = %message,
+                                "Transient runner error on phase attempt; retrying"
+                            );
                             sleep(backoff).await;
                             backoff = std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(3));
                             continue;
