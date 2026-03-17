@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use orchestrator_core::runtime_contract;
-use protocol::{AgentRunEvent, IpcAuthRequest, IpcAuthResult, RunId, MAX_UNIX_SOCKET_PATH_LEN};
+use protocol::{AgentRunEvent, IpcAuthRequest, IpcAuthResult, OutputStreamType, RunId, MAX_UNIX_SOCKET_PATH_LEN};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::time::Duration;
@@ -205,6 +205,44 @@ pub fn run_dir(project_root: &str, run_id: &RunId, base_override: Option<&str>) 
     base.join(&run_id.0)
 }
 
+pub fn persist_run_event(run_dir: &Path, event: &AgentRunEvent) -> Result<()> {
+    let event_path = run_dir.join("events.jsonl");
+    let line = serde_json::to_string(event)?;
+    append_line(&event_path, &line)?;
+
+    if let AgentRunEvent::OutputChunk { stream_type, text, .. } = event {
+        persist_json_output(run_dir, *stream_type, text)?;
+    }
+
+    Ok(())
+}
+
+fn persist_json_output(run_dir: &Path, stream_type: OutputStreamType, text: &str) -> Result<()> {
+    let path = run_dir.join("json-output.jsonl");
+    for (raw, payload) in collect_json_payload_lines(text) {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let entry = serde_json::json!({
+            "timestamp_ms": timestamp_ms,
+            "stream_type": stream_type_label(stream_type),
+            "raw": raw,
+            "payload": payload,
+        });
+        append_line(&path, &serde_json::to_string(&entry)?)?;
+    }
+    Ok(())
+}
+
+fn stream_type_label(stream_type: OutputStreamType) -> &'static str {
+    match stream_type {
+        OutputStreamType::Stdout => "stdout",
+        OutputStreamType::Stderr => "stderr",
+        OutputStreamType::System => "system",
+    }
+}
+
 pub fn collect_json_payload_lines(text: &str) -> Vec<(String, Value)> {
     text.lines()
         .filter_map(|line| {
@@ -230,4 +268,106 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::{RunId, Timestamp};
+    use uuid::Uuid;
+
+    fn temp_run_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ao-ipc-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn persist_run_event_writes_events_jsonl() {
+        let run_dir = temp_run_dir();
+        let run_id = RunId("run-persist-001".to_string());
+
+        persist_run_event(&run_dir, &AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
+            .expect("persist started");
+        persist_run_event(
+            &run_dir,
+            &AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stdout,
+                text: "hello\n".to_string(),
+            },
+        )
+        .expect("persist output chunk");
+        persist_run_event(&run_dir, &AgentRunEvent::Finished { run_id, exit_code: Some(0), duration_ms: 100 })
+            .expect("persist finished");
+
+        let events_path = run_dir.join("events.jsonl");
+        assert!(events_path.exists());
+        let contents = std::fs::read_to_string(&events_path).expect("read events");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("\"kind\":\"started\""));
+        assert!(lines[1].contains("\"kind\":\"output_chunk\""));
+        assert!(lines[2].contains("\"kind\":\"finished\""));
+
+        let _ = std::fs::remove_dir_all(&run_dir);
+    }
+
+    #[test]
+    fn persist_run_event_writes_json_output_for_output_chunk() {
+        let run_dir = temp_run_dir();
+        let run_id = RunId("run-persist-002".to_string());
+
+        persist_run_event(
+            &run_dir,
+            &AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stdout,
+                text: "plain text\n{\"type\":\"turn.completed\"}\n".to_string(),
+            },
+        )
+        .expect("persist output chunk with json");
+
+        let json_output_path = run_dir.join("json-output.jsonl");
+        assert!(json_output_path.exists());
+        let contents = std::fs::read_to_string(&json_output_path).expect("read json-output");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 1, "only JSON lines are extracted");
+        assert!(lines[0].contains("\"turn.completed\""));
+        assert!(lines[0].contains("\"stream_type\":\"stdout\""));
+        assert!(lines[0].contains("\"timestamp_ms\""));
+
+        let _ = std::fs::remove_dir_all(&run_dir);
+    }
+
+    #[test]
+    fn persist_run_event_non_output_chunk_does_not_write_json_output() {
+        let run_dir = temp_run_dir();
+        let run_id = RunId("run-persist-003".to_string());
+
+        persist_run_event(&run_dir, &AgentRunEvent::Thinking { run_id, content: "{\"kind\":\"thought\"}".to_string() })
+            .expect("persist thinking");
+
+        assert!(run_dir.join("events.jsonl").exists());
+        assert!(!run_dir.join("json-output.jsonl").exists(), "Thinking events do not produce json-output");
+
+        let _ = std::fs::remove_dir_all(&run_dir);
+    }
+
+    #[test]
+    fn collect_json_payload_lines_skips_plain_text() {
+        let text = "plain text\n{\"key\":\"value\"}\n[1,2,3]\n\"just a string\"\n42\n";
+        let pairs = collect_json_payload_lines(text);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs[0].0.contains("key"));
+        assert!(pairs[1].0.contains('['));
+    }
+
+    #[test]
+    fn run_dir_uses_scoped_state_root() {
+        let project_root = std::env::temp_dir().join("ao-run-dir-test");
+        let run_id = RunId("run-dir-abc".to_string());
+        let dir = run_dir(project_root.to_str().unwrap(), &run_id, None);
+        assert!(dir.ends_with("run-dir-abc"));
+    }
 }
