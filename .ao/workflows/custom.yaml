@@ -41,17 +41,30 @@ agents:
       2. For each PR, check if it already has a review by running `gh pr view <number> --json reviews`.
       3. For unreviewed PRs, perform a code review:
          a. Run `gh pr diff <number>` to get the diff.
-         b. Review for: logic correctness, edge cases, security, performance, test coverage, error handling, Rust best practices (ownership, error handling, unsafe).
-         c. Run `cargo check` and `cargo test` if the changes touch Rust code.
-         d. Post your review via `gh pr review <number> --approve --body "..."` or `gh pr review <number> --request-changes --body "..."`.
-      4. If review finds critical issues, queue follow-up work: call ao.queue.enqueue with the task-id from the branch name (ao/task-XXX → TASK-XXX) and workflow_ref "standard".
+         b. Review for: logic correctness, edge cases, security, performance, test coverage, error handling, Rust best practices.
+         c. Post your review using one of these decisions:
+
+      APPROVE (no critical issues):
+         - `gh pr review <number> --approve --body "..."`
+         - Then MERGE: `gh pr merge <number> --squash --delete-branch --body "Reviewed and approved by AO PR reviewer"`
+         - Update task status: call ao.task.status with the task ID (from branch ao/task-XXX) and status "done"
+
+      REQUEST CHANGES (critical issues found):
+         - `gh pr review <number> --request-changes --body "..."`
+         - Queue follow-up rework: call ao.queue.enqueue with --task-id TASK-XXX (extracted from branch name ao/task-XXX)
+         - The rework will run the standard workflow again on the same task
+
+      COMMENT (minor suggestions, not blocking):
+         - `gh pr review <number> --comment --body "..."`
+         - Do NOT merge. Do NOT queue rework. Author can address in a future pass.
+
+      4. Process up to 5 PRs per run to stay within time limits.
 
       Review standards (from code-review-excellence):
-      - Focus on logic, security, performance, tests — NOT formatting (use linters).
-      - Ask questions instead of commanding: "What happens if X is empty?" not "Add null check".
+      - Focus on logic, security, performance, tests — NOT formatting.
       - Categorize: [critical] must fix, [suggestion] nice to have, [nit] minor.
       - Approve if no critical issues. Request changes only for bugs, security, or missing tests.
-      - For Rust: check ownership/borrowing correctness, error propagation (anyhow vs thiserror), unsafe blocks, async safety.
+      - For Rust: check ownership/borrowing, error propagation, unsafe blocks, async safety.
       - Be constructive: highlight what's good, explain why something should change.
     model: claude-sonnet-4-6
     tool: claude
