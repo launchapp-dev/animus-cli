@@ -2,6 +2,7 @@ pub mod agent_runtime_config;
 mod bundled_packs;
 mod json;
 pub mod pack_config;
+pub mod pack_marketplace;
 pub mod pack_registry;
 pub mod pack_selection;
 pub mod skill_definition;
@@ -42,6 +43,11 @@ pub use pack_registry::{
     resolve_active_pack_for_workflow_ref, resolve_pack_registry, validate_active_pack_configuration, PackInventory,
     PackInventoryEntry, PackRegistrySource, ResolvedPackRegistry, ResolvedPackRegistryEntry, BUNDLED_BUILTIN_PACK_ID,
     BUNDLED_BUILTIN_PACK_VERSION, MACHINE_PACKS_DIR_NAME, PROJECT_PACKS_DIR_NAME,
+};
+pub use pack_marketplace::{
+    add_marketplace_registry, clone_marketplace_pack, load_marketplace_state, remove_marketplace_registry,
+    search_marketplace_packs, sync_all_registries, sync_registry, MarketplaceEntry, MarketplaceSearchResult,
+    MarketplaceState,
 };
 pub use pack_selection::{
     load_pack_selection_state, pack_selection_path, save_pack_selection_state, PackSelectionEntry, PackSelectionSource,

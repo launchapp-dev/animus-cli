@@ -143,7 +143,7 @@ mod tests {
 
         match cli.command {
             Command::Pack { command: PackCommand::Install(args) } => {
-                assert_eq!(args.path, "./fixtures/ao.review");
+                assert_eq!(args.path.as_deref(), Some("./fixtures/ao.review"));
                 assert!(args.activate);
                 assert!(!args.force);
             }
