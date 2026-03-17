@@ -1,7 +1,7 @@
 use crate::config_context::RuntimeConfigContext;
 use crate::ipc::{
     build_runtime_contract_with_resume, collect_json_payload_lines, connect_runner, event_matches_run,
-    runner_config_dir, write_json_line,
+    persist_run_event, run_dir as ipc_run_dir, runner_config_dir, write_json_line,
 };
 use crate::payload_traversal::{parse_commit_message_from_text, parse_phase_decision_from_text};
 use crate::phase_command::{
@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -443,12 +443,36 @@ pub async fn run_workflow_phase_attempt(
     let (read_half, mut write_half) = tokio::io::split(stream);
     write_json_line(&mut write_half, request).await?;
 
-    let mut lines = tokio::io::BufReader::new(read_half).lines();
+    let parse_phase_decision = ctx.phase_decision_contract(phase_id).is_some();
+    let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
+    let event_run_dir = ipc_run_dir(project_root, &request.run_id, None);
+
+    process_phase_event_stream(
+        tokio::io::BufReader::new(read_half).lines(),
+        &request.run_id,
+        workflow_id,
+        phase_id,
+        parse_commit_message,
+        parse_phase_decision,
+        &expected_result_kind,
+        Some(&event_run_dir),
+    )
+    .await
+}
+
+async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
+    mut lines: tokio::io::Lines<R>,
+    run_id: &RunId,
+    workflow_id: &str,
+    phase_id: &str,
+    parse_commit_message: bool,
+    parse_phase_decision: bool,
+    expected_result_kind: &str,
+    event_run_dir: Option<&std::path::Path>,
+) -> Result<PhaseExecutionOutcome> {
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
     let mut pending_result_payload: Option<Value> = None;
-    let parse_phase_decision = ctx.phase_decision_contract(phase_id).is_some();
-    let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let mut provider_exhaustion_reason: Option<String> = None;
     let mut diagnostics = VecDeque::new();
     while let Some(line) = lines.next_line().await? {
@@ -460,8 +484,12 @@ pub async fn run_workflow_phase_attempt(
         let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
             continue;
         };
-        if !event_matches_run(&event, &request.run_id) {
+        if !event_matches_run(&event, run_id) {
             continue;
+        }
+
+        if let Some(dir) = event_run_dir {
+            let _ = persist_run_event(dir, &event);
         }
 
         match event {
@@ -484,7 +512,7 @@ pub async fn run_workflow_phase_attempt(
                     }
                 }
                 if pending_result_payload.is_none() {
-                    pending_result_payload = parse_result_payload_from_text(&text, &expected_result_kind);
+                    pending_result_payload = parse_result_payload_from_text(&text, expected_result_kind);
                 }
                 if pending_result_payload.is_none() && parse_phase_decision {
                     pending_result_payload = parse_decision_payload_from_text(&text, phase_id);
@@ -509,7 +537,7 @@ pub async fn run_workflow_phase_attempt(
                     }
                 }
                 if pending_result_payload.is_none() {
-                    pending_result_payload = parse_result_payload_from_text(&content, &expected_result_kind);
+                    pending_result_payload = parse_result_payload_from_text(&content, expected_result_kind);
                 }
                 if pending_result_payload.is_none() && parse_phase_decision {
                     pending_result_payload = parse_decision_payload_from_text(&content, phase_id);
@@ -1579,7 +1607,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
 #[cfg(test)]
 mod tests {
-    use super::{phase_outcome_is_complete, phase_session_resume_plan, PhaseExecutionOutcome};
+    use super::{phase_outcome_is_complete, phase_session_resume_plan, process_phase_event_stream, PhaseExecutionOutcome};
 
     #[test]
     fn initial_attempt_starts_a_fresh_native_session() {
@@ -1635,5 +1663,217 @@ mod tests {
 
         assert!(!phase_outcome_is_complete(Some(&empty_outcome), true));
         assert!(phase_outcome_is_complete(Some(&decided_outcome), true));
+    }
+
+    use protocol::{OutputStreamType, RunId, Timestamp};
+    use tokio::io::AsyncBufReadExt;
+    use uuid::Uuid;
+
+    fn make_event_stream(events: &[protocol::AgentRunEvent]) -> Vec<u8> {
+        events.iter().map(|e| serde_json::to_string(e).unwrap() + "\n").collect::<String>().into_bytes()
+    }
+
+    fn temp_run_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ao-phase-exec-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    async fn run_stream(
+        events: &[protocol::AgentRunEvent],
+        run_id: &RunId,
+        run_dir: Option<&std::path::Path>,
+    ) -> anyhow::Result<PhaseExecutionOutcome> {
+        let bytes = make_event_stream(events);
+        let reader = tokio::io::BufReader::new(bytes.as_slice());
+        process_phase_event_stream(reader.lines(), run_id, "wf-test", "impl", false, false, "", run_dir).await
+    }
+
+    #[tokio::test]
+    async fn event_stream_success_returns_completed() {
+        let run_id = RunId("run-success-001".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() },
+            protocol::AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stdout,
+                text: "work done\n".to_string(),
+            },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 200 },
+        ];
+        let outcome = run_stream(&events, &run_id, None).await.expect("should succeed");
+        assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn event_stream_nonzero_exit_returns_error() {
+        let run_id = RunId("run-nonzero-001".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stderr,
+                text: "fatal error\n".to_string(),
+            },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(1), duration_ms: 50 },
+        ];
+        let err = run_stream(&events, &run_id, None).await.expect_err("should be an error");
+        assert!(err.to_string().contains("exited with code"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn event_stream_error_event_returns_error() {
+        let run_id = RunId("run-error-001".to_string());
+        let events = vec![protocol::AgentRunEvent::Error {
+            run_id: run_id.clone(),
+            error: "unexpected failure".to_string(),
+        }];
+        let err = run_stream(&events, &run_id, None).await.expect_err("should be an error");
+        assert!(err.to_string().contains("unexpected failure"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn event_stream_runner_disconnect_returns_error() {
+        let run_id = RunId("run-disconnect-001".to_string());
+        let events = vec![protocol::AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() }];
+        let err = run_stream(&events, &run_id, None).await.expect_err("should be an error");
+        assert!(err.to_string().contains("runner disconnected"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn event_stream_provider_exhaustion_is_annotated_in_error() {
+        let run_id = RunId("run-exhaust-001".to_string());
+        let exhaustion_text =
+            "Error: 429 Too Many Requests\nyour account has exceeded its usage limit\nplease upgrade";
+        let events = vec![
+            protocol::AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stderr,
+                text: exhaustion_text.to_string(),
+            },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(1), duration_ms: 10 },
+        ];
+        let err = run_stream(&events, &run_id, None).await.expect_err("should fail");
+        assert!(err.to_string().contains("provider_exhausted"), "expected exhaustion annotation, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn event_stream_tool_thinking_artifact_events_are_tolerated() {
+        let run_id = RunId("run-multi-events-001".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::Thinking { run_id: run_id.clone(), content: "reasoning...".to_string() },
+            protocol::AgentRunEvent::ToolCall {
+                run_id: run_id.clone(),
+                tool_info: protocol::ToolCallInfo {
+                    tool_name: "bash".to_string(),
+                    parameters: serde_json::json!({"command": "ls"}),
+                    timestamp: Timestamp::now(),
+                },
+            },
+            protocol::AgentRunEvent::ToolResult {
+                run_id: run_id.clone(),
+                result_info: protocol::ToolResultInfo {
+                    tool_name: "bash".to_string(),
+                    result: serde_json::json!("file.txt"),
+                    duration_ms: 10,
+                    success: true,
+                },
+            },
+            protocol::AgentRunEvent::Artifact {
+                run_id: run_id.clone(),
+                artifact_info: protocol::ArtifactInfo {
+                    artifact_id: "art-001".to_string(),
+                    artifact_type: protocol::ArtifactType::Other,
+                    file_path: Some("out.txt".to_string()),
+                    size_bytes: None,
+                    mime_type: None,
+                },
+            },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 300 },
+        ];
+        let outcome = run_stream(&events, &run_id, None).await.expect("should succeed despite mixed events");
+        assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn event_stream_events_for_other_run_id_are_ignored() {
+        let run_id = RunId("run-filter-001".to_string());
+        let other_run_id = RunId("run-other-999".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::Finished { run_id: other_run_id.clone(), exit_code: Some(0), duration_ms: 10 },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 20 },
+        ];
+        let outcome = run_stream(&events, &run_id, None).await.expect("should succeed on matching run");
+        assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn event_stream_persists_events_to_run_dir() {
+        let run_dir = temp_run_dir();
+        let run_id = RunId("run-persist-stream-001".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() },
+            protocol::AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stdout,
+                text: "output text\n{\"kind\":\"result\"}\n".to_string(),
+            },
+            protocol::AgentRunEvent::Thinking { run_id: run_id.clone(), content: "thinking...".to_string() },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 100 },
+        ];
+        run_stream(&events, &run_id, Some(&run_dir)).await.expect("should succeed");
+
+        let events_path = run_dir.join("events.jsonl");
+        assert!(events_path.exists(), "events.jsonl should be written");
+        let contents = std::fs::read_to_string(&events_path).expect("read events.jsonl");
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 4, "all 4 events should be persisted");
+
+        let json_output_path = run_dir.join("json-output.jsonl");
+        assert!(json_output_path.exists(), "json-output.jsonl should be written");
+        let json_contents = std::fs::read_to_string(&json_output_path).expect("read json-output.jsonl");
+        assert!(json_contents.contains("\"result\""), "JSON payload from OutputChunk should be extracted");
+
+        let _ = std::fs::remove_dir_all(&run_dir);
+    }
+
+    #[tokio::test]
+    async fn event_stream_persists_events_on_error_exit() {
+        let run_dir = temp_run_dir();
+        let run_id = RunId("run-persist-err-001".to_string());
+        let events = vec![
+            protocol::AgentRunEvent::OutputChunk {
+                run_id: run_id.clone(),
+                stream_type: OutputStreamType::Stderr,
+                text: "crash\n".to_string(),
+            },
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(2), duration_ms: 30 },
+        ];
+        let _ = run_stream(&events, &run_id, Some(&run_dir)).await;
+
+        let events_path = run_dir.join("events.jsonl");
+        assert!(events_path.exists(), "events.jsonl should be written even on failure");
+        let lines: Vec<String> =
+            std::fs::read_to_string(&events_path).expect("read").lines().map(str::to_string).collect();
+        assert_eq!(lines.len(), 2, "both events should be persisted before the error is returned");
+
+        let _ = std::fs::remove_dir_all(&run_dir);
+    }
+
+    #[tokio::test]
+    async fn event_stream_malformed_lines_are_skipped() {
+        let run_id = RunId("run-malformed-001".to_string());
+        let mut bytes =
+            b"not json at all\n{\"garbage\": true}\n".to_vec();
+        let finished_event =
+            protocol::AgentRunEvent::Finished { run_id: run_id.clone(), exit_code: Some(0), duration_ms: 10 };
+        bytes.extend(serde_json::to_string(&finished_event).unwrap().as_bytes());
+        bytes.push(b'\n');
+
+        let reader = tokio::io::BufReader::new(bytes.as_slice());
+        let outcome =
+            process_phase_event_stream(reader.lines(), &run_id, "wf-test", "impl", false, false, "", None::<&std::path::Path>)
+                .await
+                .expect("malformed lines should be skipped, not cause failure");
+        assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
     }
 }
