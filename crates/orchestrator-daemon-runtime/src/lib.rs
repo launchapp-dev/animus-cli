@@ -17,7 +17,7 @@ pub use dispatch::{
 };
 pub use protocol::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
 pub use queue::{
-    dispatch_queue_state_path, enqueue_subject_dispatch, hold_subject, load_dispatch_queue_state,
+    dispatch_queue_state_path, drop_subject, enqueue_subject_dispatch, hold_subject, load_dispatch_queue_state,
     mark_dispatch_queue_entry_assigned, queue_snapshot, queue_stats, release_subject,
     remove_terminal_dispatch_queue_entry_non_fatal, reorder_subjects, save_dispatch_queue_state, DispatchQueueEntry,
     DispatchQueueEntryStatus, DispatchQueueState, QueueEnqueueResult, QueueEntrySnapshot, QueueSnapshot, QueueStats,

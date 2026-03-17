@@ -62,6 +62,21 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "ao.queue.drop",
+        description = "Drop (remove) a queued subject dispatch. Purpose: Remove a queue entry regardless of its current status (pending, assigned, or held). Use this to clean up stale or stuck queue entries. Prerequisites: Subject must be in the queue. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use ao.queue.list to find subject IDs, then ao.queue.drop to remove stuck entries.",
+        input_schema = ao_schema_for_type::<QueueSubjectInput>()
+    )]
+    async fn ao_queue_drop(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        self.run_tool(
+            "ao.queue.drop",
+            vec!["queue".to_string(), "drop".to_string(), "--subject-id".to_string(), input.subject_id],
+            input.project_root,
+        )
+        .await
+    }
+
+    #[tool(
         name = "ao.queue.reorder",
         description = "Reorder queued subject dispatches. Purpose: Set the preferred dispatch order for queued subjects by subject id. Prerequisites: Subjects should already be queued. Example: {\"subject_ids\": [\"TASK-002\", \"TASK-001\"]}. Sequencing: Use ao.queue.list before and after to confirm the effective order.",
         input_schema = ao_schema_for_type::<QueueReorderInput>()

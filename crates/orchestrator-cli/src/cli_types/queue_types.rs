@@ -14,6 +14,8 @@ pub(crate) enum QueueCommand {
     Hold(QueueSubjectArgs),
     /// Release a held queued subject.
     Release(QueueSubjectArgs),
+    /// Drop (remove) a queued subject dispatch regardless of status.
+    Drop(QueueSubjectArgs),
     /// Reorder queued subjects by subject id.
     Reorder(QueueReorderArgs),
 }

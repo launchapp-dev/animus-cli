@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, workflow_ref_for_task};
 use orchestrator_daemon_runtime::{
-    enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject, reorder_subjects,
+    drop_subject, enqueue_subject_dispatch, hold_subject, queue_snapshot, queue_stats, release_subject,
+    reorder_subjects,
 };
 use protocol::SubjectDispatch;
 
@@ -110,6 +111,17 @@ pub(crate) async fn handle_queue(
                 return Err(anyhow!("queue subject not found or not held"));
             }
             print_value(serde_json::json!({ "released": released, "subject_id": args.subject_id }), true)
+        }
+        QueueCommand::Drop(args) => {
+            let removed = drop_subject(project_root, &args.subject_id)?;
+            if !json {
+                if removed > 0 {
+                    print_ok(&format!("dropped {removed} queue entry/entries for {}", args.subject_id), false);
+                    return Ok(());
+                }
+                return Err(anyhow!("queue subject not found"));
+            }
+            print_value(serde_json::json!({ "dropped": removed, "subject_id": args.subject_id }), true)
         }
         QueueCommand::Reorder(args) => {
             let reordered = reorder_subjects(project_root, args.subject_ids.clone())?;

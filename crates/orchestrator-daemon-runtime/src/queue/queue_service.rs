@@ -121,6 +121,21 @@ pub fn release_subject(project_root: &str, subject_id: &str) -> Result<bool> {
     Ok(updated)
 }
 
+pub fn drop_subject(project_root: &str, subject_id: &str) -> Result<usize> {
+    let Some(mut state) = load_dispatch_queue_state(project_root)? else {
+        return Ok(0);
+    };
+
+    let before = state.entries.len();
+    state.entries.retain(|entry| entry.subject_id() != subject_id);
+    let removed = before.saturating_sub(state.entries.len());
+
+    if removed > 0 {
+        save_dispatch_queue_state(project_root, &state)?;
+    }
+    Ok(removed)
+}
+
 pub fn reorder_subjects(project_root: &str, subject_ids: Vec<String>) -> Result<bool> {
     let Some(mut state) = load_dispatch_queue_state(project_root)? else {
         return Ok(false);
