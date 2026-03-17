@@ -686,7 +686,37 @@ impl FileServiceHub {
         copy("requirements")?;
         copy("docs")?;
         copy("workflow-state")?;
+
+        let legacy_daemon_config = legacy_ao.join(crate::daemon_config::DAEMON_PROJECT_CONFIG_FILE_NAME);
+        if legacy_daemon_config.exists() {
+            let daemon_dir = scoped_root.join("daemon");
+            std::fs::create_dir_all(&daemon_dir)?;
+            let scoped_daemon_config = daemon_dir.join(crate::daemon_config::DAEMON_PROJECT_CONFIG_FILE_NAME);
+            if !scoped_daemon_config.exists() {
+                std::fs::copy(&legacy_daemon_config, &scoped_daemon_config)?;
+            }
+        }
+
+        let scoped_state_file = scoped_root.join("core-state.json");
+        let tasks_dir = scoped_root.join("tasks");
+        let requirements_dir = scoped_root.join("requirements");
+        if !tasks_dir.exists() || !requirements_dir.exists() {
+            let state = state_store::load_core_state(&scoped_state_file);
+            if !state.tasks.is_empty() || !state.requirements.is_empty() {
+                Self::persist_structured_artifacts(&scoped_state_file, &state)?;
+            }
+        }
+
         std::fs::write(scoped_root.join(".migrated-from-repo"), project_root.display().to_string())?;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "event": "state_migration",
+                "from": legacy_ao.display().to_string(),
+                "to": scoped_root.display().to_string(),
+                "migrated_at": chrono::Utc::now().to_rfc3339(),
+            })
+        );
         Ok(())
     }
 
