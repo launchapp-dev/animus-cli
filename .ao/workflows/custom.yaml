@@ -176,6 +176,11 @@ phase_catalog:
     description: "Detect and fix task state inconsistencies"
     category: operations
     tags: [reconciliation, state-management]
+  create-pr:
+    label: "Create PR"
+    description: "Push branch and create GitHub PR after successful implementation"
+    category: operations
+    tags: [git, pr, automation]
   pr-review:
     label: "PR Review"
     description: "Scan open PRs and perform code reviews with follow-up queueing"
@@ -352,6 +357,26 @@ phases:
     directive: "Detect and fix task state inconsistencies: stale in-progress tasks, resolved dependency gates, and completed-but-unmarked tasks."
     capabilities:
       mutates_state: true
+  create-pr:
+    mode: agent
+    agent: default
+    directive: |
+      Push the current task branch to origin and create a GitHub PR.
+
+      Steps:
+      1. Get the current branch name: `git branch --show-current`
+      2. Extract the task ID from branch name (ao/task-XXX → TASK-XXX)
+      3. Get the task details: call ao.task.get with the task ID
+      4. Check if a PR already exists: `gh pr list --head <branch> --state open`
+      5. If no PR exists:
+         a. Push the branch: `git push origin <branch>`
+         b. Get commit summary: `git log --oneline main..<branch>`
+         c. Create the PR: `gh pr create --base main --head <branch> --title "<TASK-ID>: <task title>" --body "<summary from commits and task description>"`
+      6. If PR already exists, skip.
+
+      Output the PR URL or "skipped" if already exists.
+    capabilities:
+      mutates_state: false
   pr-review:
     mode: agent
     agent: pr-reviewer
@@ -546,6 +571,7 @@ workflows:
           on_verdict:
             rework:
               target: implementation
+      - create-pr
       - testing
 
   - id: gated
