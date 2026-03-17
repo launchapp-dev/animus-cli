@@ -87,9 +87,9 @@ Important current paths:
 - Project-local daemon settings: `.ao/pm-config.json`
 - Workflow YAML overlays: `.ao/workflows.yaml`, `.ao/workflows/*.yaml`
 - Scoped runtime root: `~/.ao/<repo-scope>/`
-- Compiled workflow config: `~/.ao/<repo-scope>/state/workflow-config.v2.json`
-- Agent runtime config: `~/.ao/<repo-scope>/state/agent-runtime-config.v2.json`
-- State machines: `~/.ao/<repo-scope>/state/state-machines.v1.json`
+- Compiled workflow config: `~/.ao/<repo-scope>/config/workflow-config.v2.json`
+- Agent runtime config: `~/.ao/<repo-scope>/config/agent-runtime-config.v2.json`
+- State machines: `~/.ao/<repo-scope>/config/state-machines.v1.json`
 - Runs: `~/.ao/<repo-scope>/runs/`
 - Artifacts: `~/.ao/<repo-scope>/artifacts/`
 

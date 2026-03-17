@@ -17,7 +17,7 @@ use crate::{
 
 pub fn workflow_config_path(project_root: &Path) -> PathBuf {
     let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
-    base.join("state").join(WORKFLOW_CONFIG_FILE_NAME)
+    base.join("config").join(WORKFLOW_CONFIG_FILE_NAME)
 }
 
 pub fn legacy_workflow_config_paths(project_root: &Path) -> [PathBuf; 2] {

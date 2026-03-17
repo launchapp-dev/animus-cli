@@ -42,12 +42,28 @@ pub struct LoadedStateMachines {
 
 pub fn state_machines_path(project_root: &Path) -> PathBuf {
     let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+    base.join("config").join(STATE_MACHINES_FILE_NAME)
+}
+
+fn legacy_state_machines_path(project_root: &Path) -> PathBuf {
+    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
     base.join("state").join(STATE_MACHINES_FILE_NAME)
 }
 
 pub fn ensure_state_machines_file(project_root: &Path) -> Result<()> {
     let path = state_machines_path(project_root);
     if path.exists() {
+        return Ok(());
+    }
+
+    let legacy = legacy_state_machines_path(project_root);
+    if legacy.exists() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("failed to create dir {}", parent.display()))?;
+        }
+        fs::rename(&legacy, &path).with_context(|| {
+            format!("failed to migrate {} to {}", legacy.display(), path.display())
+        })?;
         return Ok(());
     }
 
