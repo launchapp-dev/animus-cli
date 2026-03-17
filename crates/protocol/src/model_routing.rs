@@ -85,7 +85,9 @@ impl ModelRoutingComplexity {
 pub fn normalize_tool_id(tool_id: &str) -> String {
     match tool_id.trim().to_ascii_lowercase().as_str() {
         "open-code" => "opencode".to_string(),
-        "glm" | "minimax" | "oai" | "ao-oai-runner" | "groq" | "together" | "fireworks" | "mistral" => "oai-runner".to_string(),
+        "glm" | "minimax" | "oai" | "ao-oai-runner" | "groq" | "together" | "fireworks" | "mistral" => {
+            "oai-runner".to_string()
+        }
         other => other.to_string(),
     }
 }

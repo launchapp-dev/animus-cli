@@ -142,7 +142,8 @@
       "Bash(echo:*)",
       "Bash(git tag:*)",
       "Bash(for d:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(gh api:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

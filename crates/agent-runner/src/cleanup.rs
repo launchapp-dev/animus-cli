@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 pub use protocol::{graceful_kill_process, process_exists};
 
 #[cfg(windows)]
-pub use protocol::{track_job, untrack_job};
+pub use protocol::untrack_job;
 
 fn read_tracker(tracker_path: &Path) -> Result<HashMap<String, u32>> {
     if !tracker_path.exists() {

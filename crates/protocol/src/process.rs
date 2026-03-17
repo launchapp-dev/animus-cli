@@ -1,39 +1,50 @@
+#[cfg(windows)]
+use anyhow::Context;
 use anyhow::Result;
-#[cfg(windows)]
-use once_cell::sync::Lazy;
-#[cfg(windows)]
-use std::collections::HashMap;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::process::Command;
-#[cfg(windows)]
-use std::sync::Mutex;
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 
 #[cfg(windows)]
-struct SendHandle(windows::Win32::Foundation::HANDLE);
+pub fn untrack_job(_pid: u32) {}
 
 #[cfg(windows)]
-unsafe impl Send for SendHandle {}
-
-#[cfg(windows)]
-static JOB_HANDLES: Lazy<Mutex<HashMap<u32, SendHandle>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-#[cfg(windows)]
-pub fn track_job(pid: u32, job_handle: windows::Win32::Foundation::HANDLE) {
-    let mut handles = JOB_HANDLES.lock().unwrap();
-    handles.insert(pid, SendHandle(job_handle));
+fn windows_process_exists(pid: i32) -> bool {
+    let pid_filter = format!("PID eq {pid}");
+    Command::new("tasklist")
+        .args(["/FI", pid_filter.as_str(), "/FO", "CSV", "/NH"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).lines().map(str::trim).any(|line| line.starts_with('"')))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
-pub fn untrack_job(pid: u32) {
-    use windows::Win32::Foundation::CloseHandle;
+fn taskkill_process_tree(pid: u32, force: bool) -> Result<()> {
+    let pid_arg = pid.to_string();
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", pid_arg.as_str(), "/T"]);
+    if force {
+        command.arg("/F");
+    }
 
-    let mut handles = JOB_HANDLES.lock().unwrap();
-    if let Some(SendHandle(job_handle)) = handles.remove(&pid) {
-        unsafe {
-            let _ = CloseHandle(job_handle);
-        }
+    let output = command.output().with_context(|| format!("failed to launch taskkill for process {pid}"))?;
+
+    if output.status.success() || !is_process_alive(pid) {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = stderr.trim();
+    let detail = if detail.is_empty() { stdout.trim() } else { detail };
+
+    if detail.is_empty() {
+        Err(anyhow::anyhow!("taskkill failed for process {pid}"))
+    } else {
+        Err(anyhow::anyhow!("taskkill failed for process {pid}: {detail}"))
     }
 }
 
@@ -56,16 +67,7 @@ pub fn process_exists(pid: i32) -> bool {
 
     #[cfg(windows)]
     {
-        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
-        unsafe {
-            match OpenProcess(PROCESS_QUERY_INFORMATION, false, pid as u32) {
-                Ok(handle) => {
-                    let _ = windows::Win32::Foundation::CloseHandle(handle);
-                    true
-                }
-                Err(_) => false,
-            }
-        }
+        windows_process_exists(pid)
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -144,29 +146,7 @@ pub fn kill_process(pid: i32) -> bool {
 
     #[cfg(windows)]
     {
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::JobObjects::TerminateJobObject;
-        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
-
-        let mut handles = JOB_HANDLES.lock().unwrap();
-        if let Some(SendHandle(job_handle)) = handles.remove(&(pid as u32)) {
-            unsafe {
-                let result = TerminateJobObject(job_handle, 1);
-                let _ = CloseHandle(job_handle);
-                return result.is_ok();
-            }
-        }
-
-        unsafe {
-            match OpenProcess(PROCESS_TERMINATE, false, pid as u32) {
-                Ok(handle) => {
-                    let result = TerminateProcess(handle, 1);
-                    let _ = CloseHandle(handle);
-                    result.is_ok()
-                }
-                Err(_) => false,
-            }
-        }
+        taskkill_process_tree(pid as u32, true).is_ok()
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -200,22 +180,17 @@ pub fn terminate_process(pid: u32) -> Result<bool> {
 
     #[cfg(windows)]
     {
-        use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        let _ = taskkill_process_tree(pid, false);
 
-        unsafe {
-            match OpenProcess(PROCESS_TERMINATE, false, pid) {
-                Ok(handle) => {
-                    let result = TerminateProcess(handle, 1);
-                    let _ = CloseHandle(handle);
-                    Ok(result.is_ok())
-                }
-                Err(e) => {
-                    let err = anyhow::Error::new(e);
-                    Err(err.context(format!("failed to terminate process {}", pid)))
-                }
+        for _ in 0..20 {
+            if !is_process_alive(pid) {
+                return Ok(true);
             }
+            std::thread::sleep(Duration::from_millis(100));
         }
+
+        taskkill_process_tree(pid, true)?;
+        Ok(!is_process_alive(pid))
     }
 
     #[cfg(not(any(unix, windows)))]

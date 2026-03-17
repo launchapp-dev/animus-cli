@@ -49,42 +49,7 @@ pub(super) fn untrack_after_completion(run_id: &RunId, pid: u32) {
 }
 
 #[cfg(windows)]
-pub(super) fn setup_windows_job_object(pid: u32) {
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::JobObjects::*;
-    use windows::Win32::System::Threading::OpenProcess;
-
-    unsafe {
-        if let Ok(job) = CreateJobObjectW(None, None) {
-            if let Ok(process_handle) = OpenProcess(
-                windows::Win32::System::Threading::PROCESS_SET_QUOTA
-                    | windows::Win32::System::Threading::PROCESS_TERMINATE,
-                false,
-                pid,
-            ) {
-                if AssignProcessToJobObject(job, process_handle).is_ok() {
-                    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
-                    if SetInformationJobObject(
-                        job,
-                        JobObjectExtendedLimitInformation,
-                        &info as *const _ as *const _,
-                        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                    )
-                    .is_ok()
-                    {
-                        crate::cleanup::track_job(pid, job);
-                    } else {
-                        let _ = CloseHandle(job);
-                    }
-                } else {
-                    let _ = CloseHandle(job);
-                }
-                let _ = CloseHandle(process_handle);
-            } else {
-                let _ = CloseHandle(job);
-            }
-        }
-    }
+pub(super) fn setup_windows_job_object(_pid: u32) {
+    // Windows cleanup uses `taskkill /T` in protocol::process, so no raw job
+    // object handles are needed in the release binary set.
 }

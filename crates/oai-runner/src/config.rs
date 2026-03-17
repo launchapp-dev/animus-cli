@@ -117,7 +117,17 @@ fn try_opencode_auth_json(normalized_model: &str, api_base: &str) -> Option<Stri
 }
 
 fn strip_provider_prefix(model: &str) -> String {
-    let prefixes = ["minimax/", "zai-coding-plan/", "zai/", "deepseek/", "openrouter/", "groq/", "together/", "fireworks/", "mistral/"];
+    let prefixes = [
+        "minimax/",
+        "zai-coding-plan/",
+        "zai/",
+        "deepseek/",
+        "openrouter/",
+        "groq/",
+        "together/",
+        "fireworks/",
+        "mistral/",
+    ];
     for prefix in prefixes {
         if let Some(stripped) = model.strip_prefix(prefix) {
             return stripped.to_string();

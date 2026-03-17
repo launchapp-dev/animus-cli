@@ -17,10 +17,7 @@ fn circuit_is_open() -> bool {
     if until == 0 {
         return false;
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     now < until
 }
 
@@ -32,10 +29,7 @@ fn record_success() {
 fn record_failure() {
     let count = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
     if count >= CIRCUIT_BREAKER_THRESHOLD {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
         CIRCUIT_OPEN_UNTIL.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
         eprintln!(
             "[oai-runner] Circuit breaker OPEN after {} consecutive failures. Cooling down for {}s.",
