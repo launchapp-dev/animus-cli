@@ -108,13 +108,14 @@ pub use workflow::{
     UI_UX_WORKFLOW_REF,
 };
 pub use workflow_config::{
-    builtin_workflow_config, compile_and_write_yaml_workflows, compile_yaml_workflow_files,
+    builtin_workflow_config, compile_yaml_workflow_files,
     ensure_workflow_config_compiled, ensure_workflow_config_file, expand_variables, expand_workflow_phases,
     legacy_workflow_config_paths, load_workflow_config, load_workflow_config_or_default,
     load_workflow_config_with_metadata, merge_yaml_into_config, parse_yaml_workflow_config,
     resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards,
     resolve_workflow_variables, resolve_workflow_verdict_routing, validate_workflow_and_runtime_configs,
-    validate_workflow_config, workflow_config_hash, workflow_config_path, write_workflow_config, yaml_workflows_dir,
+    validate_workflow_config, validate_and_compile_yaml_workflows, workflow_config_hash, workflow_config_path,
+    write_workflow_config, yaml_workflows_dir,
     CompileYamlResult, LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef,
     WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
     WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowVariable,

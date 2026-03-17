@@ -55,7 +55,7 @@ where
         }
     }
 
-    match orchestrator_core::compile_and_write_yaml_workflows(Path::new(project_root)) {
+    match orchestrator_core::validate_and_compile_yaml_workflows(Path::new(project_root)) {
         Ok(Some(result)) => {
             hooks.handle_event(DaemonRunEvent::YamlCompileSucceeded {
                 project_root: primary_root.clone(),

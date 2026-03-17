@@ -199,7 +199,7 @@ pub struct CompileYamlResult {
     pub output_path: PathBuf,
 }
 
-pub fn compile_and_write_yaml_workflows(project_root: &Path) -> Result<Option<CompileYamlResult>> {
+pub fn validate_and_compile_yaml_workflows(project_root: &Path) -> Result<Option<CompileYamlResult>> {
     let workflows_dir = yaml_workflows_dir(project_root);
     let single_file = project_root.join(".ao").join("workflows.yaml");
 
