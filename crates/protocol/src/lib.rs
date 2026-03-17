@@ -16,6 +16,7 @@ pub mod errors;
 pub mod model_routing;
 pub mod orchestrator;
 pub mod output;
+#[allow(unsafe_code)]
 pub mod process;
 pub mod repository_scope;
 #[cfg(any(test, feature = "test-utils"))]
