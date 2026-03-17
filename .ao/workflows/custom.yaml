@@ -335,6 +335,44 @@ agents:
     model: claude-sonnet-4-6
     tool: claude
 
+  minimax-smoke-test:
+    system_prompt: |
+      You are a smoke test agent running on MiniMax via oai-runner.
+      Your job is to verify the oai-runner → MiniMax API pipeline is working.
+
+      On each run:
+      1. Confirm you can read files: run `cat CLAUDE.md | head -5` to verify file access works.
+      2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.
+      3. Confirm you have tool use: call at least one tool (read_file or list_files).
+      4. Confirm AO MCP connectivity: call ao.task.stats to get task statistics.
+      5. Confirm AO MCP read: call ao.queue.stats to get queue statistics.
+      6. Report your model name, a timestamp, and "PASS" or "FAIL" for each check.
+      7. If everything works, output a single JSON line:
+         {"status": "pass", "model": "minimax", "checks": ["file_read", "dir_list", "tool_use", "mcp_task_stats", "mcp_queue_stats"]}
+
+      Keep it brief. Do not modify any files or tasks.
+    model: minimax/MiniMax-M2.5
+    tool: oai-runner
+
+  glm-smoke-test:
+    system_prompt: |
+      You are a smoke test agent running on GLM (Z-AI) via oai-runner.
+      Your job is to verify the oai-runner → Z-AI API pipeline is working.
+
+      On each run:
+      1. Confirm you can read files: run `cat CLAUDE.md | head -5` to verify file access works.
+      2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.
+      3. Confirm you have tool use: call at least one tool (read_file or list_files).
+      4. Confirm AO MCP connectivity: call ao.task.stats to get task statistics.
+      5. Confirm AO MCP read: call ao.queue.stats to get queue statistics.
+      6. Report your model name, a timestamp, and "PASS" or "FAIL" for each check.
+      7. If everything works, output a single JSON line:
+         {"status": "pass", "model": "glm", "checks": ["file_read", "dir_list", "tool_use", "mcp_task_stats", "mcp_queue_stats"]}
+
+      Keep it brief. Do not modify any files or tasks.
+    model: zai-coding-plan/glm-5
+    tool: oai-runner
+
 phase_catalog:
   po-review:
     label: "PO Review"
@@ -693,6 +731,18 @@ phases:
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120
+  minimax-smoke:
+    mode: agent
+    agent: minimax-smoke-test
+    directive: "Run MiniMax API smoke test: verify file access, tool use, and AO MCP connectivity."
+    capabilities:
+      mutates_state: false
+  glm-smoke:
+    mode: agent
+    agent: glm-smoke-test
+    directive: "Run GLM/Z-AI API smoke test: verify file access, tool use, and AO MCP connectivity."
+    capabilities:
+      mutates_state: false
 
 workflows:
   - id: requirement-task-generation
@@ -890,6 +940,18 @@ workflows:
     phases:
       - pr-review
 
+  - id: minimax-smoke-test
+    name: "MiniMax Smoke Test"
+    description: "Verify oai-runner → MiniMax API pipeline: file ops, tool use, AO MCP connectivity"
+    phases:
+      - minimax-smoke
+
+  - id: glm-smoke-test
+    name: "GLM Smoke Test"
+    description: "Verify oai-runner → GLM/Z-AI API pipeline: file ops, tool use, AO MCP connectivity"
+    phases:
+      - glm-smoke
+
   - id: system-monitor
     name: "System Monitor"
     description: "Hourly health check: build, tests, daemon, disk, queue, stale PRs"
@@ -980,4 +1042,14 @@ schedules:
   - id: branch-sync
     cron: "45 */4 * * *"
     workflow_ref: branch-sync
+    enabled: true
+
+  - id: minimax-smoke-test
+    cron: "0 */3 * * *"
+    workflow_ref: minimax-smoke-test
+    enabled: true
+
+  - id: glm-smoke-test
+    cron: "10 */3 * * *"
+    workflow_ref: glm-smoke-test
     enabled: true
