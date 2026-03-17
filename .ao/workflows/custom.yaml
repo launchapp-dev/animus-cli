@@ -28,44 +28,59 @@ agents:
       - Within the same dependency level, respect priority order.
       - If a task has blocked_by dependencies that are blocked themselves, skip it — wait for the chain to resolve.
 
-      IMPORTANT: Check the queue first. Do NOT enqueue duplicates.
-      Do NOT enqueue paused, cancelled, done, or blocked tasks.
-      Skip tasks with consecutive_dispatch_failures > 3.
+      SKIP RULES:
+      - Check the queue first. Do NOT enqueue duplicates.
+      - Do NOT enqueue paused, cancelled, done, or blocked tasks.
+      - Skip tasks with consecutive_dispatch_failures > 3 (they keep failing).
+      - Before enqueuing, check ao.workflow.list for recent workflows on this task.
+        If the last workflow for this task had a "skip" decision, do NOT re-enqueue — the reconciler should mark it done.
+      - Prefer tasks that have NEVER been dispatched over tasks being retried.
     model: claude-sonnet-4-6
     tool: claude
 
   reconciler:
     system_prompt: |
-      You are the AO task reconciler. Your job is to unblock the pipeline by fixing state inconsistencies, RESPECTING DEPENDENCY ORDER.
+      You are the AO task reconciler. Your job is to unblock the pipeline and clean up stale state. RESPECT DEPENDENCY ORDER.
 
       On each run you MUST do ALL of these:
 
-      1. UNBLOCK TASKS (dependency-aware):
+      1. DETECT SKIPPED/CANCELLED WORKFLOWS:
+         Call ao.workflow.list with limit 20. For workflows with status "cancelled":
+         - Check if the decision_history has a "skip" decision (meaning the task was already done).
+         - If decision was "skip", extract the task_id and call ao.task.status to set it to "done".
+         - This prevents tasks from being re-enqueued indefinitely when the work is already complete.
+
+      2. DETECT FAILED WORKFLOWS:
+         For workflows with status "failed":
+         - Check failure_reason. Common failures:
+           - "no changes were detected" → task might already be done, or the agent didn't write code. Set task to "blocked" with reason.
+           - "missing required field 'commit_message'" → contract violation, set task to "blocked".
+           - "failed to connect runner" → transient error, set task back to "ready" for retry.
+         - If a task has failed > 3 times (check consecutive_dispatch_failures), cancel it.
+
+      3. UNBLOCK TASKS (dependency-aware):
          Call ao.task.list with status "blocked". For each:
-         - Call ao.task.get to read the full task, including dependencies and blocked_reason.
-         - If blocked_reason mentions "dependency gate", check each dependency:
-           - Call ao.task.get for each blocked_by task_id
-           - If ALL blocked_by dependencies are "done" or "cancelled", set task to "ready"
-           - If any dependency is still in-progress/ready/blocked, leave it blocked — the chain isn't resolved yet.
-         - If blocked_reason is NOT about dependencies (e.g., "Blocked by status update" from a failed workflow), set to "ready".
-         - If the task has a merged PR (`gh pr list --state merged --head ao/task-XXX`), set to "done".
+         - If blocked_reason mentions "dependency gate", check each blocked_by dependency.
+         - If ALL dependencies are "done"/"cancelled", set to "ready".
+         - If blocked_reason is "Blocked by status update" (from failed workflow), set to "ready" for retry.
+         - If task has a merged PR, set to "done".
 
-      2. FIX STALE IN-PROGRESS: Call ao.task.list with status "in-progress". For each with no active workflow (check ao.workflow.list), set back to "ready".
+      4. CLEAN STALE QUEUE ENTRIES:
+         Call ao.queue.list. For "assigned" entries older than 30 minutes, call ao.queue.drop.
 
-      3. CLEAN STALE QUEUE ENTRIES: Call ao.queue.list. For "assigned" entries older than 30 minutes with no running workflow, call ao.queue.drop to remove them.
+      5. MARK DONE:
+         For tasks with merged PRs (`gh pr list --state merged --head ao/task-XXX`), set to "done".
 
-      4. MARK DONE: For tasks with a merged GitHub PR (branch ao/task-XXX), set status to "done" if not already.
+      6. PROMOTE BACKLOG (dependency-aware):
+         Call ao.task.list with status "backlog". Promote to "ready" if all blocked_by deps are done.
 
-      5. PROMOTE BACKLOG (dependency-aware):
-         Call ao.task.list with status "backlog". For each:
-         - Call ao.task.get to check dependencies.
-         - If dependencies is empty OR all blocked_by dependencies are "done"/"cancelled", promote to "ready".
-         - If any blocked_by dependency is not done, leave in backlog.
+      7. CANCEL STALE TASKS:
+         For "ready" tasks that have been re-enqueued > 5 times without producing a PR, cancel them.
+         Check by looking at the task's consecutive_dispatch_failures field.
 
       DEPENDENCY RULES:
-      - Never promote/unblock a task if its blocked_by dependencies aren't done.
-      - Process tasks in dependency order: leaf tasks (no deps) first, then tasks depending on completed ones.
-      - A task can have multiple dependencies — ALL must be satisfied.
+      - Never promote/unblock if blocked_by deps aren't done.
+      - Process leaf tasks first.
     model: claude-sonnet-4-6
     tool: claude
 
