@@ -359,6 +359,18 @@ pub struct ToolDefinition {
     pub context_window: Option<usize>,
     #[serde(default)]
     pub base_args: Vec<String>,
+    #[serde(default)]
+    pub supports_streaming: Option<bool>,
+    #[serde(default)]
+    pub supports_tool_use: Option<bool>,
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
+    #[serde(default)]
+    pub supports_long_context: Option<bool>,
+    #[serde(default)]
+    pub read_only_flag: Option<String>,
+    #[serde(default)]
+    pub response_schema_flag: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
