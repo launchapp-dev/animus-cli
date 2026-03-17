@@ -713,7 +713,8 @@ impl FileServiceHub {
 
         Self::maybe_migrate_state_to_scoped_root(project_root)?;
 
-        let scoped_root = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
+        let scoped_root =
+            protocol::scoped_state_root(project_root).expect("scoped_state_root requires a home directory");
         let state_dir = scoped_root.join("state");
         std::fs::create_dir_all(&state_dir)?;
 

@@ -120,14 +120,19 @@ impl DoctorReport {
             },
         ));
 
-        let core_state_path = ao_dir.join("core-state.json");
-        checks.push(build_ao_file_check("core_state_present", &core_state_path, ao_dir_state));
+        let scoped_root = protocol::scoped_state_root(project_root);
+        let core_state_path =
+            scoped_root.as_ref().map(|r| r.join("core-state.json")).unwrap_or_else(|| ao_dir.join("core-state.json"));
+        checks.push(build_scoped_file_check("core_state_present", &core_state_path));
 
         let config_path = ao_dir.join("config.json");
         checks.push(build_ao_file_check("config_json_present", &config_path, ao_dir_state));
 
-        let resume_config_path = ao_dir.join("resume-config.json");
-        checks.push(build_ao_file_check("resume_config_present", &resume_config_path, ao_dir_state));
+        let resume_config_path = scoped_root
+            .as_ref()
+            .map(|r| r.join("resume-config.json"))
+            .unwrap_or_else(|| ao_dir.join("resume-config.json"));
+        checks.push(build_scoped_file_check("resume_config_present", &resume_config_path));
 
         let daemon_config_path = daemon_project_config_path(project_root);
         let daemon_check = if ao_dir_state == DirectoryState::NotDirectory {
@@ -289,6 +294,18 @@ fn directory_state(path: &Path) -> DirectoryState {
         return DirectoryState::Directory;
     }
     DirectoryState::NotDirectory
+}
+
+fn build_scoped_file_check(check_id: &str, expected_path: &Path) -> DoctorCheck {
+    build_check(
+        check_id,
+        if expected_path.exists() { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Warn },
+        format!("expected {}", expected_path.display()),
+        "bootstrap_project_state",
+        true,
+        "create baseline AO state/config files",
+        Some("ao doctor --fix"),
+    )
 }
 
 fn build_ao_file_check(check_id: &str, expected_path: &Path, ao_dir_state: DirectoryState) -> DoctorCheck {
@@ -453,17 +470,15 @@ mod tests {
 
         let report = DoctorReport::run_for_project(temp.path());
 
-        for id in [
-            "ao_directory_present",
-            "core_state_present",
-            "config_json_present",
-            "resume_config_present",
-            "daemon_config_valid_json",
-        ] {
+        for id in ["ao_directory_present", "config_json_present", "daemon_config_valid_json"] {
             let check = report.checks.iter().find(|check| check.id == id).expect("check should exist");
             assert_eq!(check.status, DoctorCheckStatus::Fail, "{id} should fail");
             assert_eq!(check.remediation.id, "manual_ao_directory_repair");
             assert!(!check.remediation.available);
+        }
+        for id in ["core_state_present", "resume_config_present"] {
+            let check = report.checks.iter().find(|check| check.id == id).expect("check should exist");
+            assert_eq!(check.status, DoctorCheckStatus::Warn, "{id} should warn (scoped state, independent of .ao/)");
         }
         assert_eq!(report.result, DoctorCheckResult::Unhealthy);
     }
@@ -474,9 +489,12 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let ao_dir = temp.path().join(".ao");
         std::fs::create_dir_all(&ao_dir).expect("ao dir should be created");
-        std::fs::write(ao_dir.join("core-state.json"), "{}").expect("core state should be written");
+        let scoped_root =
+            protocol::scoped_state_root(temp.path()).expect("scoped_state_root should resolve in test");
+        std::fs::create_dir_all(&scoped_root).expect("scoped root dir should be created");
+        std::fs::write(scoped_root.join("core-state.json"), "{}").expect("core state should be written");
         std::fs::write(ao_dir.join("config.json"), "{}").expect("config should be written");
-        std::fs::write(ao_dir.join("resume-config.json"), "{}").expect("resume config should be written");
+        std::fs::write(scoped_root.join("resume-config.json"), "{}").expect("resume config should be written");
         let daemon_cfg = daemon_project_config_path(temp.path());
         std::fs::create_dir_all(daemon_cfg.parent().unwrap()).expect("daemon config dir should be created");
         std::fs::write(&daemon_cfg, "{}").expect("daemon config should be written");

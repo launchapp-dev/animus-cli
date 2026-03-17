@@ -90,10 +90,10 @@ fn read_daemon_pid(project_root: &str) -> Option<u32> {
 
 pub(crate) fn autonomous_daemon_log_path(project_root: &str) -> PathBuf {
     let canonical_root = PathBuf::from(canonicalize_lossy(project_root));
-    let scoped_runtime_root =
-        dirs::home_dir().map(|home| home.join(".ao").join(protocol::repository_scope_for_path(&canonical_root)));
-
-    scoped_runtime_root.unwrap_or_else(|| canonical_root.join(".ao")).join("daemon").join("daemon.log")
+    protocol::scoped_state_root(&canonical_root)
+        .expect("scoped_state_root requires a home directory")
+        .join("daemon")
+        .join("daemon.log")
 }
 
 async fn wait_for_autonomous_startup_probe(child: &mut Child, probe_window: Duration) -> Result<Option<ExitStatus>> {

@@ -108,6 +108,6 @@ mod tests {
         let report = DoctorReport::run_for_project(temp.path());
         let actions = apply_doctor_fixes(temp.path().to_string_lossy().as_ref(), &report);
         assert!(actions.iter().any(|action| action.id == "create_default_daemon_config" && action.status == "applied"));
-        assert!(temp.path().join(".ao").join("pm-config.json").exists());
+        assert!(orchestrator_core::daemon_project_config_path(temp.path()).exists());
     }
 }

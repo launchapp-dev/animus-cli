@@ -615,7 +615,7 @@ fn e2e_daemon_config_persists_auto_prune_worktrees_after_merge() -> Result<()> {
     let configured = harness.run_json_ok(&["daemon", "config", "--auto-prune-worktrees-after-merge", "true"])?;
     assert_eq!(configured.pointer("/data/auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));
 
-    let pm_config_path = harness.project_root().join(".ao").join("pm-config.json");
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
     let pm_config_content = std::fs::read_to_string(pm_config_path).context("pm-config should be readable")?;
     let pm_config: Value = serde_json::from_str(&pm_config_content).context("pm-config should parse as JSON")?;
     assert_eq!(pm_config.get("auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));

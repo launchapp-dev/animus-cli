@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{ArchitectureEdge, ArchitectureEntity, ArchitectureGraph, OrchestratorTask};
+use protocol;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -64,7 +65,10 @@ struct ArchitectureEdgeCreateInputCli {
 }
 
 fn core_state_path(project_root: &str) -> PathBuf {
-    Path::new(project_root).join(".ao").join("core-state.json")
+    let path = Path::new(project_root);
+    protocol::scoped_state_root(path)
+        .map(|root| root.join("core-state.json"))
+        .unwrap_or_else(|| path.join(".ao").join("core-state.json"))
 }
 
 fn architecture_docs_path(project_root: &str) -> PathBuf {

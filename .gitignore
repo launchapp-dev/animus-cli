@@ -31,10 +31,6 @@ crates/orchestrator-web-server/web-ui/.smoke-artifacts/
 *.lock
 !Cargo.lock
 
-# AO — everything except declarative workflow config
-.ao/*
-!.ao/workflows/
-
 # Node / docs site
 node_modules/
 docs/.vitepress/cache/

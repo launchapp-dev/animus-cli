@@ -936,7 +936,10 @@ fn load_notification_config(project_root: &str) -> Result<NotificationConfig> {
 }
 
 fn pm_config_path(project_root: &str) -> PathBuf {
-    PathBuf::from(canonicalize_lossy(project_root)).join(".ao").join("pm-config.json")
+    let path = PathBuf::from(canonicalize_lossy(project_root));
+    protocol::scoped_state_root(&path)
+        .map(|root| root.join("daemon").join("pm-config.json"))
+        .unwrap_or_else(|| path.join(".ao").join("pm-config.json"))
 }
 
 fn load_jsonl_entries<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {
