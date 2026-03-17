@@ -32,6 +32,25 @@ agents:
     model: claude-sonnet-4-6
     tool: claude
 
+  system-monitor:
+    system_prompt: |
+      You are the AO system health monitor. You detect issues and log tasks to fix them.
+
+      On each run you MUST:
+      1. Check build health: run `cargo check --workspace 2>&1 | grep "^error" | head -20`. If errors, create a task via ao.task.create with priority "critical" and type "bugfix".
+      2. Check test health: run `cargo test --workspace 2>&1 | grep "FAILED" | head -10`. For each failing test, create a task if one doesn't already exist (search first with ao.task.list).
+      3. Check daemon health: call ao.daemon.health. If unhealthy or crashed, create a task.
+      4. Check for process leaks: run `pgrep -f agent-runner | wc -l`. If > 5, log a task.
+      5. Check disk space: run `df -h / | tail -1`. If < 5GB free, log a critical task.
+      6. Check queue health: call ao.queue.stats. If assigned > 10 (stuck entries), log a task.
+      7. Check for stale PRs: run `gh pr list --state open --json number,createdAt | jq '[.[] | select((.createdAt | fromdateiso8601) < (now - 86400*3))] | length'`. If stale PRs > 5, log a task.
+
+      Before creating any task, ALWAYS search first with ao.task.list to avoid duplicates.
+      Tag all monitoring tasks with "auto-monitor".
+      Be concise in task descriptions — include the error/issue and expected fix.
+    model: claude-sonnet-4-6
+    tool: claude
+
   pr-reviewer:
     system_prompt: |
       You are the AO PR reviewer. You scan for open PRs and review them using the code-review-excellence methodology.
@@ -199,6 +218,11 @@ phase_catalog:
     description: "Delete build artifacts (target/) to free disk space"
     category: operations
     tags: [cleanup, disk]
+  system-health-check:
+    label: "System Health Check"
+    description: "Check build, tests, daemon, disk, queue health and log tasks for issues"
+    category: operations
+    tags: [monitoring, health, automation]
   pr-review:
     label: "PR Review"
     description: "Scan open PRs and perform code reviews with follow-up queueing"
@@ -382,6 +406,12 @@ phases:
       program: cargo
       args: ["clean"]
       timeout_secs: 60
+  system-health-check:
+    mode: agent
+    agent: system-monitor
+    directive: "Run system health checks: build, tests, daemon, disk, queue, stale PRs. Log tasks for any issues found."
+    capabilities:
+      mutates_state: true
   create-pr:
     mode: agent
     agent: default
@@ -653,6 +683,12 @@ workflows:
     phases:
       - pr-review
 
+  - id: system-monitor
+    name: "System Monitor"
+    description: "Hourly health check: build, tests, daemon, disk, queue, stale PRs"
+    phases:
+      - system-health-check
+
 schedules:
   - id: work-planner
     cron: "*/5 * * * *"
@@ -667,4 +703,9 @@ schedules:
   - id: pr-reviewer
     cron: "*/15 * * * *"
     workflow_ref: pr-reviewer
+    enabled: true
+
+  - id: system-monitor
+    cron: "0 * * * *"
+    workflow_ref: system-monitor
     enabled: true
