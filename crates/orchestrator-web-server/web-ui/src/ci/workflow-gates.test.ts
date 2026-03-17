@@ -64,7 +64,7 @@ describe("web gui release workflow gates", () => {
     expect(workflow).toMatch(/web-ui-gates:\s*\n\s*name:\s*Web UI Gates/);
     expect(workflow).toMatch(/web-ui-gates:\s*\n[\s\S]*timeout-minutes:\s*25/);
     expect(workflow).toMatch(/build:\s*\n[\s\S]*needs:\s*web-ui-gates/);
-    expect(workflow).toMatch(/publish:\s*\n[\s\S]*if:\s*startsWith\(github\.ref,\s*'refs\/tags\/v'\)/);
+    expect(workflow).toMatch(/publish:\s*\n[\s\S]*if:[\s\S]*startsWith\(github\.ref,\s*'refs\/tags\/v'\)/);
     expect(workflow).toMatch(/publish:\s*\n[\s\S]*permissions:\s*[\s\S]*contents:\s*write/);
     expect(workflow).toContain("run: npm run test");
     expect(workflow).toContain("run: npm run build");
