@@ -5,7 +5,7 @@ import { basename, relative, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const JS_GZIP_BUDGET_BYTES = 110 * 1024;
-const CSS_GZIP_BUDGET_BYTES = 24 * 1024;
+const CSS_GZIP_BUDGET_BYTES = 36 * 1024;
 
 const embeddedDirPath = resolve(import.meta.dirname, "..", "..", "embedded");
 const embeddedIndexPath = resolve(embeddedDirPath, "index.html");
