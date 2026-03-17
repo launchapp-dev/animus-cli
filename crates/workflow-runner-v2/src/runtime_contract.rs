@@ -558,8 +558,6 @@ mod tests {
         PhaseMcpBinding, WorkflowConfigMetadata, WorkflowConfigSource,
     };
 
-    use crate::runtime_support::WorkflowRuntimeConfigLite;
-
     use super::*;
 
     #[test]
@@ -593,7 +591,6 @@ mod tests {
         let ctx = RuntimeConfigContext {
             agent_runtime_config: builtin_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
-            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
         };
 
         let mut runtime_contract = serde_json::json!({

@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -27,46 +25,6 @@ pub struct WorkflowPhaseRuntimeSettings {
     pub codex_config_overrides: Vec<String>,
     #[serde(default)]
     pub max_continuations: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct WorkflowPipelineRuntimeRecord {
-    pub id: String,
-    #[serde(default)]
-    pub phase_settings: std::collections::HashMap<String, WorkflowPhaseRuntimeSettings>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct WorkflowRuntimeConfigLite {
-    #[serde(default)]
-    pub default_workflow_ref: String,
-    #[serde(default)]
-    pub workflows: Vec<WorkflowPipelineRuntimeRecord>,
-}
-
-fn workflow_runtime_config_paths(project_root: &str) -> [PathBuf; 2] {
-    [
-        Path::new(project_root).join(".ao").join("state").join("workflow-config.json"),
-        Path::new(project_root).join(".ao").join("workflow-config.json"),
-    ]
-}
-
-pub fn load_workflow_runtime_config(project_root: &str) -> WorkflowRuntimeConfigLite {
-    for path in workflow_runtime_config_paths(project_root) {
-        if !path.exists() {
-            continue;
-        }
-
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-
-        if let Ok(parsed) = serde_json::from_str::<WorkflowRuntimeConfigLite>(&content) {
-            return parsed;
-        }
-    }
-
-    WorkflowRuntimeConfigLite::default()
 }
 
 fn parse_env_usize(key: &str) -> Option<usize> {

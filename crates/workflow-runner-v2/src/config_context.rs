@@ -7,20 +7,16 @@ use orchestrator_core::AgentRuntimeConfig;
 use protocol::PhaseCapabilities;
 use serde_json::Value;
 
-use crate::runtime_support::{load_workflow_runtime_config, WorkflowRuntimeConfigLite};
-
 pub struct RuntimeConfigContext {
     pub agent_runtime_config: AgentRuntimeConfig,
     pub workflow_config: orchestrator_core::LoadedWorkflowConfig,
-    pub workflow_runtime_config: WorkflowRuntimeConfigLite,
 }
 
 impl RuntimeConfigContext {
     pub fn load(project_root: &str) -> Self {
         let agent_runtime_config = orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root));
         let workflow_config = orchestrator_core::load_workflow_config_or_default(Path::new(project_root));
-        let workflow_runtime_config = load_workflow_runtime_config(project_root);
-        Self { agent_runtime_config, workflow_config, workflow_runtime_config }
+        Self { agent_runtime_config, workflow_config }
     }
 
     pub fn phase_execution(&self, phase_id: &str) -> Option<&PhaseExecutionDefinition> {

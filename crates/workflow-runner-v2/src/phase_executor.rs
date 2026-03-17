@@ -1279,7 +1279,6 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
     let ctx = RuntimeConfigContext {
         agent_runtime_config: merged_runtime.clone(),
         workflow_config: workflow_config.clone(),
-        workflow_runtime_config: crate::runtime_support::load_workflow_runtime_config(project_root),
     };
 
     let definition = ctx

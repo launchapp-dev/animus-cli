@@ -32,29 +32,6 @@ struct HandoffLogEntry {
     pub payload: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-struct WorkflowPhaseRuntimeSettings {
-    #[serde(default)]
-    tool: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct WorkflowPipelineRuntimeRecord {
-    id: String,
-    #[serde(default)]
-    phase_settings: std::collections::HashMap<String, WorkflowPhaseRuntimeSettings>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct WorkflowRuntimeConfigLite {
-    #[serde(default)]
-    default_workflow_ref: String,
-    #[serde(default)]
-    workflows: Vec<WorkflowPipelineRuntimeRecord>,
-}
-
 fn handoff_timeout() -> Duration {
     Duration::from_secs(DEFAULT_HANDOFF_TIMEOUT_SECS)
 }
@@ -63,58 +40,18 @@ fn handoff_max_depth() -> usize {
     DEFAULT_HANDOFF_MAX_DEPTH
 }
 
-fn workflow_runtime_config_path(project_root: &Path) -> PathBuf {
-    let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"));
-    base.join("state").join("workflow-config.json")
-}
-
-fn load_workflow_runtime_config(project_root: &Path) -> WorkflowRuntimeConfigLite {
-    let path = workflow_runtime_config_path(project_root);
-    if !path.exists() {
-        return WorkflowRuntimeConfigLite::default();
-    }
-    let Ok(content) = fs::read_to_string(path) else {
-        return WorkflowRuntimeConfigLite::default();
-    };
-    serde_json::from_str::<WorkflowRuntimeConfigLite>(&content).unwrap_or_default()
-}
-
-fn resolve_handoff_settings_from_runtime_config(
-    project_root: &Path,
-    phase_key: &str,
-) -> Option<WorkflowPhaseRuntimeSettings> {
-    let config = load_workflow_runtime_config(project_root);
-    let workflow_ref = config.default_workflow_ref.trim();
-    let pipeline = if workflow_ref.is_empty() {
-        config.workflows.first()
-    } else {
-        config
-            .workflows
-            .iter()
-            .find(|pipeline| pipeline.id.eq_ignore_ascii_case(workflow_ref))
-            .or_else(|| config.workflows.first())
-    }?;
-    pipeline
-        .phase_settings
-        .iter()
-        .find(|(phase_id, _)| phase_id.eq_ignore_ascii_case(phase_key))
-        .map(|(_, settings)| settings.clone())
-}
-
 fn resolve_handoff_execution_target(project_root: &Path, role: HandoffTargetRole) -> (String, String) {
     let phase_key = format!("handoff-{}", role.as_str());
-    let runtime_settings = resolve_handoff_settings_from_runtime_config(project_root, &phase_key);
+    let runtime = crate::load_agent_runtime_config_or_default(project_root);
 
-    let tool = runtime_settings
-        .as_ref()
-        .and_then(|settings| settings.tool.as_deref())
+    let tool = runtime
+        .phase_tool_override(&phase_key)
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "codex".to_string());
 
-    let model = runtime_settings
-        .as_ref()
-        .and_then(|settings| settings.model.as_deref())
+    let model = runtime
+        .phase_model_override(&phase_key)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
