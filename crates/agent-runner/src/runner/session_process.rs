@@ -553,6 +553,7 @@ mod tests {
             &run_id,
             event_tx,
             cancel_rx,
+            None,
         )
         .await
         .expect("native claude session should succeed");
