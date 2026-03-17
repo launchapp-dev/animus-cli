@@ -130,7 +130,8 @@
       "Bash(~/ao-cli/target/debug/ao output:*)",
       "mcp__ao__ao_queue_enqueue",
       "mcp__ao__ao_queue_hold",
-      "mcp__ao__ao_queue_reorder"
+      "mcp__ao__ao_queue_reorder",
+      "mcp__ao__ao_queue_stats"
     ]
   },
   "enableAllProjectMcpServers": true,
