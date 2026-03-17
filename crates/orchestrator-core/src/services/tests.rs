@@ -182,6 +182,7 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     assert!(project_path.join(".ao").join("workflows").join("standard-workflow.yaml").exists());
     assert!(scoped.join("state").join("state-machines.v1.json").exists());
     assert!(!project_path.join(".git").exists());
+    assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "bootstrap must not generate JSON workflow config");
 }
 
 #[test]
@@ -577,6 +578,48 @@ fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() 
         .block_on(async { TaskServiceApi::get(&reloaded, &task_id).await.expect("interleaved task should exist") });
     assert_eq!(task.id, task_id);
     assert_core_state_json_is_valid(temp.path());
+}
+
+#[tokio::test]
+async fn file_hub_yaml_only_repo_executes_workflow_without_json_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let workflows_dir = temp.path().join(".ao").join("workflows");
+    std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+    std::fs::write(
+        workflows_dir.join("custom.yaml"),
+        r#"
+workflows:
+  - id: yaml-only-workflow
+    name: YAML Only
+    phases:
+      - requirements
+      - implementation
+"#,
+    )
+    .expect("write yaml workflow");
+
+    let scoped = scoped_ao_root(temp.path());
+    assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "no JSON config should exist");
+
+    let config = crate::load_workflow_config(temp.path()).expect("yaml-only repo should load workflow config");
+    assert!(
+        config.workflows.iter().any(|w| w.id == "yaml-only-workflow"),
+        "workflow config should include yaml-defined workflow"
+    );
+
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-yaml-only".to_string(), Some("yaml-only-workflow".to_string())),
+    )
+    .await
+    .expect("workflow should start in yaml-only repo");
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    let phase_ids: Vec<&str> = workflow.phases.iter().map(|p| p.phase_id.as_str()).collect();
+    assert_eq!(phase_ids, vec!["requirements", "implementation"]);
+    assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "execution must not generate JSON config");
 }
 
 #[tokio::test]

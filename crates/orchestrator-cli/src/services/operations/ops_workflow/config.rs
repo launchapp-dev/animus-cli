@@ -241,7 +241,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
 }
 
 pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value> {
-    match orchestrator_core::compile_and_write_yaml_workflows(Path::new(project_root))? {
+    match orchestrator_core::validate_and_compile_yaml_workflows(Path::new(project_root))? {
         Some(result) => {
             let source_files: Vec<String> = result.source_files.iter().map(|p| p.display().to_string()).collect();
             Ok(serde_json::json!({

@@ -12,7 +12,7 @@ use super::types::*;
 use super::validation::{
     validate_workflow_and_runtime_configs, validate_workflow_config, validate_workflow_config_with_project_root,
 };
-use super::yaml_compiler::{compile_and_write_yaml_workflows, compile_yaml_workflow_files, merge_yaml_into_config};
+use super::yaml_compiler::{compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows};
 use super::yaml_parser::parse_yaml_workflow_config;
 
 #[test]
@@ -514,12 +514,6 @@ workflows:
 #[test]
 fn yaml_compile_reads_from_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let state_dir = temp.path().join(".ao").join("state");
-    fs::create_dir_all(&state_dir).expect("create state dir");
-    let builtin = builtin_workflow_config();
-    crate::domain_state::write_json_pretty(&state_dir.join(WORKFLOW_CONFIG_FILE_NAME), &builtin)
-        .expect("write base config");
-
     let workflows_dir = temp.path().join(".ao").join("workflows");
     fs::create_dir_all(&workflows_dir).expect("create workflows dir");
     fs::write(
@@ -620,14 +614,9 @@ workflows:
 }
 
 #[test]
-fn yaml_compile_and_write_validates_and_writes() {
+fn validate_and_compile_yaml_validates_and_reloads() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
-    let state_dir = temp.path().join(".ao").join("state");
-    fs::create_dir_all(&state_dir).expect("create state dir");
-    let builtin = builtin_workflow_config();
-    crate::domain_state::write_json_pretty(&state_dir.join(WORKFLOW_CONFIG_FILE_NAME), &builtin)
-        .expect("write base config");
 
     let workflows_dir = temp.path().join(".ao").join("workflows");
     fs::create_dir_all(&workflows_dir).expect("create workflows dir");
@@ -646,7 +635,7 @@ workflows:
     )
     .expect("write yaml");
 
-    let result = compile_and_write_yaml_workflows(temp.path()).expect("compile and write should succeed");
+    let result = validate_and_compile_yaml_workflows(temp.path()).expect("validate and compile should succeed");
     let compile_result = result.expect("should have result");
     assert_eq!(compile_result.source_files.len(), 1);
 
