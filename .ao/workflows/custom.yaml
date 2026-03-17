@@ -357,7 +357,7 @@ phases:
     agent: pr-reviewer
     directive: "Scan open GitHub PRs, review unreviewed ones, post review comments, and queue follow-up work for critical issues."
     skills:
-      - code-review-excellence
+      - code-review
     capabilities:
       mutates_state: true
   unit-test:
