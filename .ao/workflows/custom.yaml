@@ -32,6 +32,30 @@ agents:
     model: claude-sonnet-4-6
     tool: claude
 
+  pr-reviewer:
+    system_prompt: |
+      You are the AO PR reviewer. You scan for open PRs and review them using the code-review-excellence methodology.
+
+      On each run you MUST:
+      1. Run `gh pr list --state open --json number,title,headRefName,additions,deletions,changedFiles` to list open PRs.
+      2. For each PR, check if it already has a review by running `gh pr view <number> --json reviews`.
+      3. For unreviewed PRs, perform a code review:
+         a. Run `gh pr diff <number>` to get the diff.
+         b. Review for: logic correctness, edge cases, security, performance, test coverage, error handling, Rust best practices (ownership, error handling, unsafe).
+         c. Run `cargo check` and `cargo test` if the changes touch Rust code.
+         d. Post your review via `gh pr review <number> --approve --body "..."` or `gh pr review <number> --request-changes --body "..."`.
+      4. If review finds critical issues, queue follow-up work: call ao.queue.enqueue with the task-id from the branch name (ao/task-XXX → TASK-XXX) and workflow_ref "standard".
+
+      Review standards (from code-review-excellence):
+      - Focus on logic, security, performance, tests — NOT formatting (use linters).
+      - Ask questions instead of commanding: "What happens if X is empty?" not "Add null check".
+      - Categorize: [critical] must fix, [suggestion] nice to have, [nit] minor.
+      - Approve if no critical issues. Request changes only for bugs, security, or missing tests.
+      - For Rust: check ownership/borrowing correctness, error propagation (anyhow vs thiserror), unsafe blocks, async safety.
+      - Be constructive: highlight what's good, explain why something should change.
+    model: claude-sonnet-4-6
+    tool: claude
+
   po-reviewer:
     system_prompt: |
       You are a Product Owner reviewing completed development work.
@@ -152,6 +176,11 @@ phase_catalog:
     description: "Detect and fix task state inconsistencies"
     category: operations
     tags: [reconciliation, state-management]
+  pr-review:
+    label: "PR Review"
+    description: "Scan open PRs and perform code reviews with follow-up queueing"
+    category: operations
+    tags: [review, quality, pr]
   brain-requirement-scan:
     label: "Brain Requirement Scan"
     description: "List requirement candidates that still need planning work"
@@ -321,6 +350,14 @@ phases:
     mode: agent
     agent: reconciler
     directive: "Detect and fix task state inconsistencies: stale in-progress tasks, resolved dependency gates, and completed-but-unmarked tasks."
+    capabilities:
+      mutates_state: true
+  pr-review:
+    mode: agent
+    agent: pr-reviewer
+    directive: "Scan open GitHub PRs, review unreviewed ones, post review comments, and queue follow-up work for critical issues."
+    skills:
+      - code-review-excellence
     capabilities:
       mutates_state: true
   unit-test:
@@ -555,6 +592,12 @@ workflows:
     phases:
       - task-reconciliation
 
+  - id: pr-reviewer
+    name: "PR Reviewer"
+    description: "Scans open PRs, performs code reviews, and queues follow-up work for issues found"
+    phases:
+      - pr-review
+
 schedules:
   - id: work-planner
     cron: "*/5 * * * *"
@@ -564,4 +607,9 @@ schedules:
   - id: task-reconciler
     cron: "*/10 * * * *"
     workflow_ref: task-reconciler
+    enabled: true
+
+  - id: pr-reviewer
+    cron: "*/15 * * * *"
+    workflow_ref: pr-reviewer
     enabled: true
