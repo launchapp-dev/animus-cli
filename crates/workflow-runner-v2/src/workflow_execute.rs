@@ -847,6 +847,8 @@ async fn run_git_output(program: &str, cwd: &str, args: &[&str]) -> Result<std::
         .current_dir(cwd)
         .args(args)
         .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .await
         .with_context(|| format!("failed to run command {program} in {cwd}"))
