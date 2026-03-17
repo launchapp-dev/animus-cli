@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::config::Config;
 
@@ -16,12 +17,23 @@ pub struct ProviderCredential {
 
 impl Credentials {
     pub fn load_global() -> Self {
+        if let Ok(dir) = std::env::var("AO_CONFIG_DIR") {
+            if let Some(creds) = Self::try_load_from(&PathBuf::from(dir).join("credentials.json")) {
+                return creds;
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            if let Some(creds) = Self::try_load_from(&PathBuf::from(home).join(".ao").join("credentials.json")) {
+                return creds;
+            }
+        }
         let path = Config::global_config_dir().join("credentials.json");
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => return Self::default(),
-        };
-        serde_json::from_str(&content).unwrap_or_default()
+        Self::try_load_from(&path).unwrap_or_default()
+    }
+
+    fn try_load_from(path: &PathBuf) -> Option<Self> {
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
     }
 
     pub fn resolve(&self, model: &str, api_base: &str) -> Option<String> {

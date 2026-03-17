@@ -111,6 +111,13 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
 }
 
 #[cfg(test)]
@@ -132,6 +139,7 @@ mod tests {
             tools: None,
             max_tokens: Some(4096),
             response_format: None,
+            stream_options: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["model"], "minimax/MiniMax-M2.1");
@@ -158,6 +166,7 @@ mod tests {
                 type_: "json_schema".to_string(),
                 json_schema: Some(JsonSchemaSpec { name: "phase_output".to_string(), strict: true, schema }),
             }),
+            stream_options: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["response_format"]["type"], "json_schema");

@@ -90,6 +90,7 @@ pub async fn run_agent_loop(
             tools: Some(tools.to_vec()),
             max_tokens: Some(16384),
             response_format: None,
+            stream_options: Some(StreamOptions { include_usage: true }),
         };
 
         let (assistant_msg, usage) = client
@@ -123,6 +124,7 @@ pub async fn run_agent_loop(
                     eprintln!("[oai-runner] Warning: failed to save session {}: {}", sid, e);
                 }
             }
+            output.emit_session_summary();
             output.newline();
             return Ok(());
         }
@@ -180,6 +182,7 @@ pub async fn run_agent_loop(
         }
     }
     output.flush_result();
+    output.emit_session_summary();
     output.newline();
     Ok(())
 }
@@ -219,6 +222,7 @@ async fn retry_schema_validation(
             tools: None,
             max_tokens: Some(4096),
             response_format: None,
+            stream_options: Some(StreamOptions { include_usage: true }),
         };
 
         let retry_result = client

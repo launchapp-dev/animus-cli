@@ -4,11 +4,14 @@ use std::io::Write;
 pub struct OutputFormatter {
     json_mode: bool,
     text_buffer: String,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    request_count: u32,
 }
 
 impl OutputFormatter {
     pub fn new(json_mode: bool) -> Self {
-        Self { json_mode, text_buffer: String::new() }
+        Self { json_mode, text_buffer: String::new(), total_input_tokens: 0, total_output_tokens: 0, request_count: 0 }
     }
 
     pub fn text_chunk(&mut self, text: &str) {
@@ -74,7 +77,10 @@ impl OutputFormatter {
         }
     }
 
-    pub fn metadata(&self, input_tokens: u64, output_tokens: u64) {
+    pub fn metadata(&mut self, input_tokens: u64, output_tokens: u64) {
+        self.total_input_tokens += input_tokens;
+        self.total_output_tokens += output_tokens;
+        self.request_count += 1;
         if self.json_mode {
             let event = json!({
                 "type": "metadata",
@@ -84,6 +90,30 @@ impl OutputFormatter {
                 }
             });
             println!("{}", event);
+        }
+    }
+
+    pub fn emit_session_summary(&self) {
+        let total = self.total_input_tokens + self.total_output_tokens;
+        if total == 0 {
+            return;
+        }
+        if self.json_mode {
+            let event = json!({
+                "type": "session_summary",
+                "tokens": {
+                    "total_input": self.total_input_tokens,
+                    "total_output": self.total_output_tokens,
+                    "total": total,
+                    "requests": self.request_count
+                }
+            });
+            println!("{}", event);
+        } else {
+            eprintln!(
+                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens",
+                self.request_count, self.total_input_tokens, self.total_output_tokens, total
+            );
         }
     }
 
