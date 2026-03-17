@@ -1275,6 +1275,24 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
         entry.supports_mcp = Some(definition.supports_mcp);
         entry.supports_file_editing = Some(definition.supports_write);
         entry.max_context_tokens = definition.context_window;
+        if definition.supports_streaming.is_some() {
+            entry.supports_streaming = definition.supports_streaming;
+        }
+        if definition.supports_tool_use.is_some() {
+            entry.supports_tool_use = definition.supports_tool_use;
+        }
+        if definition.supports_vision.is_some() {
+            entry.supports_vision = definition.supports_vision;
+        }
+        if definition.supports_long_context.is_some() {
+            entry.supports_long_context = definition.supports_long_context;
+        }
+        if definition.read_only_flag.is_some() {
+            entry.read_only_flag = definition.read_only_flag.clone();
+        }
+        if definition.response_schema_flag.is_some() {
+            entry.response_schema_flag = definition.response_schema_flag.clone();
+        }
     }
 }
 
@@ -1432,6 +1450,12 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
                             supports_write: cli_tool.supports_file_editing.unwrap_or(false),
                             context_window: cli_tool.max_context_tokens,
                             base_args: Vec::new(),
+                            supports_streaming: cli_tool.supports_streaming,
+                            supports_tool_use: cli_tool.supports_tool_use,
+                            supports_vision: cli_tool.supports_vision,
+                            supports_long_context: cli_tool.supports_long_context,
+                            read_only_flag: cli_tool.read_only_flag.clone(),
+                            response_schema_flag: cli_tool.response_schema_flag.clone(),
                         },
                     )
                 })
@@ -1929,6 +1953,12 @@ cli_tools:
                 supports_write: true,
                 context_window: Some(42_000),
                 base_args: vec![],
+                supports_streaming: None,
+                supports_tool_use: None,
+                supports_vision: None,
+                supports_long_context: None,
+                read_only_flag: None,
+                response_schema_flag: None,
             },
         );
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
@@ -3162,5 +3192,260 @@ cli_tools:
         let json = serde_json::to_string(&with_prompt).expect("serialize");
         assert!(json.contains("system_prompt"));
         assert!(json.contains("My custom prompt"));
+    }
+
+    #[test]
+    fn decision_contract_rejects_min_confidence_above_one() {
+        let config = make_minimal_config_with_phase(
+            "review",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("Review the code.".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 1.5,
+                    max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: true,
+                    extra_json_schema: None,
+                    fields: BTreeMap::new(),
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("min_confidence must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn decision_contract_rejects_min_confidence_below_zero() {
+        let config = make_minimal_config_with_phase(
+            "review",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("Review the code.".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: -0.1,
+                    max_risk: crate::types::WorkflowDecisionRisk::Low,
+                    allow_missing_decision: true,
+                    extra_json_schema: None,
+                    fields: BTreeMap::new(),
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("min_confidence must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn decision_contract_rejects_extra_json_schema_non_object() {
+        let config = make_minimal_config_with_phase(
+            "review",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("Review the code.".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.7,
+                    max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: true,
+                    extra_json_schema: Some(serde_json::json!(["not", "an", "object"])),
+                    fields: BTreeMap::new(),
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("extra_json_schema must be a JSON object"));
+    }
+
+    #[test]
+    fn decision_contract_rejects_invalid_field_type() {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "my_field".to_string(),
+            PhaseFieldDefinition {
+                field_type: "uuid".to_string(),
+                required: false,
+                description: None,
+                enum_values: Vec::new(),
+                items: None,
+                fields: BTreeMap::new(),
+            },
+        );
+        let config = make_minimal_config_with_phase(
+            "review",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("Review the code.".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.7,
+                    max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                    allow_missing_decision: true,
+                    extra_json_schema: None,
+                    fields,
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        let err = validate_agent_runtime_config(&config).unwrap_err();
+        assert!(err.to_string().contains("must be one of string, number, integer, boolean, array, object, null"));
+    }
+
+    #[test]
+    fn decision_contract_accepts_valid_contract_with_fields() {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "verdict".to_string(),
+            PhaseFieldDefinition {
+                field_type: "string".to_string(),
+                required: true,
+                description: Some("The review verdict".to_string()),
+                enum_values: vec!["approve".to_string(), "reject".to_string()],
+                items: None,
+                fields: BTreeMap::new(),
+            },
+        );
+        let config = make_minimal_config_with_phase(
+            "review",
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("Review the code.".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: Some(PhaseDecisionContract {
+                    required_evidence: Vec::new(),
+                    min_confidence: 0.8,
+                    max_risk: crate::types::WorkflowDecisionRisk::Low,
+                    allow_missing_decision: false,
+                    extra_json_schema: Some(serde_json::json!({"type": "object"})),
+                    fields,
+                }),
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+            },
+        );
+        validate_agent_runtime_config(&config).expect("valid decision contract should pass validation");
+    }
+
+    #[test]
+    fn decision_contract_yaml_roundtrip() {
+        let yaml = r#"
+phases:
+  my-phase:
+    mode: agent
+    agent: default
+    directive: Do work.
+    decision_contract:
+      min_confidence: 0.85
+      max_risk: low
+      allow_missing_decision: false
+      fields:
+        status:
+          type: string
+          required: true
+          enum: [advance, rework, fail]
+        reason:
+          type: string
+          required: true
+"#;
+        let config = crate::workflow_config::parse_yaml_workflow_config(yaml).expect("parse YAML");
+        let phase_def = config.phase_definitions.get("my-phase").expect("phase should exist");
+        let contract = phase_def.decision_contract.as_ref().expect("decision_contract should exist");
+        assert!((contract.min_confidence - 0.85).abs() < 1e-6);
+        assert_eq!(contract.max_risk, crate::types::WorkflowDecisionRisk::Low);
+        assert!(!contract.allow_missing_decision);
+        let status_field = contract.fields.get("status").expect("status field should exist");
+        assert_eq!(status_field.field_type, "string");
+        assert!(status_field.required);
+        assert_eq!(status_field.enum_values, vec!["advance", "rework", "fail"]);
+        let reason_field = contract.fields.get("reason").expect("reason field should exist");
+        assert_eq!(reason_field.field_type, "string");
+        assert!(reason_field.required);
+    }
+
+    #[test]
+    fn cli_tool_metadata_all_fields_propagate_via_merge() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut workflow = crate::workflow_config::builtin_workflow_config();
+        workflow.tools.insert(
+            "full-tool".to_string(),
+            crate::workflow_config::ToolDefinition {
+                executable: "full-tool-bin".to_string(),
+                supports_mcp: true,
+                supports_write: true,
+                context_window: Some(128_000),
+                base_args: vec![],
+                supports_streaming: Some(true),
+                supports_tool_use: Some(false),
+                supports_vision: Some(true),
+                supports_long_context: Some(true),
+                read_only_flag: Some("--read-only".to_string()),
+                response_schema_flag: Some("--schema".to_string()),
+            },
+        );
+        crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
+
+        let resolved = load_agent_runtime_config_or_default(temp.path());
+        let tool = resolved.cli_tools.get("full-tool").expect("full-tool should exist in cli_tools");
+        assert_eq!(tool.executable.as_deref(), Some("full-tool-bin"));
+        assert_eq!(tool.supports_streaming, Some(true));
+        assert_eq!(tool.supports_tool_use, Some(false));
+        assert_eq!(tool.supports_vision, Some(true));
+        assert_eq!(tool.supports_long_context, Some(true));
+        assert_eq!(tool.read_only_flag.as_deref(), Some("--read-only"));
+        assert_eq!(tool.response_schema_flag.as_deref(), Some("--schema"));
     }
 }
