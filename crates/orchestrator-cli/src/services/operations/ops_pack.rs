@@ -3,13 +3,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use orchestrator_config::{
-    check_pack_runtime_requirements, load_pack_inventory, load_pack_manifest, load_pack_selection_state,
-    machine_installed_packs_dir, save_pack_selection_state, PackInventoryEntry, PackRegistrySource, PackSelectionEntry,
-    PackSelectionSource,
+    add_marketplace_registry, check_pack_runtime_requirements, clone_marketplace_pack, load_marketplace_state,
+    load_pack_inventory, load_pack_manifest, load_pack_selection_state, machine_installed_packs_dir,
+    remove_marketplace_registry, save_pack_selection_state, search_marketplace_packs, sync_all_registries, sync_registry,
+    PackInventoryEntry, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
 };
 use serde::Serialize;
 
-use crate::{invalid_input_error, print_ok, print_value, PackCommand, PackInspectArgs, PackPinArgs};
+use crate::{
+    invalid_input_error, print_ok, print_value, PackCommand, PackInspectArgs, PackPinArgs, PackRegistryCommand,
+};
 
 #[derive(Debug, Serialize)]
 struct PackListRow {
@@ -192,8 +195,41 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
             print_value(rows, json)
         }
         PackCommand::Inspect(args) => print_value(inspect_pack(project_root, args)?, json),
+        PackCommand::Search(args) => {
+            let results = search_marketplace_packs(
+                args.query.as_deref(),
+                args.category.as_deref(),
+                args.registry.as_deref(),
+            )?;
+            if results.is_empty() && !json {
+                print_ok("no packs found matching the query", false);
+                return Ok(());
+            }
+            print_value(results, json)
+        }
+        PackCommand::Registry { command } => handle_registry(command, json),
         PackCommand::Install(args) => {
-            let source_root = resolve_local_pack_root(&args.path)?;
+            let source_root = if let Some(name) = args.name.as_deref() {
+                let registry_id = args.registry.as_deref().unwrap_or_else(|| {
+                    eprintln!("no --registry specified, searching all registries for '{}'", name);
+                    ""
+                });
+                let registry_id = if registry_id.is_empty() {
+                    let results = search_marketplace_packs(Some(name), None, None)?;
+                    let hit = results
+                        .iter()
+                        .find(|r| r.name.eq_ignore_ascii_case(name))
+                        .ok_or_else(|| anyhow!("pack '{}' not found in any registry", name))?;
+                    hit.registry_id.clone()
+                } else {
+                    registry_id.to_string()
+                };
+                clone_marketplace_pack(&registry_id, name)?
+            } else if let Some(path) = args.path.as_deref() {
+                resolve_local_pack_root(path)?
+            } else {
+                return Err(invalid_input_error("either --path or --name is required for pack install"));
+            };
             let loaded = load_pack_manifest(&source_root)?;
             let target_root = machine_installed_packs_dir().join(&loaded.manifest.id).join(&loaded.manifest.version);
 
@@ -275,6 +311,58 @@ fn handle_pin(project_root: &Path, args: PackPinArgs, json: bool) -> Result<()> 
 
     print_ok(if selection.enabled { "pack pin updated" } else { "pack disabled for project" }, false);
     Ok(())
+}
+
+fn handle_registry(command: PackRegistryCommand, json: bool) -> Result<()> {
+    match command {
+        PackRegistryCommand::Add(args) => {
+            add_marketplace_registry(&args.id, &args.url)?;
+            if json {
+                print_value(serde_json::json!({"id": args.id, "url": args.url, "status": "added"}), true)
+            } else {
+                print_ok(&format!("registry '{}' added and synced", args.id), false);
+                Ok(())
+            }
+        }
+        PackRegistryCommand::Remove(args) => {
+            remove_marketplace_registry(&args.id)?;
+            if json {
+                print_value(serde_json::json!({"id": args.id, "status": "removed"}), true)
+            } else {
+                print_ok(&format!("registry '{}' removed", args.id), false);
+                Ok(())
+            }
+        }
+        PackRegistryCommand::List => {
+            let state = load_marketplace_state()?;
+            print_value(state.registries, json)
+        }
+        PackRegistryCommand::Sync(args) => {
+            if let Some(id) = args.id {
+                let state = load_marketplace_state()?;
+                let entry = state
+                    .registries
+                    .iter()
+                    .find(|r| r.id == id)
+                    .ok_or_else(|| anyhow!("registry '{}' not found", id))?;
+                sync_registry(&entry.id, &entry.url)?;
+                if json {
+                    print_value(serde_json::json!({"id": id, "status": "synced"}), true)
+                } else {
+                    print_ok(&format!("registry '{}' synced", id), false);
+                    Ok(())
+                }
+            } else {
+                let synced = sync_all_registries()?;
+                if json {
+                    print_value(serde_json::json!({"synced": synced}), true)
+                } else {
+                    print_ok(&format!("synced {} registries", synced.len()), false);
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

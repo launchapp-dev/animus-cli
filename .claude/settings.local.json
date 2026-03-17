@@ -118,7 +118,9 @@
       "Bash(stat:*)",
       "Bash(gh pr:*)",
       "Bash(for i:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(gh auth:*)",
+      "Read(//private/tmp/claude-501/**)"
     ]
   },
   "enableAllProjectMcpServers": true,
