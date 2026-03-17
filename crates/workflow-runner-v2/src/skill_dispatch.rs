@@ -178,7 +178,7 @@ mod tests {
     use crate::ipc::build_runtime_contract_with_resume;
     use crate::phase_prompt::{render_phase_prompt_with_ctx_overrides, PhasePromptInputs, PhaseRenderParams};
     use crate::runtime_contract::{inject_named_mcp_servers, set_mcp_tool_policy};
-    use crate::runtime_support::WorkflowRuntimeConfigLite;
+
     use orchestrator_config::workflow_config::McpServerDefinition;
     use orchestrator_core::{
         builtin_agent_runtime_config, builtin_workflow_config, workflow_config_hash, write_agent_runtime_config,
@@ -348,7 +348,7 @@ mod tests {
                 config: workflow,
                 path: PathBuf::from("builtin"),
             },
-            workflow_runtime_config: WorkflowRuntimeConfigLite::default(),
+
         };
         let error =
             resolve_phase_skills(&ctx, temp.path(), "implementation").expect_err("missing skill should fail loudly");
