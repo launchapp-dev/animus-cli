@@ -181,6 +181,11 @@ phase_catalog:
     description: "Push branch and create GitHub PR after successful implementation"
     category: operations
     tags: [git, pr, automation]
+  cleanup:
+    label: "Cleanup"
+    description: "Delete build artifacts (target/) to free disk space"
+    category: operations
+    tags: [cleanup, disk]
   pr-review:
     label: "PR Review"
     description: "Scan open PRs and perform code reviews with follow-up queueing"
@@ -357,6 +362,13 @@ phases:
     directive: "Detect and fix task state inconsistencies: stale in-progress tasks, resolved dependency gates, and completed-but-unmarked tasks."
     capabilities:
       mutates_state: true
+  cleanup:
+    mode: command
+    directive: "Delete cargo build artifacts to free disk space"
+    command:
+      program: cargo
+      args: ["clean"]
+      timeout_secs: 60
   create-pr:
     mode: agent
     agent: default
@@ -518,6 +530,7 @@ workflows:
           on_verdict:
             rework:
               target: implementation
+      - cleanup
     post_success:
       merge:
         strategy: squash
@@ -549,6 +562,7 @@ workflows:
             rework:
               target: implementation
       - testing
+      - cleanup
 
   - id: standard
     name: "Standard (Custom)"
@@ -573,6 +587,7 @@ workflows:
               target: implementation
       - create-pr
       - testing
+      - cleanup
 
   - id: gated
     name: "Gated"
@@ -596,6 +611,7 @@ workflows:
           on_verdict:
             rework:
               target: requirements
+      - cleanup
 
   - id: brain
     name: "Brain Planner"
