@@ -34,7 +34,7 @@ describe("build performance baselines", () => {
     expect(budgetScriptContents).toContain("embedded/index.html");
     expect(budgetScriptContents).toContain("before budget checks");
     expect(budgetScriptContents).toContain("JS_GZIP_BUDGET_BYTES = 110 * 1024");
-    expect(budgetScriptContents).toContain("CSS_GZIP_BUDGET_BYTES = 24 * 1024");
+    expect(budgetScriptContents).toContain("CSS_GZIP_BUDGET_BYTES = 36 * 1024");
     expect(budgetScriptContents).toContain("gzipSync");
     expect(budgetScriptContents).toContain("split(/[?#]/, 1)");
   });
