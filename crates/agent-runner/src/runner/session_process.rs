@@ -57,6 +57,7 @@ pub(super) async fn spawn_session_process(
     run_id: &RunId,
     event_tx: mpsc::Sender<AgentRunEvent>,
     mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
+    resume_session_id: Option<&str>,
 ) -> Result<i32> {
     let mut invocation = build_cli_invocation(tool, model, prompt, runtime_contract).await?;
     let mut env = env;
@@ -88,7 +89,13 @@ pub(super) async fn spawn_session_process(
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, timeout_secs, runtime_contract);
     let resolver = SessionBackendResolver::new();
     let backend = resolver.resolve(&session_request);
-    let mut run = backend.start_session(session_request).await.context("failed to start native session backend")?;
+    let mut run = match resume_session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(session_id) => backend
+            .resume_session(session_request, session_id)
+            .await
+            .context("failed to resume native session backend")?,
+        None => backend.start_session(session_request).await.context("failed to start native session backend")?,
+    };
     let run_session_id = run.session_id.clone();
     let run_started_at = Instant::now();
     let mut last_activity_at = run_started_at;
@@ -460,6 +467,7 @@ mod tests {
             &run_id,
             event_tx,
             cancel_rx,
+            None,
         )
         .await
         .expect("native claude session should succeed");
@@ -620,6 +628,7 @@ mod tests {
                 &run_id,
                 event_tx,
                 cancel_rx,
+                None,
             )
             .await
             .expect("native session should succeed");
@@ -674,6 +683,7 @@ mod tests {
             &run_id,
             event_tx,
             cancel_rx,
+            None,
         )
         .await
         .expect("native opencode session should succeed");
@@ -743,6 +753,7 @@ mod tests {
             &run_id,
             event_tx,
             cancel_rx,
+            None,
         )
         .await
         .expect("native gemini session should succeed");
@@ -823,6 +834,7 @@ mod tests {
             &run_id,
             event_tx,
             cancel_rx,
+            None,
         )
         .await
         .expect("native oai-runner session should succeed");
@@ -843,5 +855,53 @@ mod tests {
         let mcp_idx =
             args.iter().position(|arg| arg == "--mcp-config").expect("oai-runner launch should include mcp config");
         assert_eq!(mcp_idx, 1, "expected mcp flag immediately after run");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn spawn_session_process_resume_session_id_routes_to_backend_resume() {
+        let run_id = RunId("run-resume-codex".to_string());
+        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl";
+        let runtime_contract = json!({
+            "cli": {
+                "name": "codex",
+                "capabilities": { "supports_mcp": true },
+                "launch": {
+                    "command": "sh",
+                    "args": ["-c", format!("cat {fixture}")],
+                    "prompt_via_stdin": false
+                }
+            }
+        });
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let exit_code = spawn_session_process(
+            "codex",
+            "test-model",
+            "",
+            Some(&runtime_contract),
+            ".",
+            HashMap::new(),
+            Some(30),
+            &run_id,
+            event_tx,
+            cancel_rx,
+            Some("existing-session-abc"),
+        )
+        .await
+        .expect("resume session should succeed without error");
+
+        let mut saw_output = false;
+        while let Some(event) = event_rx.recv().await {
+            if let AgentRunEvent::OutputChunk { text, .. } = event {
+                if text.contains("PINEAPPLE_42") {
+                    saw_output = true;
+                }
+            }
+        }
+
+        assert_eq!(exit_code, 0);
+        assert!(saw_output, "expected output forwarded through resume session path");
     }
 }
