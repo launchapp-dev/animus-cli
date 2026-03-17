@@ -795,8 +795,7 @@ impl FileServiceHub {
             if manager.load(id).is_ok() {
                 continue;
             }
-            let Ok(workflow) =
-                serde_json::from_value::<crate::types::OrchestratorWorkflow>(workflow_value.clone())
+            let Ok(workflow) = serde_json::from_value::<crate::types::OrchestratorWorkflow>(workflow_value.clone())
             else {
                 continue;
             };

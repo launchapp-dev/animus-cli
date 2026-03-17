@@ -182,7 +182,10 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     assert!(project_path.join(".ao").join("workflows").join("standard-workflow.yaml").exists());
     assert!(scoped.join("state").join("state-machines.v1.json").exists());
     assert!(!project_path.join(".git").exists());
-    assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "bootstrap must not generate JSON workflow config");
+    assert!(
+        !scoped.join("state").join("workflow-config.v2.json").exists(),
+        "bootstrap must not generate JSON workflow config"
+    );
 }
 
 #[test]

@@ -489,8 +489,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let ao_dir = temp.path().join(".ao");
         std::fs::create_dir_all(&ao_dir).expect("ao dir should be created");
-        let scoped_root =
-            protocol::scoped_state_root(temp.path()).expect("scoped_state_root should resolve in test");
+        let scoped_root = protocol::scoped_state_root(temp.path()).expect("scoped_state_root should resolve in test");
         std::fs::create_dir_all(&scoped_root).expect("scoped root dir should be created");
         std::fs::write(scoped_root.join("core-state.json"), "{}").expect("core state should be written");
         std::fs::write(ao_dir.join("config.json"), "{}").expect("config should be written");

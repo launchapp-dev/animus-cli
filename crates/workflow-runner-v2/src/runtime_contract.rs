@@ -620,7 +620,6 @@ mod tests {
         let ctx = RuntimeConfigContext {
             agent_runtime_config: builtin_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
-
         };
 
         let mut runtime_contract = serde_json::json!({
@@ -655,7 +654,6 @@ mod tests {
         let ctx = RuntimeConfigContext {
             agent_runtime_config: builtin_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
-
         };
 
         let mut runtime_contract = serde_json::json!({

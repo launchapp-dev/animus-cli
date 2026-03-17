@@ -61,9 +61,8 @@ pub fn ensure_state_machines_file(project_root: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("failed to create dir {}", parent.display()))?;
         }
-        fs::rename(&legacy, &path).with_context(|| {
-            format!("failed to migrate {} to {}", legacy.display(), path.display())
-        })?;
+        fs::rename(&legacy, &path)
+            .with_context(|| format!("failed to migrate {} to {}", legacy.display(), path.display()))?;
         return Ok(());
     }
 

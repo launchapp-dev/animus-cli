@@ -51,17 +51,11 @@ pub struct MarketplacePackEntry {
 }
 
 fn marketplace_state_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ao")
-        .join("state")
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".ao").join("state")
 }
 
 fn marketplace_cache_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ao")
-        .join(MARKETPLACE_CACHE_DIR)
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".ao").join(MARKETPLACE_CACHE_DIR)
 }
 
 pub fn load_marketplace_state() -> Result<MarketplaceState> {
@@ -89,11 +83,7 @@ pub fn add_marketplace_registry(id: &str, url: &str) -> Result<()> {
             r.last_synced = None;
         });
     } else {
-        state.registries.push(MarketplaceEntry {
-            id: id.to_string(),
-            url: url.to_string(),
-            last_synced: None,
-        });
+        state.registries.push(MarketplaceEntry { id: id.to_string(), url: url.to_string(), last_synced: None });
     }
     save_marketplace_state(&state)?;
     sync_registry(id, url)?;
@@ -173,10 +163,7 @@ fn git_clone(url: &str, target: &Path) -> Result<()> {
 }
 
 pub fn load_marketplace_manifest(registry_id: &str) -> Result<Option<MarketplaceManifest>> {
-    let manifest_path = marketplace_cache_dir()
-        .join(registry_id)
-        .join(".claude-plugin")
-        .join("marketplace.json");
+    let manifest_path = marketplace_cache_dir().join(registry_id).join(".claude-plugin").join("marketplace.json");
     if !manifest_path.exists() {
         return Ok(None);
     }
@@ -208,9 +195,8 @@ pub fn search_marketplace_packs(
                             || pack.description.as_deref().unwrap_or("").to_lowercase().contains(&q)
                     })
                     .unwrap_or(true);
-                let matches_category = category
-                    .map(|c| pack.category.as_deref().unwrap_or("").eq_ignore_ascii_case(c))
-                    .unwrap_or(true);
+                let matches_category =
+                    category.map(|c| pack.category.as_deref().unwrap_or("").eq_ignore_ascii_case(c)).unwrap_or(true);
                 if matches_query && matches_category {
                     results.push(MarketplaceSearchResult {
                         registry_id: entry.id.clone(),
