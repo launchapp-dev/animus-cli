@@ -15,8 +15,8 @@ use orchestrator_notifications::{
 };
 
 use crate::{
-    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonStartArgs, DaemonStopArgs,
-    RunnerScopeArg,
+    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonRunArgs, DaemonStartArgs,
+    DaemonStopArgs, RunnerScopeArg,
 };
 
 mod daemon_events;
@@ -502,19 +502,13 @@ pub(crate) async fn handle_daemon(
                 );
             }
 
-            let result = daemon
-                .start(orchestrator_core::services::DaemonStartConfig {
-                    pool_size: args.scheduler.pool_size,
-                    skip_runner: args.skip_runner,
-                    runner_scope: args.runner_scope.as_ref().map(|scope| runner_scope_value(scope).to_string()),
-                    ..Default::default()
-                })
-                .await;
-            if result.is_ok() {
-                let _ = set_daemon_pid(project_root, None);
-                let _ = set_runtime_paused(project_root, false);
-            }
-            result.map(|_| print_ok("daemon started", json))
+            let _ = set_daemon_pid(project_root, None);
+            handle_daemon_run(
+                DaemonRunArgs { scheduler: args.scheduler, skip_runner: args.skip_runner, runner_scope: args.runner_scope, once: false },
+                project_root,
+                json,
+            )
+            .await
         }
         DaemonCommand::Run(args) => handle_daemon_run(args, project_root, json).await,
         DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
