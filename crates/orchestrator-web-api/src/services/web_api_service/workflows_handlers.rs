@@ -346,6 +346,33 @@ impl WebApiService {
         Ok(json!(workflow))
     }
 
+    pub async fn save_agent_profile(
+        &self,
+        name: String,
+        model: Option<String>,
+        tool: Option<String>,
+        role: Option<String>,
+    ) -> Result<(), WebApiError> {
+        let project_root = std::path::Path::new(&self.context.project_root);
+        let loaded = load_workflow_config_or_default(project_root);
+        let mut config = loaded.config;
+        let profile = config.agent_profiles.get_mut(&name).ok_or_else(|| {
+            WebApiError::new("not_found", format!("agent profile '{name}' not found"), 3)
+        })?;
+        if let Some(m) = model {
+            profile.model = if m.is_empty() { None } else { Some(m) };
+        }
+        if let Some(t) = tool {
+            profile.tool = if t.is_empty() { None } else { Some(t) };
+        }
+        if let Some(r) = role {
+            profile.role = if r.is_empty() { None } else { Some(r) };
+        }
+        write_workflow_config(project_root, &config)
+            .map_err(|e| WebApiError::new("internal", format!("failed to write workflow config: {e}"), 1))?;
+        Ok(())
+    }
+
     pub async fn save_workflow_config(&self, config_json: &str) -> Result<(), WebApiError> {
         let config: orchestrator_config::workflow_config::WorkflowConfig = serde_json::from_str(config_json)
             .map_err(|e| WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2))?;

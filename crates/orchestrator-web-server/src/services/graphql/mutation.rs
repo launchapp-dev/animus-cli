@@ -317,6 +317,19 @@ impl MutationRoot {
         Ok(GqlWorkflow(raw))
     }
 
+    async fn save_agent_profile(
+        &self,
+        ctx: &Context<'_>,
+        name: String,
+        model: Option<String>,
+        tool: Option<String>,
+        role: Option<String>,
+    ) -> Result<bool> {
+        let api = ctx.data::<WebApiService>()?;
+        api.save_agent_profile(name, model, tool, role).await.map_err(gql_err)?;
+        Ok(true)
+    }
+
     async fn save_workflow_config(&self, ctx: &Context<'_>, config_json: String) -> Result<bool> {
         let api = ctx.data::<WebApiService>()?;
         api.save_workflow_config(&config_json).await.map_err(gql_err)?;

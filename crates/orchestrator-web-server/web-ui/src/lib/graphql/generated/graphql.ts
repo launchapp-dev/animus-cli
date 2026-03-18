@@ -478,6 +478,7 @@ export type MutationRoot = {
   resumeWorkflow: GqlWorkflow;
   reviewHandoff: Scalars['Boolean']['output'];
   runWorkflow: GqlWorkflow;
+  saveAgentProfile: Scalars['Boolean']['output'];
   saveVision: GqlVision;
   saveWorkflowConfig: Scalars['Boolean']['output'];
   setDeadline: GqlTask;
@@ -649,6 +650,14 @@ export type MutationRootReviewHandoffArgs = {
 export type MutationRootRunWorkflowArgs = {
   taskId: Scalars['String']['input'];
   workflowRef?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type MutationRootSaveAgentProfileArgs = {
+  model?: InputMaybe<Scalars['String']['input']>;
+  name: Scalars['String']['input'];
+  role?: InputMaybe<Scalars['String']['input']>;
+  tool?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -1145,6 +1154,16 @@ export type ReviewHandoffMutationVariables = Exact<{
 
 
 export type ReviewHandoffMutation = { __typename?: 'MutationRoot', reviewHandoff: boolean };
+
+export type SaveAgentProfileMutationVariables = Exact<{
+  name: Scalars['String']['input'];
+  model?: InputMaybe<Scalars['String']['input']>;
+  tool?: InputMaybe<Scalars['String']['input']>;
+  role?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type SaveAgentProfileMutation = { __typename?: 'MutationRoot', saveAgentProfile: boolean };
 
 export type WorkflowConfigQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1758,6 +1777,11 @@ export const ReviewHandoffDocument = new TypedDocumentString(`
   reviewHandoff(targetRole: $targetRole, question: $question, context: $context)
 }
     `) as unknown as TypedDocumentString<ReviewHandoffMutation, ReviewHandoffMutationVariables>;
+export const SaveAgentProfileDocument = new TypedDocumentString(`
+    mutation SaveAgentProfile($name: String!, $model: String, $tool: String, $role: String) {
+  saveAgentProfile(name: $name, model: $model, tool: $tool, role: $role)
+}
+    `) as unknown as TypedDocumentString<SaveAgentProfileMutation, SaveAgentProfileMutationVariables>;
 export const WorkflowConfigDocument = new TypedDocumentString(`
     query WorkflowConfig {
   workflowConfig {

@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery } from "@/lib/graphql/client";
+import { useQuery, useMutation } from "@/lib/graphql/client";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -11,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
-import { WorkflowConfigDocument } from "@/lib/graphql/generated/graphql";
+import { WorkflowConfigDocument, SaveAgentProfileDocument, WorkflowConfigQuery } from "@/lib/graphql/generated/graphql";
 import { PageLoading, PageError, SectionHeading } from "./shared";
 
 function SettingsNav() {
@@ -154,8 +157,91 @@ export function McpServersPage() {
   );
 }
 
+type AgentProfileItem = NonNullable<WorkflowConfigQuery["workflowConfig"]>["agentProfiles"][number];
+
+function ProfileCard({ p, onSaved }: { p: AgentProfileItem; onSaved: () => void }) {
+  const [model, setModel] = useState(p.model ?? "");
+  const [tool, setTool] = useState(p.tool ?? "");
+  const [role, setRole] = useState(p.role ?? "");
+  const [{ fetching }, executeSave] = useMutation(SaveAgentProfileDocument);
+
+  const handleSave = async () => {
+    const { error } = await executeSave({
+      name: p.name,
+      model: model || null,
+      tool: tool || null,
+      role: role || null,
+    });
+    if (error) toast.error(error.message);
+    else {
+      toast.success("Profile saved.");
+      onSaved();
+    }
+  };
+
+  return (
+    <Card className="border-border/40 bg-card/60">
+      <CardHeader className="pb-2 pt-3 px-4">
+        <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Agent Profile</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        <p className="font-mono text-primary text-sm">{p.name}</p>
+        {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground/60 w-10 shrink-0">role</span>
+            <input
+              className="flex-1 h-6 px-2 text-xs font-mono bg-muted/40 border border-border/40 rounded focus:outline-none focus:ring-1 focus:ring-primary/50"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              placeholder="e.g. implementer"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground/60 w-10 shrink-0">model</span>
+            <input
+              className="flex-1 h-6 px-2 text-xs font-mono bg-muted/40 border border-border/40 rounded focus:outline-none focus:ring-1 focus:ring-primary/50"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. claude-sonnet-4-6"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground/60 w-10 shrink-0">tool</span>
+            <input
+              className="flex-1 h-6 px-2 text-xs font-mono bg-muted/40 border border-border/40 rounded focus:outline-none focus:ring-1 focus:ring-primary/50"
+              value={tool}
+              onChange={(e) => setTool(e.target.value)}
+              placeholder="e.g. claude"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex flex-wrap gap-1">
+            {p.mcpServers.map((s) => (
+              <Badge key={s} variant="secondary" className="text-[10px] h-4 px-1.5 font-mono">{s}</Badge>
+            ))}
+            {p.skills.map((s) => (
+              <Badge key={s} variant="outline" className="text-[10px] h-4 px-1.5 font-mono">{s}</Badge>
+            ))}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-3 text-xs shrink-0"
+            onClick={handleSave}
+            disabled={fetching}
+          >
+            {fetching ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AgentProfilesPage() {
-  const [result] = useQuery({ query: WorkflowConfigDocument });
+  const [result, reexecute] = useQuery({ query: WorkflowConfigDocument });
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -168,7 +254,7 @@ export function AgentProfilesPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Agent Profiles</h1>
-        <p className="text-sm text-muted-foreground mt-1">View agent configurations and capabilities</p>
+        <p className="text-sm text-muted-foreground mt-1">Configure agent model, tool, and role</p>
       </div>
 
       <SettingsNav />
@@ -182,44 +268,7 @@ export function AgentProfilesPage() {
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {profiles.map((p) => (
-            <Card key={p.name} className="border-border/40 bg-card/60">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Agent Profile</CardTitle>
-              </CardHeader>
-              <CardContent className="px-4 pb-4 space-y-3">
-                <p className="font-mono text-primary text-sm">{p.name}</p>
-                {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
-                {p.role && <Badge variant="outline" className="text-[10px] h-4 px-1.5">{p.role}</Badge>}
-                <div className="space-y-1">
-                  {p.model && (
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-muted-foreground/60">model</span>
-                      <span className="text-foreground/70 font-mono">{p.model}</span>
-                    </div>
-                  )}
-                  {p.tool && (
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-muted-foreground/60">tool</span>
-                      <span className="text-foreground/70 font-mono">{p.tool}</span>
-                    </div>
-                  )}
-                </div>
-                {p.mcpServers.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {p.mcpServers.map((s) => (
-                      <Badge key={s} variant="secondary" className="text-[10px] h-4 px-1.5 font-mono">{s}</Badge>
-                    ))}
-                  </div>
-                )}
-                {p.skills.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {p.skills.map((s) => (
-                      <Badge key={s} variant="outline" className="text-[10px] h-4 px-1.5 font-mono">{s}</Badge>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <ProfileCard key={p.name} p={p} onSaved={reexecute} />
           ))}
         </div>
       )}

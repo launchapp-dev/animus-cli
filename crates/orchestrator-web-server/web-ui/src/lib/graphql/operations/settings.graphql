@@ -1,3 +1,7 @@
+mutation SaveAgentProfile($name: String!, $model: String, $tool: String, $role: String) {
+  saveAgentProfile(name: $name, model: $model, tool: $tool, role: $role)
+}
+
 query WorkflowConfig {
   workflowConfig {
     mcpServers { name command args transport tools env { key value } }
