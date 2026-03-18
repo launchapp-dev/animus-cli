@@ -1,16 +1,44 @@
 tools_allowlist:
   - cargo
+  - git
+  - gh
+
+mcp_servers:
+  context7:
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+  rust-docs:
+    command: npx
+    args: ["-y", "rust-docs-mcp-server"]
+  github:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+  sequential-thinking:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  memory:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/samishukri/ao-cli"]
 
 agents:
   default:
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking"]
 
   work-planner:
     system_prompt: |
       You are the AO work planner. Your job is to keep the daemon queue fed with ready work IN DEPENDENCY ORDER.
 
       On each run you MUST:
+      0. REWORK/REBASE FIRST (check before anything else):
+         Run `gh pr list --state open --json number,title,headRefName,mergeable,reviews`.
+         - If a PR has CHANGES_REQUESTED reviews: enqueue its task with workflow_ref="rework".
+         - If a PR is CONFLICTING: enqueue its task with workflow_ref="rebase-and-retry".
+         Handle ALL rework/rebase before moving to new work.
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
       3. If pending queue < 5, call ao.task.prioritized to get highest priority ready tasks.
@@ -266,27 +294,32 @@ agents:
         - MERGEABLE PRs (mergeable != "CONFLICTING")
         - CONFLICTING PRs (mergeable == "CONFLICTING")
 
-      STEP 2 — CLOSE CONFLICTING PRs:
+      STEP 2 — HANDLE CONFLICTING PRs:
       For each CONFLICTING PR:
         - Extract task ID from branch name (ao/task-XXX → TASK-XXX)
-        - Close the PR: `gh pr close <number> --comment "Closing: merge conflicts with develop. Task re-enqueued." --delete-branch`
-        - Reset task to ready: call ao.task.status with id=TASK-XXX status="ready"
-        - Re-enqueue: call ao.queue.enqueue with task_id=TASK-XXX
-        - This ensures the task gets a fresh run on current main.
+        - Enqueue for rebase: call ao.queue.enqueue with task_id=TASK-XXX workflow_ref="rebase-and-retry"
+        - Skip to next PR.
 
-      STEP 3 — MERGE CLEAN PRs (dependency-aware):
+      STEP 3 — CHECK CI AND MERGE (dependency-aware):
       For each MERGEABLE PR:
         a. Extract task ID from branch name (ao/task-XXX → TASK-XXX).
         b. Call ao.task.get for the task to check its dependencies.
         c. If the task has blocked_by dependencies, check each:
            - Call ao.task.get for each dependency task_id
-           - If ANY dependency is NOT "done" or "cancelled", SKIP this PR — merge it later when deps are done.
-        d. If all dependencies satisfied (or no dependencies):
+           - If ANY dependency is NOT "done" or "cancelled", SKIP this PR.
+        d. CHECK CI STATUS: Run `gh pr checks <number>`.
+           - If checks FAIL, EVALUATE the failure:
+             * If caused by THIS PR's changes: enqueue with workflow_ref="rework". Skip.
+             * If PRE-EXISTING or UNRELATED: proceed with merge. Create a bugfix task for the CI issue if none exists.
+           - If checks PENDING: skip this PR, pick up next cycle.
+           - If all pass: proceed.
+        e. If all dependencies satisfied and CI ok:
            - Run `gh pr diff <number>` to review the diff.
            - Quick check: no panics in production paths, no security holes, no data corruption.
            - If OK, merge: `gh pr merge <number> --squash --delete-branch --admin`
            - Call ao.task.status with status "done".
-        e. If merge fails for any reason, log it and move on.
+        f. If changes needed: `gh pr review <number> --request-changes --body "<explanation>"`
+           Then enqueue with workflow_ref="rework".
 
       STEP 4 — SKIP if no open PRs.
 
@@ -295,9 +328,10 @@ agents:
       - NEVER use `gh pr review --comment` — either merge or close, don't comment.
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
-      - Conflicting PRs get closed and re-enqueued, not left open.
+      - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "github"]
 
   po-reviewer:
     system_prompt: |
@@ -398,6 +432,7 @@ agents:
       - Tag all tasks with "web-ui-improvement".
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "context7"]
 
   mcp-server-improver:
     system_prompt: |
@@ -487,6 +522,7 @@ agents:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks — architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking", "memory"]
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
@@ -821,26 +857,89 @@ phases:
     directive: "Check for develop/main divergence and create sync tasks."
     capabilities:
       mutates_state: true
+  push-branch:
+    mode: command
+    directive: "Push the current branch to origin"
+    command:
+      program: git
+      args: ["push", "-u", "origin", "HEAD"]
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes: [0, 1, 128]
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
   create-pr:
+    mode: command
+    directive: "Create a GitHub PR from the current branch to develop"
+    command:
+      program: gh
+      args: ["pr", "create", "--fill", "--base", "develop"]
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes: [0, 1]
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
+  force-push:
+    mode: command
+    directive: "Force push rebased branch"
+    command:
+      program: git
+      args: ["push", "--force-with-lease", "origin", "HEAD"]
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes: [0, 1, 128]
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
+  sync-main:
+    mode: command
+    directive: "Pull latest origin/main into project root"
+    command:
+      program: git
+      args: ["pull", "origin", "main", "--ff-only"]
+      timeout_secs: 30
+      success_exit_codes: [0, 1, 128]
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
+  rebase-on-main:
     mode: agent
     agent: default
     directive: |
-      Push the current task branch to origin and create a GitHub PR.
-
-      Steps:
-      1. Get the current branch name: `git branch --show-current`
-      2. Extract the task ID from branch name (ao/task-XXX → TASK-XXX)
-      3. Get the task details: call ao.task.get with the task ID
-      4. Check if a PR already exists: `gh pr list --head <branch> --state open`
-      5. If no PR exists:
-         a. Push the branch: `git push origin <branch>`
-         b. Get commit summary: `git log --oneline develop..<branch>`
-         c. Create the PR: `gh pr create --base develop --head <branch> --title "<TASK-ID>: <task title>" --body "<summary from commits and task description>"`
-      6. If PR already exists, skip.
-
-      Output the PR URL or "skipped" if already exists.
+      This branch has merge conflicts with main/develop. Rebase it.
+      1. Run: git fetch origin develop
+      2. Run: git rebase origin/develop
+      3. For each conflict, resolve by keeping BOTH sides of changes.
+         For Cargo.lock: accept theirs, run cargo build to regenerate.
+         For code files: integrate both changes.
+      4. After resolving: git add <file>, then git rebase --continue
+      5. Run cargo build to verify the project compiles.
+      6. If fundamentally incompatible, abort with git rebase --abort.
     capabilities:
-      mutates_state: false
+      mutates_state: true
+  address-review:
+    mode: agent
+    agent: default
+    directive: |
+      A PR reviewer has requested changes. Address the feedback.
+      1. Get the task ID from context. Read task via ao.task.get.
+      2. Find the PR: gh pr list --state open --head <branch> --json number
+      3. Read review comments: gh pr view <number> --json reviews,comments
+      4. For each requested change, make the code fix.
+      5. After all changes: git add -A && git commit referencing the review.
+      6. Verify cargo build passes.
+    capabilities:
+      mutates_state: true
   pr-review:
     mode: agent
     agent: pr-reviewer
@@ -1136,8 +1235,8 @@ workflows:
       - cleanup
 
   - id: standard
-    name: "Standard (Custom)"
-    description: "Standard workflow: requirements, implementation, unit-test, lint, code-review, manual testing"
+    name: "Standard"
+    description: "Requirements → Implement → Test → Lint → Review → Push → PR"
     phases:
       - requirements
       - implementation:
@@ -1156,8 +1255,9 @@ workflows:
           on_verdict:
             rework:
               target: implementation
+      - push-branch
+      - push-branch
       - create-pr
-      - testing
       - cleanup
 
   - id: standard-glm
@@ -1181,6 +1281,7 @@ workflows:
           on_verdict:
             rework:
               target: glm-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1212,6 +1313,7 @@ workflows:
           on_verdict:
             rework:
               target: minimax-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1243,6 +1345,7 @@ workflows:
           on_verdict:
             rework:
               target: kimi-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1274,6 +1377,7 @@ workflows:
           on_verdict:
             rework:
               target: gemini-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1349,6 +1453,7 @@ workflows:
           on_verdict:
             rework:
               target: kimi-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1380,6 +1485,7 @@ workflows:
           on_verdict:
             rework:
               target: kimi-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1411,6 +1517,7 @@ workflows:
           on_verdict:
             rework:
               target: codex-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1446,6 +1553,7 @@ workflows:
           on_verdict:
             rework:
               target: opus-implementation
+      - push-branch
       - create-pr
       - cleanup
     post_success:
@@ -1567,6 +1675,26 @@ workflows:
     phases:
       - branch-sync-check
 
+  - id: rework
+    name: "Rework"
+    description: "Address reviewer feedback, push fixes, re-review"
+    phases:
+      - address-review
+      - force-push
+
+  - id: rebase-and-retry
+    name: "Rebase and Retry"
+    description: "Rebase conflicting branch on develop, force push"
+    phases:
+      - rebase-on-main
+      - force-push
+
+  - id: sync-main
+    name: "Sync Main"
+    description: "Pull latest origin/main into project root"
+    phases:
+      - sync-main
+
   - id: hotfix
     name: "Hotfix"
     description: "Emergency fix targeting main directly, bypasses develop"
@@ -1589,6 +1717,11 @@ workflows:
         cleanup_worktree: true
 
 schedules:
+  - id: sync-main
+    cron: "*/5 * * * *"
+    workflow_ref: sync-main
+    enabled: true
+
   - id: work-planner
     cron: "*/5 * * * *"
     workflow_ref: work-planner
