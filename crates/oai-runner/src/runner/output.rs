@@ -17,11 +17,6 @@ impl OutputFormatter {
     pub fn text_chunk(&mut self, text: &str) {
         if self.json_mode {
             self.text_buffer.push_str(text);
-            let event = json!({
-                "type": "text_chunk",
-                "text": text
-            });
-            println!("{}", event);
         } else {
             print!("{}", text);
             std::io::stdout().flush().ok();

@@ -6,11 +6,13 @@ pub(super) fn build_agent_run_args(input: &AgentRunInput) -> Vec<String> {
         "run".to_string(),
         "--tool".to_string(),
         input.tool.clone(),
-        "--model".to_string(),
-        input.model.clone(),
         "--stream".to_string(),
         "false".to_string(),
     ];
+    if let Some(model) = &input.model {
+        args.push("--model".to_string());
+        args.push(model.clone());
+    }
     if input.detach {
         args.push("--detach".to_string());
     }

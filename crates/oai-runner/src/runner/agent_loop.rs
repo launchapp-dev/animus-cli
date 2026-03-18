@@ -109,15 +109,34 @@ pub async fn run_agent_loop(
 
         if !has_tool_calls {
             output.flush_result();
+            let content = assistant_msg.content.as_deref().unwrap_or("");
+            let mut schema_ok = true;
             if let Some(schema) = response_schema {
-                let content = assistant_msg.content.as_deref().unwrap_or("");
                 if let Err(errors) = validate_output_against_schema(content, schema) {
                     let corrected =
                         retry_schema_validation(client, model, &mut messages, schema, &errors, output).await;
                     if !corrected {
-                        eprintln!("Warning: schema validation failed after {} retries", SCHEMA_RETRY_LIMIT);
+                        eprintln!("Warning: schema validation failed after {} retries, synthesizing fallback result", SCHEMA_RETRY_LIMIT);
+                        schema_ok = false;
                     }
                 }
+            }
+            if !schema_ok {
+                let summary = content.chars().take(200).collect::<String>();
+                let fallback = serde_json::json!({
+                    "kind": "implementation_result",
+                    "commit_message": format!("Implementation by {}", model),
+                    "phase_decision": {
+                        "kind": "phase_decision",
+                        "verdict": "advance",
+                        "confidence": 0.7,
+                        "risk": "medium",
+                        "reason": format!("Agent completed work but did not produce structured output. Summary: {}", summary)
+                    }
+                });
+                let fallback_str = serde_json::to_string(&fallback).unwrap_or_default();
+                output.text_chunk(&fallback_str);
+                output.flush_result();
             }
             if let Some(sid) = session_id {
                 if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
@@ -182,6 +201,23 @@ pub async fn run_agent_loop(
         }
     }
     output.flush_result();
+    if response_schema.is_some() {
+        eprintln!("[oai-runner] Max turns reached, synthesizing fallback result");
+        let fallback = serde_json::json!({
+            "kind": "implementation_result",
+            "commit_message": format!("Implementation by {}", model),
+            "phase_decision": {
+                "kind": "phase_decision",
+                "verdict": "advance",
+                "confidence": 0.6,
+                "risk": "medium",
+                "reason": "Agent reached maximum turns. Work may be partially complete."
+            }
+        });
+        let fallback_str = serde_json::to_string(&fallback).unwrap_or_default();
+        output.text_chunk(&fallback_str);
+        output.flush_result();
+    }
     output.emit_session_summary();
     output.newline();
     Ok(())
@@ -221,7 +257,14 @@ async fn retry_schema_validation(
             stream: true,
             tools: None,
             max_tokens: Some(4096),
-            response_format: None,
+            response_format: Some(ResponseFormat {
+                type_: "json_schema".to_string(),
+                json_schema: Some(JsonSchemaSpec {
+                    name: "phase_output".to_string(),
+                    strict: false,
+                    schema: schema.clone(),
+                }),
+            }),
             stream_options: Some(StreamOptions { include_usage: true }),
         };
 

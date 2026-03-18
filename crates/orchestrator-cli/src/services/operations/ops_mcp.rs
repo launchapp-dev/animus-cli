@@ -203,8 +203,8 @@ fn default_true() -> bool {
     true
 }
 
-fn default_codex() -> String {
-    "codex".to_string()
+fn default_claude() -> String {
+    "claude".to_string()
 }
 
 fn normalize_non_empty(value: Option<String>) -> Option<String> {
