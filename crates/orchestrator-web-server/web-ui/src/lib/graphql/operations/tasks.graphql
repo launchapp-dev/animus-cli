@@ -16,7 +16,7 @@ query TaskDetail($id: ID!) {
   task(id: $id) {
     id title description status statusRaw priority priorityRaw
     taskType taskTypeRaw risk scope complexity tags
-    linkedRequirementIds
+    linkedRequirementIds workflowId
     checklist { id description completed }
     dependencies { taskId type }
   }

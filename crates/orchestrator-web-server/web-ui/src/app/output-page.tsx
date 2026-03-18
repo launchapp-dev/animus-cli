@@ -7,14 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { statusColor, PageLoading, PageError } from "./shared";
 
-const TASK_QUERY = `query Task($id: ID!) { task(id: $id) { id title statusRaw } }`;
-const WORKFLOWS_QUERY = `query Workflows { workflows { id taskId statusRaw phases { phaseId status startedAt completedAt } } }`;
+const TASK_QUERY = `query Task($id: ID!) { task(id: $id) { id title statusRaw workflowId } }`;
+const WORKFLOW_QUERY = `query Workflow($id: ID!) { workflow(id: $id) { id statusRaw phases { phaseId status startedAt completedAt } } }`;
 const PHASE_OUTPUT_QUERY = `query PhaseOutput($workflowId: ID!, $phaseId: String, $tail: Int) { phaseOutput(workflowId: $workflowId, phaseId: $phaseId, tail: $tail) { lines phaseId hasMore } }`;
 
-type TaskData = { task: { id: string; title: string; statusRaw: string | null } };
+type TaskData = { task: { id: string; title: string; statusRaw: string | null; workflowId: string | null } };
 type WorkflowPhase = { phaseId: string; status: string | null; startedAt: string | null; completedAt: string | null };
-type Workflow = { id: string; taskId: string | null; statusRaw: string | null; phases: WorkflowPhase[] };
-type WorkflowsData = { workflows: Workflow[] };
+type Workflow = { id: string; statusRaw: string | null; phases: WorkflowPhase[] };
+type WorkflowData = { workflow: Workflow | null };
 type PhaseOutputData = { phaseOutput: { lines: string[]; phaseId: string; hasMore: boolean } };
 
 function PhaseSection({
@@ -121,11 +121,11 @@ export function TaskOutputPage() {
   const [allExpanded, setAllExpanded] = useState(false);
 
   const [taskResult] = useQuery<TaskData>({ query: TASK_QUERY, variables: { id: taskId! } });
-  const [workflowsResult] = useQuery<WorkflowsData>({ query: WORKFLOWS_QUERY });
+  const workflowId = taskResult.data?.task?.workflowId ?? null;
+  const [workflowResult] = useQuery<WorkflowData>({ query: WORKFLOW_QUERY, variables: { id: workflowId! }, pause: !workflowId });
 
   const task = taskResult.data?.task;
-  const workflows = workflowsResult.data?.workflows ?? [];
-  const workflow = workflows.find((w) => w.taskId === taskId);
+  const workflow = workflowResult.data?.workflow ?? null;
   const phases = workflow?.phases ?? [];
 
   const togglePhase = (phaseId: string) => {
@@ -159,9 +159,9 @@ export function TaskOutputPage() {
     }
   };
 
-  if (taskResult.fetching || workflowsResult.fetching) return <PageLoading />;
+  if (taskResult.fetching || (workflowId && workflowResult.fetching)) return <PageLoading />;
   if (taskResult.error) return <PageError message={taskResult.error.message} />;
-  if (workflowsResult.error) return <PageError message={workflowsResult.error.message} />;
+  if (workflowResult.error) return <PageError message={workflowResult.error.message} />;
   if (!task) return <PageError message={`Task ${taskId} not found.`} />;
 
   return (

@@ -1104,7 +1104,7 @@ export type TaskDetailQueryVariables = Exact<{
 }>;
 
 
-export type TaskDetailQuery = { __typename?: 'QueryRoot', task?: { __typename?: 'GqlTask', id: string, title: string, description: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, risk: GqlRiskLevel, scope: GqlScope, complexity: GqlComplexity, tags: Array<string>, linkedRequirementIds: Array<string>, checklist: Array<{ __typename?: 'GqlChecklist', id: string, description: string, completed: boolean }>, dependencies: Array<{ __typename?: 'GqlDependency', taskId: string, type: string }> } | null };
+export type TaskDetailQuery = { __typename?: 'QueryRoot', task?: { __typename?: 'GqlTask', id: string, title: string, description: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, risk: GqlRiskLevel, scope: GqlScope, complexity: GqlComplexity, tags: Array<string>, linkedRequirementIds: Array<string>, workflowId?: string | null, checklist: Array<{ __typename?: 'GqlChecklist', id: string, description: string, completed: boolean }>, dependencies: Array<{ __typename?: 'GqlDependency', taskId: string, type: string }> } | null };
 
 export type UpdateTaskStatusMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -1778,6 +1778,7 @@ export const TaskDetailDocument = new TypedDocumentString(`
     complexity
     tags
     linkedRequirementIds
+    workflowId
     checklist {
       id
       description

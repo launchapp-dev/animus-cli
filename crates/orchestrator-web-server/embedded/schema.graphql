@@ -271,6 +271,7 @@ type GqlTask {
 	checklist: [GqlChecklist!]!
 	dependencies: [GqlDependency!]!
 	requirements: [GqlRequirement!]!
+	workflowId: String
 }
 
 type GqlTaskConnection {

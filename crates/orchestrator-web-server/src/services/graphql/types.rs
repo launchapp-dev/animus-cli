@@ -690,6 +690,22 @@ impl GqlTask {
         }
         Ok(requirements)
     }
+    async fn workflow_id(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<Option<String>> {
+        let api = ctx.data::<orchestrator_web_api::WebApiService>()?;
+        let query = api
+            .build_workflow_query(
+                None,
+                None,
+                Some(self.0.id.clone()),
+                None,
+                None,
+                orchestrator_core::ListPageRequest { limit: Some(1), offset: 0 },
+                None,
+            )
+            .map_err(super::gql_err)?;
+        let page = api.workflows_list(query).await.map_err(super::gql_err)?;
+        Ok(page.items.into_iter().next().map(|w| w.id))
+    }
 }
 
 // ---------------------------------------------------------------------------
