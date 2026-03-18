@@ -75,7 +75,8 @@ mod tests {
     #[tokio::test]
     async fn read_file_supports_offset_and_limit() {
         let dir = setup_temp_dir();
-        let result = execute_tool("read_file", r#"{"path": "test.txt", "offset": 2, "limit": 1}"#, dir.path()).await.unwrap();
+        let result =
+            execute_tool("read_file", r#"{"path": "test.txt", "offset": 2, "limit": 1}"#, dir.path()).await.unwrap();
         assert!(result.contains("line two"));
         assert!(!result.contains("line one"));
         assert!(!result.contains("line three"));
@@ -94,7 +95,9 @@ mod tests {
     #[tokio::test]
     async fn write_file_creates_parent_directories() {
         let dir = setup_temp_dir();
-        execute_tool("write_file", r#"{"path": "deep/nested/dir/file.txt", "content": "nested"}"#, dir.path()).await.unwrap();
+        execute_tool("write_file", r#"{"path": "deep/nested/dir/file.txt", "content": "nested"}"#, dir.path())
+            .await
+            .unwrap();
         let content = fs::read_to_string(dir.path().join("deep/nested/dir/file.txt")).unwrap();
         assert_eq!(content, "nested");
     }
