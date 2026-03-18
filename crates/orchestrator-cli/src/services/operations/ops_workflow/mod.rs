@@ -73,9 +73,13 @@ async fn resolve_workflow_run_dispatch_from_input(
     project_root: &str,
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch> {
-    let WorkflowRunInput { subject, workflow_ref, input, vars, .. } = input;
-    if let Some(id) = subject.task_id() {
-        let task = hub.tasks().get(id).await?;
+    let WorkflowRunInput { subject, workflow_ref, input, vars, task_id: flat_task_id, requirement_id: flat_requirement_id, .. } = input;
+    let effective_task_id = subject.task_id().filter(|id| !id.is_empty()).map(|s| s.to_string())
+        .or_else(|| (!flat_task_id.is_empty()).then_some(flat_task_id));
+    let effective_requirement_id = subject.requirement_id().filter(|id| !id.is_empty()).map(|s| s.to_string())
+        .or(flat_requirement_id);
+    if let Some(id) = effective_task_id {
+        let task = hub.tasks().get(&id).await?;
         Ok(protocol::SubjectDispatch::for_task_with_metadata(
             task.id.clone(),
             workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task)),
@@ -84,10 +88,10 @@ async fn resolve_workflow_run_dispatch_from_input(
         )
         .with_input(input))
         .map(|dispatch| dispatch.with_vars(vars))
-    } else if let Some(id) = subject.requirement_id() {
-        hub.planning().get_requirement(id).await?;
+    } else if let Some(id) = effective_requirement_id {
+        hub.planning().get_requirement(&id).await?;
         Ok(protocol::SubjectDispatch::for_requirement(
-            id.to_string(),
+            id,
             workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
             "manual-cli-run",
         )
@@ -202,13 +206,13 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
         return Ok(dispatch);
     }
 
-    if let Ok(input) = serde_json::from_str::<WorkflowRunInput>(raw) {
-        return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
-    }
-
     if let Some(input) = upgrade_legacy_workflow_run_input(raw)
         .with_context(|| "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema")?
     {
+        return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
+    }
+
+    if let Ok(input) = serde_json::from_str::<WorkflowRunInput>(raw) {
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
 

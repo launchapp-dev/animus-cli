@@ -145,7 +145,7 @@ mod tests {
     use orchestrator_core::{
         builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
         InMemoryServiceHub, RequirementItem, RequirementLinks, RequirementPriority, RequirementStatus,
-        WorkflowDefinition, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
+        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
     };
     use serde_json::json;
 
@@ -154,15 +154,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_enqueue_dispatch_uses_requirement_workflow_default() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut workflow_config = builtin_workflow_config();
-        workflow_config.workflows.push(WorkflowDefinition {
-            id: REQUIREMENT_TASK_GENERATION_WORKFLOW_REF.to_string(),
-            name: "Requirement Task Generation".to_string(),
-            description: "test workflow".to_string(),
-            phases: vec!["requirements".to_string().into()],
-            post_success: None,
-            variables: Vec::new(),
-        });
+        let workflow_config = builtin_workflow_config();
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
