@@ -257,7 +257,14 @@ async fn retry_schema_validation(
             stream: true,
             tools: None,
             max_tokens: Some(4096),
-            response_format: None,
+            response_format: Some(ResponseFormat {
+                type_: "json_schema".to_string(),
+                json_schema: Some(JsonSchemaSpec {
+                    name: "phase_output".to_string(),
+                    strict: false,
+                    schema: schema.clone(),
+                }),
+            }),
             stream_options: Some(StreamOptions { include_usage: true }),
         };
 
