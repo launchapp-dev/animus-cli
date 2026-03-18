@@ -1323,6 +1323,13 @@ export type ApprovePhaseMutationVariables = Exact<{
 
 export type ApprovePhaseMutation = { __typename?: 'MutationRoot', approvePhase: { __typename?: 'GqlWorkflow', id: string, status: GqlWorkflowStatus, statusRaw: string, currentPhase?: string | null } };
 
+export type WorkflowEventsSubscriptionVariables = Exact<{
+  workflowId?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type WorkflowEventsSubscription = { __typename?: 'SubscriptionRoot', workflowEvents: { __typename?: 'GqlDaemonEvent', id: string, seq: number, timestamp: string, eventType: string, data: string } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -2088,3 +2095,14 @@ export const ApprovePhaseDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ApprovePhaseMutation, ApprovePhaseMutationVariables>;
+export const WorkflowEventsDocument = new TypedDocumentString(`
+    subscription WorkflowEvents($workflowId: String) {
+  workflowEvents(workflowId: $workflowId) {
+    id
+    seq
+    timestamp
+    eventType
+    data
+  }
+}
+    `) as unknown as TypedDocumentString<WorkflowEventsSubscription, WorkflowEventsSubscriptionVariables>;

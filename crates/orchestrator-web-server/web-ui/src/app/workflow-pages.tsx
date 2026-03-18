@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery, useMutation } from "@/lib/graphql/client";
+import { useQuery, useMutation, useSubscription } from "@/lib/graphql/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
   ResumeWorkflowDocument,
   CancelWorkflowDocument,
   ApprovePhaseDocument,
+  WorkflowEventsDocument,
 } from "@/lib/graphql/generated/graphql";
 import { statusColor, StatusDot, PageLoading, PageError, StatCard, SectionHeading, Markdown } from "./shared";
 
@@ -359,6 +360,14 @@ export function WorkflowDetailPage() {
   const [escalationFeedback, setEscalationFeedback] = useState("");
   const [expandedDecisions, setExpandedDecisions] = useState<Set<string>>(new Set());
 
+  const [subscriptionState] = useSubscription(
+    { query: WorkflowEventsDocument, variables: { workflowId: workflowId! } },
+    (_prev, _data) => {
+      reexecute({ requestPolicy: "network-only" });
+      return _data;
+    },
+  );
+
   const { data, fetching, error } = result;
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -406,10 +415,16 @@ export function WorkflowDetailPage() {
           <h1 className="text-2xl font-semibold tracking-tight">
             Workflow for <Link to={`/tasks/${wf.taskId}`} className="underline">{wf.taskId}</Link>
           </h1>
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-2 mt-2 items-center">
             <Badge variant={statusColor(wf.statusRaw ?? "")}>{wf.statusRaw}</Badge>
             {wf.workflowRef && <Badge variant="outline">{wf.workflowRef}</Badge>}
             {(wf.totalReworks ?? 0) > 0 && <Badge variant="outline">{wf.totalReworks} reworks</Badge>}
+            {isRunning && subscriptionState.fetching && (
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
+                <span className="h-2 w-2 rounded-full bg-[var(--ao-running)] animate-pulse" />
+                live
+              </span>
+            )}
           </div>
         </div>
         {!isTerminal && !isEscalated && (
