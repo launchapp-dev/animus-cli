@@ -37,7 +37,7 @@ enum Commands {
         #[arg(long)]
         working_dir: Option<PathBuf>,
 
-        #[arg(long, default_value = "50")]
+        #[arg(long, default_value = "200")]
         max_turns: usize,
 
         #[arg(long, default_value = "600")]
