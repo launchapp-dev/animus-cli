@@ -463,26 +463,32 @@ agents:
     tool: claude
 
   glm-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
     model: zai-coding-plan/glm-5
     tool: oai-runner
 
   minimax-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
     model: minimax/MiniMax-M2.5
     tool: oai-runner
 
   kimi-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
     model: openrouter/moonshotai/kimi-k2.5
     tool: oai-runner
 
   opus-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks — architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
 
   codex-default:
+    system_prompt: "You are an expert code reviewer for the AO CLI Rust workspace. Review code for correctness, requirement alignment, edge cases, and quality. Do NOT make changes — only review."
     model: gpt-5.3-codex
     tool: codex
 
   gemini-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
     model: gemini-3.1-pro-preview
     tool: gemini
 
