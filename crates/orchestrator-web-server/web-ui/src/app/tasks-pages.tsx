@@ -433,6 +433,7 @@ export function TaskDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Link to={`/tasks/${taskId}/output`}><Button size="sm" variant="outline">Output</Button></Link>
           <Button size="sm" variant="outline" onClick={startEdit}>Edit</Button>
           {confirmDelete ? (
             <>
