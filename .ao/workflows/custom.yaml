@@ -25,24 +25,24 @@ agents:
          WORKFLOW ROUTING TABLE:
          | Complexity | Type           | workflow_ref        | Model              | Why                          |
          |------------|----------------|---------------------|--------------------|------------------------------|
-         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5       | Cheapest, fast               |
-         | low        | feature/docs   | quick-fix-glm       | GLM-5              | Cheap, good at structured    |
-         | medium     | any            | standard-glm        | GLM-5              | Good balance of cost/quality |
-         | medium     | feature        | standard-kimi       | Kimi K2.5          | Strong agentic reasoning     |
-         | medium     | ui-ux          | ao.task/ui-ux       | Kimi K2.5          | UI/UX tasks use Kimi         |
-         | medium     | refactor       | standard-glm        | GLM-5 + Codex rev  | GLM implements, Codex reviews|
-         | high       | feature        | standard            | Claude Sonnet      | Best quality for hard tasks  |
-         | high       | ui-ux          | standard-kimi       | Kimi K2.5          | Complex UI needs strong reasoning |
-         | high       | refactor       | standard-gemini     | Gemini 3.1 Pro     | 1M context for large changes |
+         | low        | bugfix/chore   | standard            | Claude Sonnet      | Reliable, proven pipeline    |
+         | low        | docs           | standard-glm        | GLM-5-Turbo        | Docs are safe for cheaper    |
+         | medium     | any            | standard            | Claude Sonnet      | Proven reliable pipeline     |
+         | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet      | UI tasks need reliability    |
+         | high       | any            | standard            | Claude Sonnet      | Best quality for hard tasks  |
          | high       | architecture   | standard-opus       | Claude Opus        | Hardest tasks, PO review     |
          | critical   | any            | standard-opus       | Claude Opus        | Maximum quality              |
-         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5       | Monitoring is always cheap   |
-         | any        | workflow-opt   | quick-fix-glm       | GLM-5              | Self-improvement is cheap    |
+         | any        | monitoring     | standard            | Claude Sonnet      | Monitoring needs reliability |
+         | any        | workflow-opt   | standard            | Claude Sonnet      | Self-improvement needs care  |
 
-         If complexity is null/unknown, default to "standard-glm" (safe middle ground).
-         If unsure, prefer cheaper models — Claude/Opus reserved for high-complexity work.
-         Note: Codex (GPT-5.3) is used as CODE REVIEWER in standard-glm, standard-minimax, and standard-kimi workflows.
-         It catches requirement misalignments and logic errors. Don't route it as an implementer.
+         EXPERIMENTAL (use sparingly until oai-runner structured output is fixed):
+         | low        | docs/chore     | standard-glm        | GLM-5-Turbo        | Test oai-runner pipeline     |
+         | low        | docs/chore     | quick-fix-glm       | GLM-5-Turbo        | Test quick-fix pipeline      |
+
+         Default to "standard" (Claude Sonnet) for all tasks.
+         Only use oai-runner workflows (standard-glm, quick-fix-glm, standard-kimi)
+         for low-priority docs/chore tasks as experimental runs.
+         Claude is the proven pipeline — use it until oai-runner structured output is reliable.
 
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
