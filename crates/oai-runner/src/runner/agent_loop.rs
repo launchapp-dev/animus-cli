@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api::client::ApiClient;
 use crate::api::types::*;
+use crate::config::StructuredOutputSupport;
 use crate::tools::{executor, mcp_client};
 
 use super::context;
@@ -44,7 +45,7 @@ fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessa
     Ok(())
 }
 
-fn build_response_format(schema: &Value) -> ResponseFormat {
+fn build_json_schema_format(schema: &Value) -> ResponseFormat {
     ResponseFormat {
         type_: "json_schema".to_string(),
         json_schema: Some(JsonSchemaSpec {
@@ -53,6 +54,21 @@ fn build_response_format(schema: &Value) -> ResponseFormat {
             schema: schema.clone(),
         }),
     }
+}
+
+fn build_json_object_format() -> ResponseFormat {
+    ResponseFormat {
+        type_: "json_object".to_string(),
+        json_schema: None,
+    }
+}
+
+fn build_schema_injection(schema: &Value) -> String {
+    format!(
+        "\n\nIMPORTANT: Your final response MUST be a single valid JSON object matching this exact schema. \
+         Do not wrap it in markdown. Do not add explanation. Output ONLY the JSON.\n\nRequired JSON Schema:\n{}",
+        serde_json::to_string_pretty(schema).unwrap_or_default()
+    )
 }
 
 fn synthesize_fallback(model: &str, summary: &str, confidence: f64) -> Value {
@@ -82,7 +98,7 @@ pub async fn run_agent_loop(
     response_schema: Option<&Value>,
     mcp_clients: &[mcp_client::McpClient],
     session_id: Option<&str>,
-    use_response_format: bool,
+    structured_output: Option<StructuredOutputSupport>,
     cancel_token: CancellationToken,
     context_limit: usize,
     max_tokens: usize,
@@ -97,13 +113,22 @@ pub async fn run_agent_loop(
         }
     }
 
-    if messages.is_empty() && !system_prompt.is_empty() {
-        messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: Some(system_prompt.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+    let needs_schema_in_prompt = structured_output == Some(StructuredOutputSupport::JsonObjectOnly)
+        && response_schema.is_some();
+
+    if messages.is_empty() {
+        let mut sys = system_prompt.to_string();
+        if needs_schema_in_prompt {
+            sys.push_str(&build_schema_injection(response_schema.unwrap()));
+        }
+        if !sys.is_empty() {
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: Some(sys),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
     }
 
     messages.push(ChatMessage {
@@ -127,10 +152,12 @@ pub async fn run_agent_loop(
 
         context::truncate_to_fit(&mut messages, context_limit, max_tokens);
 
-        let format = if use_response_format {
-            response_schema.map(build_response_format)
-        } else {
-            None
+        let format = match structured_output {
+            Some(StructuredOutputSupport::JsonSchema) => response_schema.map(build_json_schema_format),
+            Some(StructuredOutputSupport::JsonObjectOnly) if response_schema.is_some() => {
+                Some(build_json_object_format())
+            }
+            _ => None,
         };
 
         let request = ChatRequest {
@@ -165,7 +192,7 @@ pub async fn run_agent_loop(
                 if let Err(errors) = validate_output_against_schema(content, schema) {
                     let system_msg = messages.iter().find(|m| m.role == "system").cloned();
                     let corrected =
-                        retry_schema_validation(client, model, system_msg.as_ref(), &mut messages, schema, &errors, output).await;
+                        retry_schema_validation(client, model, system_msg.as_ref(), &mut messages, schema, &errors, output, structured_output).await;
                     if !corrected {
                         eprintln!("Warning: schema validation failed after {} retries, synthesizing fallback result", SCHEMA_RETRY_LIMIT);
                         schema_ok = false;
@@ -267,6 +294,7 @@ async fn retry_schema_validation(
     schema: &Value,
     initial_errors: &str,
     output: &mut OutputFormatter,
+    structured_output: Option<StructuredOutputSupport>,
 ) -> bool {
     let mut last_errors = initial_errors.to_string();
 
@@ -311,7 +339,10 @@ async fn retry_schema_validation(
             stream: true,
             tools: None,
             max_tokens: Some(4096),
-            response_format: Some(build_response_format(schema)),
+            response_format: Some(match structured_output {
+                Some(StructuredOutputSupport::JsonObjectOnly) | None => build_json_object_format(),
+                _ => build_json_schema_format(schema),
+            }),
             stream_options: Some(StreamOptions { include_usage: true }),
         };
 
