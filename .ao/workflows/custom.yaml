@@ -62,8 +62,9 @@ agents:
          | medium     | feature        | standard-kimi       | Kimi K2.5 (oai-runner)   | Near-Opus coding, cheap      |
          | medium     | bugfix         | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
          | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
-         | medium     | ui-ux          | ao.task/ui-ux       | Kimi K2.5 (oai-runner)   | Multimodal + agentic         |
+         | medium     | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Great at UI/UX + vision      |
          | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
+         | high       | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Vision + 1M ctx for UI       |
          | high       | refactor       | standard-gemini     | Gemini 3.1 Pro (gemini)  | 1M context, native CLI       |
          | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks, PO review     |
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
