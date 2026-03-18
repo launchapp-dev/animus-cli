@@ -1,5 +1,7 @@
 tools_allowlist:
   - cargo
+  - git
+  - gh
 
 agents:
   default:
