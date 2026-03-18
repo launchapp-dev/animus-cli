@@ -86,13 +86,8 @@ impl ApiClient {
         let url = format!("{}/chat/completions", self.api_base);
 
         let mut last_err = None;
-        for attempt in 0..3 {
-            if attempt > 0 {
-                // Exponential backoff: 500ms, 1s, 2s for retries 1, 2, 3
-                let delay = Duration::from_millis(500 * 2u64.pow(attempt - 1));
-                tokio::time::sleep(delay).await;
-            }
-
+        let max_attempts = MAX_TRANSIENT_RETRIES.max(3);
+        for attempt in 0..max_attempts {
             match self.do_stream_with_retry_after(&url, request, on_text_chunk).await {
                 Ok(result) => {
                     record_success();
@@ -101,30 +96,42 @@ impl ApiClient {
                 Err(e) => {
                     let err_str = e.to_string();
                     let is_rate_limit = err_str.contains("429");
-                    let is_server_error = err_str.contains(" 5") && attempt < 2;
+                    let is_server_error = err_str.contains(" 5") && attempt < max_attempts - 1;
                     let is_transient = is_transient_connection_error(&err_str);
+                    let can_retry = attempt < max_attempts - 1;
 
-                    if is_rate_limit || is_server_error {
+                    if is_rate_limit {
                         record_failure();
                         eprintln!(
-                            "[oai-runner] Retry {}/3: {}",
+                            "[oai-runner] Retry {}/{}: rate limited (429)",
                             attempt + 1,
-                            if is_rate_limit { "rate limited (429)" } else { "server error" }
+                            max_attempts
                         );
                         last_err = Some(e);
                         continue;
                     }
 
-                    // Retry transient connection errors (EOF, reset, timeout) with exponential backoff
-                    if is_transient && attempt < MAX_TRANSIENT_RETRIES - 1 {
-                        let delay = Duration::from_millis(500 * 2u64.pow(attempt - 1));
+                    if is_server_error {
+                        record_failure();
+                        eprintln!(
+                            "[oai-runner] Retry {}/{}: server error",
+                            attempt + 1,
+                            max_attempts
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
+
+                    if is_transient && can_retry {
+                        let delay = Duration::from_millis(500 * 2u64.pow(attempt));
                         eprintln!(
                             "[oai-runner] Transient error (attempt {}/{}): {}. Retrying in {:?}",
                             attempt + 1,
-                            MAX_TRANSIENT_RETRIES,
+                            max_attempts,
                             &err_str[..err_str.len().min(100)],
                             delay
                         );
+                        tokio::time::sleep(delay).await;
                         last_err = Some(e);
                         continue;
                     }
@@ -331,6 +338,41 @@ mod tests {
             assert!(
                 !is_transient_connection_error(err),
                 "Expected '{}' to NOT be transient",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_transient_connection_error_network() {
+        let errors = vec![
+            "network error: could not connect",
+            "Network is unreachable",
+            "io: network error",
+        ];
+
+        for err in errors {
+            assert!(
+                is_transient_connection_error(err),
+                "Expected '{}' to be transient",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_transient_error_detection_is_case_insensitive() {
+        let errors = vec![
+            "UNEXPECTED EOF",
+            "Connection Reset By Peer",
+            "TIMEOUT",
+            "Broken Pipe",
+        ];
+
+        for err in errors {
+            assert!(
+                is_transient_connection_error(err),
+                "Expected '{}' to be transient (case insensitive)",
                 err
             );
         }
