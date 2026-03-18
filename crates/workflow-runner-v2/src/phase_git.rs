@@ -75,7 +75,8 @@ pub fn commit_implementation_changes(cwd: &str, commit_message: &str) -> Result<
         anyhow::bail!("implementation phase requires a git repository for commit at {}", cwd);
     }
     if !git_has_pending_changes(cwd)? {
-        anyhow::bail!("implementation phase requires file changes to commit, but no changes were detected in {}", cwd);
+        tracing::info!(cwd, "No pending changes to commit — agent likely already committed");
+        return Ok(());
     }
 
     ensure_git_identity(cwd)?;
