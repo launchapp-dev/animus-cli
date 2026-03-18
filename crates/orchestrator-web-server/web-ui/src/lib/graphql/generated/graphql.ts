@@ -215,7 +215,12 @@ export type GqlRequirement = {
 
 export type GqlRequirementConnection = {
   __typename?: 'GqlRequirementConnection';
+  hasMore: Scalars['Boolean']['output'];
   items: Array<GqlRequirement>;
+  limit: Scalars['Int']['output'];
+  nextOffset?: Maybe<Scalars['Int']['output']>;
+  offset: Scalars['Int']['output'];
+  returned: Scalars['Int']['output'];
   totalCount: Scalars['Int']['output'];
 };
 
@@ -292,6 +297,7 @@ export type GqlTask = {
   __typename?: 'GqlTask';
   checklist: Array<GqlChecklist>;
   complexity: GqlComplexity;
+  deadline?: Maybe<Scalars['String']['output']>;
   dependencies: Array<GqlDependency>;
   description: Scalars['String']['output'];
   id: Scalars['ID']['output'];
@@ -311,7 +317,12 @@ export type GqlTask = {
 
 export type GqlTaskConnection = {
   __typename?: 'GqlTaskConnection';
+  hasMore: Scalars['Boolean']['output'];
   items: Array<GqlTask>;
+  limit: Scalars['Int']['output'];
+  nextOffset?: Maybe<Scalars['Int']['output']>;
+  offset: Scalars['Int']['output'];
+  returned: Scalars['Int']['output'];
   totalCount: Scalars['Int']['output'];
 };
 
@@ -397,7 +408,12 @@ export type GqlWorkflowConfig = {
 
 export type GqlWorkflowConnection = {
   __typename?: 'GqlWorkflowConnection';
+  hasMore: Scalars['Boolean']['output'];
   items: Array<GqlWorkflow>;
+  limit: Scalars['Int']['output'];
+  nextOffset?: Maybe<Scalars['Int']['output']>;
+  offset: Scalars['Int']['output'];
+  returned: Scalars['Int']['output'];
   totalCount: Scalars['Int']['output'];
 };
 
@@ -464,6 +480,7 @@ export type MutationRoot = {
   runWorkflow: GqlWorkflow;
   saveVision: GqlVision;
   saveWorkflowConfig: Scalars['Boolean']['output'];
+  setDeadline: GqlTask;
   updateProject: GqlProject;
   updateRequirement: GqlRequirement;
   updateTask: GqlTask;
@@ -645,6 +662,12 @@ export type MutationRootSaveWorkflowConfigArgs = {
 };
 
 
+export type MutationRootSetDeadlineArgs = {
+  deadline?: InputMaybe<Scalars['String']['input']>;
+  id: Scalars['ID']['input'];
+};
+
+
 export type MutationRootUpdateProjectArgs = {
   description?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
@@ -753,9 +776,29 @@ export type QueryRootRequirementArgs = {
 };
 
 
+export type QueryRootRequirementsArgs = {
+  category?: InputMaybe<Scalars['String']['input']>;
+  linkedTaskId?: InputMaybe<Scalars['String']['input']>;
+  priority?: InputMaybe<Scalars['String']['input']>;
+  requirementType?: InputMaybe<Scalars['String']['input']>;
+  search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['String']['input']>>;
+};
+
+
 export type QueryRootRequirementsPaginatedArgs = {
+  category?: InputMaybe<Scalars['String']['input']>;
   limit?: Scalars['Int']['input'];
+  linkedTaskId?: InputMaybe<Scalars['String']['input']>;
   offset?: Scalars['Int']['input'];
+  priority?: InputMaybe<Scalars['String']['input']>;
+  requirementType?: InputMaybe<Scalars['String']['input']>;
+  search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['String']['input']>>;
 };
 
 
@@ -770,19 +813,31 @@ export type QueryRootTaskArgs = {
 
 
 export type QueryRootTasksArgs = {
+  assigneeType?: InputMaybe<Scalars['String']['input']>;
+  linkedArchitectureEntity?: InputMaybe<Scalars['String']['input']>;
+  linkedRequirement?: InputMaybe<Scalars['String']['input']>;
   priority?: InputMaybe<Scalars['String']['input']>;
+  risk?: InputMaybe<Scalars['String']['input']>;
   search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['String']['input']>>;
   taskType?: InputMaybe<Scalars['String']['input']>;
 };
 
 
 export type QueryRootTasksPaginatedArgs = {
+  assigneeType?: InputMaybe<Scalars['String']['input']>;
   limit?: Scalars['Int']['input'];
+  linkedArchitectureEntity?: InputMaybe<Scalars['String']['input']>;
+  linkedRequirement?: InputMaybe<Scalars['String']['input']>;
   offset?: Scalars['Int']['input'];
   priority?: InputMaybe<Scalars['String']['input']>;
+  risk?: InputMaybe<Scalars['String']['input']>;
   search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<Scalars['String']['input']>;
+  tags?: InputMaybe<Array<Scalars['String']['input']>>;
   taskType?: InputMaybe<Scalars['String']['input']>;
 };
 
@@ -798,14 +853,24 @@ export type QueryRootWorkflowCheckpointsArgs = {
 
 
 export type QueryRootWorkflowsArgs = {
+  phaseId?: InputMaybe<Scalars['String']['input']>;
+  search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<Scalars['String']['input']>;
+  taskId?: InputMaybe<Scalars['String']['input']>;
+  workflowRef?: InputMaybe<Scalars['String']['input']>;
 };
 
 
 export type QueryRootWorkflowsPaginatedArgs = {
   limit?: Scalars['Int']['input'];
   offset?: Scalars['Int']['input'];
+  phaseId?: InputMaybe<Scalars['String']['input']>;
+  search?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<Scalars['String']['input']>;
+  taskId?: InputMaybe<Scalars['String']['input']>;
+  workflowRef?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type SubscriptionRoot = {
@@ -1092,7 +1157,7 @@ export type TasksQueryVariables = Exact<{
 }>;
 
 
-export type TasksQuery = { __typename?: 'QueryRoot', tasks: Array<{ __typename?: 'GqlTask', id: string, title: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, tags: Array<string>, linkedRequirementIds: Array<string> }>, taskStats: { __typename?: 'GqlTaskStats', total: number, byStatus?: string | null, byPriority?: string | null } };
+export type TasksQuery = { __typename?: 'QueryRoot', tasks: Array<{ __typename?: 'GqlTask', id: string, title: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, tags: Array<string>, linkedRequirementIds: Array<string>, deadline?: string | null }>, taskStats: { __typename?: 'GqlTaskStats', total: number, byStatus?: string | null, byPriority?: string | null } };
 
 export type TasksPrioritizedQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1104,7 +1169,7 @@ export type TaskDetailQueryVariables = Exact<{
 }>;
 
 
-export type TaskDetailQuery = { __typename?: 'QueryRoot', task?: { __typename?: 'GqlTask', id: string, title: string, description: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, risk: GqlRiskLevel, scope: GqlScope, complexity: GqlComplexity, tags: Array<string>, linkedRequirementIds: Array<string>, checklist: Array<{ __typename?: 'GqlChecklist', id: string, description: string, completed: boolean }>, dependencies: Array<{ __typename?: 'GqlDependency', taskId: string, type: string }> } | null };
+export type TaskDetailQuery = { __typename?: 'QueryRoot', task?: { __typename?: 'GqlTask', id: string, title: string, description: string, status: GqlTaskStatus, statusRaw: string, priority: GqlPriority, priorityRaw: string, taskType: GqlTaskType, taskTypeRaw: string, risk: GqlRiskLevel, scope: GqlScope, complexity: GqlComplexity, tags: Array<string>, linkedRequirementIds: Array<string>, deadline?: string | null, checklist: Array<{ __typename?: 'GqlChecklist', id: string, description: string, completed: boolean }>, dependencies: Array<{ __typename?: 'GqlDependency', taskId: string, type: string }> } | null };
 
 export type UpdateTaskStatusMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -1144,6 +1209,14 @@ export type DeleteTaskMutationVariables = Exact<{
 
 
 export type DeleteTaskMutation = { __typename?: 'MutationRoot', deleteTask: boolean };
+
+export type SetDeadlineMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+  deadline?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type SetDeadlineMutation = { __typename?: 'MutationRoot', setDeadline: { __typename?: 'GqlTask', id: string, deadline?: string | null } };
 
 export type AssignAgentMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -1738,6 +1811,7 @@ export const TasksDocument = new TypedDocumentString(`
     taskTypeRaw
     tags
     linkedRequirementIds
+    deadline
   }
   taskStats {
     total
@@ -1778,6 +1852,7 @@ export const TaskDetailDocument = new TypedDocumentString(`
     complexity
     tags
     linkedRequirementIds
+    deadline
     checklist {
       id
       description
@@ -1838,6 +1913,14 @@ export const DeleteTaskDocument = new TypedDocumentString(`
   deleteTask(id: $id)
 }
     `) as unknown as TypedDocumentString<DeleteTaskMutation, DeleteTaskMutationVariables>;
+export const SetDeadlineDocument = new TypedDocumentString(`
+    mutation SetDeadline($id: ID!, $deadline: String) {
+  setDeadline(id: $id, deadline: $deadline) {
+    id
+    deadline
+  }
+}
+    `) as unknown as TypedDocumentString<SetDeadlineMutation, SetDeadlineMutationVariables>;
 export const AssignAgentDocument = new TypedDocumentString(`
     mutation AssignAgent($id: ID!, $role: String, $model: String) {
   assignAgent(id: $id, role: $role, model: $model) {

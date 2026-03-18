@@ -504,6 +504,8 @@ pub struct RawTask {
     pub checklist: Vec<RawChecklist>,
     #[serde(default)]
     pub dependencies: Vec<RawDependency>,
+    #[serde(default)]
+    pub deadline: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -655,6 +657,9 @@ impl GqlTask {
     }
     async fn linked_requirement_ids(&self) -> &[String] {
         &self.0.linked_requirements
+    }
+    async fn deadline(&self) -> Option<&str> {
+        self.0.deadline.as_deref()
     }
     async fn checklist(&self) -> Vec<GqlChecklist> {
         self.0
