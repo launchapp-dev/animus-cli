@@ -129,7 +129,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Output & Monitoring (5 tools)
+## Output & Monitoring (6 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -138,6 +138,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | `ao.output.monitor` | Stream real-time output from a running agent | `run_id`, `task_id`, `phase_id` |
 | `ao.output.jsonl` | Get structured JSONL event log | `run_id`, `entries` |
 | `ao.output.artifacts` | Get files generated during execution | `execution_id` |
+| `ao.output.phase-outputs` | Get persisted workflow phase outputs | `workflow_id`, `phase_id`, `project_root` |
 
 ---
 
