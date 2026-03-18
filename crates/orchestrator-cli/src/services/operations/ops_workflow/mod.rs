@@ -202,13 +202,13 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
         return Ok(dispatch);
     }
 
-    if let Ok(input) = serde_json::from_str::<WorkflowRunInput>(raw) {
-        return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
-    }
-
     if let Some(input) = upgrade_legacy_workflow_run_input(raw)
         .with_context(|| "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema")?
     {
+        return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
+    }
+
+    if let Ok(input) = serde_json::from_str::<WorkflowRunInput>(raw) {
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
 
