@@ -46,12 +46,16 @@ fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessa
 }
 
 fn build_json_schema_format(schema: &Value) -> ResponseFormat {
+    let mut strict_schema = schema.clone();
+    if let Some(obj) = strict_schema.as_object_mut() {
+        obj.entry("additionalProperties").or_insert(serde_json::Value::Bool(false));
+    }
     ResponseFormat {
         type_: "json_schema".to_string(),
         json_schema: Some(JsonSchemaSpec {
             name: "phase_output".to_string(),
-            strict: false,
-            schema: schema.clone(),
+            strict: true,
+            schema: strict_schema,
         }),
     }
 }
