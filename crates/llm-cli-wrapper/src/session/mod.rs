@@ -14,6 +14,18 @@ pub mod session_run;
 pub mod session_stability;
 pub mod subprocess_session_backend;
 
+pub(crate) async fn kill_and_reap_child(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &format!("-{}", pid)])
+            .output();
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
 pub use claude::ClaudeSessionBackend;
 pub use codex::CodexSessionBackend;
 pub use gemini::GeminiSessionBackend;

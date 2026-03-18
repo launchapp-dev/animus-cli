@@ -162,11 +162,11 @@ async fn wait_for_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = &mut timeout_sleep => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!("{label} session timed out after {secs} seconds")))
                 }
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!("{label} session cancelled")))
                 }
             }
@@ -175,7 +175,7 @@ async fn wait_for_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!("{label} session cancelled")))
                 }
             }

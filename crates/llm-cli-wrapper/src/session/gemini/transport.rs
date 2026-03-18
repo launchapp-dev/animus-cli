@@ -211,14 +211,14 @@ async fn wait_for_gemini_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = &mut timeout_sleep => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!(
                         "gemini session timed out after {} seconds",
                         secs
                     )))
                 }
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("gemini session cancelled".to_string()))
                 }
             }
@@ -227,7 +227,7 @@ async fn wait_for_gemini_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("gemini session cancelled".to_string()))
                 }
             }

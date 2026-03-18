@@ -172,14 +172,14 @@ async fn wait_for_codex_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = &mut timeout_sleep => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!(
                         "codex session timed out after {} seconds",
                         secs
                     )))
                 }
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("codex session cancelled".to_string()))
                 }
             }
@@ -188,7 +188,7 @@ async fn wait_for_codex_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("codex session cancelled".to_string()))
                 }
             }
