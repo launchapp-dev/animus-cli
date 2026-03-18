@@ -106,13 +106,18 @@ agents:
          - If decision was "skip", extract the task_id and call ao.task.status to set it to "done".
          - This prevents tasks from being re-enqueued indefinitely when the work is already complete.
 
-      2. DETECT FAILED WORKFLOWS:
+      2. DETECT FAILED WORKFLOWS AND RE-ROUTE:
          For workflows with status "failed":
-         - Check failure_reason. Common failures:
-           - "no changes were detected" → task might already be done, or the agent didn't write code. Set task to "blocked" with reason.
-           - "missing required field 'commit_message'" → contract violation, set task to "blocked".
-           - "failed to connect runner" → transient error, set task back to "ready" for retry.
-         - If a task has failed > 3 times (check consecutive_dispatch_failures), cancel it.
+         - Check failure_reason and workflow_ref. Common failures:
+           - "no changes were detected" → task might already be done. Set to "blocked" with reason.
+           - "missing required field 'commit_message'" → contract violation, set to "blocked".
+           - "failed to connect runner" → transient error, set back to "ready" for retry.
+         - MODEL FAILURE RE-ROUTING (CRITICAL):
+           If a task failed on an oai-runner workflow (standard-glm, standard-kimi, standard-minimax, quick-fix-glm, quick-fix-minimax):
+           a. Set task back to "ready".
+           b. Re-enqueue with workflow_ref="standard" (Claude) — the proven reliable pipeline.
+           c. This ensures no task is permanently stuck on a failing model.
+         - If a task has failed > 5 times across ALL models (including Claude re-route), cancel it.
 
       3. UNBLOCK TASKS (dependency-aware):
          Call ao.task.list with status "blocked". For each:
@@ -165,12 +170,18 @@ agents:
 
       On each run you MUST do ALL of these:
 
-      1. ANALYZE WORKFLOW FAILURE PATTERNS:
+      1. ANALYZE WORKFLOW FAILURE PATTERNS BY MODEL:
          - Call ao.workflow.list with limit 50 to get recent workflows.
-         - Count successes vs failures. Calculate success rate.
-         - Group failures by phase (requirements, implementation, unit-test, create-pr, etc.).
-         - Identify the top 3 most-failing phases and their common failure reasons.
-         - If success rate < 50%, create a critical task to investigate.
+         - Count successes vs failures GROUPED BY workflow_ref (standard, standard-kimi, standard-glm, etc.).
+         - Calculate success rate PER workflow_ref.
+         - If a model-specific workflow has 0% success rate over 3+ attempts:
+           a. Create a critical bugfix task: "Investigate [model] workflow failures — 0% success rate"
+              Include: which phases fail, error patterns, comparison with Claude's success rate.
+              Tag with "model-pipeline-failure".
+           b. UPDATE THE WORK-PLANNER ROUTING TABLE in the task description:
+              Recommend removing the failing workflow_ref from the routing table until fixed.
+              Suggest re-routing those tasks to "standard" (Claude) as fallback.
+         - If success rate < 50% overall, create a critical task to investigate.
 
       2. ANALYZE DAEMON LOGS FOR RECURRING ERRORS:
          - Call ao.daemon.logs with limit 100.
