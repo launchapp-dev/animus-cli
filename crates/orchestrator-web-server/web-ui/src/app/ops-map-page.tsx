@@ -2,7 +2,7 @@ import { ReactFlow, Background, Controls, MiniMap, Handle, Position, type Node, 
 import "@xyflow/react/dist/style.css";
 import { useQuery } from "@/lib/graphql/client";
 import { DashboardDocument } from "@/lib/graphql/generated/graphql";
-import { PageLoading } from "./shared";
+import { PageError, PageLoading } from "./shared";
 
 const WORKFLOWS_QUERY = `query ActiveWorkflows { workflows(status: "running") { id taskId status statusRaw currentPhase phases { phaseId status startedAt completedAt } } }`;
 
@@ -201,7 +201,9 @@ export function OpsMapPage() {
   const [dashResult] = useQuery({ query: DashboardDocument });
   const [wfResult] = useQuery({ query: WORKFLOWS_QUERY });
 
-  if (dashResult.fetching && wfResult.fetching) return <PageLoading />;
+  if (dashResult.fetching || wfResult.fetching) return <PageLoading />;
+  if (dashResult.error) return <PageError message="Failed to load dashboard data" />;
+  if (wfResult.error) return <PageError message="Failed to load workflow data" />;
 
   const { nodes, edges } = buildGraph(
     dashResult.data,
