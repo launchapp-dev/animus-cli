@@ -21,6 +21,19 @@ mcp_servers:
   memory:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-memory"]
+  brave-search:
+    command: npx
+    args: ["-y", "@anthropic/mcp-server-brave-search"]
+    env:
+      BRAVE_API_KEY: ""
+  sentry:
+    command: npx
+    args: ["-y", "@sentry/mcp-server"]
+    env:
+      SENTRY_AUTH_TOKEN: ""
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/samishukri/ao-cli"]
 
 agents:
   default:
@@ -431,6 +444,7 @@ agents:
       - Tag all tasks with "web-ui-improvement".
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "context7", "brave-search"]
 
   mcp-server-improver:
     system_prompt: |
