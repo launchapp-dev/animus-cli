@@ -3,10 +3,19 @@ tools_allowlist:
   - git
   - gh
 
+mcp_servers:
+  context7:
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+  rust-docs:
+    command: npx
+    args: ["-y", "rust-docs-mcp-server"]
+
 agents:
   default:
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
 
   work-planner:
     system_prompt: |
@@ -499,6 +508,7 @@ agents:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks — architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
