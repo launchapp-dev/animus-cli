@@ -57,7 +57,7 @@ agents:
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
          | low        | bugfix/chore   | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
-         | low        | docs           | standard-minimax        | MiniMax M2.5 (oai-runner) | Cheap, experimental          |
+         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, experimental          |
          | medium     | any            | standard            | Claude Sonnet (claude)   | Proven reliable pipeline     |
          | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
          | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet (claude)   | UI tasks need reliability    |
@@ -67,12 +67,15 @@ agents:
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
          | any        | monitoring     | standard            | Claude Sonnet (claude)   | Needs reliability            |
 
-         EXPERIMENTAL oai-runner workflows (for low-priority docs/chore only):
-         | low        | docs/chore     | standard-minimax        | MiniMax M2.5 (oai-runner) |
-         | low        | docs/chore     | quick-fix-minimax       | MiniMax M2.5 (oai-runner) |
-         | low        | docs/chore     | standard-kimi       | Kimi K2.5 (oai-runner)   |
+         oai-runner workflows (now with json_object structured output):
+         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | json_object mode works |
+         | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option        |
+         | low        | bugfix         | quick-fix-glm       | GLM-5-Turbo (oai-runner) | Fast for small fixes   |
+         | low        | docs/chore     | standard-kimi       | Kimi K2.5 (oai-runner)   | Agentic reasoning      |
 
          Default to "standard" (Claude Sonnet via claude CLI).
+         GLM and MiniMax now produce valid structured output via json_object + schema-in-prompt.
+         Use them for low-priority work to save costs.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
          Only route low-priority docs/chore to oai-runner models as experiments.
 
@@ -1260,7 +1263,7 @@ workflows:
       - create-pr
       - cleanup
 
-  - id: standard-minimax
+  - id: standard-glm
     name: "Standard (GLM)"
     description: "Standard workflow using GLM/Z-AI for implementation, Codex for review"
     phases:
@@ -1292,7 +1295,7 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: standard-minimax
+  - id: standard-glm
     name: "Standard (MiniMax)"
     description: "Standard workflow using MiniMax for implementation, Codex for review"
     phases:
@@ -1388,7 +1391,7 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: quick-fix-minimax
+  - id: quick-fix-glm
     name: "Quick Fix (MiniMax)"
     description: "Fast workflow for trivial bug fixes using MiniMax — cheapest option"
     phases:
@@ -1410,7 +1413,7 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: quick-fix-minimax
+  - id: quick-fix-glm
     name: "Quick Fix (GLM)"
     description: "Fast workflow for small fixes using GLM"
     phases:
