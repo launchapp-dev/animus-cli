@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cli_wrapper::{is_ai_cli_tool, LaunchInvocation, SessionBackendResolver, SessionEvent, SessionRequest};
 use protocol::{
     AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage, ToolCallInfo,
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, MissedTickBehavior};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
@@ -96,6 +96,18 @@ pub(super) async fn spawn_session_process(
             .context("failed to resume native session backend")?,
         None => backend.start_session(session_request).await.context("failed to start native session backend")?,
     };
+
+    if let Some(pid) = run.pid {
+        if let Err(err) = crate::cleanup::track_process(run_id.0.as_str(), pid) {
+            warn!(
+                run_id = %run_id.0.as_str(),
+                pid,
+                error = %err,
+                "Failed to register process in orphan tracker"
+            );
+        }
+    }
+
     let run_session_id = run.session_id.clone();
     let run_started_at = Instant::now();
     let mut last_activity_at = run_started_at;
@@ -113,11 +125,11 @@ pub(super) async fn spawn_session_process(
         "Spawning native session backend"
     );
 
-    loop {
+    let result: Result<i32> = loop {
         tokio::select! {
             maybe_event = run.events.recv() => {
                 let Some(event) = maybe_event else {
-                    bail!("native session backend closed event stream unexpectedly");
+                    break Err(anyhow!("native session backend closed event stream unexpectedly"));
                 };
 
                 if !matches!(event, SessionEvent::Started { .. }) {
@@ -125,7 +137,7 @@ pub(super) async fn spawn_session_process(
                 }
 
                 if let Some(exit_code) = forward_session_event(run_id, &event, &event_tx).await {
-                    return Ok(exit_code);
+                    break Ok(exit_code);
                 }
             }
             _ = heartbeat.tick() => {
@@ -149,7 +161,7 @@ pub(super) async fn spawn_session_process(
                         if let Some(session_id) = run_session_id.as_deref() {
                             let _ = backend.terminate_session(session_id).await;
                         }
-                        bail!("Process idle timeout after {}s without activity", idle_limit_secs);
+                        break Err(anyhow!("Process idle timeout after {}s without activity", idle_limit_secs));
                     }
                 }
             }
@@ -157,10 +169,22 @@ pub(super) async fn spawn_session_process(
                 if let Some(session_id) = run_session_id.as_deref() {
                     let _ = backend.terminate_session(session_id).await;
                 }
-                bail!("Process cancelled by user");
+                break Err(anyhow!("Process cancelled by user"));
             }
         }
+    };
+
+    if run.pid.is_some() {
+        if let Err(err) = crate::cleanup::untrack_process(run_id.0.as_str()) {
+            warn!(
+                run_id = %run_id.0.as_str(),
+                error = %err,
+                "Failed to unregister process from orphan tracker"
+            );
+        }
     }
+
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
