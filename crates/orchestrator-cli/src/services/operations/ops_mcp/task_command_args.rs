@@ -68,8 +68,8 @@ pub(super) fn build_task_delete_args(id: String, confirm: Option<String>, dry_ru
     args
 }
 
-pub(super) fn build_task_control_args(action: &str, task_id: String) -> Vec<String> {
-    vec!["task".to_string(), action.to_string(), "--id".to_string(), task_id]
+pub(super) fn build_task_control_args(action: &str, id: String) -> Vec<String> {
+    vec!["task".to_string(), action.to_string(), "--id".to_string(), id]
 }
 
 pub(super) fn build_bulk_status_item_args(item: &BulkTaskStatusItem) -> Vec<String> {
