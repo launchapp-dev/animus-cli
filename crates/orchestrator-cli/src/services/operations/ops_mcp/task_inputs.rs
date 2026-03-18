@@ -97,7 +97,7 @@ pub(super) struct TaskDeleteInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct TaskControlInput {
-    pub(super) task_id: String,
+    pub(super) id: String,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
@@ -182,7 +182,7 @@ pub(super) struct TaskBulkUpdateInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct TaskCancelInput {
-    pub(super) task_id: String,
+    pub(super) id: String,
     #[serde(default)]
     pub(super) confirm: Option<String>,
     #[serde(default)]
@@ -193,7 +193,7 @@ pub(super) struct TaskCancelInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct TaskSetPriorityInput {
-    pub(super) task_id: String,
+    pub(super) id: String,
     pub(super) priority: String,
     #[serde(default)]
     pub(super) project_root: Option<String>,
@@ -201,7 +201,7 @@ pub(super) struct TaskSetPriorityInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct TaskSetDeadlineInput {
-    pub(super) task_id: String,
+    pub(super) id: String,
     #[serde(default)]
     pub(super) deadline: Option<String>,
     #[serde(default)]
