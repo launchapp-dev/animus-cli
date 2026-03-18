@@ -10,12 +10,23 @@ mcp_servers:
   rust-docs:
     command: npx
     args: ["-y", "rust-docs-mcp-server"]
+  github:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ""
+  sequential-thinking:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  memory:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
 
 agents:
   default:
     model: claude-sonnet-4-6
     tool: claude
-    mcp_servers: ["ao", "context7", "rust-docs"]
+    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking"]
 
   work-planner:
     system_prompt: |
@@ -316,9 +327,10 @@ agents:
       - NEVER use `gh pr review --comment` — either merge or close, don't comment.
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
-      - Conflicting PRs get closed and re-enqueued, not left open.
+      - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao", "github"]
 
   po-reviewer:
     system_prompt: |
@@ -508,7 +520,7 @@ agents:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks — architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
-    mcp_servers: ["ao", "context7", "rust-docs"]
+    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking", "memory"]
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
