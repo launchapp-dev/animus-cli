@@ -3,7 +3,7 @@ use std::process::Stdio;
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::cli::{
@@ -66,23 +66,26 @@ impl SessionBackend for SubprocessSessionBackend {
         let fallback_reason =
             request.extras.get("fallback_reason").and_then(serde_json::Value::as_str).map(ToOwned::to_owned);
         let (event_tx, event_rx) = mpsc::channel(128);
+        let (pid_tx, pid_rx) = oneshot::channel::<Option<u32>>();
 
         tokio::spawn(async move {
             let _ = event_tx
                 .send(SessionEvent::Started { backend: started_backend_label.clone(), session_id: Some(session_id) })
                 .await;
 
-            if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone()).await {
+            if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone(), pid_tx).await {
                 let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
                 let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
             }
         });
 
+        let pid = pid_rx.await.ok().flatten();
         Ok(SessionRun {
             session_id: Some(session_id_for_run),
             events: event_rx,
             selected_backend: backend_label,
             fallback_reason,
+            pid,
         })
     }
 
@@ -102,6 +105,7 @@ async fn run_subprocess_session(
     request: SessionRequest,
     invocation: LaunchInvocation,
     event_tx: mpsc::Sender<SessionEvent>,
+    pid_tx: oneshot::Sender<Option<u32>>,
 ) -> Result<()> {
     let mut command = Command::new(&invocation.command);
     command
@@ -116,6 +120,7 @@ async fn run_subprocess_session(
     command.process_group(0);
 
     let mut child = command.spawn()?;
+    let _ = pid_tx.send(child.id());
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {

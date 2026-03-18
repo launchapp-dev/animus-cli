@@ -24,6 +24,7 @@ pub(crate) async fn start_claude_session(
     let started_session_id = Some(control_session_id.clone());
     let (event_tx, event_rx) = mpsc::channel(128);
     let (cancel_tx, cancel_rx) = oneshot::channel();
+    let (pid_tx, pid_rx) = oneshot::channel::<Option<u32>>();
     register_session(control_session_id.clone(), cancel_tx);
 
     tokio::spawn(async move {
@@ -31,18 +32,20 @@ pub(crate) async fn start_claude_session(
             .send(SessionEvent::Started { backend: "claude-native".to_string(), session_id: started_session_id })
             .await;
 
-        if let Err(error) = run_claude_session(request, invocation, event_tx.clone(), cancel_rx).await {
+        if let Err(error) = run_claude_session(request, invocation, event_tx.clone(), cancel_rx, pid_tx).await {
             let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
             let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
         unregister_session(&control_session_id);
     });
 
+    let pid = pid_rx.await.ok().flatten();
     Ok(SessionRun {
         session_id: Some(control_session_id_for_run),
         events: event_rx,
         selected_backend: "claude-native".to_string(),
         fallback_reason: None,
+        pid,
     })
 }
 
@@ -103,6 +106,7 @@ async fn run_claude_session(
     invocation: LaunchInvocation,
     event_tx: mpsc::Sender<SessionEvent>,
     mut cancel_rx: oneshot::Receiver<()>,
+    pid_tx: oneshot::Sender<Option<u32>>,
 ) -> Result<()> {
     let mut command = Command::new(&invocation.command);
     command
@@ -116,6 +120,7 @@ async fn run_claude_session(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
+    let _ = pid_tx.send(child.id());
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {
