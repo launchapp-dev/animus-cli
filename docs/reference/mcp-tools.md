@@ -122,7 +122,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 |---|---|---|
 | `ao.queue.list` | List queued subject dispatches | `project_root` |
 | `ao.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `ao.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json`, `subject_id` |
+| `ao.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json` |
 | `ao.queue.reorder` | Set preferred dispatch order | `subject_ids[]` |
 | `ao.queue.hold` | Hold a pending subject from dispatch | `subject_id` |
 | `ao.queue.release` | Release a held subject for dispatch | `subject_id` |
