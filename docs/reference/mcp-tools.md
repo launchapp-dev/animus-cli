@@ -141,12 +141,13 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Runner (3 tools)
+## Runner (4 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `ao.runner.health` | Check runner process health and capacity | `project_root` |
 | `ao.runner.orphans-detect` | Find orphaned runner processes | `project_root` |
+| `ao.runner.orphans-cleanup` | Clean up orphaned runner processes by run ID | `run_id`, `project_root` |
 | `ao.runner.restart-stats` | View runner uptime and restart history | `project_root` |
 
 ---

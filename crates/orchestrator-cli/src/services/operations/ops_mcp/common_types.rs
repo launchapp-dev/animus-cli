@@ -20,6 +20,13 @@ pub(super) struct ExecutionIdInput {
     pub(super) project_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct RunnerOrphansCleanupInput {
+    pub(super) run_id: Vec<String>,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum OnError {
