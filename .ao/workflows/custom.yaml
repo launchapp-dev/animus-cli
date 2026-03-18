@@ -56,26 +56,22 @@ agents:
 
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
-         | low        | bugfix/chore   | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
-         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, experimental          |
-         | medium     | any            | standard            | Claude Sonnet (claude)   | Proven reliable pipeline     |
+         | low        | bugfix/chore   | quick-fix-glm       | GLM-5-Turbo (oai-runner) | Cheapest for simple fixes    |
+         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, good for docs         |
+         | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option              |
+         | medium     | feature        | standard-kimi       | Kimi K2.5 (oai-runner)   | Near-Opus coding, cheap      |
+         | medium     | bugfix         | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
          | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
-         | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet (claude)   | UI tasks need reliability    |
+         | medium     | ui-ux          | ao.task/ui-ux       | Kimi K2.5 (oai-runner)   | Multimodal + agentic         |
          | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
          | high       | refactor       | standard-gemini     | Gemini 3.1 Pro (gemini)  | 1M context, native CLI       |
          | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks, PO review     |
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
-         | any        | monitoring     | standard            | Claude Sonnet (claude)   | Needs reliability            |
+         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Monitoring is cheap          |
 
-         oai-runner workflows (now with json_object structured output):
-         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | json_object mode works |
-         | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option        |
-         | low        | bugfix         | quick-fix-glm       | GLM-5-Turbo (oai-runner) | Fast for small fixes   |
-         | low        | docs/chore     | standard-kimi       | Kimi K2.5 (oai-runner)   | Agentic reasoning      |
-
-         Default to "standard" (Claude Sonnet via claude CLI).
-         GLM and MiniMax now produce valid structured output via json_object + schema-in-prompt.
-         Use them for low-priority work to save costs.
+         Default to "standard-kimi" for medium tasks, "standard" for high.
+         All oai-runner models use json_object + schema-in-prompt for structured output.
+         Kimi K2.5 is near-Opus level on coding — use it for most medium work.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
          Only route low-priority docs/chore to oai-runner models as experiments.
 
