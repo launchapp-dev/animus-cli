@@ -57,7 +57,7 @@ agents:
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
          | low        | bugfix/chore   | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
-         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, experimental          |
+         | low        | docs           | standard-minimax        | MiniMax M2.5 (oai-runner) | Cheap, experimental          |
          | medium     | any            | standard            | Claude Sonnet (claude)   | Proven reliable pipeline     |
          | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
          | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet (claude)   | UI tasks need reliability    |
@@ -68,8 +68,8 @@ agents:
          | any        | monitoring     | standard            | Claude Sonnet (claude)   | Needs reliability            |
 
          EXPERIMENTAL oai-runner workflows (for low-priority docs/chore only):
-         | low        | docs/chore     | standard-glm        | GLM-5-Turbo (oai-runner) |
-         | low        | docs/chore     | quick-fix-glm       | GLM-5-Turbo (oai-runner) |
+         | low        | docs/chore     | standard-minimax        | MiniMax M2.5 (oai-runner) |
+         | low        | docs/chore     | quick-fix-minimax       | MiniMax M2.5 (oai-runner) |
          | low        | docs/chore     | standard-kimi       | Kimi K2.5 (oai-runner)   |
 
          Default to "standard" (Claude Sonnet via claude CLI).
@@ -1260,7 +1260,7 @@ workflows:
       - create-pr
       - cleanup
 
-  - id: standard-glm
+  - id: standard-minimax
     name: "Standard (GLM)"
     description: "Standard workflow using GLM/Z-AI for implementation, Codex for review"
     phases:
@@ -1410,7 +1410,7 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: quick-fix-glm
+  - id: quick-fix-minimax
     name: "Quick Fix (GLM)"
     description: "Fast workflow for small fixes using GLM"
     phases:
