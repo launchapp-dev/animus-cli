@@ -75,7 +75,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `ao.workflow.run` | Start a workflow for a task (async, via daemon) | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json` |
-| `ao.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`), `on_error` |
+| `ao.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`, `input_json`), `on_error` |
 | `ao.workflow.execute` | Execute a workflow synchronously (no daemon) | `task_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json` |
 | `ao.workflow.get` | Get full workflow state by ID | `id` |
 | `ao.workflow.list` | List workflow executions | `limit`, `offset`, `max_tokens` |
