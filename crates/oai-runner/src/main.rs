@@ -6,6 +6,7 @@ mod tools;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")");
 
@@ -55,6 +56,15 @@ enum Commands {
         #[arg(long)]
         session_id: Option<String>,
 
+        #[arg(long, help = "Disable sending response_format with json_schema on API requests")]
+        no_response_format: bool,
+
+        #[arg(long, default_value = "128000", help = "Context window token limit for the model")]
+        context_limit: usize,
+
+        #[arg(long, default_value = "16384", help = "Maximum output tokens per response")]
+        max_tokens: usize,
+
         prompt: String,
     },
 }
@@ -77,6 +87,9 @@ async fn main() -> Result<()> {
             read_only,
             mcp_config,
             session_id,
+            no_response_format,
+            context_limit,
+            max_tokens,
             prompt,
         } => {
             let working_dir =
@@ -121,7 +134,29 @@ async fn main() -> Result<()> {
 
             let mut output = runner::output::OutputFormatter::new(json_mode);
 
-            if let Err(e) = runner::agent_loop::run_agent_loop(
+            let cancel_token = CancellationToken::new();
+            let cancel_for_signal = cancel_token.clone();
+
+            tokio::spawn(async move {
+                let ctrl_c = tokio::signal::ctrl_c();
+                #[cfg(unix)]
+                {
+                    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("failed to register SIGTERM handler");
+                    tokio::select! {
+                        _ = ctrl_c => {},
+                        _ = sigterm.recv() => {},
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    ctrl_c.await.ok();
+                }
+                eprintln!("[oai-runner] Shutdown signal received, cancelling...");
+                cancel_for_signal.cancel();
+            });
+
+            let result = runner::agent_loop::run_agent_loop(
                 &client,
                 &resolved_config.model_id,
                 &system,
@@ -133,15 +168,20 @@ async fn main() -> Result<()> {
                 parsed_schema.as_ref(),
                 &mcp_clients,
                 session_id.as_deref(),
+                !no_response_format,
+                cancel_token,
+                context_limit,
+                max_tokens,
             )
-            .await
-            {
+            .await;
+
+            if let Err(e) = result {
                 if json_mode {
                     let err_json = serde_json::json!({
                         "type": "error",
                         "error": e.to_string()
                     });
-                    eprintln!("{}", err_json);
+                    println!("{}", err_json);
                 }
                 bail!(e);
             }

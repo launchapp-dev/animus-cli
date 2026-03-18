@@ -53,7 +53,7 @@ pub fn search_files(
 
 fn try_ripgrep(base: &Path, pattern: &str, include: Option<&str>) -> Result<std::process::Output> {
     let mut cmd = std::process::Command::new("rg");
-    cmd.arg("-n").arg("--color=never").arg("-E").arg(pattern);
+    cmd.arg("-n").arg("--color=never").arg(pattern);
 
     if let Some(inc) = include {
         cmd.arg("--glob").arg(inc);

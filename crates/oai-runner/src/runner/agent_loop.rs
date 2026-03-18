@@ -1,11 +1,13 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 use crate::api::client::ApiClient;
 use crate::api::types::*;
 use crate::tools::{executor, mcp_client};
 
+use super::context;
 use super::output::OutputFormatter;
 
 const SCHEMA_RETRY_LIMIT: usize = 3;
@@ -42,6 +44,31 @@ fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessa
     Ok(())
 }
 
+fn build_response_format(schema: &Value) -> ResponseFormat {
+    ResponseFormat {
+        type_: "json_schema".to_string(),
+        json_schema: Some(JsonSchemaSpec {
+            name: "phase_output".to_string(),
+            strict: false,
+            schema: schema.clone(),
+        }),
+    }
+}
+
+fn synthesize_fallback(model: &str, summary: &str, confidence: f64) -> Value {
+    serde_json::json!({
+        "kind": "implementation_result",
+        "commit_message": format!("Implementation by {}", model),
+        "phase_decision": {
+            "kind": "phase_decision",
+            "verdict": "rework",
+            "confidence": confidence,
+            "risk": "high",
+            "reason": format!("Agent did not produce valid structured output. Summary: {}", summary)
+        }
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     client: &ApiClient,
@@ -55,6 +82,10 @@ pub async fn run_agent_loop(
     response_schema: Option<&Value>,
     mcp_clients: &[mcp_client::McpClient],
     session_id: Option<&str>,
+    use_response_format: bool,
+    cancel_token: CancellationToken,
+    context_limit: usize,
+    max_tokens: usize,
 ) -> Result<()> {
     let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -83,13 +114,32 @@ pub async fn run_agent_loop(
     });
 
     for turn in 0..max_turns {
+        if cancel_token.is_cancelled() {
+            eprintln!("[oai-runner] Cancelled by signal");
+            if let Some(sid) = session_id {
+                if let Err(e) = save_session_messages_to(&config_dir(), sid, &messages) {
+                    eprintln!("[oai-runner] Warning: failed to save session on cancel {}: {}", sid, e);
+                }
+            }
+            output.emit_session_summary();
+            anyhow::bail!("Cancelled by shutdown signal");
+        }
+
+        context::truncate_to_fit(&mut messages, context_limit, max_tokens);
+
+        let format = if use_response_format {
+            response_schema.map(build_response_format)
+        } else {
+            None
+        };
+
         let request = ChatRequest {
             model: model.to_string(),
             messages: messages.clone(),
             stream: true,
             tools: Some(tools.to_vec()),
-            max_tokens: Some(16384),
-            response_format: None,
+            max_tokens: Some(max_tokens as u32),
+            response_format: format,
             stream_options: Some(StreamOptions { include_usage: true }),
         };
 
@@ -113,8 +163,9 @@ pub async fn run_agent_loop(
             let mut schema_ok = true;
             if let Some(schema) = response_schema {
                 if let Err(errors) = validate_output_against_schema(content, schema) {
+                    let system_msg = messages.iter().find(|m| m.role == "system").cloned();
                     let corrected =
-                        retry_schema_validation(client, model, &mut messages, schema, &errors, output).await;
+                        retry_schema_validation(client, model, system_msg.as_ref(), &mut messages, schema, &errors, output).await;
                     if !corrected {
                         eprintln!("Warning: schema validation failed after {} retries, synthesizing fallback result", SCHEMA_RETRY_LIMIT);
                         schema_ok = false;
@@ -123,17 +174,7 @@ pub async fn run_agent_loop(
             }
             if !schema_ok {
                 let summary = content.chars().take(200).collect::<String>();
-                let fallback = serde_json::json!({
-                    "kind": "implementation_result",
-                    "commit_message": format!("Implementation by {}", model),
-                    "phase_decision": {
-                        "kind": "phase_decision",
-                        "verdict": "advance",
-                        "confidence": 0.7,
-                        "risk": "medium",
-                        "reason": format!("Agent completed work but did not produce structured output. Summary: {}", summary)
-                    }
-                });
+                let fallback = synthesize_fallback(model, &summary, 0.4);
                 let fallback_str = serde_json::to_string(&fallback).unwrap_or_default();
                 output.text_chunk(&fallback_str);
                 output.flush_result();
@@ -151,6 +192,11 @@ pub async fn run_agent_loop(
         let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
 
         for tc in tool_calls {
+            if cancel_token.is_cancelled() {
+                eprintln!("[oai-runner] Cancelled between tool calls");
+                break;
+            }
+
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
 
@@ -169,7 +215,7 @@ pub async fn run_agent_loop(
                     }
                 }
             } else {
-                match executor::execute_tool(&tc.function.name, &tc.function.arguments, working_dir) {
+                match executor::execute_tool(&tc.function.name, &tc.function.arguments, working_dir).await {
                     Ok(r) => {
                         output.tool_result(&tc.function.name, &r);
                         r
@@ -203,17 +249,7 @@ pub async fn run_agent_loop(
     output.flush_result();
     if response_schema.is_some() {
         eprintln!("[oai-runner] Max turns reached, synthesizing fallback result");
-        let fallback = serde_json::json!({
-            "kind": "implementation_result",
-            "commit_message": format!("Implementation by {}", model),
-            "phase_decision": {
-                "kind": "phase_decision",
-                "verdict": "advance",
-                "confidence": 0.6,
-                "risk": "medium",
-                "reason": "Agent reached maximum turns. Work may be partially complete."
-            }
-        });
+        let fallback = synthesize_fallback(model, "Agent reached maximum turns. Work may be partially complete.", 0.3);
         let fallback_str = serde_json::to_string(&fallback).unwrap_or_default();
         output.text_chunk(&fallback_str);
         output.flush_result();
@@ -226,12 +262,20 @@ pub async fn run_agent_loop(
 async fn retry_schema_validation(
     client: &ApiClient,
     model: &str,
+    system_msg: Option<&ChatMessage>,
     messages: &mut Vec<ChatMessage>,
     schema: &Value,
     initial_errors: &str,
     output: &mut OutputFormatter,
 ) -> bool {
     let mut last_errors = initial_errors.to_string();
+
+    let last_assistant_content = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
 
     for attempt in 1..=SCHEMA_RETRY_LIMIT {
         eprintln!("Schema validation failed (attempt {}/{}): {}", attempt, SCHEMA_RETRY_LIMIT, last_errors);
@@ -244,27 +288,30 @@ async fn retry_schema_validation(
             serde_json::to_string_pretty(schema).unwrap_or_default()
         );
 
-        messages.push(ChatMessage {
+        let mut retry_messages: Vec<ChatMessage> = Vec::new();
+        if let Some(sys) = system_msg {
+            retry_messages.push(sys.clone());
+        }
+        retry_messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: Some(last_assistant_content.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        retry_messages.push(ChatMessage {
             role: "user".to_string(),
-            content: Some(correction),
+            content: Some(correction.clone()),
             tool_calls: None,
             tool_call_id: None,
         });
 
         let retry_request = ChatRequest {
             model: model.to_string(),
-            messages: messages.clone(),
+            messages: retry_messages,
             stream: true,
             tools: None,
             max_tokens: Some(4096),
-            response_format: Some(ResponseFormat {
-                type_: "json_schema".to_string(),
-                json_schema: Some(JsonSchemaSpec {
-                    name: "phase_output".to_string(),
-                    strict: false,
-                    schema: schema.clone(),
-                }),
-            }),
+            response_format: Some(build_response_format(schema)),
             stream_options: Some(StreamOptions { include_usage: true }),
         };
 
@@ -284,6 +331,12 @@ async fn retry_schema_validation(
         }
 
         let content = retry_msg.content.clone().unwrap_or_default();
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(correction),
+            tool_calls: None,
+            tool_call_id: None,
+        });
         messages.push(retry_msg);
 
         match validate_output_against_schema(&content, schema) {
@@ -299,61 +352,16 @@ fn validate_output_against_schema(content: &str, schema: &Value) -> std::result:
     let parsed = extract_json_from_content(content)
         .ok_or_else(|| "Response does not contain valid JSON. Expected a JSON object.".to_string())?;
 
-    let mut errors = Vec::new();
+    let validator = jsonschema::validator_for(schema).map_err(|e| format!("Invalid schema: {}", e))?;
 
-    if let Some(required) = schema.get("required").and_then(Value::as_array) {
-        if let Some(obj) = parsed.as_object() {
-            for field in required {
-                if let Some(name) = field.as_str() {
-                    if !obj.contains_key(name) {
-                        errors.push(format!("missing required field '{}'", name));
-                    }
-                }
-            }
+    let errors: Vec<String> = validator.iter_errors(&parsed).map(|e| {
+        let path = e.instance_path().to_string();
+        if path.is_empty() {
+            format!("{}", e)
         } else {
-            errors.push("expected a JSON object, got a different type".to_string());
-            return Err(errors.join("; "));
+            format!("at '{}': {}", path, e)
         }
-    }
-
-    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-        if let Some(obj) = parsed.as_object() {
-            for (key, rule) in properties {
-                let Some(value) = obj.get(key) else { continue };
-
-                if let Some(expected_type) = rule.get("type").and_then(Value::as_str) {
-                    if !validate_type(expected_type, value) {
-                        errors.push(format!(
-                            "field '{}' must be type '{}', got {}",
-                            key,
-                            expected_type,
-                            type_name(value)
-                        ));
-                    }
-                }
-
-                if let Some(constant) = rule.get("const") {
-                    if value != constant {
-                        errors.push(format!("field '{}' must equal {}, got {}", key, constant, value));
-                    }
-                }
-
-                if let Some(enum_values) = rule.get("enum").and_then(Value::as_array) {
-                    if !enum_values.contains(value) {
-                        errors.push(format!("field '{}' must be one of {:?}, got {}", key, enum_values, value));
-                    }
-                }
-
-                if let Some(min_len) = rule.get("minLength").and_then(Value::as_u64) {
-                    if let Some(s) = value.as_str() {
-                        if (s.len() as u64) < min_len {
-                            errors.push(format!("field '{}' must have minLength {}", key, min_len));
-                        }
-                    }
-                }
-            }
-        }
-    }
+    }).collect();
 
     if errors.is_empty() {
         Ok(())
@@ -398,30 +406,6 @@ fn extract_json_from_content(content: &str) -> Option<Value> {
     None
 }
 
-fn validate_type(expected: &str, value: &Value) -> bool {
-    match expected {
-        "string" => value.is_string(),
-        "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "boolean" => value.is_boolean(),
-        "array" => value.is_array(),
-        "object" => value.is_object(),
-        "null" => value.is_null(),
-        _ => true,
-    }
-}
-
-fn type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,7 +437,7 @@ mod tests {
         });
         let content = r#"{"kind":"phase_decision"}"#;
         let err = validate_output_against_schema(content, &schema).unwrap_err();
-        assert!(err.contains("missing required field 'verdict'"));
+        assert!(err.contains("verdict"), "Error should mention 'verdict': {}", err);
     }
 
     #[test]
@@ -467,7 +451,7 @@ mod tests {
         });
         let content = r#"{"confidence":"high"}"#;
         let err = validate_output_against_schema(content, &schema).unwrap_err();
-        assert!(err.contains("must be type 'number'"));
+        assert!(!err.is_empty());
     }
 
     #[test]
@@ -481,7 +465,7 @@ mod tests {
         });
         let content = r#"{"kind":"something_else"}"#;
         let err = validate_output_against_schema(content, &schema).unwrap_err();
-        assert!(err.contains("must equal"));
+        assert!(!err.is_empty());
     }
 
     #[test]
@@ -495,7 +479,7 @@ mod tests {
         });
         let content = r#"{"verdict":"maybe"}"#;
         let err = validate_output_against_schema(content, &schema).unwrap_err();
-        assert!(err.contains("must be one of"));
+        assert!(!err.is_empty());
     }
 
     #[test]
@@ -534,6 +518,96 @@ mod tests {
         let content = "This is just plain text with no JSON at all.";
         let err = validate_output_against_schema(content, &schema).unwrap_err();
         assert!(err.contains("does not contain valid JSON"));
+    }
+
+    #[test]
+    fn validates_nested_objects() {
+        let schema = json!({
+            "type": "object",
+            "required": ["phase_decision"],
+            "properties": {
+                "phase_decision": {
+                    "type": "object",
+                    "required": ["verdict", "confidence"],
+                    "properties": {
+                        "verdict": { "type": "string", "enum": ["advance", "rework", "fail"] },
+                        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                    }
+                }
+            }
+        });
+        let valid = r#"{"phase_decision":{"verdict":"advance","confidence":0.9}}"#;
+        assert!(validate_output_against_schema(valid, &schema).is_ok());
+
+        let invalid = r#"{"phase_decision":{"verdict":"maybe","confidence":0.9}}"#;
+        assert!(validate_output_against_schema(invalid, &schema).is_err());
+
+        let missing = r#"{"phase_decision":{"verdict":"advance"}}"#;
+        assert!(validate_output_against_schema(missing, &schema).is_err());
+    }
+
+    #[test]
+    fn validates_one_of() {
+        let schema = json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["kind"],
+                    "properties": { "kind": { "const": "success" } }
+                },
+                {
+                    "type": "object",
+                    "required": ["kind"],
+                    "properties": { "kind": { "const": "failure" } }
+                }
+            ]
+        });
+        let valid = r#"{"kind":"success"}"#;
+        assert!(validate_output_against_schema(valid, &schema).is_ok());
+
+        let invalid = r#"{"kind":"other"}"#;
+        assert!(validate_output_against_schema(invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn validates_array_min_items() {
+        let schema = json!({
+            "type": "object",
+            "required": ["items"],
+            "properties": {
+                "items": { "type": "array", "minItems": 1 }
+            }
+        });
+        let valid = r#"{"items":["a"]}"#;
+        assert!(validate_output_against_schema(valid, &schema).is_ok());
+
+        let invalid = r#"{"items":[]}"#;
+        assert!(validate_output_against_schema(invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn validates_string_pattern() {
+        let schema = json!({
+            "type": "object",
+            "required": ["version"],
+            "properties": {
+                "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" }
+            }
+        });
+        let valid = r#"{"version":"1.2.3"}"#;
+        assert!(validate_output_against_schema(valid, &schema).is_ok());
+
+        let invalid = r#"{"version":"not-a-version"}"#;
+        assert!(validate_output_against_schema(invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn fallback_uses_rework_verdict() {
+        let fallback = synthesize_fallback("test-model", "test summary", 0.4);
+        let decision = &fallback["phase_decision"];
+        assert_eq!(decision["verdict"], "rework");
+        assert_eq!(decision["confidence"], 0.4);
+        assert_eq!(decision["risk"], "high");
     }
 
     #[test]

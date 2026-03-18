@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -71,7 +72,7 @@ impl ApiClient {
                 tokio::time::sleep(delay).await;
             }
 
-            match self.do_stream_with_retry_after(&url, request, on_text_chunk).await {
+            match self.do_stream(&url, request, on_text_chunk).await {
                 Ok(result) => {
                     record_success();
                     return Ok(result);
@@ -80,13 +81,20 @@ impl ApiClient {
                     let err_str = e.to_string();
                     let is_rate_limit = err_str.contains("429");
                     let is_server_error = err_str.contains(" 5") && attempt < 2;
-                    if is_rate_limit || is_server_error {
+                    let is_transient = err_str.contains("EOF")
+                        || err_str.contains("connection closed")
+                        || err_str.contains("broken pipe")
+                        || err_str.contains("reset by peer");
+                    if is_rate_limit || is_server_error || is_transient {
                         record_failure();
-                        eprintln!(
-                            "[oai-runner] Retry {}/3: {}",
-                            attempt + 1,
-                            if is_rate_limit { "rate limited (429)" } else { "server error" }
-                        );
+                        let reason = if is_rate_limit {
+                            "rate limited (429)"
+                        } else if is_transient {
+                            "transient connection error"
+                        } else {
+                            "server error"
+                        };
+                        eprintln!("[oai-runner] Retry {}/3: {}", attempt + 1, reason);
                         last_err = Some(e);
                         continue;
                     }
@@ -99,7 +107,7 @@ impl ApiClient {
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("stream_chat failed after retries")))
     }
 
-    async fn do_stream_with_retry_after(
+    async fn do_stream(
         &self,
         url: &str,
         request: &ChatRequest,
@@ -133,75 +141,64 @@ impl ApiClient {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut usage: Option<UsageInfo> = None;
 
-        let mut stream = resp.bytes_stream();
-        let mut buffer = String::new();
+        let mut stream = resp.bytes_stream().eventsource();
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer[..line_end].trim().to_string();
-                buffer = buffer[line_end + 1..].to_string();
-
-                if line.is_empty() || line.starts_with(':') {
+        while let Some(event_result) = stream.next().await {
+            let event = match event_result {
+                Ok(event) => event,
+                Err(e) => {
+                    eprintln!("[oai-runner] SSE parse error: {}", e);
                     continue;
                 }
+            };
 
-                if !line.starts_with("data: ") {
-                    continue;
-                }
-
-                let data = &line[6..];
-
-                if data == "[DONE]" {
-                    std::io::stdout().flush().ok();
-                    let msg = ChatMessage {
-                        role: "assistant".to_string(),
-                        content: if content.is_empty() { None } else { Some(content) },
-                        tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
-                        tool_call_id: None,
-                    };
-                    return Ok((msg, usage));
-                }
-
-                let parsed: StreamChunk = match serde_json::from_str(data) {
-                    Ok(c) => c,
-                    Err(_) => continue,
+            if event.data == "[DONE]" {
+                std::io::stdout().flush().ok();
+                let msg = ChatMessage {
+                    role: "assistant".to_string(),
+                    content: if content.is_empty() { None } else { Some(content) },
+                    tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                    tool_call_id: None,
                 };
+                return Ok((msg, usage));
+            }
 
-                if let Some(u) = parsed.usage {
-                    usage = Some(u);
+            let parsed: StreamChunk = match serde_json::from_str(&event.data) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if let Some(u) = parsed.usage {
+                usage = Some(u);
+            }
+
+            for choice in &parsed.choices {
+                if let Some(text) = &choice.delta.content {
+                    content.push_str(text);
+                    on_text_chunk(text);
                 }
 
-                for choice in &parsed.choices {
-                    if let Some(text) = &choice.delta.content {
-                        content.push_str(text);
-                        on_text_chunk(text);
-                    }
+                if let Some(tc_deltas) = &choice.delta.tool_calls {
+                    for tc_delta in tc_deltas {
+                        let idx = tc_delta.index;
 
-                    if let Some(tc_deltas) = &choice.delta.tool_calls {
-                        for tc_delta in tc_deltas {
-                            let idx = tc_delta.index;
+                        while tool_calls.len() <= idx {
+                            tool_calls.push(ToolCall {
+                                id: String::new(),
+                                type_: "function".to_string(),
+                                function: FunctionCall { name: String::new(), arguments: String::new() },
+                            });
+                        }
 
-                            while tool_calls.len() <= idx {
-                                tool_calls.push(ToolCall {
-                                    id: String::new(),
-                                    type_: "function".to_string(),
-                                    function: FunctionCall { name: String::new(), arguments: String::new() },
-                                });
+                        if let Some(id) = &tc_delta.id {
+                            tool_calls[idx].id = id.clone();
+                        }
+                        if let Some(fc) = &tc_delta.function {
+                            if let Some(name) = &fc.name {
+                                tool_calls[idx].function.name = name.clone();
                             }
-
-                            if let Some(id) = &tc_delta.id {
-                                tool_calls[idx].id = id.clone();
-                            }
-                            if let Some(fc) = &tc_delta.function {
-                                if let Some(name) = &fc.name {
-                                    tool_calls[idx].function.name = name.clone();
-                                }
-                                if let Some(args) = &fc.arguments {
-                                    tool_calls[idx].function.arguments.push_str(args);
-                                }
+                            if let Some(args) = &fc.arguments {
+                                tool_calls[idx].function.arguments.push_str(args);
                             }
                         }
                     }

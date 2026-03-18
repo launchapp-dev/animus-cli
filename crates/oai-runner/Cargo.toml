@@ -16,6 +16,10 @@ serde_json = "1"
 anyhow = "1"
 futures-util = "0.3"
 glob = "0.3"
+jsonschema = "0.45"
+eventsource-stream = "0.2"
+tiktoken-rs = "0.9"
+tokio-util = "0.7"
 rmcp = { version = "1.2", features = ["client", "transport-child-process"] }
 protocol = { path = "../protocol" }
 
