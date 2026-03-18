@@ -23,20 +23,23 @@ agents:
          Choose workflow_ref based on task complexity and type:
 
          WORKFLOW ROUTING TABLE:
-         | Complexity | Type           | workflow_ref        | Model         | Why                          |
-         |------------|----------------|---------------------|---------------|------------------------------|
-         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5  | Cheapest, fast               |
-         | low        | feature/docs   | quick-fix-glm       | GLM-5         | Cheap, good at structured    |
-         | medium     | any            | standard-glm        | GLM-5         | Good balance of cost/quality |
-         | medium     | feature        | standard-kimi       | Kimi K2.5     | Strong agentic reasoning     |
-         | high       | feature        | standard            | Claude Sonnet | Best quality for hard tasks  |
-         | high       | refactor       | standard-gemini     | Gemini 2.5    | 1M context for large changes |
-         | high       | architecture   | ao-task-complete    | Claude Sonnet | Full pipeline with PO review |
-         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5  | Monitoring is always cheap   |
-         | any        | workflow-opt   | quick-fix-glm       | GLM-5         | Self-improvement is cheap    |
+         | Complexity | Type           | workflow_ref        | Model              | Why                          |
+         |------------|----------------|---------------------|--------------------|------------------------------|
+         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5       | Cheapest, fast               |
+         | low        | feature/docs   | quick-fix-glm       | GLM-5              | Cheap, good at structured    |
+         | medium     | any            | standard-glm        | GLM-5              | Good balance of cost/quality |
+         | medium     | feature        | standard-kimi       | Kimi K2.5          | Strong agentic reasoning     |
+         | medium     | refactor       | standard-codex      | GPT-5.3 Codex      | Strong code understanding    |
+         | high       | feature        | standard            | Claude Sonnet      | Best quality for hard tasks  |
+         | high       | refactor       | standard-gemini     | Gemini 3.1 Pro     | 1M context for large changes |
+         | high       | architecture   | standard-opus       | Claude Opus        | Hardest tasks, PO review     |
+         | critical   | any            | standard-opus       | Claude Opus        | Maximum quality              |
+         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5       | Monitoring is always cheap   |
+         | any        | workflow-opt   | quick-fix-glm       | GLM-5              | Self-improvement is cheap    |
 
          If complexity is null/unknown, default to "standard-glm" (safe middle ground).
-         If unsure, prefer cheaper models — Claude is reserved for high-complexity work.
+         If unsure, prefer cheaper models — Claude/Opus reserved for high-complexity work.
+         Use Codex for medium-complexity refactors where strong code understanding matters.
 
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
@@ -365,8 +368,16 @@ agents:
     model: openrouter/moonshotai/kimi-k2.5
     tool: oai-runner
 
+  opus-default:
+    model: claude-opus-4-6
+    tool: claude
+
+  codex-default:
+    model: gpt-5.3-codex
+    tool: codex
+
   gemini-default:
-    model: gemini-2.5-pro
+    model: gemini-3.1-pro-preview
     tool: gemini
 
   minimax-smoke-test:
@@ -765,6 +776,18 @@ phases:
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120
+  opus-implementation:
+    mode: agent
+    agent: opus-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code. You are the strongest model — this task requires exceptional quality."
+    capabilities:
+      mutates_state: true
+  codex-implementation:
+    mode: agent
+    agent: codex-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    capabilities:
+      mutates_state: true
   glm-implementation:
     mode: agent
     agent: glm-default
@@ -1108,6 +1131,72 @@ workflows:
           on_verdict:
             rework:
               target: glm-implementation
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-codex
+    name: "Standard (Codex)"
+    description: "Standard workflow using OpenAI GPT-5.3 Codex for implementation"
+    phases:
+      - requirements
+      - codex-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: codex-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: codex-implementation
+      - code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: codex-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-opus
+    name: "Standard (Opus)"
+    description: "Premium workflow using Claude Opus for the hardest tasks — architecture, complex refactors, critical fixes"
+    phases:
+      - requirements
+      - opus-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - po-review:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - create-pr
       - cleanup
     post_success:
       merge:
