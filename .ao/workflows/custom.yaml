@@ -19,7 +19,29 @@ agents:
            - Call ao.task.get for the dependency task_id
            - If the dependency is NOT status "done" or "cancelled", SKIP this task — it's not truly ready.
          - Only enqueue tasks whose ALL blocked_by dependencies are done/cancelled.
-      5. For eligible tasks NOT already in the queue, call ao.queue.enqueue with --task-id.
+      5. For eligible tasks NOT already in the queue, call ao.queue.enqueue with task_id AND workflow_ref.
+         Choose workflow_ref based on task complexity and type:
+
+         WORKFLOW ROUTING TABLE:
+         | Complexity | Type           | workflow_ref        | Model              | Why                          |
+         |------------|----------------|---------------------|--------------------|------------------------------|
+         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5       | Cheapest, fast               |
+         | low        | feature/docs   | quick-fix-glm       | GLM-5              | Cheap, good at structured    |
+         | medium     | any            | standard-glm        | GLM-5              | Good balance of cost/quality |
+         | medium     | feature        | standard-kimi       | Kimi K2.5          | Strong agentic reasoning     |
+         | medium     | refactor       | standard-glm        | GLM-5 + Codex rev  | GLM implements, Codex reviews|
+         | high       | feature        | standard            | Claude Sonnet      | Best quality for hard tasks  |
+         | high       | refactor       | standard-gemini     | Gemini 3.1 Pro     | 1M context for large changes |
+         | high       | architecture   | standard-opus       | Claude Opus        | Hardest tasks, PO review     |
+         | critical   | any            | standard-opus       | Claude Opus        | Maximum quality              |
+         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5       | Monitoring is always cheap   |
+         | any        | workflow-opt   | quick-fix-glm       | GLM-5              | Self-improvement is cheap    |
+
+         If complexity is null/unknown, default to "standard-glm" (safe middle ground).
+         If unsure, prefer cheaper models — Claude/Opus reserved for high-complexity work.
+         Note: Codex (GPT-5.3) is used as CODE REVIEWER in standard-glm, standard-minimax, and standard-kimi workflows.
+         It catches requirement misalignments and logic errors. Don't route it as an implementer.
+
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
       DEPENDENCY RULES:
@@ -334,6 +356,141 @@ agents:
       Use "advance" for KEEP, "skip" for DONE/OBSOLETE/DUPLICATE when the task should not continue.
     model: claude-sonnet-4-6
     tool: claude
+
+  web-ui-improver:
+    system_prompt: |
+      You are the AO Web UI improvement agent. Your sole focus is improving the web API, GraphQL API, and React web app.
+
+      Scope:
+      - crates/orchestrator-web-server/ (web server, embedded UI)
+      - crates/orchestrator-web-api/ (GraphQL resolvers, API routes)
+      - crates/orchestrator-web-contracts/ (shared types between API and UI)
+      - crates/orchestrator-web-server/web-ui/ (React 18 app, TanStack Query, Tailwind CSS 4)
+      - crates/orchestrator-web-server/web-ui/src/app/router.tsx (routes)
+      - crates/orchestrator-web-server/web-ui/src/lib/graphql/ (GraphQL client queries)
+
+      On each run you MUST:
+      1. Read the web UI source: scan router.tsx, key pages, GraphQL queries, and component structure.
+      2. Read the web API: scan GraphQL schema, resolvers, and REST endpoints.
+      3. Read the web contracts crate for shared types.
+      4. Identify improvements in these categories:
+         a. Missing GraphQL queries/mutations (data available in core but not exposed)
+         b. UI gaps (pages that exist but are incomplete, missing error states, loading states)
+         c. API coverage (core service methods not yet exposed via GraphQL)
+         d. UX issues (navigation gaps, inconsistent layouts, missing responsive design)
+         e. Performance (unnecessary re-renders, missing query caching, bundle size)
+         f. Type safety (GraphQL types not matching Rust contracts)
+      5. For each improvement found, check ao.task.list to avoid duplicates.
+      6. Create up to 3 tasks per run, tagged "web-ui-improvement", with type "feature" or "bugfix".
+         Set complexity to "low" or "medium" — these should be routable to cheaper models.
+         Include specific file paths and line numbers in the description.
+
+      RULES:
+      - Do NOT create vague tasks. Every task must reference specific files and what to change.
+      - Do NOT create tasks for things already working well.
+      - Prefer small, focused improvements over large rewrites.
+      - Tag all tasks with "web-ui-improvement".
+    model: claude-sonnet-4-6
+    tool: claude
+
+  mcp-server-improver:
+    system_prompt: |
+      You are the AO MCP server improvement agent. Your sole focus is improving the out-of-the-box MCP tools.
+
+      Scope:
+      - docs/reference/mcp-tools.md (MCP tool documentation)
+      - crates/orchestrator-cli/src/services/operations/ops_mcp/ (MCP tool implementations)
+      - crates/orchestrator-cli/src/services/operations/ops_mcp.rs (MCP dispatch)
+      - crates/orchestrator-core/src/services/ (core services backing MCP tools)
+      - crates/protocol/src/ (shared types used by MCP tools)
+
+      On each run you MUST:
+      1. Read the MCP tool reference docs at docs/reference/mcp-tools.md.
+      2. Scan the ops_mcp/ directory for all implemented MCP tool handlers.
+      3. Compare documented tools vs implemented tools — find gaps.
+      4. Check each tool's input/output types for consistency with the core service layer.
+      5. Identify improvements in these categories:
+         a. Missing MCP tools (core functionality not exposed as MCP tools)
+         b. Tool ergonomics (required params that should be optional, missing defaults)
+         c. Error handling (tools that return unhelpful error messages)
+         d. Documentation gaps (tools missing from docs, outdated descriptions)
+         e. Input validation (tools accepting invalid input without clear errors)
+         f. Output format (tools returning raw data instead of structured responses)
+      6. For each improvement found, check ao.task.list to avoid duplicates.
+      7. Create up to 3 tasks per run, tagged "mcp-improvement", with type "feature" or "bugfix".
+         Set complexity to "low" or "medium".
+         Include specific file paths and function names in the description.
+
+      RULES:
+      - Do NOT create vague tasks. Reference specific tool names, files, and what to change.
+      - Do NOT propose new tools unless there's a clear core service method to back them.
+      - Prefer fixing existing tools over adding new ones.
+      - Tag all tasks with "mcp-improvement".
+    model: claude-sonnet-4-6
+    tool: claude
+
+  docs-drift-checker:
+    system_prompt: |
+      You are the AO documentation drift checker. You find where docs have fallen behind the code.
+
+      Scope — compare these doc files against their source:
+      - docs/reference/cli/index.md ↔ crates/orchestrator-cli/src/cli_types/root_types.rs (CLI commands)
+      - docs/reference/mcp-tools.md ↔ crates/orchestrator-cli/src/services/operations/ops_mcp/ (MCP tools)
+      - docs/guides/agents.md ↔ .ao/workflows/custom.yaml (agent workflows)
+      - CLAUDE.md ↔ actual workspace state (crate count, CLI groups, web UI stack)
+      - README.md ↔ current features and setup instructions
+
+      On each run you MUST:
+      1. Read each doc file listed above.
+      2. Read the corresponding source file(s).
+      3. Compare: find commands/tools/features that exist in code but not in docs, or docs that describe removed/renamed things.
+      4. Check for:
+         a. CLI commands in root_types.rs not documented in cli/index.md
+         b. MCP tools implemented in ops_mcp/ not listed in mcp-tools.md
+         c. Workflow agents/phases in custom.yaml not described in agents.md
+         d. Stale crate counts, removed features, or wrong version numbers in CLAUDE.md
+         e. Setup instructions in README.md that reference old paths or removed commands
+      5. For each drift found, check ao.task.list for existing docs tasks to avoid duplicates.
+      6. Create up to 3 tasks per run, tagged "docs-drift", with type "docs" and complexity "low".
+         Include the specific doc file, section, and what needs updating.
+
+      RULES:
+      - Only create tasks for real drift — not style or formatting preferences.
+      - Every task must cite the exact doc section AND the source of truth.
+      - Tag all tasks with "docs-drift".
+      - Set task_type to "docs" so the work-planner routes them to cheap models.
+    model: claude-sonnet-4-6
+    tool: claude
+
+  glm-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
+    model: zai-coding-plan/glm-5
+    tool: oai-runner
+
+  minimax-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
+    model: minimax/MiniMax-M2.5
+    tool: oai-runner
+
+  kimi-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
+    model: openrouter/moonshotai/kimi-k2.5
+    tool: oai-runner
+
+  opus-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks — architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
+    model: claude-opus-4-6
+    tool: claude
+
+  codex-default:
+    system_prompt: "You are an expert code reviewer for the AO CLI Rust workspace. Review code for correctness, requirement alignment, edge cases, and quality. Do NOT make changes — only review."
+    model: gpt-5.3-codex
+    tool: codex
+
+  gemini-default:
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
+    model: gemini-3.1-pro-preview
+    tool: gemini
 
   minimax-smoke-test:
     system_prompt: |
@@ -731,6 +888,91 @@ phases:
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120
+  opus-implementation:
+    mode: agent
+    agent: opus-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code. You are the strongest model — this task requires exceptional quality."
+    capabilities:
+      mutates_state: true
+  docs-drift-scan:
+    mode: agent
+    agent: docs-drift-checker
+    directive: "Compare documentation against source code. Create tasks for any drift found."
+    capabilities:
+      mutates_state: true
+  web-ui-scan:
+    mode: agent
+    agent: web-ui-improver
+    directive: "Scan the web API, GraphQL layer, and React UI. Create focused improvement tasks."
+    capabilities:
+      mutates_state: true
+  mcp-server-scan:
+    mode: agent
+    agent: mcp-server-improver
+    directive: "Scan MCP tool implementations and docs. Create focused improvement tasks."
+    capabilities:
+      mutates_state: true
+  codex-code-review:
+    mode: agent
+    agent: codex-default
+    directive: "Review the implementation against the task requirements and acceptance criteria. Check for: requirement misalignment, missing acceptance criteria, edge cases, logic errors, and code quality. Do NOT make changes. If issues found, set verdict to rework with exact details of what must be fixed. Only advance if code fully satisfies the task spec."
+    decision_contract:
+      required_evidence: [code_review_clean]
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        review_summary:
+          type: string
+          description: "Short review summary explaining why the branch is approved or sent back."
+        blocking_issues:
+          type: array
+          description: "Concrete blocking defects or requirement misalignments discovered."
+          items:
+            type: string
+        requirements_verified:
+          type: array
+          description: "Acceptance criteria confirmed as satisfied."
+          items:
+            type: string
+    capabilities:
+      mutates_state: false
+  glm-implementation:
+    mode: agent
+    agent: glm-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    capabilities:
+      mutates_state: true
+  minimax-implementation:
+    mode: agent
+    agent: minimax-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    capabilities:
+      mutates_state: true
+  kimi-implementation:
+    mode: agent
+    agent: kimi-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    capabilities:
+      mutates_state: true
+  gemini-implementation:
+    mode: agent
+    agent: gemini-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    capabilities:
+      mutates_state: true
+  glm-requirements:
+    mode: agent
+    agent: glm-default
+    directive: "Refine the task into implementation-ready requirements with clear acceptance criteria."
+    capabilities:
+      mutates_state: true
+  minimax-requirements:
+    mode: agent
+    agent: minimax-default
+    directive: "Refine the task into implementation-ready requirements with clear acceptance criteria."
+    capabilities:
+      mutates_state: true
   minimax-smoke:
     mode: agent
     agent: minimax-smoke-test
@@ -889,6 +1131,209 @@ workflows:
       - testing
       - cleanup
 
+  - id: standard-glm
+    name: "Standard (GLM)"
+    description: "Standard workflow using GLM/Z-AI for implementation, Codex for review"
+    phases:
+      - glm-requirements
+      - glm-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: glm-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: glm-implementation
+      - codex-code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: glm-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-minimax
+    name: "Standard (MiniMax)"
+    description: "Standard workflow using MiniMax for implementation, Codex for review"
+    phases:
+      - minimax-requirements
+      - minimax-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: minimax-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: minimax-implementation
+      - codex-code-review:
+          max_rework_attempts: 2
+          on_verdict:
+            rework:
+              target: minimax-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-kimi
+    name: "Standard (Kimi K2.5)"
+    description: "Standard workflow using Kimi K2.5 via OpenRouter — multimodal agentic model for complex tasks"
+    phases:
+      - requirements
+      - kimi-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - codex-code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-gemini
+    name: "Standard (Gemini)"
+    description: "Standard workflow using Gemini for implementation — 1M context, good for large refactors"
+    phases:
+      - requirements
+      - gemini-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: gemini-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: gemini-implementation
+      - code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: gemini-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: quick-fix-minimax
+    name: "Quick Fix (MiniMax)"
+    description: "Fast workflow for trivial bug fixes using MiniMax — cheapest option"
+    phases:
+      - minimax-implementation
+      - unit-test:
+          on_verdict:
+            rework:
+              target: minimax-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: minimax-implementation
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: quick-fix-glm
+    name: "Quick Fix (GLM)"
+    description: "Fast workflow for small fixes using GLM"
+    phases:
+      - glm-implementation
+      - unit-test:
+          on_verdict:
+            rework:
+              target: glm-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: glm-implementation
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-opus
+    name: "Standard (Opus)"
+    description: "Premium workflow using Claude Opus for the hardest tasks — architecture, complex refactors, critical fixes"
+    phases:
+      - requirements
+      - opus-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - po-review:
+          on_verdict:
+            rework:
+              target: opus-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
   - id: gated
     name: "Gated"
     description: "Full workflow with requirements validation, implementation, deterministic test/lint gates, code review, and PO sign-off"
@@ -951,6 +1396,24 @@ workflows:
     description: "Verify oai-runner → GLM/Z-AI API pipeline: file ops, tool use, AO MCP connectivity"
     phases:
       - glm-smoke
+
+  - id: docs-drift-checker
+    name: "Documentation Drift Checker"
+    description: "Hourly scan for documentation that has fallen behind code changes"
+    phases:
+      - docs-drift-scan
+
+  - id: web-ui-improver
+    name: "Web UI Improver"
+    description: "Hourly scan of web API, GraphQL, and React UI to create focused improvement tasks"
+    phases:
+      - web-ui-scan
+
+  - id: mcp-server-improver
+    name: "MCP Server Improver"
+    description: "Hourly scan of MCP tool implementations and docs to create improvement tasks"
+    phases:
+      - mcp-server-scan
 
   - id: system-monitor
     name: "System Monitor"
@@ -1017,6 +1480,21 @@ schedules:
   - id: pr-reviewer
     cron: "*/5 * * * *"
     workflow_ref: pr-reviewer
+    enabled: true
+
+  - id: docs-drift-checker
+    cron: "50 */2 * * *"
+    workflow_ref: docs-drift-checker
+    enabled: true
+
+  - id: web-ui-improver
+    cron: "20 * * * *"
+    workflow_ref: web-ui-improver
+    enabled: true
+
+  - id: mcp-server-improver
+    cron: "40 * * * *"
+    workflow_ref: mcp-server-improver
     enabled: true
 
   - id: system-monitor

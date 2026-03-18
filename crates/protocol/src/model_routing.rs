@@ -164,6 +164,7 @@ pub fn tool_for_model_id(model_id: &str) -> &'static str {
         || normalized.starts_with("zai")
         || normalized.contains("glm")
         || normalized.contains("minimax")
+        || normalized.starts_with("openrouter/")
         || normalized.starts_with("groq/")
         || normalized.starts_with("together/")
         || normalized.starts_with("fireworks/")
