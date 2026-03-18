@@ -503,6 +503,183 @@ agents:
     model: claude-sonnet-4-6
     tool: claude
 
+  po-oai-runner:
+    system_prompt: |
+      You are the Product Owner for the oai-runner and model routing subsystem.
+      Your domain: crates/oai-runner/ (API client, agent loop, tools, config) and crates/protocol/src/model_routing.rs.
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - New provider support (check latest OpenAI-compatible APIs)
+      - Structured output improvements (json_object, response_format)
+      - Token tracking and cost optimization
+      - Circuit breaker and retry improvements
+      - Session management and resumption
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-oai-runner". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  po-web:
+    system_prompt: |
+      You are the Product Owner for the AO web surface.
+      Your domain: crates/orchestrator-web-server/ (embedded UI), crates/orchestrator-web-api/ (GraphQL), crates/orchestrator-web-contracts/ (shared types), and web-ui/ (React 18 app).
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - Missing GraphQL queries/mutations (core data not exposed)
+      - UI gaps (incomplete pages, missing error/loading states)
+      - API coverage (service methods not exposed via GraphQL)
+      - UX issues (navigation, responsive design, accessibility)
+      - Type safety (GraphQL types vs Rust contracts)
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-web". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7"]
+
+  po-mcp:
+    system_prompt: |
+      You are the Product Owner for the AO MCP tools.
+      Your domain: crates/orchestrator-cli/src/services/operations/ops_mcp/ and docs/reference/mcp-tools.md.
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - Tools documented but not implemented (or vice versa)
+      - Tool ergonomics (required params that should be optional)
+      - Error messages that are unhelpful
+      - Missing input validation
+      - Output format improvements
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-mcp". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  po-workflow:
+    system_prompt: |
+      You are the Product Owner for the workflow engine.
+      Your domain: crates/workflow-runner-v2/ (phase execution, git ops, output parsing), crates/orchestrator-config/ (workflow config, YAML parsing).
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - Phase execution reliability (commit handling, output parsing)
+      - Workflow YAML feature gaps
+      - Output contract improvements
+      - Rework/continuation logic
+      - Fallback and failover behavior
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-workflow". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  po-agent-runner:
+    system_prompt: |
+      You are the Product Owner for the agent runner and CLI wrappers.
+      Your domain: crates/agent-runner/ (session process, IPC, output parsing) and crates/llm-cli-wrapper/ (CLI abstraction, session backends).
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - Process lifecycle (zombie reaping, signal handling)
+      - Session resume reliability
+      - Output parsing accuracy across CLI tools
+      - MCP policy enforcement
+      - New CLI tool support
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-agent-runner". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  po-cli:
+    system_prompt: |
+      You are the Product Owner for the CLI surface and core services.
+      Your domain: crates/orchestrator-cli/ (commands, dispatch), crates/orchestrator-core/ (services, config, state), crates/protocol/ (shared types).
+      Scan your domain each run. Create requirements (ao.requirements.create) for:
+      - CLI command UX improvements
+      - Service layer gaps
+      - State management issues
+      - Doctor/setup command improvements
+      - Configuration ergonomics
+      Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
+      Tag requirements with "po-cli". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  architect-rust:
+    system_prompt: |
+      You are the Rust Workspace Architect for AO CLI (16 crates).
+      Scan the workspace structure each run. Create requirements (ao.requirements.create) for:
+      - Circular dependencies between crates
+      - Crates with too many dependencies (over-coupling)
+      - Public API surface issues (leaking internals)
+      - Compile time bottlenecks
+      - Unused dependencies in Cargo.toml
+      - Trait boundary violations
+      Read Cargo.toml in each crate to map the dependency graph.
+      Check ao.requirements.list before creating — NEVER duplicate.
+      Tag requirements with "architect-rust". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "rust-docs"]
+
+  architect-infra:
+    system_prompt: |
+      You are the Infrastructure Architect for AO CLI.
+      Scan CI/CD and release infrastructure each run. Create requirements (ao.requirements.create) for:
+      - .github/workflows/ issues (missing checks, slow builds)
+      - Cargo workspace configuration
+      - Release pipeline improvements
+      - Build performance (caching, incremental compilation)
+      - Cross-platform support (macOS, Linux, Windows)
+      Check ao.requirements.list before creating — NEVER duplicate.
+      Tag requirements with "architect-infra". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao"]
+
+  researcher-models:
+    system_prompt: |
+      You are the LLM Model Researcher for AO CLI.
+      Research new models and providers each run. Create requirements (ao.requirements.create) for:
+      - New OpenAI-compatible providers to add to oai-runner
+      - Model pricing changes (cheaper alternatives)
+      - New model capabilities (vision, tool use, structured output)
+      - Provider API stability reports
+      Use WebSearch to find latest model announcements and pricing.
+      Check ao.requirements.list before creating — NEVER duplicate.
+      Tag requirements with "researcher-models". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao"]
+
+  researcher-ecosystem:
+    system_prompt: |
+      You are the Rust Ecosystem Researcher for AO CLI.
+      Research useful crates and tools each run. Create requirements (ao.requirements.create) for:
+      - New MCP servers worth integrating
+      - Rust crates that could improve the workspace
+      - Testing frameworks and patterns
+      - Performance optimization tools
+      - Security scanning tools
+      Use context7 and rust-docs to check current crate APIs.
+      Check ao.requirements.list before creating — NEVER duplicate.
+      Tag requirements with "researcher-ecosystem". Max 2 per run.
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7", "rust-docs"]
+
+  requirement-reviewer:
+    system_prompt: |
+      You are the Master Requirement Reviewer for AO CLI.
+      Review all pending requirements each run:
+      1. Call ao.requirements.list to get all requirements.
+      2. For each with status "proposed" or "draft":
+         a. Check ao.task.list for existing tasks covering the same scope — reject duplicates.
+         b. Evaluate priority: is this actually important for the project right now?
+         c. Check scope: is this too broad? Should it be split?
+         d. If approved: create a task via ao.task.create with proper complexity/type/priority.
+            Set task status to "ready". Reference the requirement ID.
+         e. If rejected: update requirement status to explain why.
+      3. Max 5 task conversions per run to avoid flooding.
+      4. Prefer requirements from POs over researchers (POs know their domain better).
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao"]
+
   glm-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
     model: zai-coding-plan/glm-5-turbo
@@ -1014,6 +1191,72 @@ phases:
     mode: agent
     agent: docs-drift-checker
     directive: "Compare documentation against source code. Create tasks for any drift found."
+    capabilities:
+      mutates_state: true
+  po-oai-runner-scan:
+    mode: agent
+    agent: po-oai-runner
+    directive: "Scan oai-runner and model routing. Create requirement proposals for improvements."
+    capabilities:
+      mutates_state: true
+  po-web-scan:
+    mode: agent
+    agent: po-web
+    directive: "Scan web API, GraphQL, and React UI. Create requirement proposals."
+    capabilities:
+      mutates_state: true
+  po-mcp-scan:
+    mode: agent
+    agent: po-mcp
+    directive: "Scan MCP tool implementations and docs. Create requirement proposals."
+    capabilities:
+      mutates_state: true
+  po-workflow-scan:
+    mode: agent
+    agent: po-workflow
+    directive: "Scan workflow engine and config. Create requirement proposals."
+    capabilities:
+      mutates_state: true
+  po-agent-runner-scan:
+    mode: agent
+    agent: po-agent-runner
+    directive: "Scan agent runner and CLI wrappers. Create requirement proposals."
+    capabilities:
+      mutates_state: true
+  po-cli-scan:
+    mode: agent
+    agent: po-cli
+    directive: "Scan CLI surface and core services. Create requirement proposals."
+    capabilities:
+      mutates_state: true
+  architect-rust-audit:
+    mode: agent
+    agent: architect-rust
+    directive: "Audit workspace structure, dependency graph, and trait boundaries."
+    capabilities:
+      mutates_state: true
+  architect-infra-audit:
+    mode: agent
+    agent: architect-infra
+    directive: "Audit CI/CD, release pipeline, and build infrastructure."
+    capabilities:
+      mutates_state: true
+  researcher-models-scan:
+    mode: agent
+    agent: researcher-models
+    directive: "Research new LLM models, providers, and pricing changes."
+    capabilities:
+      mutates_state: true
+  researcher-ecosystem-scan:
+    mode: agent
+    agent: researcher-ecosystem
+    directive: "Research useful Rust crates, MCP servers, and tools."
+    capabilities:
+      mutates_state: true
+  requirement-review:
+    mode: agent
+    agent: requirement-reviewer
+    directive: "Review pending requirements. Convert approved ones to tasks."
     capabilities:
       mutates_state: true
   web-ui-scan:
@@ -1633,15 +1876,81 @@ workflows:
     phases:
       - docs-drift-scan
 
+  - id: po-oai-runner
+    name: "PO: oai-runner"
+    description: "Product Owner scan of oai-runner and model routing"
+    phases:
+      - po-oai-runner-scan
+
+  - id: po-web
+    name: "PO: Web Surface"
+    description: "Product Owner scan of web API, GraphQL, and React UI"
+    phases:
+      - po-web-scan
+
+  - id: po-mcp
+    name: "PO: MCP Tools"
+    description: "Product Owner scan of MCP tool implementations"
+    phases:
+      - po-mcp-scan
+
+  - id: po-workflow
+    name: "PO: Workflow Engine"
+    description: "Product Owner scan of workflow runner and config"
+    phases:
+      - po-workflow-scan
+
+  - id: po-agent-runner
+    name: "PO: Agent Runner"
+    description: "Product Owner scan of agent runner and CLI wrappers"
+    phases:
+      - po-agent-runner-scan
+
+  - id: po-cli
+    name: "PO: CLI Surface"
+    description: "Product Owner scan of CLI commands and core services"
+    phases:
+      - po-cli-scan
+
+  - id: architect-rust
+    name: "Architect: Rust Workspace"
+    description: "Audit workspace structure, dependency graph, traits"
+    phases:
+      - architect-rust-audit
+
+  - id: architect-infra
+    name: "Architect: Infrastructure"
+    description: "Audit CI/CD, release pipeline, build infrastructure"
+    phases:
+      - architect-infra-audit
+
+  - id: researcher-models
+    name: "Researcher: LLM Models"
+    description: "Research new models, providers, and pricing"
+    phases:
+      - researcher-models-scan
+
+  - id: researcher-ecosystem
+    name: "Researcher: Ecosystem"
+    description: "Research useful Rust crates, MCP servers, tools"
+    phases:
+      - researcher-ecosystem-scan
+
+  - id: requirement-review
+    name: "Master Requirement Review"
+    description: "Review pending requirements, convert approved ones to tasks"
+    phases:
+      - requirement-review
+
   - id: web-ui-improver
-    name: "Web UI Improver"
-    description: "Hourly scan of web API, GraphQL, and React UI to create focused improvement tasks"
+    name: "Web UI Improver (legacy)"
+    description: "Legacy — replaced by po-web"
     phases:
       - web-ui-scan
 
   - id: mcp-server-improver
-    name: "MCP Server Improver"
-    description: "Hourly scan of MCP tool implementations and docs to create improvement tasks"
+    name: "MCP Server Improver (legacy)"
+    description: "Legacy — replaced by po-mcp"
     phases:
       - mcp-server-scan
 
@@ -1742,14 +2051,59 @@ schedules:
     workflow_ref: docs-drift-checker
     enabled: true
 
-  - id: web-ui-improver
-    cron: "20 * * * *"
-    workflow_ref: web-ui-improver
+  - id: po-oai-runner
+    cron: "5 */2 * * *"
+    workflow_ref: po-oai-runner
     enabled: true
 
-  - id: mcp-server-improver
+  - id: po-web
+    cron: "20 * * * *"
+    workflow_ref: po-web
+    enabled: true
+
+  - id: po-mcp
     cron: "40 * * * *"
-    workflow_ref: mcp-server-improver
+    workflow_ref: po-mcp
+    enabled: true
+
+  - id: po-workflow
+    cron: "25 */2 * * *"
+    workflow_ref: po-workflow
+    enabled: true
+
+  - id: po-agent-runner
+    cron: "35 */3 * * *"
+    workflow_ref: po-agent-runner
+    enabled: true
+
+  - id: po-cli
+    cron: "55 */3 * * *"
+    workflow_ref: po-cli
+    enabled: true
+
+  - id: architect-rust
+    cron: "10 */4 * * *"
+    workflow_ref: architect-rust
+    enabled: true
+
+  - id: architect-infra
+    cron: "30 */6 * * *"
+    workflow_ref: architect-infra
+    enabled: true
+
+  - id: researcher-models
+    cron: "45 */4 * * *"
+    workflow_ref: researcher-models
+    enabled: true
+
+  - id: researcher-ecosystem
+    cron: "15 */4 * * *"
+    workflow_ref: researcher-ecosystem
+    enabled: true
+
+  - id: requirement-review
+    cron: "*/30 * * * *"
+    workflow_ref: requirement-review
     enabled: true
 
   - id: system-monitor
