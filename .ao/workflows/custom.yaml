@@ -29,8 +29,10 @@ agents:
          | low        | feature/docs   | quick-fix-glm       | GLM-5              | Cheap, good at structured    |
          | medium     | any            | standard-glm        | GLM-5              | Good balance of cost/quality |
          | medium     | feature        | standard-kimi       | Kimi K2.5          | Strong agentic reasoning     |
+         | medium     | ui-ux          | ao.task/ui-ux       | Kimi K2.5          | UI/UX tasks use Kimi         |
          | medium     | refactor       | standard-glm        | GLM-5 + Codex rev  | GLM implements, Codex reviews|
          | high       | feature        | standard            | Claude Sonnet      | Best quality for hard tasks  |
+         | high       | ui-ux          | standard-kimi       | Kimi K2.5          | Complex UI needs strong reasoning |
          | high       | refactor       | standard-gemini     | Gemini 3.1 Pro     | 1M context for large changes |
          | high       | architecture   | standard-opus       | Claude Opus        | Hardest tasks, PO review     |
          | critical   | any            | standard-opus       | Claude Opus        | Maximum quality              |
@@ -464,7 +466,7 @@ agents:
 
   glm-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
-    model: zai-coding-plan/glm-5
+    model: zai-coding-plan/glm-4.7
     tool: oai-runner
 
   minimax-default:
@@ -527,7 +529,7 @@ agents:
          {"status": "pass", "model": "glm", "checks": ["file_read", "dir_list", "tool_use", "mcp_task_stats", "mcp_queue_stats"]}
 
       Keep it brief. Do not modify any files or tasks.
-    model: zai-coding-plan/glm-5
+    model: zai-coding-plan/glm-4.7
     tool: oai-runner
 
 phase_catalog:
@@ -1290,6 +1292,68 @@ workflows:
           on_verdict:
             rework:
               target: glm-implementation
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: ao.task/ui-ux
+    name: "UI/UX Task Workflow"
+    description: "Standard workflow using Kimi for UI/UX implementation — maps from ao.task/ui-ux workflow reference"
+    phases:
+      - requirements
+      - kimi-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - codex-code-review:
+          max_rework_attempts: 2
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: ui-ux-standard
+    name: "UI/UX Standard"
+    description: "Standard workflow using Kimi for UI/UX implementation, Codex for review — for web UI, React, and design-related tasks"
+    phases:
+      - requirements
+      - kimi-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - codex-code-review:
+          max_rework_attempts: 2
+          on_verdict:
+            rework:
+              target: kimi-implementation
+      - create-pr
       - cleanup
     post_success:
       merge:
