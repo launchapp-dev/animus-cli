@@ -73,10 +73,8 @@ pub fn truncate_to_fit(messages: &mut Vec<ChatMessage>, context_limit: usize, re
         if messages[i].role == "assistant" && messages[i].tool_calls.is_none() {
             if let Some(content) = &messages[i].content {
                 if content.len() > 500 {
-                    messages[i].content = Some(format!(
-                        "{}...\n[truncated]",
-                        &content.chars().take(200).collect::<String>()
-                    ));
+                    messages[i].content =
+                        Some(format!("{}...\n[truncated]", &content.chars().take(200).collect::<String>()));
                     removed += 1;
                     i += 1;
                     continue;
@@ -135,12 +133,7 @@ mod tests {
     use super::*;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
-        ChatMessage {
-            role: role.to_string(),
-            content: Some(content.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        }
+        ChatMessage { role: role.to_string(), content: Some(content.to_string()), tool_calls: None, tool_call_id: None }
     }
 
     #[test]

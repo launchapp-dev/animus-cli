@@ -156,6 +156,8 @@ async fn main() -> Result<()> {
                 cancel_for_signal.cancel();
             });
 
+            let structured_output = if no_response_format { None } else { Some(resolved_config.structured_output) };
+
             let result = runner::agent_loop::run_agent_loop(
                 &client,
                 &resolved_config.model_id,
@@ -168,7 +170,7 @@ async fn main() -> Result<()> {
                 parsed_schema.as_ref(),
                 &mcp_clients,
                 session_id.as_deref(),
-                !no_response_format,
+                structured_output,
                 cancel_token,
                 context_limit,
                 max_tokens,

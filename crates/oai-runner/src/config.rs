@@ -3,10 +3,17 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructuredOutputSupport {
+    JsonSchema,
+    JsonObjectOnly,
+}
+
 pub struct ResolvedConfig {
     pub api_base: String,
     pub api_key: String,
     pub model_id: String,
+    pub structured_output: StructuredOutputSupport,
 }
 
 pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<String>) -> Result<ResolvedConfig> {
@@ -23,8 +30,19 @@ pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<Str
     };
 
     let model_id = strip_provider_prefix(model);
+    let structured_output = infer_structured_output_support(&normalized);
 
-    Ok(ResolvedConfig { api_base, api_key, model_id })
+    Ok(ResolvedConfig { api_base, api_key, model_id, structured_output })
+}
+
+fn infer_structured_output_support(normalized_model: &str) -> StructuredOutputSupport {
+    if normalized_model.starts_with("zai") || normalized_model.starts_with("glm") || normalized_model.contains("glm") {
+        return StructuredOutputSupport::JsonObjectOnly;
+    }
+    if normalized_model.starts_with("minimax/") || normalized_model.contains("minimax") {
+        return StructuredOutputSupport::JsonObjectOnly;
+    }
+    StructuredOutputSupport::JsonSchema
 }
 
 fn infer_api_base(normalized_model: &str) -> Result<String> {
