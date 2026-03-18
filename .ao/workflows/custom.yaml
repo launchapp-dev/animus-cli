@@ -783,6 +783,7 @@ phases:
     mode: command
     directive: "Delete cargo build artifacts to free disk space"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["clean"]
       timeout_secs: 60
