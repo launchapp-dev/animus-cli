@@ -1216,6 +1216,7 @@ pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<Lo
             }
         }
 
+        backfill_agent_system_prompts(&mut config);
         validate_agent_runtime_config(&config)?;
 
         return Ok(LoadedAgentRuntimeConfig {
@@ -1657,6 +1658,16 @@ fn validate_phase_definition(
     }
 
     Ok(())
+}
+
+fn backfill_agent_system_prompts(config: &mut AgentRuntimeConfig) {
+    const DEFAULT_SYSTEM_PROMPT: &str =
+        "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.";
+    for profile in config.agents.values_mut() {
+        if profile.system_prompt.trim().is_empty() {
+            profile.system_prompt = DEFAULT_SYSTEM_PROMPT.to_string();
+        }
+    }
 }
 
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
