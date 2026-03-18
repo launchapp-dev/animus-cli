@@ -507,7 +507,7 @@ pub struct LoadedAgentRuntimeConfig {
 }
 
 fn default_command_cwd_mode() -> CommandCwdMode {
-    CommandCwdMode::ProjectRoot
+    CommandCwdMode::TaskRoot
 }
 
 fn default_success_exit_codes() -> Vec<i32> {
@@ -2681,7 +2681,7 @@ cli_tools:
     }
 
     #[test]
-    fn command_mode_defaults_cwd_to_project_root_and_exit_code_zero() {
+    fn command_mode_defaults_cwd_to_task_root_and_exit_code_zero() {
         let json = r#"{
             "mode": "command",
             "command": {
@@ -2693,7 +2693,7 @@ cli_tools:
         assert_eq!(definition.mode, PhaseExecutionMode::Command);
         let cmd = definition.command.expect("command present");
         assert_eq!(cmd.program, "make");
-        assert_eq!(cmd.cwd_mode, CommandCwdMode::ProjectRoot);
+        assert_eq!(cmd.cwd_mode, CommandCwdMode::TaskRoot);
         assert_eq!(cmd.success_exit_codes, vec![0]);
         assert!(cmd.args.is_empty());
         assert!(cmd.env.is_empty());

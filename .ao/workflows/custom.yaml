@@ -783,6 +783,7 @@ phases:
     mode: command
     directive: "Delete cargo build artifacts to free disk space"
     command:
+      cwd_mode: task_root
       program: cargo
       args: ["clean"]
       timeout_secs: 60
@@ -943,36 +944,48 @@ phases:
     mode: agent
     agent: glm-default
     directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    runtime:
+      fallback_models: ["minimax/MiniMax-M2.5", "claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   minimax-implementation:
     mode: agent
     agent: minimax-default
     directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    runtime:
+      fallback_models: ["zai-coding-plan/glm-5-turbo", "claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   kimi-implementation:
     mode: agent
     agent: kimi-default
     directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    runtime:
+      fallback_models: ["zai-coding-plan/glm-5-turbo", "minimax/MiniMax-M2.5", "claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   gemini-implementation:
     mode: agent
     agent: gemini-default
     directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    runtime:
+      fallback_models: ["claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   glm-requirements:
     mode: agent
     agent: glm-default
     directive: "Refine the task into implementation-ready requirements with clear acceptance criteria."
+    runtime:
+      fallback_models: ["minimax/MiniMax-M2.5", "claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   minimax-requirements:
     mode: agent
     agent: minimax-default
     directive: "Refine the task into implementation-ready requirements with clear acceptance criteria."
+    runtime:
+      fallback_models: ["zai-coding-plan/glm-5-turbo", "claude-sonnet-4-6"]
     capabilities:
       mutates_state: true
   minimax-smoke:
