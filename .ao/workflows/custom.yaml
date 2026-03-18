@@ -13,24 +13,12 @@ mcp_servers:
   github:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-github"]
-    env:
-      GITHUB_PERSONAL_ACCESS_TOKEN: ""
   sequential-thinking:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
   memory:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-memory"]
-  brave-search:
-    command: npx
-    args: ["-y", "@anthropic/mcp-server-brave-search"]
-    env:
-      BRAVE_API_KEY: ""
-  sentry:
-    command: npx
-    args: ["-y", "@sentry/mcp-server"]
-    env:
-      SENTRY_AUTH_TOKEN: ""
   filesystem:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/samishukri/ao-cli"]
@@ -444,7 +432,7 @@ agents:
       - Tag all tasks with "web-ui-improvement".
     model: claude-sonnet-4-6
     tool: claude
-    mcp_servers: ["ao", "context7", "brave-search"]
+    mcp_servers: ["ao", "context7"]
 
   mcp-server-improver:
     system_prompt: |
