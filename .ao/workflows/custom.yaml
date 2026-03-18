@@ -23,26 +23,30 @@ agents:
          Choose workflow_ref based on task complexity and type:
 
          WORKFLOW ROUTING TABLE:
-         | Complexity | Type           | workflow_ref        | Model              | Why                          |
-         |------------|----------------|---------------------|--------------------|------------------------------|
-         | low        | bugfix/chore   | standard            | Claude Sonnet      | Reliable, proven pipeline    |
-         | low        | docs           | standard-glm        | GLM-5-Turbo        | Docs are safe for cheaper    |
-         | medium     | any            | standard            | Claude Sonnet      | Proven reliable pipeline     |
-         | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet      | UI tasks need reliability    |
-         | high       | any            | standard            | Claude Sonnet      | Best quality for hard tasks  |
-         | high       | architecture   | standard-opus       | Claude Opus        | Hardest tasks, PO review     |
-         | critical   | any            | standard-opus       | Claude Opus        | Maximum quality              |
-         | any        | monitoring     | standard            | Claude Sonnet      | Monitoring needs reliability |
-         | any        | workflow-opt   | standard            | Claude Sonnet      | Self-improvement needs care  |
+         Native CLI tools (Claude, Codex, Gemini) produce structured output reliably.
+         oai-runner tools (GLM, Kimi, MiniMax) are experimental — use for low-priority only.
 
-         EXPERIMENTAL (use sparingly until oai-runner structured output is fixed):
-         | low        | docs/chore     | standard-glm        | GLM-5-Turbo        | Test oai-runner pipeline     |
-         | low        | docs/chore     | quick-fix-glm       | GLM-5-Turbo        | Test quick-fix pipeline      |
+         | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
+         |------------|----------------|---------------------|-------------------------|------------------------------|
+         | low        | bugfix/chore   | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
+         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, experimental          |
+         | medium     | any            | standard            | Claude Sonnet (claude)   | Proven reliable pipeline     |
+         | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
+         | medium     | ui-ux          | ao.task/ui-ux       | Claude Sonnet (claude)   | UI tasks need reliability    |
+         | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
+         | high       | refactor       | standard-gemini     | Gemini 3.1 Pro (gemini)  | 1M context, native CLI       |
+         | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks, PO review     |
+         | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
+         | any        | monitoring     | standard            | Claude Sonnet (claude)   | Needs reliability            |
 
-         Default to "standard" (Claude Sonnet) for all tasks.
-         Only use oai-runner workflows (standard-glm, quick-fix-glm, standard-kimi)
-         for low-priority docs/chore tasks as experimental runs.
-         Claude is the proven pipeline — use it until oai-runner structured output is reliable.
+         EXPERIMENTAL oai-runner workflows (for low-priority docs/chore only):
+         | low        | docs/chore     | standard-glm        | GLM-5-Turbo (oai-runner) |
+         | low        | docs/chore     | quick-fix-glm       | GLM-5-Turbo (oai-runner) |
+         | low        | docs/chore     | standard-kimi       | Kimi K2.5 (oai-runner)   |
+
+         Default to "standard" (Claude Sonnet via claude CLI).
+         Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
+         Only route low-priority docs/chore to oai-runner models as experiments.
 
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
@@ -485,7 +489,7 @@ agents:
     tool: claude
 
   codex-default:
-    system_prompt: "You are an expert code reviewer for the AO CLI Rust workspace. Review code for correctness, requirement alignment, edge cases, and quality. Do NOT make changes — only review."
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
     model: gpt-5.3-codex
     tool: codex
 
@@ -891,6 +895,14 @@ phases:
       program: cargo
       args: ["clippy", "--workspace", "--", "-D", "warnings"]
       timeout_secs: 120
+  codex-implementation:
+    mode: agent
+    agent: codex-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
+    runtime:
+      fallback_models: ["claude-sonnet-4-6"]
+    capabilities:
+      mutates_state: true
   opus-implementation:
     mode: agent
     agent: opus-default
@@ -1366,6 +1378,37 @@ workflows:
           on_verdict:
             rework:
               target: kimi-implementation
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: standard-codex
+    name: "Standard (Codex)"
+    description: "Standard workflow using GPT-5.3 Codex via native CLI for code-heavy refactors"
+    phases:
+      - requirements
+      - codex-implementation:
+          skip_if:
+            - "task_type == docs"
+      - unit-test:
+          on_verdict:
+            rework:
+              target: codex-implementation
+      - lint:
+          on_verdict:
+            rework:
+              target: codex-implementation
+      - code-review:
+          max_rework_attempts: 3
+          on_verdict:
+            rework:
+              target: codex-implementation
       - create-pr
       - cleanup
     post_success:
