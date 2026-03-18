@@ -1451,7 +1451,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                         None => phase_output_json_schema_for(&ctx, phase_id)?,
                     };
                     if let Some(schema) = phase_schema.as_ref() {
-                        let payload = result_payload.clone().unwrap_or_else(|| {
+                        let mut payload = result_payload.clone().unwrap_or_else(|| {
                             serde_json::json!({
                                 "kind": definition
                                     .output_contract
@@ -1461,6 +1461,11 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                                 "commit_message": commit_message,
                             })
                         });
+                        if let (Some(obj), Some(msg)) = (payload.as_object_mut(), commit_message.as_deref()) {
+                            if !obj.contains_key("commit_message") && !msg.trim().is_empty() {
+                                obj.insert("commit_message".to_string(), serde_json::Value::String(msg.to_string()));
+                            }
+                        }
                         if let Err(error) = validate_basic_json_schema(&payload, schema) {
                             signals.push(PhaseExecutionSignal {
                                 event_type: "workflow-phase-contract-violation".to_string(),
