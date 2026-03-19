@@ -1248,6 +1248,15 @@ pub enum PhaseDecisionVerdict {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    AlreadyDone,
+    Duplicate,
+    NoLongerValid,
+    OutOfScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PhaseEvidenceKind {
     TestsPassed,
     TestsFailed,
@@ -1288,6 +1297,8 @@ pub struct PhaseDecision {
     pub commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<SkipReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

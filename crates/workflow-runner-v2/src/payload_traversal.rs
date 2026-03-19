@@ -133,6 +133,11 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
 
     let target_phase = value.get("target_phase").and_then(Value::as_str).map(ToOwned::to_owned);
 
+    let skip_reason = value
+        .get("skip_reason")
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_value(Value::String(s.to_string())).ok());
+
     Some(orchestrator_core::PhaseDecision {
         kind: "phase_decision".to_string(),
         phase_id: phase_id.to_string(),
@@ -144,6 +149,7 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
         guardrail_violations,
         commit_message,
         target_phase,
+        skip_reason,
     })
 }
 

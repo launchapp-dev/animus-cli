@@ -6,9 +6,9 @@ use crate::agent_runtime_config::{PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS}
 use crate::providers::SubjectContext;
 use crate::state_machines::{builtin_compiled_state_machines, evaluate_guard, CompiledStateMachines, GuardContext};
 use crate::types::{
-    OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, WorkflowDecisionAction, WorkflowDecisionRecord,
-    WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
-    WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
+    OrchestratorWorkflow, PhaseDecision, PhaseDecisionVerdict, SkipReason, WorkflowDecisionAction,
+    WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineEvent, WorkflowMachineState,
+    WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput, WorkflowStatus,
 };
 use crate::workflow_config::PhaseTransitionConfig;
 
@@ -511,7 +511,11 @@ impl WorkflowLifecycleExecutor {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| "workflow closed by skip verdict".to_string());
-        let skip_as_completed = reason.to_ascii_lowercase().contains("already_done");
+        let skip_as_completed = decision
+            .as_ref()
+            .and_then(|d| d.skip_reason)
+            .map(|r| r == SkipReason::AlreadyDone)
+            .unwrap_or_else(|| reason.to_ascii_lowercase().contains("already_done"));
         let (machine_version, machine_hash, machine_source) = self.machine_metadata();
         let record = WorkflowDecisionRecord {
             timestamp: Utc::now(),

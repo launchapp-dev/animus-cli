@@ -185,7 +185,7 @@ pub(crate) fn render_phase_prompt_with_ctx_overrides(
     let phase_decision_rule = if phase_contract.is_some() {
         if phase_decision_contract.is_some() {
             format!(
-                "- The nested `phase_decision` object must describe whether this phase should advance, rework, fail, or skip.\n- Set `phase_decision.verdict` to `advance` if work is complete and correct.\n- Set `phase_decision.verdict` to `rework` if issues remain that need another pass.\n- Set `phase_decision.verdict` to `fail` only if problems are unrecoverable.\n- Set `phase_decision.verdict` to `skip` to close the task without further work. Use with a reason from: `already_done`, `duplicate`, `no_longer_valid`, `out_of_scope`.\n{}",
+                "- The nested `phase_decision` object must describe whether this phase should advance, rework, fail, or skip.\n- Set `phase_decision.verdict` to `advance` if work is complete and correct.\n- Set `phase_decision.verdict` to `rework` if issues remain that need another pass.\n- Set `phase_decision.verdict` to `fail` only if problems are unrecoverable.\n- Set `phase_decision.verdict` to `skip` to close the task without further work. Set `phase_decision.skip_reason` to one of: `already_done`, `duplicate`, `no_longer_valid`, `out_of_scope`.\n{}",
                 decision_extra_field_rule
             )
         } else {
@@ -212,7 +212,7 @@ pub(crate) fn render_phase_prompt_with_ctx_overrides(
         };
         let decision_example = phase_decision_example_for_prompt(phase_id, Some(contract));
         format!(
-            "- Before finishing, emit one JSON line with your phase assessment as the FINAL line of output:\n  {}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Set verdict to \"skip\" to close the task without further work. Use with a reason from: \"already_done\", \"duplicate\", \"no_longer_valid\", \"out_of_scope\".\n- Confidence must be at least {} unless you truly cannot justify a decision.\n- Risk must not exceed {:?} unless you are explicitly failing the phase.\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.{}",
+            "- Before finishing, emit one JSON line with your phase assessment as the FINAL line of output:\n  {}\n- Set verdict to \"advance\" if work is complete and correct.\n- Set verdict to \"rework\" if issues remain that need another pass.\n- Set verdict to \"fail\" only if problems are unrecoverable.\n- Set verdict to \"skip\" to close the task without further work. Set `skip_reason` to one of: \"already_done\", \"duplicate\", \"no_longer_valid\", \"out_of_scope\".\n- Confidence must be at least {} unless you truly cannot justify a decision.\n- Risk must not exceed {:?} unless you are explicitly failing the phase.\n{}\n{}\n- Put any prose summary BEFORE the JSON line and emit nothing after it.{}",
             decision_example,
             contract.min_confidence,
             contract.max_risk,

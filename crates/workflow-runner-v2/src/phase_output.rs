@@ -255,6 +255,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
             result_payload: None,
         };
@@ -294,6 +295,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
             result_payload: None,
         };
@@ -312,6 +314,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
             result_payload: None,
         };
@@ -462,6 +465,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
             result_payload: Some(serde_json::json!({"findings": ["pattern A"]})),
         };

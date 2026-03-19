@@ -2,7 +2,7 @@ pub use protocol::orchestrator::{
     AgentHandoffRequestInput, AgentHandoffResult, AgentHandoffStatus, ArchitectureEdge, ArchitectureEntity,
     ArchitectureGraph, Assignee, CheckpointReason, Complexity, ComplexityAssessment, ComplexityTier, DaemonHealth,
     DaemonStatus, ImpactArea, ListPage, ListPageRequest, LogEntry, LogLevel, OrchestratorProject, OrchestratorWorkflow,
-    PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits,
+    PhaseDecision, PhaseDecisionVerdict, PhaseEvidence, PhaseEvidenceKind, Priority, ProjectConcurrencyLimits, SkipReason,
     ProjectConfig, ProjectCreateInput, ProjectMetadata, ProjectModelPreferences, ProjectType, RequirementQuery,
     RequirementQuerySort, RequirementRange, RiskLevel, Scope, SubjectDispatch, SubjectRef, TaskDensity, TaskQuery,
     TaskQuerySort, TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
@@ -129,6 +129,7 @@ mod tests {
             guardrail_violations: vec![],
             commit_message: Some("test: validate phase decision contract".to_string()),
             target_phase: None,
+            skip_reason: None,
         };
 
         let serialized = serde_json::to_value(&decision).expect("phase decision should serialize successfully");

@@ -267,6 +267,7 @@ pub(crate) fn build_command_phase_decision(
         guardrail_violations: vec![],
         commit_message: None,
         target_phase: None,
+        skip_reason: None,
     }
 }
 

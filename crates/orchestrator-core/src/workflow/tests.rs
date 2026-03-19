@@ -2,10 +2,10 @@ use super::*;
 use crate::providers::SubjectContext;
 use crate::types::{
     Assignee, CheckpointReason, Complexity, OrchestratorTask, OrchestratorWorkflow, PhaseDecision,
-    PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef, TaskMetadata, TaskStatus,
-    TaskType, WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
-    WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowRunInput,
-    WorkflowStatus, SUBJECT_KIND_TASK,
+    PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, SkipReason, SubjectRef, TaskMetadata,
+    TaskStatus, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord,
+    WorkflowDecisionRisk, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus,
+    WorkflowRunInput, WorkflowStatus, SUBJECT_KIND_TASK,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -55,7 +55,7 @@ fn task_subject_context(task: &OrchestratorTask) -> SubjectContext {
     }
 }
 
-fn skip_decision(reason: &str) -> PhaseDecision {
+fn skip_decision(reason: &str, skip_reason: Option<SkipReason>) -> PhaseDecision {
     PhaseDecision {
         kind: "phase_decision".to_string(),
         phase_id: "requirements".to_string(),
@@ -67,6 +67,7 @@ fn skip_decision(reason: &str) -> PhaseDecision {
         guardrail_violations: Vec::new(),
         commit_message: None,
         target_phase: None,
+        skip_reason,
     }
 }
 
@@ -139,7 +140,7 @@ fn lifecycle_skip_already_done_completes_workflow_early() {
 
     executor.mark_current_phase_success_with_decision(
         &mut workflow,
-        Some(skip_decision("already_done: task already completed upstream")),
+        Some(skip_decision("already_done: task already completed upstream", Some(SkipReason::AlreadyDone))),
     );
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
@@ -167,7 +168,7 @@ fn lifecycle_skip_duplicate_cancels_workflow_early() {
 
     executor.mark_current_phase_success_with_decision(
         &mut workflow,
-        Some(skip_decision("duplicate: superseded by TASK-999")),
+        Some(skip_decision("duplicate: superseded by TASK-999", Some(SkipReason::Duplicate))),
     );
 
     assert_eq!(workflow.status, WorkflowStatus::Cancelled);
@@ -176,6 +177,50 @@ fn lifecycle_skip_duplicate_cancels_workflow_early() {
     assert_eq!(workflow.current_phase, None);
     assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Success);
     assert_eq!(workflow.decision_history.last().map(|record| record.decision), Some(WorkflowDecisionAction::Skip));
+}
+
+#[test]
+fn lifecycle_skip_already_done_typed_takes_precedence_over_reason_string() {
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.machine_state = WorkflowMachineState::RunPhase;
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    let executor = WorkflowLifecycleExecutor::default();
+
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(skip_decision("duplicate: superseded", Some(SkipReason::AlreadyDone))),
+    );
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed, "typed skip_reason=AlreadyDone must complete even when reason text says duplicate");
+}
+
+#[test]
+fn lifecycle_skip_compat_fallback_uses_reason_string_when_skip_reason_absent() {
+    let mut workflow = make_workflow(WorkflowStatus::Running);
+    workflow.machine_state = WorkflowMachineState::RunPhase;
+    workflow.phases.push(WorkflowPhaseExecution {
+        phase_id: "implementation".to_string(),
+        status: WorkflowPhaseStatus::Pending,
+        started_at: None,
+        completed_at: None,
+        attempt: 0,
+        error_message: None,
+    });
+    let executor = WorkflowLifecycleExecutor::default();
+
+    executor.mark_current_phase_success_with_decision(
+        &mut workflow,
+        Some(skip_decision("already_done: legacy reason text only", None)),
+    );
+
+    assert_eq!(workflow.status, WorkflowStatus::Completed, "compat fallback must complete when reason string contains already_done");
 }
 
 #[test]
@@ -421,6 +466,7 @@ fn make_rework_decision(target_phase: Option<String>) -> PhaseDecision {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase,
+        skip_reason: None,
     }
 }
 
@@ -573,6 +619,7 @@ fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
             guardrail_violations: Vec::new(),
             commit_message: None,
             target_phase: None,
+            skip_reason: None,
         }),
     );
 
@@ -615,6 +662,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
         );
 
@@ -640,6 +688,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
             guardrail_violations: Vec::new(),
             commit_message: None,
             target_phase: None,
+            skip_reason: None,
         }),
     );
     assert_eq!(workflow.status, WorkflowStatus::Escalated, "should escalate after exceeding max_attempts=5");
@@ -821,6 +870,7 @@ fn advance_ignores_agent_target_phase_and_uses_default_order() {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase: Some("testing".to_string()),
+        skip_reason: None,
     };
     executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
 
@@ -917,6 +967,7 @@ fn advance_can_follow_agent_selected_target_when_yaml_allows_it() {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase: Some("testing".to_string()),
+        skip_reason: None,
     };
     executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
 
@@ -955,6 +1006,7 @@ fn default_max_attempts_is_3_when_no_config() {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
         );
         if i < 2 {
@@ -981,6 +1033,7 @@ fn default_max_attempts_is_3_when_no_config() {
             guardrail_violations: Vec::new(),
             commit_message: None,
             target_phase: None,
+            skip_reason: None,
         }),
     );
     assert_eq!(

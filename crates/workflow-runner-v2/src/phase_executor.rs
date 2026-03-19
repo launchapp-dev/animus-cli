@@ -1675,6 +1675,7 @@ mod tests {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                skip_reason: None,
             }),
             result_payload: None,
         };
