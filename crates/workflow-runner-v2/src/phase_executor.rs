@@ -948,12 +948,12 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                 let mut context = base_context.clone();
                 context
                     .as_object_mut()
-                    .expect("json object")
+                    .ok_or_else(|| anyhow!("phase context is not a json object"))?
                     .insert("prompt".to_string(), serde_json::json!(effective_prompt));
                 if let Some(agent_id) = ctx.phase_agent_id(phase_id) {
                     context
                         .as_object_mut()
-                        .expect("json object")
+                        .ok_or_else(|| anyhow!("phase context is not a json object"))?
                         .insert("agent_id".to_string(), serde_json::json!(agent_id));
                 }
                 if let Some(mut runtime_contract) = build_runtime_contract_with_resume(
@@ -971,10 +971,13 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         if let Some(schema) = phase_response_schema.clone().or(phase_output_schema.clone()) {
                             policy
                                 .as_object_mut()
-                                .expect("json object")
+                                .ok_or_else(|| anyhow!("phase policy is not a json object"))?
                                 .insert("output_json_schema".to_string(), schema);
                         }
-                        runtime_contract.as_object_mut().expect("json object").insert("policy".to_string(), policy);
+                        runtime_contract
+                            .as_object_mut()
+                            .ok_or_else(|| anyhow!("runtime contract is not a json object"))?
+                            .insert("policy".to_string(), policy);
                     }
                     if let Some(schema) = phase_response_schema.as_ref() {
                         inject_response_schema_into_launch_args(
@@ -1059,7 +1062,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                     }
                     context
                         .as_object_mut()
-                        .expect("json object")
+                        .ok_or_else(|| anyhow!("phase context is not a json object"))?
                         .insert("runtime_contract".to_string(), runtime_contract);
                 } else {
                     info!(
