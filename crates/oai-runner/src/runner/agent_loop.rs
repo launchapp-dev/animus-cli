@@ -52,19 +52,12 @@ fn build_json_schema_format(schema: &Value) -> ResponseFormat {
     }
     ResponseFormat {
         type_: "json_schema".to_string(),
-        json_schema: Some(JsonSchemaSpec {
-            name: "phase_output".to_string(),
-            strict: true,
-            schema: strict_schema,
-        }),
+        json_schema: Some(JsonSchemaSpec { name: "phase_output".to_string(), strict: true, schema: strict_schema }),
     }
 }
 
 fn build_json_object_format() -> ResponseFormat {
-    ResponseFormat {
-        type_: "json_object".to_string(),
-        json_schema: None,
-    }
+    ResponseFormat { type_: "json_object".to_string(), json_schema: None }
 }
 
 fn build_schema_injection(schema: &Value) -> String {
@@ -117,8 +110,8 @@ pub async fn run_agent_loop(
         }
     }
 
-    let needs_schema_in_prompt = structured_output == Some(StructuredOutputSupport::JsonObjectOnly)
-        && response_schema.is_some();
+    let needs_schema_in_prompt =
+        structured_output == Some(StructuredOutputSupport::JsonObjectOnly) && response_schema.is_some();
 
     if messages.is_empty() {
         let mut sys = system_prompt.to_string();
@@ -195,10 +188,22 @@ pub async fn run_agent_loop(
             if let Some(schema) = response_schema {
                 if let Err(errors) = validate_output_against_schema(content, schema) {
                     let system_msg = messages.iter().find(|m| m.role == "system").cloned();
-                    let corrected =
-                        retry_schema_validation(client, model, system_msg.as_ref(), &mut messages, schema, &errors, output, structured_output).await;
+                    let corrected = retry_schema_validation(
+                        client,
+                        model,
+                        system_msg.as_ref(),
+                        &mut messages,
+                        schema,
+                        &errors,
+                        output,
+                        structured_output,
+                    )
+                    .await;
                     if !corrected {
-                        eprintln!("Warning: schema validation failed after {} retries, synthesizing fallback result", SCHEMA_RETRY_LIMIT);
+                        eprintln!(
+                            "Warning: schema validation failed after {} retries, synthesizing fallback result",
+                            SCHEMA_RETRY_LIMIT
+                        );
                         schema_ok = false;
                     }
                 }
@@ -302,12 +307,8 @@ async fn retry_schema_validation(
 ) -> bool {
     let mut last_errors = initial_errors.to_string();
 
-    let last_assistant_content = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "assistant")
-        .and_then(|m| m.content.clone())
-        .unwrap_or_default();
+    let last_assistant_content =
+        messages.iter().rev().find(|m| m.role == "assistant").and_then(|m| m.content.clone()).unwrap_or_default();
 
     for attempt in 1..=SCHEMA_RETRY_LIMIT {
         eprintln!("Schema validation failed (attempt {}/{}): {}", attempt, SCHEMA_RETRY_LIMIT, last_errors);
@@ -389,14 +390,17 @@ fn validate_output_against_schema(content: &str, schema: &Value) -> std::result:
 
     let validator = jsonschema::validator_for(schema).map_err(|e| format!("Invalid schema: {}", e))?;
 
-    let errors: Vec<String> = validator.iter_errors(&parsed).map(|e| {
-        let path = e.instance_path().to_string();
-        if path.is_empty() {
-            format!("{}", e)
-        } else {
-            format!("at '{}': {}", path, e)
-        }
-    }).collect();
+    let errors: Vec<String> = validator
+        .iter_errors(&parsed)
+        .map(|e| {
+            let path = e.instance_path().to_string();
+            if path.is_empty() {
+                format!("{}", e)
+            } else {
+                format!("at '{}': {}", path, e)
+            }
+        })
+        .collect();
 
     if errors.is_empty() {
         Ok(())
