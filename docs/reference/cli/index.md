@@ -52,6 +52,15 @@ ao
 │   ├── archive              Archive project
 │   └── remove               Remove project
 │
+├── queue                    Daemon dispatch queue
+│   ├── list                 List queued dispatches
+│   ├── stats                Queue statistics
+│   ├── enqueue              Enqueue a subject dispatch
+│   ├── hold                 Hold a queued subject
+│   ├── release              Release a held subject
+│   ├── drop                 Drop a queued subject
+│   └── reorder              Reorder queued subjects
+│
 ├── task                     Task management
 │   ├── list                 List tasks (filterable)
 │   ├── prioritized          Tasks sorted by priority
@@ -79,8 +88,7 @@ ao
 │   ├── list                 List workflows
 │   ├── get                  Get workflow details
 │   ├── decisions            Show workflow decisions
-│   ├── run                  Start workflow (async, daemon)
-│   ├── execute              Execute workflow (sync, no daemon)
+│   ├── run                  Start workflow (async, daemon; use --sync for terminal)
 │   ├── resume               Resume paused workflow
 │   ├── resume-status        Check resumability
 │   ├── pause                Pause workflow (confirmation)
@@ -91,7 +99,8 @@ ao
 │   │   ├── get              Get checkpoint
 │   │   └── prune            Prune checkpoints
 │   ├── phase
-│   │   └── approve          Approve pending phase gate
+│   │   ├── approve          Approve pending phase gate
+│   │   └── reject           Reject pending phase gate
 │   ├── phases
 │   │   ├── list             List phase definitions
 │   │   ├── get              Get phase by id
@@ -108,10 +117,12 @@ ao
 │   │   ├── get              Read state-machine config
 │   │   ├── validate         Validate state-machine
 │   │   └── set              Replace state-machine config
-│   └── agent-runtime
-│       ├── get              Read agent-runtime config
-│       ├── validate         Validate agent-runtime config
-│       └── set              Replace agent-runtime config
+│   ├── agent-runtime
+│   │   ├── get              Read agent-runtime config
+│   │   ├── validate         Validate agent-runtime config
+│   │   └── set              Replace agent-runtime config
+│   └── prompt
+│       └── render           Render workflow phase prompt
 │
 ├── vision                   Project vision
 │   ├── draft                Draft vision
@@ -230,6 +241,18 @@ ao
 │       ├── run              Run model evaluation
 │       └── report           Show evaluation report
 │
+├── pack                     Workflow pack management
+│   ├── install              Install a pack from path or registry
+│   ├── list                 List discovered packs
+│   ├── inspect              Inspect a pack or local manifest
+│   ├── pin                  Pin pack version or toggle enablement
+│   ├── search               Search packs across registries
+│   └── registry
+│       ├── add              Add a marketplace registry
+│       ├── remove           Remove a registry
+│       ├── list             List registered registries
+│       └── sync             Sync a registry for latest catalog
+│
 ├── runner                   Runner management
 │   ├── health               Runner health
 │   ├── orphans
@@ -258,8 +281,8 @@ ao
 
 | Metric | Count |
 |---|---|
-| Top-level commands | 24 |
-| Total subcommands (all levels) | ~130+ |
+| Top-level commands | 26 |
+| Total subcommands (all levels) | ~145+ |
 | Commands with `--confirmation` pattern | 8 |
 | Commands with `--input-json` | 15+ |
 | Commands with `--dry-run` | 6 |
