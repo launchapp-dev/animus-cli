@@ -212,6 +212,12 @@ pub(crate) struct TaskCreateArgs {
         help = "Link architecture entity ids to the new task. Repeat to add multiple ids."
     )]
     pub(crate) linked_architecture_entity: Vec<String>,
+    #[arg(
+        long,
+        value_name = "TAG",
+        help = "Tags to attach to the new task. Repeat to add multiple tags."
+    )]
+    pub(crate) tag: Vec<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
 }

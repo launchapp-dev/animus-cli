@@ -66,6 +66,8 @@ pub(super) struct TaskCreateInput {
     #[serde(default)]
     pub(super) linked_architecture_entity: Vec<String>,
     #[serde(default)]
+    pub(super) tags: Vec<String>,
+    #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 

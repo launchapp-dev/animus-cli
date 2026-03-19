@@ -49,6 +49,10 @@ pub(super) fn build_task_create_args(input: &TaskCreateInput) -> Vec<String> {
         args.push("--linked-architecture-entity".to_string());
         args.push(entity_id.clone());
     }
+    for tag in &input.tags {
+        args.push("--tag".to_string());
+        args.push(tag.clone());
+    }
     args
 }
 

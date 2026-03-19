@@ -203,6 +203,7 @@ fn build_task_create_args_includes_linked_requirements() {
         priority: Some("high".to_string()),
         linked_requirement: vec!["REQ-123".to_string(), "REQ-456".to_string()],
         linked_architecture_entity: Vec::new(),
+        tags: Vec::new(),
         project_root: None,
     });
     assert_eq!(
@@ -235,6 +236,7 @@ fn build_task_create_args_uses_empty_description_when_omitted() {
         priority: None,
         linked_requirement: Vec::new(),
         linked_architecture_entity: Vec::new(),
+        tags: Vec::new(),
         project_root: None,
     });
     assert_eq!(
@@ -246,6 +248,35 @@ fn build_task_create_args_uses_empty_description_when_omitted() {
             "Task".to_string(),
             "--description".to_string(),
             String::new(),
+        ]
+    );
+}
+
+#[test]
+fn build_task_create_args_includes_tags() {
+    let args = build_task_create_args(&TaskCreateInput {
+        title: "Tagged task".to_string(),
+        description: None,
+        task_type: None,
+        priority: None,
+        linked_requirement: Vec::new(),
+        linked_architecture_entity: Vec::new(),
+        tags: vec!["frontend".to_string(), "api".to_string()],
+        project_root: None,
+    });
+    assert_eq!(
+        args,
+        vec![
+            "task".to_string(),
+            "create".to_string(),
+            "--title".to_string(),
+            "Tagged task".to_string(),
+            "--description".to_string(),
+            String::new(),
+            "--tag".to_string(),
+            "frontend".to_string(),
+            "--tag".to_string(),
+            "api".to_string(),
         ]
     );
 }
