@@ -55,7 +55,7 @@ verify_checksum() {
 main() {
   [[ "$(uname -s)" == "Darwin" ]] || error "This installer is for macOS only"
 
-  local target version archive_name archive_url checksums_url tmpdir
+  local target version archive_name archive_url checksums_url
 
   target="$(detect_arch)"
   version="$(detect_version)"
@@ -66,26 +66,26 @@ main() {
   archive_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
   checksums_url="https://github.com/${REPO}/releases/download/${version}/SHA256SUMS.txt"
 
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' EXIT
+  TMPDIR_INSTALL="$(mktemp -d)"
+  trap 'rm -rf "${TMPDIR_INSTALL}"' EXIT
 
   info "Downloading ${archive_name}..."
-  if ! curl -fSL --progress-bar -o "${tmpdir}/${archive_name}" "${archive_url}"; then
+  if ! curl -fSL --progress-bar -o "${TMPDIR_INSTALL}/${archive_name}" "${archive_url}"; then
     error "Download failed. Check that release ${version} exists at:\n  https://github.com/${REPO}/releases/tag/${version}"
   fi
 
-  if curl -fsSL -o "${tmpdir}/SHA256SUMS.txt" "${checksums_url}" 2>/dev/null; then
-    verify_checksum "${tmpdir}/${archive_name}" "${tmpdir}/SHA256SUMS.txt"
+  if curl -fsSL -o "${TMPDIR_INSTALL}/SHA256SUMS.txt" "${checksums_url}" 2>/dev/null; then
+    verify_checksum "${TMPDIR_INSTALL}/${archive_name}" "${TMPDIR_INSTALL}/SHA256SUMS.txt"
   else
     warn "Could not download checksums — skipping verification"
   fi
 
   info "Extracting..."
-  tar -xzf "${tmpdir}/${archive_name}" -C "${tmpdir}"
+  tar -xzf "${TMPDIR_INSTALL}/${archive_name}" -C "${TMPDIR_INSTALL}"
 
-  local stage_dir="${tmpdir}/ao-${version}-${target}"
+  local stage_dir="${TMPDIR_INSTALL}/ao-${version}-${target}"
   if [[ ! -d "${stage_dir}" ]]; then
-    stage_dir="$(find "${tmpdir}" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    stage_dir="$(find "${TMPDIR_INSTALL}" -mindepth 1 -maxdepth 1 -type d | head -1)"
   fi
 
   mkdir -p "${INSTALL_DIR}"
