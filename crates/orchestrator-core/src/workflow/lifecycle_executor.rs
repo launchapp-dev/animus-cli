@@ -560,7 +560,6 @@ impl WorkflowLifecycleExecutor {
             Some(d) => (d.confidence, d.risk, WorkflowDecisionSource::Llm),
             None => (1.0, WorkflowDecisionRisk::Low, WorkflowDecisionSource::Fallback),
         };
-        let (machine_version, machine_hash, machine_source) = self.machine_metadata();
         let guardrail_violations = decision.as_ref().map(|d| d.guardrail_violations.clone()).unwrap_or_default();
 
         let target_phase_id = decision
@@ -569,6 +568,66 @@ impl WorkflowLifecycleExecutor {
                 self.resolve_agent_selected_target(workflow, current_phase_id, "advance", value.target_phase.as_deref())
             })
             .or_else(|| self.resolve_verdict_target(current_phase_id, "advance"));
+
+        // Guard: if the next phase is a review/validation phase and a prior implementation
+        // phase was skipped, re-route to that implementation phase without consuming the
+        // rework budget — this is a pipeline routing correction, not a review failure.
+        let preliminary_next_idx = target_phase_id
+            .as_ref()
+            .and_then(|id| find_phase_index(&workflow.phases, id))
+            .or_else(|| {
+                let idx = workflow.current_phase_index + 1;
+                if idx < workflow.phases.len() { Some(idx) } else { None }
+            });
+        if let Some(nidx) = preliminary_next_idx {
+            if workflow.phases[nidx].phase_id.contains("review") {
+                let skipped_impl = workflow.phases[..nidx].iter().enumerate().find(|(_, p)| {
+                    p.phase_id.contains("implementation") && matches!(p.status, WorkflowPhaseStatus::Skipped)
+                });
+                if let Some((impl_idx, skipped_phase)) = skipped_impl {
+                    let impl_phase_id = skipped_phase.phase_id.clone();
+                    machine.apply(WorkflowMachineEvent::GatesFailed).expect("impl-skip-guard: GatesFailed");
+                    let mid_state = machine.state();
+                    let mut retry_machine =
+                        WorkflowStateMachine::with_definition(mid_state, self.state_machines.workflow.clone());
+                    retry_machine
+                        .apply(WorkflowMachineEvent::RetryPhaseStarted)
+                        .expect("impl-skip-guard: RetryPhaseStarted");
+                    let (mv, mh, ms) = self.machine_metadata();
+                    let record = WorkflowDecisionRecord {
+                        timestamp: Utc::now(),
+                        phase_id: current_phase_id.to_string(),
+                        decision: WorkflowDecisionAction::Rework,
+                        target_phase: Some(impl_phase_id.clone()),
+                        reason: format!(
+                            "implementation phase '{}' was skipped in pipeline; bypassing code-review and routing back to implementation",
+                            impl_phase_id
+                        ),
+                        confidence: 1.0,
+                        risk: WorkflowDecisionRisk::Low,
+                        source: WorkflowDecisionSource::Fallback,
+                        guardrail_violations: Vec::new(),
+                        machine_version: mv,
+                        machine_hash: mh,
+                        machine_source: ms,
+                    };
+                    return TransitionEffect {
+                        next_phase_index: Some(impl_idx),
+                        phase_status: Some(WorkflowPhaseStatus::Running),
+                        decision_record: Some(record),
+                        workflow_status: Some(WorkflowStatus::Running),
+                        machine_state: retry_machine.state(),
+                        failure_reason: None,
+                        completed_at: None,
+                        current_phase: None,
+                        rework_increment: None,
+                        clear_phase_completed_at: true,
+                    };
+                }
+            }
+        }
+
+        let (machine_version, machine_hash, machine_source) = self.machine_metadata();
         if target_phase_id.is_some() {
             machine.apply(WorkflowMachineEvent::PhaseTargetSelected).expect("advance: PhaseTargetSelected transition");
         } else {
