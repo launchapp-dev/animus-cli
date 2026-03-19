@@ -1471,67 +1471,33 @@ workflows:
 
   - id: quick-fix
     name: "Quick Fix"
-    description: "Fast workflow for small bug fixes"
+    description: "Implement → Push → PR fast"
     phases:
       - implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - testing
+      - push-branch
+      - create-pr
       - cleanup
 
   - id: standard
     name: "Standard"
-    description: "Requirements → Implement → Test → Lint → Review → Push → PR"
+    description: "Implement → Push → PR fast. Review separately via pr-reviewer cron."
     phases:
       - requirements
       - implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: implementation
-      - push-branch
       - push-branch
       - create-pr
       - cleanup
 
   - id: standard-glm
     name: "Standard (GLM)"
-    description: "Standard workflow using GLM/Z-AI for implementation, Codex for review"
+    description: "Implement → Push → PR fast with GLM"
     phases:
       - glm-requirements
       - glm-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - codex-code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: glm-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1543,27 +1509,14 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: standard-glm
+  - id: standard-minimax
     name: "Standard (MiniMax)"
-    description: "Standard workflow using MiniMax for implementation, Codex for review"
+    description: "Implement → Push → PR fast with MiniMax"
     phases:
       - minimax-requirements
       - minimax-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: minimax-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1577,25 +1530,12 @@ workflows:
 
   - id: standard-kimi
     name: "Standard (Kimi K2.5)"
-    description: "Standard workflow using Kimi K2.5 via OpenRouter — multimodal agentic model for complex tasks"
+    description: "Implement → Push → PR fast with Kimi"
     phases:
       - requirements
       - kimi-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1609,25 +1549,28 @@ workflows:
 
   - id: standard-gemini
     name: "Standard (Gemini)"
-    description: "Standard workflow using Gemini for implementation — 1M context, good for large refactors"
+    description: "Implement → Push → PR fast with Gemini"
     phases:
       - requirements
       - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: gemini-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: gemini-implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: gemini-implementation
+      - push-branch
+      - create-pr
+      - cleanup
+    post_success:
+      merge:
+        strategy: squash
+        target_branch: develop
+        create_pr: true
+        auto_merge: true
+        cleanup_worktree: true
+
+  - id: quick-fix-minimax
+    name: "Quick Fix (MiniMax)"
+    description: "Implement → Push → PR fast with MiniMax"
+    phases:
+      - minimax-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1640,40 +1583,12 @@ workflows:
         cleanup_worktree: true
 
   - id: quick-fix-glm
-    name: "Quick Fix (MiniMax)"
-    description: "Fast workflow for trivial bug fixes using MiniMax — cheapest option"
-    phases:
-      - minimax-implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - cleanup
-    post_success:
-      merge:
-        strategy: squash
-        target_branch: develop
-        create_pr: true
-        auto_merge: true
-        cleanup_worktree: true
-
-  - id: quick-fix-glm
     name: "Quick Fix (GLM)"
-    description: "Fast workflow for small fixes using GLM"
+    description: "Implement → Push → PR fast with GLM"
     phases:
       - glm-implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: glm-implementation
+      - push-branch
+      - create-pr
       - cleanup
     post_success:
       merge:
@@ -1685,25 +1600,12 @@ workflows:
 
   - id: ao.task/ui-ux
     name: "UI/UX Task Workflow"
-    description: "Standard workflow using Kimi for UI/UX implementation — maps from ao.task/ui-ux workflow reference"
+    description: "Implement → Push → PR fast with Gemini for UI/UX"
     phases:
       - requirements
-      - kimi-implementation:
+      - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1717,25 +1619,12 @@ workflows:
 
   - id: ui-ux-standard
     name: "UI/UX Standard"
-    description: "Standard workflow using Kimi for UI/UX implementation, Codex for review — for web UI, React, and design-related tasks"
+    description: "Implement → Push → PR fast with Gemini for UI/UX"
     phases:
       - requirements
-      - kimi-implementation:
+      - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
