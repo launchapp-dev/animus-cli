@@ -74,6 +74,24 @@ jobs:
       - name: Check package
         run: cargo check --locked --all-targets -p ${{ matrix.package }}
 
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: clippy
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
   smoke-help:
     name: smoke-help
     runs-on: ubuntu-latest
