@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -447,6 +447,9 @@ pub async fn run_workflow_phase_attempt(
     let expected_result_kind = phase_result_kind_for_ctx(&ctx, phase_id);
     let event_run_dir = ipc_run_dir(project_root, &request.run_id, None);
 
+    const STREAM_GRACE_SECS: u64 = 300;
+    let stream_timeout_secs = request.timeout_secs.map(|t| t.saturating_add(STREAM_GRACE_SECS));
+
     process_phase_event_stream(
         tokio::io::BufReader::new(read_half).lines(),
         &request.run_id,
@@ -456,12 +459,13 @@ pub async fn run_workflow_phase_attempt(
         parse_phase_decision,
         &expected_result_kind,
         Some(&event_run_dir),
+        stream_timeout_secs,
     )
     .await
 }
 
 async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
-    mut lines: tokio::io::Lines<R>,
+    lines: tokio::io::Lines<R>,
     run_id: &RunId,
     workflow_id: &str,
     phase_id: &str,
@@ -469,7 +473,14 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
     parse_phase_decision: bool,
     expected_result_kind: &str,
     event_run_dir: Option<&std::path::Path>,
+    stream_timeout_secs: Option<u64>,
 ) -> Result<PhaseExecutionOutcome> {
+    const FALLBACK_TIMEOUT_SECS: u64 = 7200;
+    let timeout_secs = stream_timeout_secs.unwrap_or(FALLBACK_TIMEOUT_SECS);
+    let timeout_duration = Duration::from_secs(timeout_secs);
+
+    timeout(timeout_duration, async move {
+    let mut lines = lines;
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
     let mut pending_result_payload: Option<Value> = None;
@@ -599,6 +610,16 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
         phase_id,
         diagnostics_suffix
     ))
+    })
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "workflow {} phase {} event stream timed out after {}s",
+            workflow_id,
+            phase_id,
+            timeout_secs
+        )
+    })?
 }
 
 fn parse_result_payload_from_text(text: &str, expected_kind: &str) -> Option<Value> {
@@ -1699,7 +1720,7 @@ mod tests {
     ) -> anyhow::Result<PhaseExecutionOutcome> {
         let bytes = make_event_stream(events);
         let reader = tokio::io::BufReader::new(bytes.as_slice());
-        process_phase_event_stream(reader.lines(), run_id, "wf-test", "impl", false, false, "", run_dir).await
+        process_phase_event_stream(reader.lines(), run_id, "wf-test", "impl", false, false, "", run_dir, None).await
     }
 
     #[tokio::test]
@@ -1888,6 +1909,7 @@ mod tests {
             false,
             "",
             None::<&std::path::Path>,
+            None,
         )
         .await
         .expect("malformed lines should be skipped, not cause failure");
