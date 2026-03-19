@@ -156,11 +156,7 @@ async fn main() -> Result<()> {
                 cancel_for_signal.cancel();
             });
 
-            let structured_output = if no_response_format {
-                None
-            } else {
-                Some(resolved_config.structured_output)
-            };
+            let structured_output = if no_response_format { None } else { Some(resolved_config.structured_output) };
 
             let result = runner::agent_loop::run_agent_loop(
                 &client,
