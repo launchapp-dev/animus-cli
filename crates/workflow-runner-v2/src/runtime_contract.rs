@@ -547,6 +547,87 @@ pub fn inject_named_mcp_servers(
     Ok(())
 }
 
+pub fn check_required_env_for_phase_mcp_servers(
+    _project_root: &str,
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+    named_servers: &[String],
+) -> Result<()> {
+    let agent_id = ctx.phase_agent_id(phase_id);
+    let workflow_profile_servers: Vec<String> = agent_id
+        .as_deref()
+        .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id))
+        .map(|profile| profile.mcp_servers.clone())
+        .unwrap_or_default();
+    let runtime_profile_servers: Vec<String> = if workflow_profile_servers.is_empty() {
+        agent_id
+            .as_deref()
+            .and_then(|id| ctx.agent_runtime_config.agent_profile(id))
+            .map(|profile| profile.mcp_servers.clone())
+            .filter(|servers| !servers.is_empty())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let phase_servers = ctx.phase_mcp_servers(phase_id);
+
+    let mut allowed_servers = std::collections::BTreeSet::new();
+    for server in workflow_profile_servers.iter().chain(runtime_profile_servers.iter()).chain(phase_servers.iter()) {
+        let trimmed = server.trim();
+        if !trimmed.is_empty() {
+            allowed_servers.insert(trimmed.to_string());
+        }
+    }
+
+    let mut servers_to_check: std::collections::BTreeMap<&str, &orchestrator_config::McpServerDefinition> =
+        std::collections::BTreeMap::new();
+
+    for (name, definition) in &ctx.workflow_config.config.mcp_servers {
+        if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
+            continue;
+        }
+        servers_to_check.insert(name.as_str(), definition);
+    }
+
+    for raw_name in named_servers {
+        let name = raw_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
+            servers_to_check.insert(name, definition);
+        }
+    }
+
+    let mut missing: Vec<(String, String)> = Vec::new();
+    for (name, definition) in &servers_to_check {
+        let required = definition
+            .config
+            .get("required_env")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for var_value in required {
+            if let Some(var_name) = var_value.as_str().map(str::trim).filter(|v| !v.is_empty()) {
+                if std::env::var_os(var_name).is_none() {
+                    missing.push((name.to_string(), var_name.to_string()));
+                }
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let details = missing
+        .iter()
+        .map(|(server, var)| format!("  - server '{}' requires env var '{}'", server, var))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(anyhow!("MCP server pre-flight check failed: required environment variables are not set:\n{}", details))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -678,6 +759,120 @@ mod tests {
             runtime_contract.pointer("/mcp/additional_servers").is_none(),
             "named MCP injection should not duplicate the primary ao server"
         );
+    }
+
+    #[test]
+    fn check_required_env_passes_when_no_required_env() {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "my-server".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec!["server.js".to_string()],
+                transport: None,
+                config: BTreeMap::new(),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["my-server".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        assert!(
+            check_required_env_for_phase_mcp_servers(".", &ctx, "impl", &[]).is_ok(),
+            "no required_env should pass"
+        );
+    }
+
+    #[test]
+    fn check_required_env_errors_when_var_missing() {
+        let mut workflow_config = builtin_workflow_config();
+        let mut config = BTreeMap::new();
+        config.insert("required_env".to_string(), serde_json::json!(["__AO_TEST_MISSING_VAR_XYZ__"]));
+        workflow_config.mcp_servers.insert(
+            "needs-secret".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config,
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["needs-secret".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        std::env::remove_var("__AO_TEST_MISSING_VAR_XYZ__");
+        let result = check_required_env_for_phase_mcp_servers(".", &ctx, "impl", &[]);
+        assert!(result.is_err(), "missing required_env var should return an error");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("__AO_TEST_MISSING_VAR_XYZ__"), "error should mention the missing var name");
+        assert!(msg.contains("needs-secret"), "error should mention the server name");
+    }
+
+    #[test]
+    fn check_required_env_passes_when_var_is_set() {
+        let mut workflow_config = builtin_workflow_config();
+        let mut config = BTreeMap::new();
+        config.insert("required_env".to_string(), serde_json::json!(["__AO_TEST_PRESENT_VAR_XYZ__"]));
+        workflow_config.mcp_servers.insert(
+            "needs-secret".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config,
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["needs-secret".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        std::env::set_var("__AO_TEST_PRESENT_VAR_XYZ__", "dummy");
+        let result = check_required_env_for_phase_mcp_servers(".", &ctx, "impl", &[]);
+        std::env::remove_var("__AO_TEST_PRESENT_VAR_XYZ__");
+        assert!(result.is_ok(), "set required_env var should pass");
     }
 
     #[test]
