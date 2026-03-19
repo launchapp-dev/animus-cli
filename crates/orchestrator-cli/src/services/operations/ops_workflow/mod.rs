@@ -73,11 +73,22 @@ async fn resolve_workflow_run_dispatch_from_input(
     project_root: &str,
     input: WorkflowRunInput,
 ) -> Result<protocol::SubjectDispatch> {
-    let WorkflowRunInput { subject, workflow_ref, input, vars, task_id: flat_task_id, requirement_id: flat_requirement_id, .. } = input;
-    let effective_task_id = subject.task_id().filter(|id| !id.is_empty()).map(|s| s.to_string())
+    let WorkflowRunInput {
+        subject,
+        workflow_ref,
+        input,
+        vars,
+        task_id: flat_task_id,
+        requirement_id: flat_requirement_id,
+        ..
+    } = input;
+    let effective_task_id = subject
+        .task_id()
+        .filter(|id| !id.is_empty())
+        .map(|s| s.to_string())
         .or_else(|| (!flat_task_id.is_empty()).then_some(flat_task_id));
-    let effective_requirement_id = subject.requirement_id().filter(|id| !id.is_empty()).map(|s| s.to_string())
-        .or(flat_requirement_id);
+    let effective_requirement_id =
+        subject.requirement_id().filter(|id| !id.is_empty()).map(|s| s.to_string()).or(flat_requirement_id);
     if let Some(id) = effective_task_id {
         let task = hub.tasks().get(&id).await?;
         Ok(protocol::SubjectDispatch::for_task_with_metadata(

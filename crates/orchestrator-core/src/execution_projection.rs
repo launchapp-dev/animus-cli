@@ -44,10 +44,7 @@ pub fn is_workflow_runner_blocked(task: &OrchestratorTask) -> bool {
 /// been reset.  Once the count reaches `MAX_RUNNER_FAILURE_RESETS` the task is
 /// left blocked and an error message is logged, signalling that human
 /// intervention is needed.
-pub async fn reconcile_runner_blocked_task(
-    hub: Arc<dyn ServiceHub>,
-    task: &OrchestratorTask,
-) -> anyhow::Result<bool> {
+pub async fn reconcile_runner_blocked_task(hub: Arc<dyn ServiceHub>, task: &OrchestratorTask) -> anyhow::Result<bool> {
     let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
 
     if count > MAX_RUNNER_FAILURE_RESETS {
@@ -243,7 +240,10 @@ mod tests {
     use chrono::Utc;
     use protocol::{SubjectExecutionFact, SUBJECT_KIND_TASK};
 
-    use super::{execution_fact_subject_kind, is_workflow_runner_blocked, project_execution_fact, reconcile_runner_blocked_task, MAX_RUNNER_FAILURE_RESETS};
+    use super::{
+        execution_fact_subject_kind, is_workflow_runner_blocked, project_execution_fact, reconcile_runner_blocked_task,
+        MAX_RUNNER_FAILURE_RESETS,
+    };
     use crate::{
         services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
         TaskMetadata, TaskStatus, TaskType, WorkflowMetadata,
@@ -450,7 +450,8 @@ mod tests {
             status: TaskStatus::Blocked,
             paused: true,
             blocked_reason: Some(
-                "workflow runner exited without workflow status: workflow runner exited with status Some(1)".to_string(),
+                "workflow runner exited without workflow status: workflow runner exited with status Some(1)"
+                    .to_string(),
             ),
             ..base_test_task("TASK-1")
         };

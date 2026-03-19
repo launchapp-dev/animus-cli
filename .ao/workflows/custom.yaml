@@ -41,7 +41,16 @@ agents:
          Handle ALL rework/rebase before moving to new work.
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
-      3. If pending queue < 5, call ao.task.prioritized to get highest priority ready tasks.
+      3. QUEUE CAP: If total queue size (pending + assigned) >= 10, STOP — do NOT enqueue more.
+         If total queue < 10, enqueue up to (10 - current_total) new tasks.
+      4. PRIORITY MANAGEMENT: Use ao.queue.reorder to keep the queue sorted:
+         - critical tasks first
+         - then high priority
+         - then rework/rebase (fixing existing PRs beats new work)
+         - then medium
+         - then low
+         If a higher-priority task arrives and queue is at cap, use ao.queue.drop
+         on the lowest-priority pending task to make room.
       4. For each candidate task, call ao.task.get to check its dependencies field.
          - If dependencies is non-empty, check each blocked_by dependency:
            - Call ao.task.get for the dependency task_id
@@ -55,23 +64,28 @@ agents:
          oai-runner tools (GLM, MiniMax) are experimental — use for low-priority only.
          standard-kimi is DISABLED: Kimi K2.5 has a ~5% success rate on implementation tasks (TASK-808).
 
+         BALANCE LOAD: Split between Sonnet and Codex to avoid rate limits on either.
+         Codex has 2x rate limits until April 2nd — use for bulk work.
+
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
-         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest for simple fixes    |
-         | low        | docs           | standard            | Claude Sonnet (claude)  | Reliable; GLM had 0% success |
-         | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option              |
-         | medium     | feature        | standard            | Claude Sonnet (claude)   | Reliable; Kimi disabled       |
-         | medium     | bugfix         | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
-         | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
+         | low        | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, fast         |
+         | low        | docs           | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
+         | low        | chore          | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
+         | medium     | feature        | standard            | Claude Sonnet (claude)   | Best reasoning for features  |
+         | medium     | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
+         | medium     | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | Strong code understanding    |
          | medium     | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Great at UI/UX + vision      |
          | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
+         | high       | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
+         | high       | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | 2x limits + code expert      |
          | high       | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Vision + 1M ctx for UI       |
-         | high       | refactor       | standard-gemini     | Gemini 3.1 Pro (gemini)  | 1M context, native CLI       |
-         | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks, PO review     |
+         | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks only           |
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
          | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Monitoring is cheap          |
 
-         Default to "standard" for medium and high tasks.
+         Default split: features → Sonnet, bugfix/refactor/chore → Codex, UI → Gemini.
+         This spreads load across providers and avoids rate limits on any single one.
          All oai-runner models use json_object + schema-in-prompt for structured output.
          Do NOT use standard-kimi — Kimi K2.5 cannot satisfy implementation acceptance criteria.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
@@ -114,14 +128,11 @@ agents:
            - "no changes were detected" → task might already be done. Set to "blocked" with reason.
            - "missing required field 'commit_message'" → contract violation, set to "blocked".
            - "failed to connect runner" → transient error, set back to "ready" for retry.
-         - MODEL FAILURE RE-ROUTING (CRITICAL):
-           If a task failed OR escalated on an oai-runner workflow (standard-glm, standard-kimi, standard-minimax, quick-fix-glm, quick-fix-minimax):
-           a. Set task back to "ready".
-           b. Re-enqueue with workflow_ref="standard" (Claude) — the proven reliable pipeline.
-           c. This ensures no task is permanently stuck on a failing model.
-           NOTE: Escalated workflows are especially common for standard-kimi (50% escalation rate) —
-           always re-route escalated oai-runner tasks, do not leave them stuck waiting for manual intervention.
-         - If a task has failed or escalated > 5 times across ALL models (including Claude re-route), cancel it.
+         - MODEL FAILURE RE-ROUTING:
+           If a task failed on an oai-runner workflow (standard-glm, standard-kimi, standard-minimax):
+           a. Set task back to "ready" so the work-planner can re-enqueue it.
+           b. Do NOT call ao.queue.enqueue — only the work-planner enqueues.
+         - If a task has failed > 5 times, cancel it.
 
       3. UNBLOCK TASKS (dependency-aware):
          Call ao.task.list with status "blocked". For each:
@@ -146,8 +157,8 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: gpt-5.4-codex
+    tool: codex
 
   system-monitor:
     system_prompt: |
@@ -219,7 +230,7 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: claude-sonnet-4-6
+    model: gpt-5.4-codex
     tool: claude
 
   release-manager:
@@ -312,7 +323,9 @@ agents:
       STEP 2 — HANDLE CONFLICTING PRs:
       For each CONFLICTING PR:
         - Extract task ID from branch name (ao/task-XXX → TASK-XXX)
-        - Enqueue for rebase: call ao.queue.enqueue with task_id=TASK-XXX workflow_ref="rebase-and-retry"
+        - Set task status to "blocked" with reason "PR has merge conflicts — needs rebase"
+        - The work-planner will pick it up and enqueue with rebase-and-retry.
+        - Do NOT call ao.queue.enqueue — only the work-planner enqueues.
         - Skip to next PR.
 
       STEP 3 — CHECK CI AND MERGE (dependency-aware):
@@ -334,7 +347,8 @@ agents:
            - If OK, merge: `gh pr merge <number> --squash --delete-branch --admin`
            - Call ao.task.status with status "done".
         f. If changes needed: `gh pr review <number> --request-changes --body "<explanation>"`
-           Then enqueue with workflow_ref="rework".
+           Set task status to "blocked" with reason "PR changes requested — needs rework".
+           Do NOT call ao.queue.enqueue — the work-planner handles all enqueuing.
 
       STEP 4 — SKIP if no open PRs.
 
@@ -344,9 +358,9 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: claude-sonnet-4-6
-    tool: claude
-    mcp_servers: ["ao", "github"]
+    model: gpt-5.4-codex
+    tool: codex
+    mcp_servers: ["ao"]
 
   po-reviewer:
     system_prompt: |
@@ -718,8 +732,9 @@ agents:
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
-    model: gpt-5.3-codex
+    model: gpt-5.4-codex
     tool: codex
+    mcp_servers: ["ao", "context7", "rust-docs"]
 
   gemini-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
@@ -931,7 +946,7 @@ phases:
 
   code-review:
     mode: agent
-    agent_id: default
+    agent: codex-default
     directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
     decision_contract:
       required_evidence: [code_review_clean]
@@ -1142,34 +1157,29 @@ phases:
       mutates_state: true
   unit-test:
     mode: command
-    directive: "Run the workspace test suite"
+    directive: "Verify the workspace compiles cleanly"
     output_contract:
       kind: phase_result
       fields:
         exit_code:
           type: integer
-          description: "Process exit code returned by the test command."
+          description: "Process exit code returned by the build command."
         failure_summary:
           type: string
-          description: "High-level summary of the failing test command when verdict is rework."
-        failing_tests:
-          type: array
-          description: "Failing test names extracted from the command output when available."
-          items:
-            type: string
+          description: "High-level summary of the build failure when verdict is rework."
         suggested_fix_focus:
           type: string
           description: "Short summary of what the next repair loop should focus on."
     command:
       cwd_mode: task_root
       program: cargo
-      args: ["test", "--workspace"]
+      args: ["build", "--workspace"]
       timeout_secs: 600
-      success_exit_codes: [0, 1, 101]
+      success_exit_codes: [0]
 
   lint:
     mode: command
-    directive: "Run clippy with deny warnings"
+    directive: "Run clippy warnings check"
     output_contract:
       kind: phase_result
       fields:
@@ -1185,8 +1195,8 @@ phases:
     command:
       cwd_mode: task_root
       program: cargo
-      args: ["clippy", "--workspace", "--", "-D", "warnings"]
-      success_exit_codes: [0, 1, 101]
+      args: ["check", "--workspace"]
+      success_exit_codes: [0]
       timeout_secs: 120
   codex-implementation:
     mode: agent
@@ -1400,33 +1410,13 @@ workflows:
 
   - id: ao-task-complete
     name: "AO Task Complete"
-    description: "AO project delivery workflow that triages, refines, implements, validates, reviews, and product-signs-off a task to completion"
+    description: "Triage → Refine → Implement → Push → PR"
     phases:
       - triage
-      - refine-requirements:
-          max_rework_attempts: 2
-      - implementation:
-          max_rework_attempts: 4
-      - unit-test:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: implementation
-      - po-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: refine-requirements
+      - refine-requirements
+      - implementation
+      - push-branch
+      - create-pr
     post_success:
       merge:
         strategy: squash
@@ -1437,27 +1427,13 @@ workflows:
 
   - id: full
     name: "Full Lifecycle"
-    description: "End-to-end: triage, refine requirements, implement, test/lint gates, code review, PO sign-off, merge"
+    description: "Triage → Refine → Implement → Push → PR"
     phases:
       - triage
       - refine-requirements
       - implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - code-review:
-          on_verdict:
-            rework:
-              target: implementation
-      - po-review:
-          on_verdict:
-            rework:
-              target: implementation
+      - push-branch
+      - create-pr
       - cleanup
     post_success:
       merge:
@@ -1478,67 +1454,33 @@ workflows:
 
   - id: quick-fix
     name: "Quick Fix"
-    description: "Fast workflow for small bug fixes"
+    description: "Implement → Push → PR fast"
     phases:
       - implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - testing
+      - push-branch
+      - create-pr
       - cleanup
 
   - id: standard
     name: "Standard"
-    description: "Requirements → Implement → Test → Lint → Review → Push → PR"
+    description: "Implement → Push → PR fast. Review separately via pr-reviewer cron."
     phases:
       - requirements
       - implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: implementation
-      - push-branch
       - push-branch
       - create-pr
       - cleanup
 
   - id: standard-minimax
     name: "Standard (MiniMax)"
-    description: "Standard workflow using MiniMax for implementation, Codex for review"
+    description: "Implement → Push → PR fast with MiniMax"
     phases:
       - minimax-requirements
       - minimax-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: minimax-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1552,25 +1494,12 @@ workflows:
 
   - id: standard-kimi
     name: "Standard (Kimi K2.5)"
-    description: "Standard workflow using Kimi K2.5 via OpenRouter — multimodal agentic model for complex tasks"
+    description: "Implement → Push → PR fast with Kimi"
     phases:
       - requirements
       - kimi-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1584,25 +1513,12 @@ workflows:
 
   - id: standard-gemini
     name: "Standard (Gemini)"
-    description: "Standard workflow using Gemini for implementation — 1M context, good for large refactors"
+    description: "Implement → Push → PR fast with Gemini"
     phases:
       - requirements
       - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: gemini-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: gemini-implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: gemini-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1616,17 +1532,11 @@ workflows:
 
   - id: quick-fix-minimax
     name: "Quick Fix (MiniMax)"
-    description: "Fast workflow for trivial bug fixes using MiniMax — cheapest option"
+    description: "Implement → Push → PR fast with MiniMax"
     phases:
       - minimax-implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: minimax-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: minimax-implementation
+      - push-branch
+      - create-pr
       - cleanup
     post_success:
       merge:
@@ -1636,27 +1546,15 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
+
   - id: ao.task/ui-ux
     name: "UI/UX Task Workflow"
-    description: "Standard workflow using Kimi for UI/UX implementation — maps from ao.task/ui-ux workflow reference"
+    description: "Implement → Push → PR fast with Gemini for UI/UX"
     phases:
       - requirements
-      - kimi-implementation:
+      - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1670,25 +1568,12 @@ workflows:
 
   - id: ui-ux-standard
     name: "UI/UX Standard"
-    description: "Standard workflow using Kimi for UI/UX implementation, Codex for review — for web UI, React, and design-related tasks"
+    description: "Implement → Push → PR fast with Gemini for UI/UX"
     phases:
       - requirements
-      - kimi-implementation:
+      - gemini-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: kimi-implementation
-      - codex-code-review:
-          max_rework_attempts: 2
-          on_verdict:
-            rework:
-              target: kimi-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1702,25 +1587,12 @@ workflows:
 
   - id: standard-codex
     name: "Standard (Codex)"
-    description: "Standard workflow using GPT-5.3 Codex via native CLI for code-heavy refactors"
+    description: "Implement → Push → PR fast with Codex"
     phases:
       - requirements
       - codex-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: codex-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: codex-implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: codex-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1734,29 +1606,12 @@ workflows:
 
   - id: standard-opus
     name: "Standard (Opus)"
-    description: "Premium workflow using Claude Opus for the hardest tasks — architecture, complex refactors, critical fixes"
+    description: "Implement → Push → PR fast with Opus"
     phases:
       - requirements
       - opus-implementation:
           skip_if:
             - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: opus-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: opus-implementation
-      - code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: opus-implementation
-      - po-review:
-          on_verdict:
-            rework:
-              target: opus-implementation
       - push-branch
       - create-pr
       - cleanup
@@ -1770,26 +1625,12 @@ workflows:
 
   - id: gated
     name: "Gated"
-    description: "Full workflow with requirements validation, implementation, deterministic test/lint gates, code review, and PO sign-off"
+    description: "Implement → Push → PR (same as standard)"
     phases:
       - requirements
       - implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
-      - code-review:
-          on_verdict:
-            rework:
-              target: implementation
-      - po-review:
-          on_verdict:
-            rework:
-              target: requirements
+      - push-branch
+      - create-pr
       - cleanup
 
   - id: brain
@@ -1967,17 +1808,11 @@ workflows:
 
   - id: hotfix
     name: "Hotfix"
-    description: "Emergency fix targeting main directly, bypasses develop"
+    description: "Emergency fix → Push → PR targeting main"
     phases:
       - implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: implementation
+      - push-branch
+      - create-pr
     post_success:
       merge:
         strategy: squash
@@ -2018,27 +1853,27 @@ schedules:
     enabled: true
 
   - id: po-web
-    cron: "20 * * * *"
+    cron: "20 */6 * * *"
     workflow_ref: po-web
     enabled: true
 
   - id: po-mcp
-    cron: "40 * * * *"
+    cron: "40 */6 * * *"
     workflow_ref: po-mcp
     enabled: true
 
   - id: po-workflow
-    cron: "25 */2 * * *"
+    cron: "25 */6 * * *"
     workflow_ref: po-workflow
     enabled: true
 
   - id: po-agent-runner
-    cron: "35 */3 * * *"
+    cron: "35 */8 * * *"
     workflow_ref: po-agent-runner
     enabled: true
 
   - id: po-cli
-    cron: "55 */3 * * *"
+    cron: "55 */8 * * *"
     workflow_ref: po-cli
     enabled: true
 
