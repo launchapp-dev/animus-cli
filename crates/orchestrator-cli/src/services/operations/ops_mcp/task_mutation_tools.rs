@@ -66,7 +66,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.task.update",
-        description = "Update task fields. Purpose: Modify task properties like title, description, priority, status, or assignee. Prerequisites: Task must exist. Example: {\"id\": \"TASK-001\", \"priority\": \"high\", \"description\": \"Updated description\"}. Sequencing: Use ao.task.get first to see current values, or ao.task.status for simple status changes.",
+        description = "Update task fields. Purpose: Modify task properties like title, description, priority, status, or assignee. Prerequisites: Task must exist. Example: {\"id\": \"TASK-001\", \"priority\": \"high\", \"description\": \"Updated description\"}. Sequencing: Use ao.task.get first to see current values, or ao.task.status for simple status changes. Pass replace_linked_architecture_entities: true to replace all linked architecture entities instead of appending.",
         input_schema = ao_schema_for_type::<TaskUpdateInput>()
     )]
     async fn ao_task_update(&self, params: Parameters<TaskUpdateInput>) -> Result<CallToolResult, McpError> {
