@@ -355,6 +355,16 @@ impl WebApiService {
         Ok(())
     }
 
+    pub async fn validate_workflow_config(&self, config_json: &str) -> Result<Vec<String>, WebApiError> {
+        let config: orchestrator_config::workflow_config::WorkflowConfig = serde_json::from_str(config_json)
+            .map_err(|e| WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2))?;
+        let project_root = std::path::Path::new(&self.context.project_root);
+        match orchestrator_config::workflow_config::validate_workflow_config_with_project_root(&config, Some(project_root)) {
+            Ok(()) => Ok(vec![]),
+            Err(e) => Ok(e.to_string().lines().map(str::to_string).collect()),
+        }
+    }
+
     pub async fn upsert_workflow_definition(
         &self,
         id: String,

@@ -1591,6 +1591,8 @@ function PostSuccessSection({
 
 const SAVE_CONFIG = `mutation SaveWorkflowConfig($configJson: String!) { saveWorkflowConfig(configJson: $configJson) }`;
 
+const VALIDATE_CONFIG = `mutation ValidateWorkflowConfig($configJson: String!) { validateWorkflowConfig(configJson: $configJson) }`;
+
 const UPSERT_MUTATION = `mutation UpsertWorkflowDefinition($id: String!, $name: String!, $description: String, $phases: String!, $variables: String) { upsertWorkflowDefinition(id: $id, name: $name, description: $description, phases: $phases, variables: $variables) }`;
 
 function EditorCore({
@@ -1610,6 +1612,7 @@ function EditorCore({
   const [activeTab, setActiveTab] = useState(0);
   const [, upsertDef] = useMutation(UPSERT_MUTATION);
   const [, saveConfig] = useMutation(SAVE_CONFIG);
+  const [{ fetching: validating }, validateConfig] = useMutation(VALIDATE_CONFIG);
 
   const [agents, setAgents] = useState<AgentProfileEntry[]>([]);
   const [phaseDefinitions, setPhaseDefinitions] = useState<PhaseDefinitionEntry[]>([]);
@@ -1694,8 +1697,102 @@ function EditorCore({
     }));
   };
 
-  const onValidate = () => {
-    setValidation(validateDef(def));
+  const buildConfigJson = () => JSON.stringify({
+    agents: Object.fromEntries(agents.map((a) => [a.name, {
+      description: a.description || undefined,
+      role: a.role || undefined,
+      system_prompt: a.systemPrompt || undefined,
+      model: a.model || undefined,
+      tool: a.tool || undefined,
+      mcp_servers: a.mcpServers.length > 0 ? a.mcpServers : undefined,
+      skills: a.skills.length > 0 ? a.skills : undefined,
+    }])),
+    phases: Object.fromEntries(phaseDefinitions.map((p) => [p.id, {
+      mode: p.mode,
+      agent: p.mode === "agent" ? p.agent || undefined : undefined,
+      directive: p.mode === "agent" ? p.directive || undefined : undefined,
+      decision_contract: p.mode === "agent" ? {
+        min_confidence: p.decisionContract.minConfidence,
+        max_risk: p.decisionContract.maxRisk,
+        allow_missing_decision: p.decisionContract.allowMissingDecision || undefined,
+        required_evidence: p.decisionContract.requiredEvidence.length > 0 ? p.decisionContract.requiredEvidence : undefined,
+        fields: p.decisionContract.fields.length > 0 ? Object.fromEntries(
+          p.decisionContract.fields.map(f => [f.name, {
+            type: f.type,
+            description: f.description || undefined,
+            ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
+            ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
+          }])
+        ) : undefined,
+      } : undefined,
+      output_contract: p.mode === "agent" && p.outputContract.kind ? {
+        kind: p.outputContract.kind,
+        required_fields: p.outputContract.requiredFields.length > 0 ? p.outputContract.requiredFields : undefined,
+        fields: p.outputContract.fields.length > 0 ? Object.fromEntries(
+          p.outputContract.fields.map(f => [f.name, {
+            type: f.type,
+            description: f.description || undefined,
+            ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
+            ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
+          }])
+        ) : undefined,
+      } : undefined,
+      command: p.mode === "command" ? {
+        program: p.command.program,
+        args: p.command.args.length > 0 ? p.command.args : undefined,
+        cwd_mode: p.command.cwdMode,
+        timeout_secs: p.command.timeoutSecs,
+      } : undefined,
+      instructions: p.mode === "manual" ? p.manualInstructions || undefined : undefined,
+      approval_note_required: p.mode === "manual" ? p.approvalNoteRequired || undefined : undefined,
+    }])),
+    mcp_servers: Object.fromEntries(mcpServers.map((s) => [s.name, {
+      command: s.command,
+      args: s.args.length > 0 ? s.args : undefined,
+      transport: s.transport !== "stdio" ? s.transport : undefined,
+      tools: s.tools.length > 0 ? s.tools : undefined,
+      env: s.env.length > 0 ? Object.fromEntries(s.env.map((e) => [e.key, e.value])) : undefined,
+    }])),
+    schedules: schedules.length > 0 ? schedules.map((s) => ({
+      id: s.id,
+      cron: s.cron,
+      workflow_ref: s.workflowRef || undefined,
+      enabled: s.enabled,
+    })) : undefined,
+    workflows: {
+      [def.id]: {
+        post_success: {
+          merge_strategy: def.postSuccess.mergeStrategy,
+          target_branch: def.postSuccess.targetBranch,
+          create_pr: def.postSuccess.createPr,
+          auto_merge: def.postSuccess.autoMerge,
+          cleanup_worktree: def.postSuccess.cleanupWorktree,
+        },
+      },
+    },
+  });
+
+  const onValidate = async () => {
+    const clientResult = validateDef(def);
+    setValidation(clientResult);
+    if (!clientResult.valid) return;
+    setSaveError(null);
+    const configJson = buildConfigJson();
+    const { data, error } = await validateConfig({ configJson });
+    const serverErrors: string[] = data?.validateWorkflowConfig ?? [];
+    if (error) {
+      setSaveError(error.message);
+    } else if (serverErrors.length > 0) {
+      setValidation({
+        valid: false,
+        errors: serverErrors.map((msg) => ({ message: msg })),
+        warnings: [],
+      });
+    } else {
+      setValidation(null);
+      setSaveMsg("Configuration is valid");
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
   };
 
   const agentNames = useMemo(() => agents.map((a) => a.name).filter(Boolean), [agents]);
@@ -1741,80 +1838,7 @@ function EditorCore({
       return;
     }
 
-    const configJson = JSON.stringify({
-      agents: Object.fromEntries(agents.map((a) => [a.name, {
-        description: a.description || undefined,
-        role: a.role || undefined,
-        system_prompt: a.systemPrompt || undefined,
-        model: a.model || undefined,
-        tool: a.tool || undefined,
-        mcp_servers: a.mcpServers.length > 0 ? a.mcpServers : undefined,
-        skills: a.skills.length > 0 ? a.skills : undefined,
-      }])),
-      phases: Object.fromEntries(phaseDefinitions.map((p) => [p.id, {
-        mode: p.mode,
-        agent: p.mode === "agent" ? p.agent || undefined : undefined,
-        directive: p.mode === "agent" ? p.directive || undefined : undefined,
-        decision_contract: p.mode === "agent" ? {
-          min_confidence: p.decisionContract.minConfidence,
-          max_risk: p.decisionContract.maxRisk,
-          allow_missing_decision: p.decisionContract.allowMissingDecision || undefined,
-          required_evidence: p.decisionContract.requiredEvidence.length > 0 ? p.decisionContract.requiredEvidence : undefined,
-          fields: p.decisionContract.fields.length > 0 ? Object.fromEntries(
-            p.decisionContract.fields.map(f => [f.name, {
-              type: f.type,
-              description: f.description || undefined,
-              ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
-              ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
-            }])
-          ) : undefined,
-        } : undefined,
-        output_contract: p.mode === "agent" && p.outputContract.kind ? {
-          kind: p.outputContract.kind,
-          required_fields: p.outputContract.requiredFields.length > 0 ? p.outputContract.requiredFields : undefined,
-          fields: p.outputContract.fields.length > 0 ? Object.fromEntries(
-            p.outputContract.fields.map(f => [f.name, {
-              type: f.type,
-              description: f.description || undefined,
-              ...(f.type === "array" && f.itemsType ? { items: { type: f.itemsType } } : {}),
-              ...(f.enumValues.length > 0 ? { enum: f.enumValues } : {}),
-            }])
-          ) : undefined,
-        } : undefined,
-        command: p.mode === "command" ? {
-          program: p.command.program,
-          args: p.command.args.length > 0 ? p.command.args : undefined,
-          cwd_mode: p.command.cwdMode,
-          timeout_secs: p.command.timeoutSecs,
-        } : undefined,
-        instructions: p.mode === "manual" ? p.manualInstructions || undefined : undefined,
-        approval_note_required: p.mode === "manual" ? p.approvalNoteRequired || undefined : undefined,
-      }])),
-      mcp_servers: Object.fromEntries(mcpServers.map((s) => [s.name, {
-        command: s.command,
-        args: s.args.length > 0 ? s.args : undefined,
-        transport: s.transport !== "stdio" ? s.transport : undefined,
-        tools: s.tools.length > 0 ? s.tools : undefined,
-        env: s.env.length > 0 ? Object.fromEntries(s.env.map((e) => [e.key, e.value])) : undefined,
-      }])),
-      schedules: schedules.length > 0 ? schedules.map((s) => ({
-        id: s.id,
-        cron: s.cron,
-        workflow_ref: s.workflowRef || undefined,
-        enabled: s.enabled,
-      })) : undefined,
-      workflows: {
-        [def.id]: {
-          post_success: {
-            merge_strategy: def.postSuccess.mergeStrategy,
-            target_branch: def.postSuccess.targetBranch,
-            create_pr: def.postSuccess.createPr,
-            auto_merge: def.postSuccess.autoMerge,
-            cleanup_worktree: def.postSuccess.cleanupWorktree,
-          },
-        },
-      },
-    });
+    const configJson = buildConfigJson();
 
     const { error: configErr } = await saveConfig({ configJson });
     if (configErr) {
@@ -1846,9 +1870,9 @@ function EditorCore({
             <Eye className="h-3.5 w-3.5 mr-1.5" />
             Preview
           </Button>
-          <Button size="sm" variant="outline" onClick={onValidate}>
+          <Button size="sm" variant="outline" onClick={onValidate} disabled={validating}>
             <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
-            Validate
+            {validating ? "Validating…" : "Validate"}
           </Button>
           <Button size="sm" onClick={onSave}>
             <Save className="h-3.5 w-3.5 mr-1.5" />

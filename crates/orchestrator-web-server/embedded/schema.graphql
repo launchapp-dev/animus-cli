@@ -415,6 +415,7 @@ type MutationRoot {
 	resumeWorkflow(id: ID!, feedback: String): GqlWorkflow!
 	cancelWorkflow(id: ID!): GqlWorkflow!
 	saveWorkflowConfig(configJson: String!): Boolean!
+	validateWorkflowConfig(configJson: String!): [String!]!
 	upsertWorkflowDefinition(id: String!, name: String!, description: String, phases: String!, variables: String): Boolean!
 	deleteWorkflowDefinition(id: ID!): Boolean!
 	approvePhase(workflowId: ID!, phaseId: String!, note: String): GqlWorkflow!

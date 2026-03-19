@@ -323,6 +323,11 @@ impl MutationRoot {
         Ok(true)
     }
 
+    async fn validate_workflow_config(&self, ctx: &Context<'_>, config_json: String) -> Result<Vec<String>> {
+        let api = ctx.data::<WebApiService>()?;
+        api.validate_workflow_config(&config_json).await.map_err(gql_err)
+    }
+
     async fn upsert_workflow_definition(
         &self,
         ctx: &Context<'_>,
