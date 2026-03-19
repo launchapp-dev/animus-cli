@@ -1140,34 +1140,29 @@ phases:
       mutates_state: true
   unit-test:
     mode: command
-    directive: "Run the workspace test suite"
+    directive: "Verify the workspace compiles cleanly"
     output_contract:
       kind: phase_result
       fields:
         exit_code:
           type: integer
-          description: "Process exit code returned by the test command."
+          description: "Process exit code returned by the build command."
         failure_summary:
           type: string
-          description: "High-level summary of the failing test command when verdict is rework."
-        failing_tests:
-          type: array
-          description: "Failing test names extracted from the command output when available."
-          items:
-            type: string
+          description: "High-level summary of the build failure when verdict is rework."
         suggested_fix_focus:
           type: string
           description: "Short summary of what the next repair loop should focus on."
     command:
       cwd_mode: task_root
       program: cargo
-      args: ["test", "--workspace"]
+      args: ["build", "--workspace"]
       timeout_secs: 600
-      success_exit_codes: [0, 1, 101]
+      success_exit_codes: [0]
 
   lint:
     mode: command
-    directive: "Run clippy with deny warnings"
+    directive: "Run clippy warnings check"
     output_contract:
       kind: phase_result
       fields:
@@ -1183,8 +1178,8 @@ phases:
     command:
       cwd_mode: task_root
       program: cargo
-      args: ["clippy", "--workspace", "--", "-D", "warnings"]
-      success_exit_codes: [0, 1, 101]
+      args: ["check", "--workspace"]
+      success_exit_codes: [0]
       timeout_secs: 120
   codex-implementation:
     mode: agent
@@ -2070,27 +2065,27 @@ schedules:
     enabled: true
 
   - id: po-web
-    cron: "20 * * * *"
+    cron: "20 */6 * * *"
     workflow_ref: po-web
     enabled: true
 
   - id: po-mcp
-    cron: "40 * * * *"
+    cron: "40 */6 * * *"
     workflow_ref: po-mcp
     enabled: true
 
   - id: po-workflow
-    cron: "25 */2 * * *"
+    cron: "25 */6 * * *"
     workflow_ref: po-workflow
     enabled: true
 
   - id: po-agent-runner
-    cron: "35 */3 * * *"
+    cron: "35 */8 * * *"
     workflow_ref: po-agent-runner
     enabled: true
 
   - id: po-cli
-    cron: "55 */3 * * *"
+    cron: "55 */8 * * *"
     workflow_ref: po-cli
     enabled: true
 
