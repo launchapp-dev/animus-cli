@@ -16,6 +16,7 @@ Complete reference of every `ao` command, subcommand, and key flag. This tree is
 ```
 ao
 ├── version                  Show installed ao version
+├── update                   Check for updates and self-update the binary (--check, -y)
 ├── status                   Unified project status dashboard
 ├── setup                    Guided onboarding wizard
 ├── doctor                   Environment diagnostics (--fix)
