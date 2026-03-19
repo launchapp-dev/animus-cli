@@ -138,4 +138,6 @@ pub(crate) enum Command {
     Tui(TuiArgs),
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
+    /// Check for and install the latest ao release.
+    Update(UpdateArgs),
 }

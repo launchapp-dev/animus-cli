@@ -36,6 +36,11 @@ termimad = "0.34"
 ratatui = "0.30"
 axum = { workspace = true }
 libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-webpki-roots"] }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate-zlib"] }
+tempfile = "3"
 
 [dev-dependencies]
 assert_cmd = "2"
