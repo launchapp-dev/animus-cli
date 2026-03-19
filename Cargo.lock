@@ -3141,6 +3141,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs",
+ "libc",
  "nix 0.31.2",
  "once_cell",
  "proptest",

@@ -48,6 +48,16 @@ fn taskkill_process_tree(pid: u32, force: bool) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
+pub fn reap_child_process(pid: i32) {
+    if pid <= 0 {
+        return;
+    }
+    use nix::sys::wait::{waitpid, WaitPidFlag};
+    use nix::unistd::Pid;
+    let _ = waitpid(Pid::from_raw(pid), Some(WaitPidFlag::WNOHANG));
+}
+
 pub fn process_exists(pid: i32) -> bool {
     if pid <= 0 {
         return false;
@@ -116,6 +126,7 @@ pub fn graceful_kill_process(pid: i32) -> bool {
         let _ = kill(Pid::from_raw(pid), Signal::SIGKILL);
 
         std::thread::sleep(Duration::from_millis(100));
+        reap_child_process(pid);
         !process_exists(pid)
     }
 

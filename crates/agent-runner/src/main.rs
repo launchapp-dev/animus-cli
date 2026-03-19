@@ -35,6 +35,17 @@ async fn main() -> Result<()> {
         warn!(error = %e, "Failed to cleanup orphaned processes");
     }
 
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(e) = agent_runner::cleanup::sweep_stale_tracker_entries() {
+                warn!(error = %e, "Failed to sweep stale tracker entries");
+            }
+        }
+    });
+
     let ipc_server = agent_runner::ipc::IpcServer::new().await?;
     info!(address = %ipc_server.address(), "IPC server configured");
 

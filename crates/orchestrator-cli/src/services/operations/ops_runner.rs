@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CliTrackerStateCli {
-    #[serde(default)]
+    #[serde(flatten)]
     processes: HashMap<String, i32>,
 }
 

@@ -81,6 +81,33 @@ pub fn cleanup_orphaned_clis() -> Result<()> {
     })
 }
 
+pub fn sweep_stale_tracker_entries() -> Result<()> {
+    with_tracker_lock(|tracker_path| {
+        if !tracker_path.exists() {
+            return Ok(());
+        }
+        let tracked = read_tracker(tracker_path)?;
+        let mut cleaned = 0usize;
+        let retained: HashMap<String, u32> = tracked
+            .into_iter()
+            .filter(|(run_id, pid)| {
+                if process_exists(*pid as i32) {
+                    true
+                } else {
+                    debug!(run_id = run_id.as_str(), pid, "Swept stale tracker entry for dead process");
+                    cleaned += 1;
+                    false
+                }
+            })
+            .collect();
+        if cleaned > 0 {
+            fs::write(tracker_path, serde_json::to_string(&retained)?)?;
+            info!(cleaned_count = cleaned, "Swept stale tracker entries for dead processes");
+        }
+        Ok(())
+    })
+}
+
 pub fn track_process(run_id: &str, pid: u32) -> Result<()> {
     with_tracker_lock(|tracker_path| {
         let mut tracked = read_tracker(tracker_path)?;
