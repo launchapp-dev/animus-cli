@@ -64,27 +64,28 @@ agents:
          oai-runner tools (GLM, MiniMax) are experimental — use for low-priority only.
          standard-kimi is DISABLED: Kimi K2.5 has a ~5% success rate on implementation tasks (TASK-808).
 
-         CODEX HAS 2X RATE LIMITS UNTIL APRIL 2ND — USE IT HEAVILY!
+         BALANCE LOAD: Split between Sonnet and Codex to avoid rate limits on either.
+         Codex has 2x rate limits until April 2nd — use for bulk work.
 
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
-         | low        | bugfix/chore   | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, fast         |
+         | low        | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, fast         |
          | low        | docs           | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
          | low        | chore          | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
-         | medium     | feature        | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, strong code  |
-         | medium     | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, reliable     |
-         | medium     | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, code expert  |
+         | medium     | feature        | standard            | Claude Sonnet (claude)   | Best reasoning for features  |
+         | medium     | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
+         | medium     | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | Strong code understanding    |
          | medium     | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Great at UI/UX + vision      |
-         | high       | feature        | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, strong       |
+         | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
+         | high       | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
+         | high       | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | 2x limits + code expert      |
          | high       | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Vision + 1M ctx for UI       |
-         | high       | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits + code expert |
          | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks only           |
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
          | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Monitoring is cheap          |
 
-         Default to "standard-codex" — Codex has 2x rate limits until April 2nd.
-         Only use Claude for Opus-level architecture/critical tasks.
-         Only use Gemini for UI/UX tasks.
+         Default split: features → Sonnet, bugfix/refactor/chore → Codex, UI → Gemini.
+         This spreads load across providers and avoids rate limits on any single one.
          All oai-runner models use json_object + schema-in-prompt for structured output.
          Do NOT use standard-kimi — Kimi K2.5 cannot satisfy implementation acceptance criteria.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
