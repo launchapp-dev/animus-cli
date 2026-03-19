@@ -309,6 +309,13 @@ function ToggleRow({ label, description, checked }: { label: string; description
 }
 
 export function DaemonConfigPage() {
+  const [result] = useQuery({ query: WorkflowConfigDocument });
+  const { data, fetching, error } = result;
+  if (fetching) return <PageLoading />;
+  if (error) return <PageError message={error.message} />;
+
+  const schedules = data?.workflowConfig?.schedules ?? [];
+
   return (
     <div className="space-y-6">
       <div>
@@ -329,6 +336,42 @@ export function DaemonConfigPage() {
               <ToggleRow label={setting.label} description={setting.description} checked={false} />
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/40 bg-card/60">
+        <CardHeader className="pb-2 pt-3 px-4">
+          <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Cron Schedules</CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pb-4">
+          {schedules.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">No cron schedules configured.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">ID</TableHead>
+                  <TableHead className="text-xs">Cron</TableHead>
+                  <TableHead className="text-xs">Workflow / Command</TableHead>
+                  <TableHead className="text-xs">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {schedules.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{s.id}</TableCell>
+                    <TableCell className="font-mono text-xs">{s.cron}</TableCell>
+                    <TableCell className="text-xs">{s.workflowRef ?? s.command ?? "—"}</TableCell>
+                    <TableCell>
+                      <Badge variant={s.enabled ? "default" : "secondary"} className="text-[10px]">
+                        {s.enabled ? "enabled" : "disabled"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
