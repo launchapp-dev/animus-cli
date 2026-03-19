@@ -17,8 +17,9 @@ use crate::phase_prompt::{
 };
 use crate::phase_targets::PhaseTargetPlanner;
 use crate::runtime_contract::{
-    apply_phase_capability_launch_flags, inject_agent_tool_policy, inject_default_stdio_mcp, inject_named_mcp_servers,
-    inject_project_mcp_servers, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
+    apply_phase_capability_launch_flags, check_phase_mcp_required_env, inject_agent_tool_policy,
+    inject_default_stdio_mcp, inject_named_mcp_servers, inject_project_mcp_servers,
+    inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
     phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
 };
 use crate::runtime_support::{
@@ -1000,6 +1001,12 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         &mut runtime_contract,
                         project_root,
                         ctx,
+                        phase_id,
+                        &applied_skills.application.mcp_servers,
+                    )?;
+                    check_phase_mcp_required_env(
+                        ctx,
+                        project_root,
                         phase_id,
                         &applied_skills.application.mcp_servers,
                     )?;

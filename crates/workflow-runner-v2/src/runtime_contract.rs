@@ -547,6 +547,92 @@ pub fn inject_named_mcp_servers(
     Ok(())
 }
 
+pub fn check_phase_mcp_required_env(
+    ctx: &RuntimeConfigContext,
+    _project_root: &str,
+    phase_id: &str,
+    named_servers: &[String],
+) -> Result<()> {
+    let mut missing: Vec<(String, String)> = Vec::new();
+
+    if !ctx.workflow_config.config.mcp_servers.is_empty() {
+        let agent_id = ctx.phase_agent_id(phase_id);
+        let workflow_profile_servers: Vec<String> = agent_id
+            .as_deref()
+            .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id))
+            .map(|profile| profile.mcp_servers.clone())
+            .unwrap_or_default();
+        let runtime_profile_servers: Vec<String> = if workflow_profile_servers.is_empty() {
+            agent_id
+                .as_deref()
+                .and_then(|id| ctx.agent_runtime_config.agent_profile(id))
+                .map(|profile| profile.mcp_servers.clone())
+                .filter(|servers| !servers.is_empty())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let phase_servers = ctx.phase_mcp_servers(phase_id);
+
+        let mut allowed_servers = std::collections::BTreeSet::new();
+        for server in workflow_profile_servers.iter().chain(runtime_profile_servers.iter()).chain(phase_servers.iter()) {
+            let trimmed = server.trim();
+            if !trimmed.is_empty() {
+                allowed_servers.insert(trimmed.to_string());
+            }
+        }
+
+        for (name, definition) in &ctx.workflow_config.config.mcp_servers {
+            if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
+                continue;
+            }
+            collect_missing_required_env(name, &definition.config, &mut missing);
+        }
+    }
+
+    if !named_servers.is_empty() {
+        for raw_name in named_servers {
+            let name = raw_name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
+                collect_missing_required_env(name, &definition.config, &mut missing);
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    missing.sort();
+    missing.dedup();
+    let lines: Vec<String> =
+        missing.iter().map(|(server, var)| format!("  {server}: missing env var '{var}'")).collect();
+    Err(anyhow!(
+        "phase '{}' MCP pre-flight check failed — required environment variables are not set:\n{}",
+        phase_id,
+        lines.join("\n")
+    ))
+}
+
+fn collect_missing_required_env(
+    server_name: &str,
+    config: &std::collections::BTreeMap<String, serde_json::Value>,
+    missing: &mut Vec<(String, String)>,
+) {
+    let required_env =
+        config.get("required_env").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for key in required_env {
+        if let Some(var_name) = key.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            if std::env::var_os(var_name).is_none() {
+                missing.push((server_name.to_string(), var_name.to_string()));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -702,6 +788,180 @@ mod tests {
         assert!(
             !args.iter().any(|value| value.as_str() == Some("--read-only")),
             "managed state mutation phases should not inject a strict read-only CLI flag"
+        );
+    }
+
+    #[test]
+    fn check_phase_mcp_required_env_passes_when_no_servers_have_required_env() {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "ao.mypk/srv".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config: BTreeMap::new(),
+                tools: vec![],
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["ao.mypk/srv".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        let result = check_phase_mcp_required_env(&ctx, "/nonexistent", "impl", &[]);
+        assert!(result.is_ok(), "no required_env should always pass");
+    }
+
+    #[test]
+    fn check_phase_mcp_required_env_fails_for_missing_var() {
+        let env_var = "__AO_TEST_REQUIRED_ENV_MISSING_XYZ__";
+        std::env::remove_var(env_var);
+
+        let mut config_map = BTreeMap::new();
+        config_map.insert("required_env".to_string(), serde_json::json!([env_var]));
+
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "ao.mypk/srv".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config: config_map,
+                tools: vec![],
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["ao.mypk/srv".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        let err = check_phase_mcp_required_env(&ctx, "/nonexistent", "impl", &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("pre-flight check failed"), "error should mention pre-flight check: {msg}");
+        assert!(msg.contains(env_var), "error should name the missing env var: {msg}");
+        assert!(msg.contains("ao.mypk/srv"), "error should name the server: {msg}");
+    }
+
+    #[test]
+    fn check_phase_mcp_required_env_passes_when_var_is_present() {
+        let env_var = "__AO_TEST_REQUIRED_ENV_PRESENT_XYZ__";
+        std::env::set_var(env_var, "some-value");
+
+        let mut config_map = BTreeMap::new();
+        config_map.insert("required_env".to_string(), serde_json::json!([env_var]));
+
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "ao.mypk/srv".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config: config_map,
+                tools: vec![],
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("impl".to_string(), PhaseMcpBinding { servers: vec!["ao.mypk/srv".to_string()] });
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        let result = check_phase_mcp_required_env(&ctx, "/nonexistent", "impl", &[]);
+        std::env::remove_var(env_var);
+        assert!(result.is_ok(), "present env var should pass");
+    }
+
+    #[test]
+    fn check_phase_mcp_required_env_skips_server_not_in_phase_allowed_set() {
+        let env_var = "__AO_TEST_UNBOUND_SERVER_VAR_XYZ__";
+        std::env::remove_var(env_var);
+
+        let mut requires_env_config = BTreeMap::new();
+        requires_env_config.insert("required_env".to_string(), serde_json::json!([env_var]));
+
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "ao.mypk/needs-var".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config: requires_env_config,
+                tools: vec![],
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config.mcp_servers.insert(
+            "ao.mypk/no-var".to_string(),
+            McpServerDefinition {
+                command: "node".to_string(),
+                args: vec![],
+                transport: None,
+                config: BTreeMap::new(),
+                tools: vec![],
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config.phase_mcp_bindings.insert(
+            "impl".to_string(),
+            PhaseMcpBinding { servers: vec!["ao.mypk/no-var".to_string()] },
+        );
+
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded };
+
+        let result = check_phase_mcp_required_env(&ctx, "/nonexistent", "impl", &[]);
+        assert!(
+            result.is_ok(),
+            "server not in the phase allowed set should not be checked: {:?}",
+            result.err()
         );
     }
 }
