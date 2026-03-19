@@ -82,7 +82,7 @@ impl Runner {
         tokio::spawn(async move {
             let mut persistence = persistence;
             while let Some(event) = run_event_rx.recv().await {
-                if let Err(err) = persistence.persist(&event) {
+                if let Err(err) = persistence.persist(&event).await {
                     warn!(
                         run_id = %run_id_for_forwarder.0.as_str(),
                         error = %err,

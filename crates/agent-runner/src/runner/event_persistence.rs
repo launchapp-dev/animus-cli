@@ -1,9 +1,9 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use protocol::{AgentRunEvent, OutputStreamType, RunId};
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 
 pub(super) struct RunEventPersistence {
     run_dir: Option<PathBuf>,
@@ -16,17 +16,17 @@ impl RunEventPersistence {
         Self { run_dir }
     }
 
-    pub(super) fn persist(&mut self, event: &AgentRunEvent) -> Result<()> {
+    pub(super) async fn persist(&mut self, event: &AgentRunEvent) -> Result<()> {
         let Some(run_dir) = &self.run_dir else {
             return Ok(());
         };
 
         let event_path = run_dir.join("events.jsonl");
         let line = serde_json::to_string(event)?;
-        append_line(&event_path, &line)?;
+        append_line(&event_path, &line).await?;
 
         if let AgentRunEvent::OutputChunk { stream_type, text, .. } = event {
-            persist_json_output(run_dir, *stream_type, text)?;
+            persist_json_output(run_dir, *stream_type, text).await?;
         }
 
         Ok(())
@@ -48,7 +48,7 @@ fn project_runs_root(project_root: &Path) -> Option<PathBuf> {
     Some(home.join(".ao").join(protocol::repository_scope_for_path(project_root)).join("runs"))
 }
 
-fn persist_json_output(run_dir: &Path, stream_type: OutputStreamType, text: &str) -> Result<()> {
+async fn persist_json_output(run_dir: &Path, stream_type: OutputStreamType, text: &str) -> Result<()> {
     let path = run_dir.join("json-output.jsonl");
     for (raw, payload) in collect_json_payload_lines(text) {
         let timestamp_ms = std::time::SystemTime::now()
@@ -61,7 +61,7 @@ fn persist_json_output(run_dir: &Path, stream_type: OutputStreamType, text: &str
             "raw": raw,
             "payload": payload,
         });
-        append_line(&path, &serde_json::to_string(&entry)?)?;
+        append_line(&path, &serde_json::to_string(&entry)?).await?;
     }
 
     Ok(())
@@ -92,12 +92,13 @@ fn collect_json_payload_lines(text: &str) -> Vec<(String, Value)> {
         .collect()
 }
 
-fn append_line(path: &Path, line: &str) -> Result<()> {
+async fn append_line(path: &Path, line: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{line}")?;
+    let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(path).await?;
+    file.write_all(line.as_bytes()).await?;
+    file.write_all(b"\n").await?;
     Ok(())
 }
 
@@ -126,8 +127,8 @@ mod tests {
         base
     }
 
-    #[test]
-    fn persist_writes_events_and_json_output() {
+    #[tokio::test]
+    async fn persist_writes_events_and_json_output() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let home = test_root();
         let _home = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
@@ -141,6 +142,7 @@ mod tests {
 
         persistence
             .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
+            .await
             .expect("persist started");
         persistence
             .persist(&AgentRunEvent::OutputChunk {
@@ -148,6 +150,7 @@ mod tests {
                 stream_type: OutputStreamType::Stdout,
                 text: "plain-text\n{\"type\":\"turn.completed\"}".to_string(),
             })
+            .await
             .expect("persist output");
 
         let run_dir =
@@ -182,8 +185,8 @@ mod tests {
         assert_eq!(run_dir, expected);
     }
 
-    #[test]
-    fn persist_ignores_unsafe_run_id() {
+    #[tokio::test]
+    async fn persist_ignores_unsafe_run_id() {
         let project_root = test_root();
         let run_id = RunId("../escape".to_string());
         let context = serde_json::json!({
@@ -193,6 +196,7 @@ mod tests {
 
         persistence
             .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
+            .await
             .expect("persist with unsafe id should no-op");
 
         let run_dir =
@@ -200,8 +204,8 @@ mod tests {
         assert!(!run_dir.exists());
     }
 
-    #[test]
-    fn persist_keeps_repo_scoped_runtime_root_under_global_scope_override() {
+    #[tokio::test]
+    async fn persist_keeps_repo_scoped_runtime_root_under_global_scope_override() {
         let _lock = env_lock().lock().expect("env lock should be available");
         let home = test_root();
         let _home = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
@@ -217,6 +221,7 @@ mod tests {
         let mut persistence = RunEventPersistence::new(&context, &run_id);
         persistence
             .persist(&AgentRunEvent::Started { run_id: run_id.clone(), timestamp: Timestamp::now() })
+            .await
             .expect("persist started");
         persistence
             .persist(&AgentRunEvent::OutputChunk {
@@ -224,6 +229,7 @@ mod tests {
                 stream_type: OutputStreamType::Stdout,
                 text: "{\"kind\":\"global-scope\"}".to_string(),
             })
+            .await
             .expect("persist output");
 
         let canonical_run_dir =
