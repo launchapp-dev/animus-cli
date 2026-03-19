@@ -360,7 +360,7 @@ jobs:
             sha256sum "${BASENAMES_SORTED[@]}" > SHA256SUMS.txt
           )
 
-      - name: Publish release
+      - name: Publish release (private repo)
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -368,3 +368,51 @@ jobs:
             dist/release-assets/*.zip
             dist/release-assets/SHA256SUMS.txt
           generate_release_notes: true
+
+  publish-public:
+    name: Publish to public repo (tags only)
+    runs-on: ubuntu-latest
+    needs: publish
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_ASSETS_DIR="dist/release-assets"
+          rm -rf "${RELEASE_ASSETS_DIR}"
+          mkdir -p "${RELEASE_ASSETS_DIR}"
+
+          mapfile -d '' ARCHIVES < <(find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) ! -path "${RELEASE_ASSETS_DIR}/*" -print0 | LC_ALL=C sort -z)
+          for archive in "${ARCHIVES[@]}"; do
+            cp "${archive}" "${RELEASE_ASSETS_DIR}/$(basename "${archive}")"
+          done
+
+          (
+            cd "${RELEASE_ASSETS_DIR}"
+            sha256sum *.tar.gz *.zip 2>/dev/null | LC_ALL=C sort -k2 > SHA256SUMS.txt
+          )
+
+      - name: Create release on public repo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AO_PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+
+          gh release create "${VERSION}" \
+            --repo launchapp-dev/ao \
+            --title "AO ${VERSION}" \
+            --notes "Release ${VERSION} — download the archive for your platform and run install.sh, or use:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
+          \`\`\`" \
+            dist/release-assets/*
