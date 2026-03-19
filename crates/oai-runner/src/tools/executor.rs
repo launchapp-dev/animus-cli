@@ -174,4 +174,79 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Missing required parameter"));
     }
+
+    #[tokio::test]
+    async fn read_file_rejects_absolute_path() {
+        let dir = setup_temp_dir();
+        let result = execute_tool("read_file", r#"{"path": "/etc/passwd"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_parent_dir_escape() {
+        let dir = setup_temp_dir();
+        let result = execute_tool("read_file", r#"{"path": "../../etc/passwd"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_absolute_path() {
+        let dir = setup_temp_dir();
+        let result =
+            execute_tool("write_file", r#"{"path": "/tmp/evil.txt", "content": "evil"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn write_file_succeeds_for_new_file_in_workspace() {
+        let dir = setup_temp_dir();
+        let result =
+            execute_tool("write_file", r#"{"path": "new_subdir/new_file.txt", "content": "content"}"#, dir.path())
+                .await;
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let dir = setup_temp_dir();
+        let link_path = dir.path().join("escape_link");
+        symlink(std::env::temp_dir(), &link_path).unwrap();
+        let result = execute_tool("read_file", r#"{"path": "escape_link/some_file"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn search_files_rejects_path_escape() {
+        let dir = setup_temp_dir();
+        let result = execute_tool("search_files", r#"{"pattern": "test", "path": "../../"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn list_files_rejects_base_path_escape() {
+        let dir = setup_temp_dir();
+        let result = execute_tool("list_files", r#"{"pattern": "**/*", "path": "../../"}"#, dir.path()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_rejects_absolute_path() {
+        let dir = setup_temp_dir();
+        let result = execute_tool(
+            "edit_file",
+            r#"{"path": "/etc/hosts", "old_text": "localhost", "new_text": "evil"}"#,
+            dir.path(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escape"));
+    }
 }

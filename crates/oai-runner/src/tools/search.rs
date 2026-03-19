@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
 
+use super::file_ops::resolve_path;
+
 pub fn search_files(
     working_dir: &Path,
     pattern: &str,
@@ -8,7 +10,7 @@ pub fn search_files(
     include: Option<&str>,
 ) -> Result<String> {
     let base = match search_path {
-        Some(p) if !p.is_empty() => working_dir.join(p),
+        Some(p) if !p.is_empty() => resolve_path(working_dir, p)?,
         _ => working_dir.to_path_buf(),
     };
 

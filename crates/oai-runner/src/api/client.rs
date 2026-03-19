@@ -1,20 +1,48 @@
 use anyhow::{bail, Result};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::types::*;
 
-static CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
-static CIRCUIT_OPEN_UNTIL: AtomicU64 = AtomicU64::new(0);
+static PROVIDER_STATES: RwLock<Option<HashMap<String, Arc<ProviderState>>>> = RwLock::new(None);
+
+struct ProviderState {
+    consecutive_failures: AtomicU32,
+    circuit_open_until: AtomicU64,
+}
 
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
 const CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
 
-fn circuit_is_open() -> bool {
-    let until = CIRCUIT_OPEN_UNTIL.load(Ordering::Relaxed);
+fn get_provider_state(api_base: &str) -> Arc<ProviderState> {
+    {
+        let read = PROVIDER_STATES.read().unwrap();
+        if let Some(map) = read.as_ref() {
+            if let Some(state) = map.get(api_base) {
+                return state.clone();
+            }
+        }
+    }
+
+    let mut write = PROVIDER_STATES.write().unwrap();
+    let map = write.get_or_insert_with(HashMap::new);
+    map.entry(api_base.to_string())
+        .or_insert_with(|| {
+            Arc::new(ProviderState {
+                consecutive_failures: AtomicU32::new(0),
+                circuit_open_until: AtomicU64::new(0),
+            })
+        })
+        .clone()
+}
+
+fn circuit_is_open(state: &ProviderState) -> bool {
+    let until = state.circuit_open_until.load(Ordering::Relaxed);
     if until == 0 {
         return false;
     }
@@ -22,19 +50,19 @@ fn circuit_is_open() -> bool {
     now < until
 }
 
-fn record_success() {
-    CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
-    CIRCUIT_OPEN_UNTIL.store(0, Ordering::Relaxed);
+fn record_success(state: &ProviderState) {
+    state.consecutive_failures.store(0, Ordering::Relaxed);
+    state.circuit_open_until.store(0, Ordering::Relaxed);
 }
 
-fn record_failure() {
-    let count = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+fn record_failure(state: &ProviderState, api_base: &str) {
+    let count = state.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
     if count >= CIRCUIT_BREAKER_THRESHOLD {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-        CIRCUIT_OPEN_UNTIL.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
+        state.circuit_open_until.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
         eprintln!(
-            "[oai-runner] Circuit breaker OPEN after {} consecutive failures. Cooling down for {}s.",
-            count, CIRCUIT_BREAKER_COOLDOWN_SECS
+            "[oai-runner] Circuit breaker OPEN for {} after {} consecutive failures. Cooling down for {}s.",
+            api_base, count, CIRCUIT_BREAKER_COOLDOWN_SECS
         );
     }
 }
@@ -59,22 +87,37 @@ impl ApiClient {
         request: &ChatRequest,
         on_text_chunk: &mut dyn FnMut(&str),
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
-        if circuit_is_open() {
-            bail!("Circuit breaker is open — too many consecutive API failures. Waiting for cooldown.");
+        let state = get_provider_state(&self.api_base);
+        if circuit_is_open(&state) {
+            bail!("Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.", self.api_base);
         }
 
         let url = format!("{}/chat/completions", self.api_base);
 
         let mut last_err = None;
+        let mut emitted_any = false;
+
         for attempt in 0..3 {
             if attempt > 0 {
+                if emitted_any {
+                    // If we already sent chunks to the user, retrying the whole request
+                    // will lead to duplicate output. Better to fail or implement resume.
+                    // OpenAI-style APIs usually don't support resume mid-stream.
+                    return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content")));
+                }
+
                 let delay = Duration::from_millis(500 * 2u64.pow(attempt as u32));
                 tokio::time::sleep(delay).await;
             }
 
-            match self.do_stream(&url, request, on_text_chunk).await {
+            let mut chunk_interceptor = |chunk: &str| {
+                emitted_any = true;
+                on_text_chunk(chunk);
+            };
+
+            match self.do_stream(&url, request, &mut chunk_interceptor).await {
                 Ok(result) => {
-                    record_success();
+                    record_success(&state);
                     return Ok(result);
                 }
                 Err(e) => {
@@ -85,8 +128,9 @@ impl ApiClient {
                         || err_str.contains("connection closed")
                         || err_str.contains("broken pipe")
                         || err_str.contains("reset by peer");
+                    
                     if is_rate_limit || is_server_error || is_transient {
-                        record_failure();
+                        record_failure(&state, &self.api_base);
                         let reason = if is_rate_limit {
                             "rate limited (429)"
                         } else if is_transient {
@@ -98,7 +142,7 @@ impl ApiClient {
                         last_err = Some(e);
                         continue;
                     }
-                    record_failure();
+                    record_failure(&state, &self.api_base);
                     return Err(e);
                 }
             }
@@ -147,8 +191,8 @@ impl ApiClient {
             let event = match event_result {
                 Ok(event) => event,
                 Err(e) => {
-                    eprintln!("[oai-runner] SSE parse error: {}", e);
-                    continue;
+                    // If we fail mid-stream, we should probably return an error so stream_chat can decide to retry
+                    bail!("SSE stream error: {}", e);
                 }
             };
 
@@ -172,7 +216,8 @@ impl ApiClient {
                 usage = Some(u);
             }
 
-            for choice in &parsed.choices {
+            // Only care about the first choice for agent loop
+            if let Some(choice) = parsed.choices.first() {
                 if let Some(text) = &choice.delta.content {
                     content.push_str(text);
                     on_text_chunk(text);

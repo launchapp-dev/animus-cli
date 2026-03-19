@@ -181,6 +181,10 @@ pub async fn run_agent_loop(
 
         messages.push(assistant_msg.clone());
 
+        if let Some(sid) = session_id {
+            let _ = save_session_messages_to(&config_dir(), sid, &messages);
+        }
+
         if !has_tool_calls {
             output.flush_result();
             let content = assistant_msg.content.as_deref().unwrap_or("");
@@ -270,6 +274,10 @@ pub async fn run_agent_loop(
                 tool_calls: None,
                 tool_call_id: Some(tc.id.clone()),
             });
+
+            if let Some(sid) = session_id {
+                let _ = save_session_messages_to(&config_dir(), sid, &messages);
+            }
         }
 
         if turn == max_turns - 1 {
@@ -433,10 +441,12 @@ fn extract_json_from_content(content: &str) -> Option<Value> {
         }
     }
 
-    for line in trimmed.lines() {
-        let line = line.trim();
-        if line.starts_with('{') {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
+    // Fallback: find the first '{' and last '}' and try to parse everything in between.
+    // This handles multi-line JSON that isn't wrapped in markdown.
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if end > start {
+            let potential_json = &trimmed[start..=end];
+            if let Ok(v) = serde_json::from_str::<Value>(potential_json) {
                 return Some(v);
             }
         }
