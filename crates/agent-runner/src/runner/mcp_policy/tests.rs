@@ -539,6 +539,28 @@ fn resolve_enforcement_parses_tool_policy_from_contract() {
 }
 
 #[test]
+fn tool_policy_allow_applied_on_prefix_path_not_server_path() {
+    let enforcement = enforcement_with_tool_policy(vec!["ao.task.*"], vec![]);
+    assert!(is_tool_call_allowed("ao.task.list", &json!({ "server": "ao" }), &enforcement));
+    assert!(!is_tool_call_allowed("ao.daemon.start", &json!({}), &enforcement));
+    assert!(is_tool_call_allowed("ao.daemon.start", &json!({ "server": "ao" }), &enforcement));
+}
+
+#[test]
+fn tool_policy_deny_applied_on_prefix_path_not_server_path() {
+    let enforcement = enforcement_with_tool_policy(vec![], vec!["ao.daemon.*"]);
+    assert!(!is_tool_call_allowed("ao.daemon.start", &json!({}), &enforcement));
+    assert!(is_tool_call_allowed("ao.daemon.start", &json!({ "server": "ao" }), &enforcement));
+    assert!(is_tool_call_allowed("ao.task.list", &json!({}), &enforcement));
+}
+
+#[test]
+fn tool_policy_deny_blocks_disallowed_server_regardless_of_policy() {
+    let enforcement = enforcement_with_tool_policy(vec!["ao.*"], vec![]);
+    assert!(!is_tool_call_allowed("shortcut-search", &json!({ "server": "shortcut" }), &enforcement));
+}
+
+#[test]
 fn resolve_enforcement_parses_additional_servers() {
     let contract = serde_json::json!({
         "cli": {

@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
+use super::mcp_policy::{apply_native_mcp_policy, is_tool_call_allowed, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -134,6 +134,50 @@ pub(super) async fn spawn_session_process(
 
                 if !matches!(event, SessionEvent::Started { .. }) {
                     last_activity_at = Instant::now();
+                }
+
+                if let SessionEvent::ToolCall { tool_name, arguments, server } = &event {
+                    let mut parameters = arguments.clone();
+                    if let Some(server_name) = server {
+                        if let Some(obj) = parameters.as_object_mut() {
+                            obj.insert("server".to_string(), Value::String(server_name.clone()));
+                        }
+                    }
+                    if !is_tool_call_allowed(tool_name, &parameters, &enforcement) {
+                        let server_context = parameters
+                            .get("server")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .map(ToString::to_string);
+                        let policy = enforcement.allowed_prefixes.join(", ");
+                        let error = if let Some(server_name) = &server_context {
+                            format!(
+                                "MCP-only policy violation: tool '{}' on server '{}' is not allowed (allowed prefixes: [{}], allowed server: '{}')",
+                                tool_name, server_name, policy, enforcement.agent_id
+                            )
+                        } else {
+                            format!(
+                                "MCP-only policy violation: tool '{}' is not allowed (allowed prefixes: [{}])",
+                                tool_name, policy
+                            )
+                        };
+                        warn!(
+                            run_id = %run_id.0.as_str(),
+                            tool_name = %tool_name,
+                            tool_server = ?server_context,
+                            allowed_prefixes = ?enforcement.allowed_prefixes,
+                            "Run emitted disallowed tool call under MCP-only policy"
+                        );
+                        let _ = forward_session_event(run_id, &event, &event_tx).await;
+                        let _ = event_tx
+                            .send(AgentRunEvent::Error { run_id: run_id.clone(), error: error.clone() })
+                            .await;
+                        if let Some(session_id) = run_session_id.as_deref() {
+                            let _ = backend.terminate_session(session_id).await;
+                        }
+                        break Err(anyhow!("{error}"));
+                    }
                 }
 
                 if let Some(exit_code) = forward_session_event(run_id, &event, &event_tx).await {

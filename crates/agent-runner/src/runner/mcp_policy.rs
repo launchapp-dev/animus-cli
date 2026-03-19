@@ -121,6 +121,11 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
 
     if enabled && allowed_prefixes.is_empty() {
         allowed_prefixes = protocol::default_allowed_tool_prefixes(&agent_id);
+        warn!(
+            agent_id = %agent_id,
+            prefixes = ?allowed_prefixes,
+            "MCP enforcement using default tool prefix allowlist; set mcp.allowed_tool_prefixes for explicit control"
+        );
     }
 
     let parse_string_array = |pointer: &str| -> Vec<String> {
