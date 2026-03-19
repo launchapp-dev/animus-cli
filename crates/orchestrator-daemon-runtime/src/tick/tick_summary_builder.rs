@@ -32,6 +32,7 @@ impl TickSummaryBuilder {
                 .reconciled_workflows
                 .saturating_add(input.reconciled_dependency_tasks)
                 .saturating_add(input.reconciled_merge_tasks),
+            reconciled_runner_blocked_tasks: input.reconciled_runner_blocked_tasks,
             started_ready_workflows: input.ready_started_count,
             executed_workflow_phases: input.executed_workflow_phases,
             failed_workflow_phases: input.failed_workflow_phases,

@@ -1,0 +1,63 @@
+{
+  "phase_id": "code-review",
+  "completed_at": "2026-03-11T18:35:38.400497+00:00",
+  "verdict": "rework",
+  "confidence": 0.97,
+  "reason": "The sync path fix is correct and complete. The daemon path is still broken: CompletedProcess.failure_reason is populated only from exit code in process_manager.rs, the RunnerEvent IPC channel has no failure_reason field, and reconcile_completed_processes.rs was not modified to look up workflow storage. Fix must either (a) load the persisted workflow by workflow_id in reconcile_completed_processes.rs and override failure_reason when workflow_status is Failed/Escalated and the loaded workflow.failure_reason contains POLICY_GATE_PREFIX, or (b) add failure_reason to the protocol RunnerEvent struct and emit workflow.failure_reason from workflow-runner/src/main.rs on runner_complete, then use it in completion_reason().",
+  "evidence": [
+    {
+      "kind": "code_review_clean",
+      "description": "process_manager.rs:115-125 sets CompletedProcess.failure_reason to a generic exit-code string; never reads from workflow storage"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "workflow-runner/src/main.rs RunnerEvent struct has no failure_reason field; runner_complete event cannot carry the policy gate reason over stderr IPC"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "reconcile_completed_processes.rs unmodified — still just calls build_completion_reconciliation_plan(completed_processes) with no workflow storage lookup"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "Sync path (ops_workflow/execute.rs) correctly passes result.failure_reason.as_deref() — only the daemon subprocess path is broken"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "lifecycle_executor.rs correctly sets workflow.failure_reason = 'policy gate: ...' in storage — the information exists but is never retrieved on the daemon path"
+    }
+  ],
+  "payload": {
+    "blocking_issues": [
+      "Daemon execution path: CompletedProcess.failure_reason is set only from process exit code (process_manager.rs:115-125), never from persisted workflow state. The RunnerEvent IPC struct has no failure_reason field, so the policy gate reason is lost at the subprocess boundary. reconcile_completed_processes.rs does not load workflow storage by workflow_id. Result: task.blocked_reason = 'workflow runner failed: workflow runner exited unsuccessfully with status Some(1)' — is_policy_gate_block() returns false — retry guard is ineffective for daemon-dispatched runs."
+    ],
+    "confidence": 0.97,
+    "evidence": [
+      {
+        "description": "process_manager.rs:115-125 sets CompletedProcess.failure_reason to a generic exit-code string; never reads from workflow storage",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "workflow-runner/src/main.rs RunnerEvent struct has no failure_reason field; runner_complete event cannot carry the policy gate reason over stderr IPC",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "reconcile_completed_processes.rs unmodified — still just calls build_completion_reconciliation_plan(completed_processes) with no workflow storage lookup",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "Sync path (ops_workflow/execute.rs) correctly passes result.failure_reason.as_deref() — only the daemon subprocess path is broken",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "lifecycle_executor.rs correctly sets workflow.failure_reason = 'policy gate: ...' in storage — the information exists but is never retrieved on the daemon path",
+        "kind": "code_review_clean"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "code-review",
+    "reason": "The sync path fix is correct and complete. The daemon path is still broken: CompletedProcess.failure_reason is populated only from exit code in process_manager.rs, the RunnerEvent IPC channel has no failure_reason field, and reconcile_completed_processes.rs was not modified to look up workflow storage. Fix must either (a) load the persisted workflow by workflow_id in reconcile_completed_processes.rs and override failure_reason when workflow_status is Failed/Escalated and the loaded workflow.failure_reason contains POLICY_GATE_PREFIX, or (b) add failure_reason to the protocol RunnerEvent struct and emit workflow.failure_reason from workflow-runner/src/main.rs on runner_complete, then use it in completion_reason().",
+    "review_summary": "Sync path correctly fixed; daemon path structural gap (failure_reason lost at subprocess IPC boundary) not addressed. reconcile_completed_processes.rs and process_manager.rs were not modified. is_policy_gate_block() will return false for daemon-dispatched policy gate failures, allowing incorrect retries.",
+    "risk": "medium",
+    "verdict": "rework"
+  }
+}

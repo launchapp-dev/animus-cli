@@ -96,6 +96,12 @@ fn extract_provider_exhaustion_reason(text: &str) -> Option<String> {
     if normalized.contains("secondary") && normalized.contains("used_percent") {
         return Some("secondary token budget exhausted".to_string());
     }
+    if normalized.contains("authentication_error")
+        || normalized.contains("invalid authentication credentials")
+        || normalized.contains("failed to authenticate")
+    {
+        return Some("provider authentication failed".to_string());
+    }
 
     None
 }
@@ -188,6 +194,8 @@ fn provider_exhaustion_reason_from_payload(payload: &Value) -> Option<String> {
             || kind.contains("quota")
             || kind.contains("rate_limit")
             || kind.contains("rate-limit")
+            || kind.contains("authentication_error")
+            || kind.contains("auth_error")
         {
             return Some(format!("provider returned {}", kind));
         }

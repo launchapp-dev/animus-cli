@@ -9,6 +9,7 @@ pub struct ProjectTickExecutionOutcome {
     pub reconciled_workflows: usize,
     pub reconciled_dependency_tasks: usize,
     pub reconciled_merge_tasks: usize,
+    pub reconciled_runner_blocked_tasks: usize,
     pub ready_workflow_starts: DispatchWorkflowStartSummary,
     pub executed_workflow_phases: usize,
     pub failed_workflow_phases: usize,

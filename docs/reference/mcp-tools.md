@@ -75,7 +75,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `ao.workflow.run` | Start a workflow for a task (async, via daemon) | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json` |
-| `ao.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`), `on_error` |
+| `ao.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`, `input_json`), `on_error` |
 | `ao.workflow.execute` | Execute a workflow synchronously (no daemon) | `task_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json` |
 | `ao.workflow.get` | Get full workflow state by ID | `id` |
 | `ao.workflow.list` | List workflow executions | `limit`, `offset`, `max_tokens` |
@@ -122,14 +122,14 @@ Every tool accepts an optional `project_root` parameter to override the default 
 |---|---|---|
 | `ao.queue.list` | List queued subject dispatches | `project_root` |
 | `ao.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `ao.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json`, `subject_id` |
+| `ao.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json` |
 | `ao.queue.reorder` | Set preferred dispatch order | `subject_ids[]` |
 | `ao.queue.hold` | Hold a pending subject from dispatch | `subject_id` |
 | `ao.queue.release` | Release a held subject for dispatch | `subject_id` |
 
 ---
 
-## Output & Monitoring (5 tools)
+## Output & Monitoring (6 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -138,15 +138,17 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | `ao.output.monitor` | Stream real-time output from a running agent | `run_id`, `task_id`, `phase_id` |
 | `ao.output.jsonl` | Get structured JSONL event log | `run_id`, `entries` |
 | `ao.output.artifacts` | Get files generated during execution | `execution_id` |
+| `ao.output.phase-outputs` | Get persisted workflow phase outputs | `workflow_id`, `phase_id`, `project_root` |
 
 ---
 
-## Runner (3 tools)
+## Runner (4 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `ao.runner.health` | Check runner process health and capacity | `project_root` |
 | `ao.runner.orphans-detect` | Find orphaned runner processes | `project_root` |
+| `ao.runner.orphans-cleanup` | Clean up orphaned runner processes by run ID | `run_id`, `project_root` |
 | `ao.runner.restart-stats` | View runner uptime and restart history | `project_root` |
 
 ---

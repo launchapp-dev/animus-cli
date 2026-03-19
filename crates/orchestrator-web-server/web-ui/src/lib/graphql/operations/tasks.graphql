@@ -1,7 +1,7 @@
 query Tasks($status: String, $search: String) {
   tasks(status: $status, search: $search) {
     id title status statusRaw priority priorityRaw taskType taskTypeRaw
-    tags linkedRequirementIds
+    tags linkedRequirementIds deadline
   }
   taskStats { total byStatus byPriority }
 }
@@ -16,7 +16,7 @@ query TaskDetail($id: ID!) {
   task(id: $id) {
     id title description status statusRaw priority priorityRaw
     taskType taskTypeRaw risk scope complexity tags
-    linkedRequirementIds
+    linkedRequirementIds deadline
     checklist { id description completed }
     dependencies { taskId type }
   }
@@ -39,6 +39,10 @@ mutation UpdateTask($id: ID!, $title: String, $description: String, $taskType: S
 }
 
 mutation DeleteTask($id: ID!) { deleteTask(id: $id) }
+
+mutation SetDeadline($id: ID!, $deadline: String) {
+  setDeadline(id: $id, deadline: $deadline) { id deadline }
+}
 
 mutation AssignAgent($id: ID!, $role: String, $model: String) {
   assignAgent(id: $id, role: $role, model: $model) { id }

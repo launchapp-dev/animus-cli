@@ -52,14 +52,15 @@ agents:
 
          WORKFLOW ROUTING TABLE:
          Native CLI tools (Claude, Codex, Gemini) produce structured output reliably.
-         oai-runner tools (GLM, Kimi, MiniMax) are experimental — use for low-priority only.
+         oai-runner tools (GLM, MiniMax) are experimental — use for low-priority only.
+         standard-kimi is DISABLED: Kimi K2.5 has a ~5% success rate on implementation tasks (TASK-808).
 
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
          | low        | bugfix/chore   | quick-fix-glm       | GLM-5-Turbo (oai-runner) | Cheapest for simple fixes    |
          | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, good for docs         |
          | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option              |
-         | medium     | feature        | standard-kimi       | Kimi K2.5 (oai-runner)   | Near-Opus coding, cheap      |
+         | medium     | feature        | standard            | Claude Sonnet (claude)   | Reliable; Kimi disabled       |
          | medium     | bugfix         | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
          | medium     | refactor       | standard-codex      | Codex GPT-5.3 (codex)   | Strong code understanding    |
          | medium     | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Great at UI/UX + vision      |
@@ -70,11 +71,10 @@ agents:
          | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
          | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Monitoring is cheap          |
 
-         Default to "standard-kimi" for medium tasks, "standard" for high.
+         Default to "standard" for medium and high tasks.
          All oai-runner models use json_object + schema-in-prompt for structured output.
-         Kimi K2.5 is near-Opus level on coding — use it for most medium work.
+         Do NOT use standard-kimi — Kimi K2.5 cannot satisfy implementation acceptance criteria.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
-         Only route low-priority docs/chore to oai-runner models as experiments.
 
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
@@ -106,18 +106,20 @@ agents:
          - If decision was "skip", extract the task_id and call ao.task.status to set it to "done".
          - This prevents tasks from being re-enqueued indefinitely when the work is already complete.
 
-      2. DETECT FAILED WORKFLOWS AND RE-ROUTE:
-         For workflows with status "failed":
+      2. DETECT FAILED AND ESCALATED WORKFLOWS AND RE-ROUTE:
+         For workflows with status "failed" OR "escalated":
          - Check failure_reason and workflow_ref. Common failures:
            - "no changes were detected" → task might already be done. Set to "blocked" with reason.
            - "missing required field 'commit_message'" → contract violation, set to "blocked".
            - "failed to connect runner" → transient error, set back to "ready" for retry.
          - MODEL FAILURE RE-ROUTING (CRITICAL):
-           If a task failed on an oai-runner workflow (standard-glm, standard-kimi, standard-minimax, quick-fix-glm, quick-fix-minimax):
+           If a task failed OR escalated on an oai-runner workflow (standard-glm, standard-kimi, standard-minimax, quick-fix-glm, quick-fix-minimax):
            a. Set task back to "ready".
            b. Re-enqueue with workflow_ref="standard" (Claude) — the proven reliable pipeline.
            c. This ensures no task is permanently stuck on a failing model.
-         - If a task has failed > 5 times across ALL models (including Claude re-route), cancel it.
+           NOTE: Escalated workflows are especially common for standard-kimi (50% escalation rate) —
+           always re-route escalated oai-runner tasks, do not leave them stuck waiting for manual intervention.
+         - If a task has failed or escalated > 5 times across ALL models (including Claude re-route), cancel it.
 
       3. UNBLOCK TASKS (dependency-aware):
          Call ao.task.list with status "blocked". For each:

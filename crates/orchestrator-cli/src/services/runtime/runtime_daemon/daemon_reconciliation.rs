@@ -172,3 +172,45 @@ fn workflow_is_waiting_on_manual_phase(project_root: &str, workflow: &orchestrat
         .map(|definition| matches!(definition.mode, orchestrator_core::PhaseExecutionMode::Manual))
         .unwrap_or(false)
 }
+
+pub async fn reconcile_runner_blocked_tasks(
+    hub: Arc<dyn ServiceHub>,
+    _project_root: &str,
+) -> Result<usize> {
+    let tasks = match hub.tasks().list().await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!(
+                "{}: failed to list tasks for runner-blocked reconciliation: {}",
+                protocol::ACTOR_DAEMON,
+                error
+            );
+            return Ok(0);
+        }
+    };
+
+    let mut reconciled = 0usize;
+    for task in tasks {
+        if !orchestrator_core::is_workflow_runner_blocked(&task) {
+            continue;
+        }
+        match orchestrator_core::reconcile_runner_blocked_task(hub.clone(), &task).await {
+            Ok(true) => {
+                reconciled = reconciled.saturating_add(1);
+            }
+            Ok(false) => {
+                // Escalated to human review — task left blocked
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}: failed to reconcile runner-blocked task {}: {}",
+                    protocol::ACTOR_DAEMON,
+                    task.id,
+                    error
+                );
+            }
+        }
+    }
+
+    Ok(reconciled)
+}

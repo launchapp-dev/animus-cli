@@ -1,0 +1,53 @@
+{
+  "phase_id": "requirement-workflow-bootstrap",
+  "completed_at": "2026-03-10T02:04:21.109852+00:00",
+  "verdict": "advance",
+  "confidence": 0.98,
+  "reason": "All 10 eligible tasks for REQ-042 had workflows successfully started using the standard workflow ref. No tasks were done, cancelled, or blocked. REQ-042 status updated to in-progress.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "TASK-362 workflow 32ca9dda running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-363 workflow 2a5ccb5c running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-364 workflow 03e3cd44 running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-365 workflow 639a980f running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-366 workflow f4069dee running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-367 workflow 885b6f82 running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-368 workflow e5b3b0d6 running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-369 workflow 91db4e53 running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-370 workflow efce3a13 running"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-371 workflow 0a65829c running"
+    },
+    {
+      "kind": "custom",
+      "description": "REQ-042 status set to in-progress"
+    }
+  ]
+}

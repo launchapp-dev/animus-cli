@@ -85,6 +85,15 @@ impl MutationRoot {
         Ok(GqlTask(raw))
     }
 
+    async fn set_deadline(&self, ctx: &Context<'_>, id: ID, deadline: Option<String>) -> Result<GqlTask> {
+        let api = ctx.data::<WebApiService>()?;
+        let body = json!({ "deadline": deadline });
+        let val = api.tasks_patch(&id, body).await.map_err(gql_err)?;
+        let raw: RawTask =
+            serde_json::from_value(val).map_err(|e| async_graphql::Error::new(format!("failed to parse task: {e}")))?;
+        Ok(GqlTask(raw))
+    }
+
     async fn delete_task(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
         let api = ctx.data::<WebApiService>()?;
         api.tasks_delete(&id).await.map_err(gql_err)?;

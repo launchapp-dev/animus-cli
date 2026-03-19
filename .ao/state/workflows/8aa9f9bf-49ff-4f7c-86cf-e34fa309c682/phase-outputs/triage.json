@@ -1,0 +1,69 @@
+{
+  "phase_id": "triage",
+  "completed_at": "2026-03-10T20:54:11.489550+00:00",
+  "verdict": "skip",
+  "confidence": 0.97,
+  "reason": "All acceptance criteria for TASK-387 are satisfied. Universal phase envelope, YAML-extended contracts, workflow-local artifact persistence, and runtime contract compilation are fully implemented. The PhaseDiagnostics/RepairPlan omission is explicitly documented as a known constraint.",
+  "evidence": [
+    {
+      "kind": "code_review_clean",
+      "description": "PhaseDecision struct in crates/protocol/src/orchestrator.rs defines verdict, reason, confidence, risk, evidence fields"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "PersistedPhaseOutput in crates/workflow-runner/src/executor/phase_output.rs handles atomic persist + load in pipeline order"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "PhaseDecisionContract.fields in orchestrator-config accepts YAML-defined extra fields via PhaseFieldDefinition"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "runtime_contract_builder.rs compiles effective per-phase JSON schema merging base envelope with YAML fields"
+    },
+    {
+      "kind": "manual_verification",
+      "description": "Commit 295c8a2 'Add runtime-injected phase contracts' delivered the final implementation"
+    },
+    {
+      "kind": "manual_verification",
+      "description": "task metadata.completed_at was already set to 2026-03-10T20:45:03Z"
+    }
+  ],
+  "payload": {
+    "confidence": 0.97,
+    "evidence": [
+      {
+        "description": "PhaseDecision struct in crates/protocol/src/orchestrator.rs defines verdict, reason, confidence, risk, evidence fields",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "PersistedPhaseOutput in crates/workflow-runner/src/executor/phase_output.rs handles atomic persist + load in pipeline order",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "PhaseDecisionContract.fields in orchestrator-config accepts YAML-defined extra fields via PhaseFieldDefinition",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "runtime_contract_builder.rs compiles effective per-phase JSON schema merging base envelope with YAML fields",
+        "kind": "code_review_clean"
+      },
+      {
+        "description": "Commit 295c8a2 'Add runtime-injected phase contracts' delivered the final implementation",
+        "kind": "manual_verification"
+      },
+      {
+        "description": "task metadata.completed_at was already set to 2026-03-10T20:45:03Z",
+        "kind": "manual_verification"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "triage",
+    "reason": "All acceptance criteria for TASK-387 are satisfied. Universal phase envelope, YAML-extended contracts, workflow-local artifact persistence, and runtime contract compilation are fully implemented. The PhaseDiagnostics/RepairPlan omission is explicitly documented as a known constraint.",
+    "recommended_task_status": "done",
+    "risk": "low",
+    "skip_reason": "already_done",
+    "verdict": "skip"
+  }
+}

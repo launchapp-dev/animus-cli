@@ -19,6 +19,72 @@ pub use projector_registry::{
     builtin_execution_projector_registry, execution_fact_subject_kind, ExecutionProjector, ExecutionProjectorRegistry,
 };
 
+pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
+pub const WORKFLOW_RUNNER_CANCELLED_PREFIX: &str = "workflow runner cancelled: ";
+pub const WORKFLOW_RUNNER_EXITED_PREFIX: &str = "workflow runner exited without workflow status";
+pub const MAX_RUNNER_FAILURE_RESETS: u32 = 3;
+
+/// Returns true when a task is blocked specifically because a workflow runner
+/// exited with a non-zero status (a transient infrastructure failure), not
+/// because of a dependency gate or human-required input.
+pub fn is_workflow_runner_blocked(task: &OrchestratorTask) -> bool {
+    if !task.status.is_blocked() || !task.paused {
+        return false;
+    }
+    task.blocked_reason.as_deref().is_some_and(|reason| {
+        reason.starts_with(WORKFLOW_RUNNER_BLOCKED_PREFIX)
+            || reason.starts_with(WORKFLOW_RUNNER_CANCELLED_PREFIX)
+            || reason.starts_with(WORKFLOW_RUNNER_EXITED_PREFIX)
+    })
+}
+
+/// Resets a runner-blocked task back to `Ready` so the daemon can retry it.
+///
+/// Uses `consecutive_dispatch_failures` to track how many times this task has
+/// been reset.  Once the count reaches `MAX_RUNNER_FAILURE_RESETS` the task is
+/// left blocked and an error message is logged, signalling that human
+/// intervention is needed.
+pub async fn reconcile_runner_blocked_task(
+    hub: Arc<dyn ServiceHub>,
+    task: &OrchestratorTask,
+) -> anyhow::Result<bool> {
+    let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
+
+    if count > MAX_RUNNER_FAILURE_RESETS {
+        eprintln!(
+            "{}: task {} has been reset {} times after runner failures — escalating to human review (blocked_reason={:?})",
+            protocol::ACTOR_DAEMON,
+            task.id,
+            count,
+            task.blocked_reason,
+        );
+        return Ok(false);
+    }
+
+    let mut updated = task.clone();
+    updated.status = TaskStatus::Ready;
+    updated.paused = false;
+    updated.blocked_reason = None;
+    updated.blocked_at = None;
+    updated.blocked_phase = None;
+    updated.blocked_by = None;
+    updated.consecutive_dispatch_failures = Some(count);
+    updated.last_dispatch_failure_at = Some(Utc::now().to_rfc3339());
+    updated.metadata.updated_at = Utc::now();
+    updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
+    updated.metadata.version = updated.metadata.version.saturating_add(1);
+    hub.tasks().replace(updated).await?;
+    eprintln!(
+        "{}: unblocked task {} after runner failure (reset #{}/{}, previous reason: {:?})",
+        protocol::ACTOR_DAEMON,
+        task.id,
+        count,
+        MAX_RUNNER_FAILURE_RESETS,
+        task.blocked_reason,
+    );
+    Ok(true)
+}
+
 pub async fn project_task_status(hub: Arc<dyn ServiceHub>, task_id: &str, status: TaskStatus) -> Result<()> {
     hub.tasks().set_status(task_id, status, false).await?;
     Ok(())
@@ -177,7 +243,7 @@ mod tests {
     use chrono::Utc;
     use protocol::{SubjectExecutionFact, SUBJECT_KIND_TASK};
 
-    use super::{execution_fact_subject_kind, project_execution_fact};
+    use super::{execution_fact_subject_kind, is_workflow_runner_blocked, project_execution_fact, reconcile_runner_blocked_task, MAX_RUNNER_FAILURE_RESETS};
     use crate::{
         services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
         TaskMetadata, TaskStatus, TaskType, WorkflowMetadata,
@@ -306,5 +372,242 @@ mod tests {
         let projected = project_execution_fact(hub, ".", &fact).await;
 
         assert!(!projected);
+    }
+
+    // --- runner-blocked reconciliation tests ---
+
+    async fn upsert_runner_blocked_task(
+        hub: &Arc<InMemoryServiceHub>,
+        id: &str,
+        blocked_reason: &str,
+        dispatch_failures: Option<u32>,
+    ) -> OrchestratorTask {
+        let now = Utc::now();
+        let task = OrchestratorTask {
+            id: id.to_string(),
+            title: format!("Task {id}"),
+            description: "Runner blocked task".to_string(),
+            task_type: TaskType::Feature,
+            status: TaskStatus::Blocked,
+            blocked_reason: Some(blocked_reason.to_string()),
+            blocked_at: Some(now),
+            blocked_phase: None,
+            blocked_by: None,
+            priority: Priority::Medium,
+            risk: crate::RiskLevel::Medium,
+            scope: Scope::Medium,
+            complexity: crate::Complexity::default(),
+            impact_area: Vec::new(),
+            assignee: crate::Assignee::Unassigned,
+            estimated_effort: None,
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+            dependencies: Vec::new(),
+            checklist: Vec::new(),
+            tags: Vec::new(),
+            workflow_metadata: WorkflowMetadata::default(),
+            worktree_path: None,
+            branch_name: None,
+            metadata: TaskMetadata {
+                created_at: now,
+                updated_at: now,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                version: 1,
+            },
+            deadline: None,
+            paused: true,
+            cancelled: false,
+            resolution: None,
+            resource_requirements: ResourceRequirements::default(),
+            consecutive_dispatch_failures: dispatch_failures,
+            last_dispatch_failure_at: None,
+            dispatch_history: Vec::new(),
+        };
+
+        hub.tasks().replace(task.clone()).await.expect("upsert task");
+        task
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_detects_runner_failure() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Blocked,
+            paused: true,
+            blocked_reason: Some(
+                "workflow runner failed: workflow runner exited unsuccessfully with status Some(1)".to_string(),
+            ),
+            ..base_test_task("TASK-1")
+        };
+        assert!(is_workflow_runner_blocked(&task));
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_detects_exited_without_status() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Blocked,
+            paused: true,
+            blocked_reason: Some(
+                "workflow runner exited without workflow status: workflow runner exited with status Some(1)".to_string(),
+            ),
+            ..base_test_task("TASK-1")
+        };
+        assert!(is_workflow_runner_blocked(&task));
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_detects_cancelled() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Blocked,
+            paused: true,
+            blocked_reason: Some("workflow runner cancelled: operator requested".to_string()),
+            ..base_test_task("TASK-1")
+        };
+        assert!(is_workflow_runner_blocked(&task));
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_rejects_non_runner_reasons() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Blocked,
+            paused: true,
+            blocked_reason: Some("dependency gate: waiting on TASK-001".to_string()),
+            ..base_test_task("TASK-1")
+        };
+        assert!(!is_workflow_runner_blocked(&task));
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_rejects_not_paused() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Blocked,
+            paused: false,
+            blocked_reason: Some("workflow runner failed: something".to_string()),
+            ..base_test_task("TASK-1")
+        };
+        assert!(!is_workflow_runner_blocked(&task));
+    }
+
+    #[test]
+    fn is_workflow_runner_blocked_rejects_not_blocked() {
+        let task = OrchestratorTask {
+            status: TaskStatus::Ready,
+            paused: false,
+            blocked_reason: None,
+            ..base_test_task("TASK-1")
+        };
+        assert!(!is_workflow_runner_blocked(&task));
+    }
+
+    #[tokio::test]
+    async fn reconcile_resets_runner_blocked_task_to_ready() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_runner_blocked_task(
+            &hub,
+            "TASK-R1",
+            "workflow runner failed: workflow runner exited unsuccessfully with status Some(1)",
+            None,
+        )
+        .await;
+
+        let task = hub.tasks().get("TASK-R1").await.unwrap();
+        let result = reconcile_runner_blocked_task(hub.clone(), &task).await.unwrap();
+
+        assert!(result);
+        let updated = hub.tasks().get("TASK-R1").await.unwrap();
+        assert_eq!(updated.status, TaskStatus::Ready);
+        assert!(!updated.paused);
+        assert!(updated.blocked_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn reconcile_increments_and_persists_failure_counter() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_runner_blocked_task(
+            &hub,
+            "TASK-R3",
+            "workflow runner exited without workflow status: workflow runner exited with status Some(1)",
+            Some(1),
+        )
+        .await;
+
+        let task = hub.tasks().get("TASK-R3").await.unwrap();
+        let result = reconcile_runner_blocked_task(hub.clone(), &task).await.unwrap();
+
+        assert!(result);
+        let updated = hub.tasks().get("TASK-R3").await.unwrap();
+        assert_eq!(updated.status, TaskStatus::Ready);
+        assert!(!updated.paused);
+        assert!(updated.blocked_reason.is_none());
+        assert_eq!(updated.consecutive_dispatch_failures, Some(2));
+        assert!(updated.last_dispatch_failure_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn reconcile_stops_resetting_after_max_retries() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_runner_blocked_task(
+            &hub,
+            "TASK-R2",
+            "workflow runner failed: workflow runner exited unsuccessfully with status Some(1)",
+            Some(MAX_RUNNER_FAILURE_RESETS),
+        )
+        .await;
+
+        let task = hub.tasks().get("TASK-R2").await.unwrap();
+        let result = reconcile_runner_blocked_task(hub.clone(), &task).await.unwrap();
+
+        assert!(!result);
+        let still_blocked = hub.tasks().get("TASK-R2").await.unwrap();
+        assert_eq!(still_blocked.status, TaskStatus::Blocked);
+    }
+
+    fn base_test_task(id: &str) -> OrchestratorTask {
+        let now = Utc::now();
+        OrchestratorTask {
+            id: id.to_string(),
+            title: format!("Task {id}"),
+            description: String::new(),
+            task_type: TaskType::Feature,
+            status: TaskStatus::Backlog,
+            blocked_reason: None,
+            blocked_at: None,
+            blocked_phase: None,
+            blocked_by: None,
+            priority: Priority::Medium,
+            risk: crate::RiskLevel::Medium,
+            scope: Scope::Medium,
+            complexity: crate::Complexity::default(),
+            impact_area: Vec::new(),
+            assignee: crate::Assignee::Unassigned,
+            estimated_effort: None,
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+            dependencies: Vec::new(),
+            checklist: Vec::new(),
+            tags: Vec::new(),
+            workflow_metadata: WorkflowMetadata::default(),
+            worktree_path: None,
+            branch_name: None,
+            metadata: TaskMetadata {
+                created_at: now,
+                updated_at: now,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                version: 1,
+            },
+            deadline: None,
+            paused: false,
+            cancelled: false,
+            resolution: None,
+            resource_requirements: ResourceRequirements::default(),
+            consecutive_dispatch_failures: None,
+            last_dispatch_failure_at: None,
+            dispatch_history: Vec::new(),
+        }
     }
 }

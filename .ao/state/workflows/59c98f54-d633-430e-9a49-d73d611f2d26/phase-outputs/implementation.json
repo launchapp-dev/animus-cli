@@ -1,0 +1,80 @@
+{
+  "phase_id": "implementation",
+  "completed_at": "2026-03-11T18:14:51.577958+00:00",
+  "verdict": "advance",
+  "confidence": 0.92,
+  "reason": "All policy gate enforcement points are implemented: gate failures get a structured prefix, the sync path propagates failure reasons, the daemon path detects policy gates via contains-based check, and retry logic skips policy-gate-blocked tasks. Pre-existing test failures in services/tests.rs and ops_mcp.rs are unrelated to these changes (confirmed by git stash check).",
+  "commit_message": "Enforce workflow policy gates across sync and daemon execution paths",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "Added POLICY_GATE_PREFIX constant and helpers (policy_gate_blocked_reason, is_policy_gate_block) to task_gate.rs, following the same pattern as dependency gate and merge gate"
+    },
+    {
+      "kind": "custom",
+      "description": "build_gate_fail_effect in lifecycle_executor.rs now prefixes all gate failure reasons with 'policy gate:' making them structurally distinguishable from agent execution errors"
+    },
+    {
+      "kind": "custom",
+      "description": "retry_failed_task_workflows now skips is_policy_gate_block alongside existing merge/dependency gate skips, preventing meaningless retries of policy-blocked tasks"
+    },
+    {
+      "kind": "custom",
+      "description": "WorkflowExecuteResult now carries failure_reason from workflow state; sync path passes it to project_terminal_workflow_result instead of None"
+    },
+    {
+      "kind": "custom",
+      "description": "Both orchestrator-core and workflow-runner build cleanly; orchestrator-daemon-runtime 48 tests pass with no regressions"
+    }
+  ],
+  "payload": {
+    "changed_files": [
+      "crates/orchestrator-core/src/task_gate.rs",
+      "crates/orchestrator-core/src/workflow/lifecycle_executor.rs",
+      "crates/orchestrator-core/src/lib.rs",
+      "crates/workflow-runner/src/workflow_execute.rs",
+      "crates/orchestrator-cli/src/services/operations/ops_workflow/execute.rs"
+    ],
+    "commit_message": "Enforce workflow policy gates across sync and daemon execution paths",
+    "kind": "implementation_result",
+    "phase_decision": {
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "description": "Added POLICY_GATE_PREFIX constant and helpers (policy_gate_blocked_reason, is_policy_gate_block) to task_gate.rs, following the same pattern as dependency gate and merge gate",
+          "kind": "implementation"
+        },
+        {
+          "description": "build_gate_fail_effect in lifecycle_executor.rs now prefixes all gate failure reasons with 'policy gate:' making them structurally distinguishable from agent execution errors",
+          "kind": "implementation"
+        },
+        {
+          "description": "retry_failed_task_workflows now skips is_policy_gate_block alongside existing merge/dependency gate skips, preventing meaningless retries of policy-blocked tasks",
+          "kind": "implementation"
+        },
+        {
+          "description": "WorkflowExecuteResult now carries failure_reason from workflow state; sync path passes it to project_terminal_workflow_result instead of None",
+          "kind": "implementation"
+        },
+        {
+          "description": "Both orchestrator-core and workflow-runner build cleanly; orchestrator-daemon-runtime 48 tests pass with no regressions",
+          "kind": "validation"
+        }
+      ],
+      "kind": "phase_decision",
+      "phase_id": "implementation",
+      "reason": "All policy gate enforcement points are implemented: gate failures get a structured prefix, the sync path propagates failure reasons, the daemon path detects policy gates via contains-based check, and retry logic skips policy-gate-blocked tasks. Pre-existing test failures in services/tests.rs and ops_mcp.rs are unrelated to these changes (confirmed by git stash check).",
+      "residual_risks": [
+        "is_policy_gate_block uses contains rather than starts_with to handle the daemon 'workflow runner failed: ' wrapping — if future failure reasons legitimately contain 'policy gate:' as a substring this could produce false positives",
+        "The daemon path CompletedProcess.failure_reason does not include the structured gate reason from OrchestratorWorkflow; it comes from the runner exit. If the runner process exits without writing workflow state, the policy gate prefix will not be present in the fact's failure_reason."
+      ],
+      "risk": "low",
+      "verdict": "advance"
+    },
+    "summary": "Implemented policy gate enforcement across sync and daemon execution paths: added POLICY_GATE_PREFIX/helpers to task_gate.rs, prefixed gate failure reasons in lifecycle_executor.rs, propagated failure_reason through WorkflowExecuteResult in the sync path, and updated retry logic to skip policy-gate-blocked tasks.",
+    "validation_commands": [
+      "cargo build -p orchestrator-core -p workflow-runner",
+      "cargo test -p orchestrator-daemon-runtime"
+    ]
+  }
+}

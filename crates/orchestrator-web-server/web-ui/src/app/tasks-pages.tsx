@@ -29,6 +29,7 @@ import {
   DependencyAddDocument,
   DependencyRemoveDocument,
   RunWorkflowDocument,
+  SetDeadlineDocument,
 } from "@/lib/graphql/generated/graphql";
 import { toast } from "sonner";
 import { statusColor, priorityColor, PageLoading, PageError, SectionHeading, Markdown } from "./shared";
@@ -194,6 +195,7 @@ export function TasksPage() {
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("statusRaw")}>Status{sortArrow("statusRaw")}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("priorityRaw")}>Priority{sortArrow("priorityRaw")}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("taskTypeRaw")}>Type{sortArrow("taskTypeRaw")}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("deadline")}>Deadline{sortArrow("deadline")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -209,6 +211,7 @@ export function TasksPage() {
                   <TableCell><Badge variant={statusColor(t.statusRaw ?? "")}>{t.statusRaw}</Badge></TableCell>
                   <TableCell><Badge variant={priorityColor(t.priorityRaw ?? "")}>{t.priorityRaw}</Badge></TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t.taskTypeRaw}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{t.deadline ?? "—"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -311,6 +314,7 @@ export function TaskDetailPage() {
   const [, checklistUpdate] = useMutation(ChecklistUpdateDocument);
   const [, depAdd] = useMutation(DependencyAddDocument);
   const [, depRemove] = useMutation(DependencyRemoveDocument);
+  const [, setDeadline] = useMutation(SetDeadlineDocument);
 
   const [targetStatus, setTargetStatus] = useState("");
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
@@ -405,6 +409,12 @@ export function TaskDetailPage() {
     const { error: err } = await depRemove({ id: taskId!, dependsOn: depTaskId });
     if (err) showFeedback("error", err.message);
     else reload();
+  };
+
+  const onDeadlineChange = async (value: string) => {
+    const { error: err } = await setDeadline({ id: taskId!, deadline: value || null });
+    if (err) showFeedback("error", err.message);
+    else { showFeedback("ok", value ? `Deadline set to ${value}.` : "Deadline cleared."); reload(); }
   };
 
   const onAssign = async () => {
@@ -534,6 +544,15 @@ export function TaskDetailPage() {
             <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground/60 font-medium">Details</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-3 space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground/60">Deadline</span>
+              <input
+                type="date"
+                value={task.deadline ?? ""}
+                onChange={(e) => onDeadlineChange(e.target.value)}
+                className="h-6 rounded border border-input bg-background px-2 text-xs"
+              />
+            </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground/60">Risk</span>
               <Badge variant="outline" className="text-[10px]">{task.risk}</Badge>

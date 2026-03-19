@@ -23,6 +23,7 @@ pub(crate) async fn start_gemini_session(
     let control_session_id_for_run = control_session_id.clone();
     let (event_tx, event_rx) = mpsc::channel(128);
     let (cancel_tx, cancel_rx) = oneshot::channel();
+    let (pid_tx, pid_rx) = oneshot::channel::<Option<u32>>();
     register_session(control_session_id.clone(), cancel_tx);
 
     tokio::spawn(async move {
@@ -33,18 +34,20 @@ pub(crate) async fn start_gemini_session(
             })
             .await;
 
-        if let Err(error) = run_gemini_session(request, invocation, event_tx.clone(), cancel_rx).await {
+        if let Err(error) = run_gemini_session(request, invocation, event_tx.clone(), cancel_rx, pid_tx).await {
             let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
             let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
         unregister_session(&control_session_id);
     });
 
+    let pid = pid_rx.await.ok().flatten();
     Ok(SessionRun {
         session_id: Some(control_session_id_for_run),
         events: event_rx,
         selected_backend: "gemini-native".to_string(),
         fallback_reason: None,
+        pid,
     })
 }
 
@@ -100,6 +103,7 @@ async fn run_gemini_session(
     invocation: LaunchInvocation,
     event_tx: mpsc::Sender<SessionEvent>,
     mut cancel_rx: oneshot::Receiver<()>,
+    pid_tx: oneshot::Sender<Option<u32>>,
 ) -> Result<()> {
     let mut command = Command::new(&invocation.command);
     command
@@ -113,6 +117,7 @@ async fn run_gemini_session(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
+    let _ = pid_tx.send(child.id());
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {
@@ -211,14 +216,14 @@ async fn wait_for_gemini_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = &mut timeout_sleep => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed(format!(
                         "gemini session timed out after {} seconds",
                         secs
                     )))
                 }
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("gemini session cancelled".to_string()))
                 }
             }
@@ -227,7 +232,7 @@ async fn wait_for_gemini_child(
             tokio::select! {
                 status = child.wait() => Ok(status?.code()),
                 _ = cancel_rx => {
-                    child.kill().await?;
+                    crate::session::kill_and_reap_child(child).await;
                     Err(Error::ExecutionFailed("gemini session cancelled".to_string()))
                 }
             }

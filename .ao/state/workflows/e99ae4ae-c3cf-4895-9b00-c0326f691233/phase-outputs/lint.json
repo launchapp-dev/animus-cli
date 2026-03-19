@@ -1,0 +1,7 @@
+{
+  "phase_id": "lint",
+  "completed_at": "2026-03-04T18:43:08.006991+00:00",
+  "verdict": "rework",
+  "confidence": 1.0,
+  "reason": "Command `cargo` exited with code 101 (expected one of [0]).\n\nStderr:\nBlocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on build directory\n    Checking protocol v0.1.0 (/Users/samishukri/ao-cli/crates/protocol)\n   Compiling oai-runner v0.1.0 (/Users/samishukri/ao-cli/crates/oai-runner)\nerror: this `map_or` can be simplified\n   --> crates/protocol/src/config.rs:111:12\n    |\n111 |           if config\n    |  ____________^\n112 | |             .agent_runner_token\n113 | |             .as_deref()\n114 | |             .map_or(true, |t| t.trim().is_empty())\n    | |__________________________________________________^\n    |\n    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#unnecessary_map_or\n    = note: `-D clippy::unnecessary-map-or` implied by `-D warnings`\n    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_map_or)]`\nhelp: use is_none_or instead\n    |\n114 -             .map_or(true, |t| t.trim().is_empty())\n114 +             .is_none_or(|t| t.trim().is_empty())\n    |\n\nerror: could not compile `protocol` (lib) due to 1 previous error"
+}

@@ -52,6 +52,10 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
+    async fn reconcile_runner_blocked_tasks(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -196,6 +200,11 @@ where
     async fn reconcile_manual_timeouts(&mut self, root: &str) -> Result<usize> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.reconcile_manual_timeouts(hub, root).await
+    }
+
+    async fn reconcile_runner_blocked_tasks(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.reconcile_runner_blocked_tasks(hub, root).await
     }
 
     async fn dispatch_ready_tasks(&mut self, root: &str, limit: usize) -> Result<DispatchWorkflowStartSummary> {

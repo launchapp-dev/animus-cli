@@ -1,0 +1,61 @@
+{
+  "phase_id": "triage",
+  "completed_at": "2026-03-11T04:41:52.999997+00:00",
+  "verdict": "skip",
+  "confidence": 0.99,
+  "reason": "The 'native workflow execution' feature is a core, mature component of the system with extensive end-to-end tests in `crates/orchestrator-cli/tests/`. A temporary smoke test is no longer relevant or necessary.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "The `workflow-runner` crate is the mature engine for native workflow execution.",
+      "file_path": "crates/workflow-runner/src/workflow_execute.rs"
+    },
+    {
+      "kind": "custom",
+      "description": "The `orchestrator-cli` provides the user-facing commands for managing workflows.",
+      "file_path": "crates/orchestrator-cli/src/services/operations/ops_workflow/mod.rs"
+    },
+    {
+      "kind": "custom",
+      "description": "The codebase contains extensive end-to-end tests for CLI workflow operations, superseding the need for a simple smoke test.",
+      "file_path": "crates/orchestrator-cli/tests/cli_e2e.rs"
+    },
+    {
+      "kind": "custom",
+      "description": "Project documentation details the workflow-first architecture, indicating feature maturity.",
+      "file_path": "docs/concepts/workflows.md"
+    }
+  ],
+  "payload": {
+    "confidence": 0.99,
+    "evidence": [
+      {
+        "description": "The `workflow-runner` crate is the mature engine for native workflow execution.",
+        "file_path": "crates/workflow-runner/src/workflow_execute.rs",
+        "kind": "file_path"
+      },
+      {
+        "description": "The `orchestrator-cli` provides the user-facing commands for managing workflows.",
+        "file_path": "crates/orchestrator-cli/src/services/operations/ops_workflow/mod.rs",
+        "kind": "file_path"
+      },
+      {
+        "description": "The codebase contains extensive end-to-end tests for CLI workflow operations, superseding the need for a simple smoke test.",
+        "file_path": "crates/orchestrator-cli/tests/cli_e2e.rs",
+        "kind": "file_path"
+      },
+      {
+        "description": "Project documentation details the workflow-first architecture, indicating feature maturity.",
+        "file_path": "docs/concepts/workflows.md",
+        "kind": "file_path"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "triage",
+    "reason": "The 'native workflow execution' feature is a core, mature component of the system with extensive end-to-end tests in `crates/orchestrator-cli/tests/`. A temporary smoke test is no longer relevant or necessary.",
+    "recommended_task_status": "cancelled",
+    "risk": "low",
+    "skip_reason": "no_longer_valid",
+    "verdict": "skip"
+  }
+}

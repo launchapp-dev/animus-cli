@@ -100,11 +100,15 @@ fn failed_action(id: &str, details: String) -> DoctorFixAction {
 
 #[cfg(test)]
 mod tests {
+    use protocol::test_utils::EnvVarGuard;
+
     use super::*;
 
     #[test]
     fn doctor_fix_creates_default_daemon_config_when_missing() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let report = DoctorReport::run_for_project(temp.path());
         let actions = apply_doctor_fixes(temp.path().to_string_lossy().as_ref(), &report);
         assert!(actions.iter().any(|action| action.id == "create_default_daemon_config" && action.status == "applied"));

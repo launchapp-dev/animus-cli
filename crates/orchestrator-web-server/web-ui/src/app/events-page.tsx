@@ -77,6 +77,25 @@ export function EventsPage() {
         </div>
       </div>
 
+      {connectionState === "error" && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Badge variant="destructive" className="shrink-0">Connection Error</Badge>
+            <span className="text-sm text-muted-foreground">
+              Could not connect to the event stream. Ensure the daemon is running and reload the page.
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 self-start sm:self-auto"
+            onClick={() => { setPaused(true); setTimeout(() => setPaused(false), 0); }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {topTypes.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {topTypes.map(([type, count]) => (

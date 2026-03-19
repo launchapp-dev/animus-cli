@@ -1,0 +1,51 @@
+{
+  "phase_id": "requirements",
+  "completed_at": "2026-03-11T19:38:37.629663+00:00",
+  "verdict": "advance",
+  "confidence": 0.88,
+  "reason": "Scope is clear and well-bounded: add GenericSubject struct, WorkflowArtifact struct, and From/Into adapters in crates/protocol/, with no breaking changes to existing enum or serialized state. Acceptance criteria and constraints are defined. Ready for implementation.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "WorkflowSubject enum (Task/Requirement/Custom) exists in crates/protocol/src/orchestrator.rs — no generic struct form or compatibility adapters present"
+    },
+    {
+      "kind": "custom",
+      "description": "ArtifactInfo in crates/protocol/src/output.rs is output-parser-scoped, not a workflow-level artifact schema"
+    },
+    {
+      "kind": "custom",
+      "description": "SubjectDispatch, SubjectExecutionFact, WorkflowRunInput all use concrete WorkflowSubject — no generic intermediary"
+    },
+    {
+      "kind": "custom",
+      "description": "All existing uses of WorkflowSubject are via enum pattern-matching — additive GenericSubject struct can coexist without breaking changes"
+    }
+  ],
+  "payload": {
+    "confidence": 0.88,
+    "evidence": [
+      {
+        "description": "WorkflowSubject enum (Task/Requirement/Custom) exists in crates/protocol/src/orchestrator.rs — no generic struct form or compatibility adapters present",
+        "kind": "code_gap"
+      },
+      {
+        "description": "ArtifactInfo in crates/protocol/src/output.rs is output-parser-scoped, not a workflow-level artifact schema",
+        "kind": "code_gap"
+      },
+      {
+        "description": "SubjectDispatch, SubjectExecutionFact, WorkflowRunInput all use concrete WorkflowSubject — no generic intermediary",
+        "kind": "code_gap"
+      },
+      {
+        "description": "All existing uses of WorkflowSubject are via enum pattern-matching — additive GenericSubject struct can coexist without breaking changes",
+        "kind": "risk_mitigant"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "requirements",
+    "reason": "Scope is clear and well-bounded: add GenericSubject struct, WorkflowArtifact struct, and From/Into adapters in crates/protocol/, with no breaking changes to existing enum or serialized state. Acceptance criteria and constraints are defined. Ready for implementation.",
+    "risk": "medium",
+    "verdict": "advance"
+  }
+}

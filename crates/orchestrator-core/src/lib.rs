@@ -43,10 +43,12 @@ pub use domain_state::{
     ReviewStore, ReviewerRole,
 };
 pub use execution_projection::{
-    builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,
-    project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_execution_fact,
-    project_task_blocked_with_reason, project_task_dispatch_failure, project_task_execution_fact, project_task_status,
-    project_task_terminal_workflow_status, project_task_workflow_start, ExecutionProjector, ExecutionProjectorRegistry,
+    builtin_execution_projector_registry, execution_fact_subject_kind, is_workflow_runner_blocked,
+    project_execution_fact, project_requirement_workflow_status, project_schedule_dispatch_attempt,
+    project_schedule_execution_fact, project_task_blocked_with_reason, project_task_dispatch_failure,
+    project_task_execution_fact, project_task_status, project_task_terminal_workflow_status,
+    project_task_workflow_start, reconcile_runner_blocked_task, ExecutionProjector, ExecutionProjectorRegistry,
+    MAX_RUNNER_FAILURE_RESETS, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path, record_model_phase_outcome,

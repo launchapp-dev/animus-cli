@@ -1,0 +1,106 @@
+{
+  "schema": "ao.model-quality.v1",
+  "updated_at": "2026-03-16T02:36:09.089821+00:00",
+  "records": {
+    "minimax/MiniMax-M2.5:work-planning": {
+      "model_id": "minimax/MiniMax-M2.5",
+      "phase_id": "work-planning",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T20:06:11.145804+00:00"
+    },
+    "gpt-5.3-codex:task-reconciliation": {
+      "model_id": "gpt-5.3-codex",
+      "phase_id": "task-reconciliation",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T21:51:13.749261+00:00"
+    },
+    "zai-coding-plan/glm-5:task-reconciliation": {
+      "model_id": "zai-coding-plan/glm-5",
+      "phase_id": "task-reconciliation",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T20:21:11.733529+00:00"
+    },
+    "claude-sonnet-4-6:task-reconciliation": {
+      "model_id": "claude-sonnet-4-6",
+      "phase_id": "task-reconciliation",
+      "attempts": 28,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 28,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-16T02:31:24.744918+00:00"
+    },
+    "gemini-3.1-pro-preview:task-reconciliation": {
+      "model_id": "gemini-3.1-pro-preview",
+      "phase_id": "task-reconciliation",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T21:21:29.442294+00:00"
+    },
+    "gemini-3.1-pro-preview:work-planning": {
+      "model_id": "gemini-3.1-pro-preview",
+      "phase_id": "work-planning",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T20:21:12.358348+00:00"
+    },
+    "zai-coding-plan/glm-5:work-planning": {
+      "model_id": "zai-coding-plan/glm-5",
+      "phase_id": "work-planning",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T19:51:13.484600+00:00"
+    },
+    "claude-sonnet-4-6:work-planning": {
+      "model_id": "claude-sonnet-4-6",
+      "phase_id": "work-planning",
+      "attempts": 71,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 71,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-16T02:36:09.089815+00:00"
+    },
+    "minimax/MiniMax-M2.5:task-reconciliation": {
+      "model_id": "minimax/MiniMax-M2.5",
+      "phase_id": "task-reconciliation",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T20:51:18.291460+00:00"
+    },
+    "gpt-5.3-codex:work-planning": {
+      "model_id": "gpt-5.3-codex",
+      "phase_id": "work-planning",
+      "attempts": 3,
+      "advances": 0,
+      "reworks": 0,
+      "fails": 3,
+      "suppressed": true,
+      "last_recorded_at": "2026-03-15T20:36:24.553281+00:00"
+    }
+  }
+}

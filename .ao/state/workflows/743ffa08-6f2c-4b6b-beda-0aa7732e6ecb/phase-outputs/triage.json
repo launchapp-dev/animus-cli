@@ -1,0 +1,21 @@
+{
+  "phase_id": "triage",
+  "completed_at": "2026-03-10T15:25:22.606024+00:00",
+  "verdict": "advance",
+  "confidence": 0.88,
+  "reason": "Task is still valid. While the workflow-backed ao planning facade exists, the legacy hardcoded direct-execution paths in ops_planning/ have not been removed and ao vision/requirements commands still route through them. The core goal of collapsing to one supported operator journey and deleting dead paths remains unfinished.",
+  "evidence": [
+    {
+      "kind": "code_review_clean",
+      "description": "ops_planning/draft_runtime.rs, refinement_runtime.rs, requirements_runtime.rs still exist as parallel legacy execution paths"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "ao planning facade in ops_planning_facade.rs correctly routes to builtin workflows, confirming the new path is ready"
+    },
+    {
+      "kind": "code_review_clean",
+      "description": "ao vision draft/refine and ao requirements draft/refine still route through legacy direct-execution paths, not through the workflow engine"
+    }
+  ]
+}

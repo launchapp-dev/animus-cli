@@ -1,0 +1,38 @@
+{
+  "phase_id": "implementation",
+  "completed_at": "2026-03-10T15:38:37.465480+00:00",
+  "verdict": "advance",
+  "confidence": 0.97,
+  "reason": "All 9 acceptance criteria satisfied. Deleted Command::Execute and TaskControl variants, removed execute_types.rs, build_workflow_execute_command function and its test. Hidden VisionCommand::Draft/Refine and RequirementsCommand::Draft/Refine from help output while keeping them callable. Planning facade, requirements execute, and all 5 builtin workflow IDs already verified correct. cargo test --workspace: 379 passed, 8 pre-existing failures confirmed identical on clean main branch.",
+  "commit_message": "Delete ao execute and ao task-control; hide vision/requirements draft/refine from help",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/cli_types/execute_types.rs deleted"
+    },
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/cli_types/mod.rs: removed execute_types mod and pub use"
+    },
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/cli_types/root_types.rs: removed Command::Execute and Command::TaskControl variants"
+    },
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/cli_types/vision_types.rs: #[command(hide=true)] on Draft and Refine"
+    },
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/cli_types/requirements_types.rs: #[command(hide=true)] on Draft and Refine"
+    },
+    {
+      "kind": "custom",
+      "description": "crates/orchestrator-cli/src/main.rs: removed Execute/TaskControl dispatch arms, build_workflow_execute_command fn, deprecated test, and unused imports"
+    },
+    {
+      "kind": "custom",
+      "description": "379 tests pass; 8 pre-existing failures unrelated to changes (confirmed same failures on clean main branch before stash)"
+    }
+  ]
+}

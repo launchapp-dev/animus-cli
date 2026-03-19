@@ -30,6 +30,7 @@ impl ProjectTickSnapshot {
             reconciled_workflows: execution_outcome.reconciled_workflows,
             reconciled_dependency_tasks: execution_outcome.reconciled_dependency_tasks,
             reconciled_merge_tasks: execution_outcome.reconciled_merge_tasks,
+            reconciled_runner_blocked_tasks: execution_outcome.reconciled_runner_blocked_tasks,
             ready_started_count: execution_outcome.ready_workflow_starts.started,
             ready_started_workflows: execution_outcome.ready_workflow_starts.started_workflows,
             executed_workflow_phases: execution_outcome.executed_workflow_phases,

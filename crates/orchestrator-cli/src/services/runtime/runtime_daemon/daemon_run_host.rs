@@ -113,6 +113,7 @@ impl DefaultDaemonRunHost {
                 "resumed_workflows": summary.resumed_workflows,
                 "cleaned_stale_workflows": summary.cleaned_stale_workflows,
                 "reconciled_workflows": summary.reconciled_workflows,
+                "reconciled_runner_blocked_tasks": summary.reconciled_runner_blocked_tasks,
                 "executed_workflow_phases": summary.executed_workflow_phases,
                 "failed_workflow_phases": summary.failed_workflow_phases,
             }),

@@ -38,4 +38,22 @@ impl AoMcpServer {
         )
         .await
     }
+
+    #[tool(
+        name = "ao.runner.orphans-cleanup",
+        description = "Clean up orphaned runner processes. Purpose: Remove runner processes that are no longer managed by the daemon. Prerequisites: Use ao.runner.orphans-detect first to identify orphaned run IDs. Example: {\"run_id\": [\"abc123\"]}. Sequencing: Use after ao.runner.orphans-detect to find orphan IDs, then ao.runner.health to verify cleanup.",
+        input_schema = ao_schema_for_type::<RunnerOrphansCleanupInput>()
+    )]
+    async fn ao_runner_orphans_cleanup(&self, params: Parameters<RunnerOrphansCleanupInput>) -> Result<CallToolResult, McpError> {
+        let mut args = vec![
+            "runner".to_string(),
+            "orphans".to_string(),
+            "cleanup".to_string(),
+        ];
+        for id in &params.0.run_id {
+            args.push("--run-id".to_string());
+            args.push(id.clone());
+        }
+        self.run_tool("ao.runner.orphans-cleanup", args, params.0.project_root).await
+    }
 }

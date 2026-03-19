@@ -1,0 +1,43 @@
+{
+  "phase_id": "testing",
+  "completed_at": "2026-03-11T19:47:14.281133+00:00",
+  "verdict": "advance",
+  "confidence": 0.98,
+  "reason": "All tests pass. The 9 dedicated unit tests provide adequate coverage for the new types and compatibility adapters. No regressions in the broader protocol test suite.",
+  "evidence": [
+    {
+      "kind": "tests_passed",
+      "description": "All 9 subject_ref_tests pass: task/requirement/custom round-trips, builder methods, SubjectExecutionFact priority fallback logic"
+    },
+    {
+      "kind": "tests_passed",
+      "description": "Full protocol crate test suite passes (41 tests, 0 failures)"
+    },
+    {
+      "kind": "custom",
+      "description": "Implementation covers SubjectRef, WorkflowArtifact, From adapters for WorkflowSubject, and extension methods on SubjectDispatch/SubjectExecutionFact"
+    }
+  ],
+  "payload": {
+    "confidence": 0.98,
+    "evidence": [
+      {
+        "description": "All 9 subject_ref_tests pass: task/requirement/custom round-trips, builder methods, SubjectExecutionFact priority fallback logic",
+        "kind": "tests_passed"
+      },
+      {
+        "description": "Full protocol crate test suite passes (41 tests, 0 failures)",
+        "kind": "tests_passed"
+      },
+      {
+        "description": "Implementation covers SubjectRef, WorkflowArtifact, From adapters for WorkflowSubject, and extension methods on SubjectDispatch/SubjectExecutionFact",
+        "kind": "code_review"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "testing",
+    "reason": "All tests pass. The 9 dedicated unit tests provide adequate coverage for the new types and compatibility adapters. No regressions in the broader protocol test suite.",
+    "risk": "low",
+    "verdict": "advance"
+  }
+}

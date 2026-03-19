@@ -44,23 +44,23 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.task.pause",
-        description = "Pause a running task. Purpose: Temporarily halt task execution without cancelling. Prerequisites: Task must be in-progress. Example: {\"task_id\": \"TASK-001\"}. Sequencing: Use ao.agent.control for running agents, or ao.task.status for workflow-managed tasks.",
+        description = "Pause a running task. Purpose: Temporarily halt task execution without cancelling. Prerequisites: Task must be in-progress. Example: {\"id\": \"TASK-001\"}. Sequencing: Use ao.agent.control for running agents, or ao.task.status for workflow-managed tasks.",
         input_schema = ao_schema_for_type::<TaskControlInput>()
     )]
     async fn ao_task_pause(&self, params: Parameters<TaskControlInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = build_task_control_args("pause", input.task_id);
+        let args = build_task_control_args("pause", input.id);
         self.run_tool("ao.task.pause", args, input.project_root).await
     }
 
     #[tool(
         name = "ao.task.resume",
-        description = "Resume a paused task. Purpose: Continue execution of a task that was previously paused. Prerequisites: Task must be paused. Example: {\"task_id\": \"TASK-001\"}. Sequencing: Use after ao.task.pause, or check status with ao.task.get first.",
+        description = "Resume a paused task. Purpose: Continue execution of a task that was previously paused. Prerequisites: Task must be paused. Example: {\"id\": \"TASK-001\"}. Sequencing: Use after ao.task.pause, or check status with ao.task.get first.",
         input_schema = ao_schema_for_type::<TaskControlInput>()
     )]
     async fn ao_task_resume(&self, params: Parameters<TaskControlInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = build_task_control_args("resume", input.task_id);
+        let args = build_task_control_args("resume", input.id);
         self.run_tool("ao.task.resume", args, input.project_root).await
     }
 
@@ -111,12 +111,12 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.task.cancel",
-        description = "Cancel a task. Purpose: Stop a task and mark it as cancelled. Prerequisites: Task must exist. Warning: This may leave work incomplete. Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"confirm\": true, \"dry_run\": false}. Sequencing: Use ao.task.status to check current state first, or ao.agent.control to stop running agents.",
+        description = "Cancel a task. Purpose: Stop a task and mark it as cancelled. Prerequisites: Task must exist. Warning: This may leave work incomplete. Example: {\"id\": \"TASK-001\"} or {\"id\": \"TASK-001\", \"confirm\": true, \"dry_run\": false}. Sequencing: Use ao.task.status to check current state first, or ao.agent.control to stop running agents.",
         input_schema = ao_schema_for_type::<TaskCancelInput>()
     )]
     async fn ao_task_cancel(&self, params: Parameters<TaskCancelInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec!["task".to_string(), "cancel".to_string(), "--id".to_string(), input.task_id];
+        let mut args = vec!["task".to_string(), "cancel".to_string(), "--id".to_string(), input.id];
         push_opt(&mut args, "--confirm", input.confirm);
         if input.dry_run {
             args.push("--dry-run".to_string());
@@ -126,7 +126,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.task.set-priority",
-        description = "Set task priority. Purpose: Change the priority of a task for scheduling. Prerequisites: Task must exist. Example: {\"task_id\": \"TASK-001\", \"priority\": \"critical\"}. Valid priorities: critical, high, medium, low. Sequencing: Use ao.task.get first to check current priority, or ao.task.stats to see distribution.",
+        description = "Set task priority. Purpose: Change the priority of a task for scheduling. Prerequisites: Task must exist. Example: {\"id\": \"TASK-001\", \"priority\": \"critical\"}. Valid priorities: critical, high, medium, low. Sequencing: Use ao.task.get first to check current priority, or ao.task.stats to see distribution.",
         input_schema = ao_schema_for_type::<TaskSetPriorityInput>()
     )]
     async fn ao_task_set_priority(&self, params: Parameters<TaskSetPriorityInput>) -> Result<CallToolResult, McpError> {
@@ -135,7 +135,7 @@ impl AoMcpServer {
             "task".to_string(),
             "set-priority".to_string(),
             "--id".to_string(),
-            input.task_id,
+            input.id,
             "--priority".to_string(),
             input.priority,
         ];
@@ -144,12 +144,12 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.task.set-deadline",
-        description = "Set or clear a task deadline. Purpose: Add a due date for time-sensitive tasks. Prerequisites: Task must exist. Example: {\"task_id\": \"TASK-001\", \"deadline\": \"2024-12-31\"} or {\"task_id\": \"TASK-001\"} to clear. Sequencing: Use ao.task.get first to check, or ao.task.stats to see overdue tasks.",
+        description = "Set or clear a task deadline. Purpose: Add a due date for time-sensitive tasks. Prerequisites: Task must exist. Example: {\"id\": \"TASK-001\", \"deadline\": \"2024-12-31\"} or {\"id\": \"TASK-001\"} to clear. Sequencing: Use ao.task.get first to check, or ao.task.stats to see overdue tasks.",
         input_schema = ao_schema_for_type::<TaskSetDeadlineInput>()
     )]
     async fn ao_task_set_deadline(&self, params: Parameters<TaskSetDeadlineInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec!["task".to_string(), "set-deadline".to_string(), "--id".to_string(), input.task_id];
+        let mut args = vec!["task".to_string(), "set-deadline".to_string(), "--id".to_string(), input.id];
         push_opt(&mut args, "--deadline", input.deadline);
         self.run_tool("ao.task.set-deadline", args, input.project_root).await
     }

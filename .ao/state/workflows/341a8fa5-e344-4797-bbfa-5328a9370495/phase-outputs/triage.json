@@ -1,0 +1,45 @@
+{
+  "phase_id": "triage",
+  "completed_at": "2026-03-10T21:13:43.420321+00:00",
+  "verdict": "advance",
+  "confidence": 0.82,
+  "reason": "TASK-389 is the highest-priority ready task with no blockers. TASK-394 is next in the backlog but has unstaged in-flight work that should be committed first. Recommending TASK-389 as the next actionable unit of work.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "TASK-389 status is already 'ready' with no dependencies or blockers, making it immediately actionable"
+    },
+    {
+      "kind": "custom",
+      "description": "TASK-394 is 'backlog' and its core scope (in-memory contract compiler from YAML+Rust) was substantially addressed by commit 295c8a2 with runtime_contract_builder.rs"
+    },
+    {
+      "kind": "custom",
+      "description": "Unstaged changes in phase_executor.rs and phase_prompt.rs suggest TASK-394-related work is still in flight and not yet committed"
+    }
+  ],
+  "payload": {
+    "confidence": 0.82,
+    "evidence": [
+      {
+        "description": "TASK-389 status is already 'ready' with no dependencies or blockers, making it immediately actionable",
+        "kind": "task_state"
+      },
+      {
+        "description": "TASK-394 is 'backlog' and its core scope (in-memory contract compiler from YAML+Rust) was substantially addressed by commit 295c8a2 with runtime_contract_builder.rs",
+        "kind": "code_analysis"
+      },
+      {
+        "description": "Unstaged changes in phase_executor.rs and phase_prompt.rs suggest TASK-394-related work is still in flight and not yet committed",
+        "kind": "git_state"
+      }
+    ],
+    "kind": "phase_decision",
+    "phase_id": "triage",
+    "reason": "TASK-389 is the highest-priority ready task with no blockers. TASK-394 is next in the backlog but has unstaged in-flight work that should be committed first. Recommending TASK-389 as the next actionable unit of work.",
+    "recommended_task_status": null,
+    "risk": "low",
+    "skip_reason": null,
+    "verdict": "advance"
+  }
+}

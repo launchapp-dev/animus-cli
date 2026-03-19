@@ -1065,7 +1065,7 @@ fn build_queue_reorder_args_repeats_subject_flags() {
 fn build_agent_run_args_defaults_detach_and_stream() {
     let input = AgentRunInput {
         tool: "codex".to_string(),
-        model: "codex".to_string(),
+        model: Some("codex".to_string()),
         prompt: None,
         cwd: None,
         timeout_secs: None,
@@ -1084,10 +1084,10 @@ fn build_agent_run_args_defaults_detach_and_stream() {
             "run".to_string(),
             "--tool".to_string(),
             "codex".to_string(),
-            "--model".to_string(),
-            "codex".to_string(),
             "--stream".to_string(),
             "false".to_string(),
+            "--model".to_string(),
+            "codex".to_string(),
             "--detach".to_string(),
         ]
     );
@@ -1097,7 +1097,7 @@ fn build_agent_run_args_defaults_detach_and_stream() {
 fn build_agent_run_args_with_all_options() {
     let input = AgentRunInput {
         tool: "claude".to_string(),
-        model: "opus".to_string(),
+        model: Some("opus".to_string()),
         prompt: Some("hello".to_string()),
         cwd: Some("/tmp".to_string()),
         timeout_secs: Some(300),
@@ -1116,10 +1116,10 @@ fn build_agent_run_args_with_all_options() {
             "run".to_string(),
             "--tool".to_string(),
             "claude".to_string(),
-            "--model".to_string(),
-            "opus".to_string(),
             "--stream".to_string(),
             "false".to_string(),
+            "--model".to_string(),
+            "opus".to_string(),
             "--prompt".to_string(),
             "hello".to_string(),
             "--cwd".to_string(),

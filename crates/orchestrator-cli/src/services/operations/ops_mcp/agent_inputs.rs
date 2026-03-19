@@ -2,10 +2,10 @@ use super::*;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct AgentRunInput {
-    #[serde(default = "default_codex")]
+    #[serde(default = "default_claude")]
     pub(super) tool: String,
-    #[serde(default = "default_codex")]
-    pub(super) model: String,
+    #[serde(default)]
+    pub(super) model: Option<String>,
     #[serde(default)]
     pub(super) prompt: Option<String>,
     #[serde(default)]

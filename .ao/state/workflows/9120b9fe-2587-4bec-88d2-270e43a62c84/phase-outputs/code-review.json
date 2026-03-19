@@ -1,0 +1,25 @@
+{
+  "phase_id": "code-review",
+  "completed_at": "2026-03-10T02:57:25.642062+00:00",
+  "verdict": "rework",
+  "confidence": 0.95,
+  "reason": "Four spec-conformance defects: (1) `--url` in SkillRegistryAddArgs is Option<String> (optional) but AC3 mandates it required and AC9 requires blank-url validation; (2) `handle_registry_add` output is a flat JSON object instead of `{ \"registry\": { id, url, priority, available }, \"registry_changed\" }` as specified in AC6; (3) `handle_registry_remove` uses key `\"removed\"` instead of `\"removed_id\"` per AC6; (4) sanitize_required field label is `\"registry id\"` instead of `\"id\"` per AC9. All four are straightforward fixes with no architectural changes needed.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "skill_types.rs:37 — `pub(crate) url: Option<String>` should be `pub(crate) url: String`"
+    },
+    {
+      "kind": "custom",
+      "description": "ops_skill.rs:521-529 — add output is flat; spec requires nesting under `\"registry\"` key"
+    },
+    {
+      "kind": "custom",
+      "description": "ops_skill.rs:545-551 — remove output uses key `\"removed\"` instead of `\"removed_id\"`"
+    },
+    {
+      "kind": "custom",
+      "description": "ops_skill.rs:497,538 — sanitize_required label is `\"registry id\"` vs spec's `\"id\"` in both add and remove handlers"
+    }
+  ]
+}

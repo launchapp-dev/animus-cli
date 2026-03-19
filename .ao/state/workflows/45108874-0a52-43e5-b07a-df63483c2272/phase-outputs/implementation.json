@@ -1,0 +1,79 @@
+{
+  "phase_id": "implementation",
+  "completed_at": "2026-03-11T19:44:30.876740+00:00",
+  "verdict": "advance",
+  "confidence": 0.93,
+  "reason": "Generic SubjectRef and WorkflowArtifact types are implemented in the protocol crate with full backward compatibility. All existing workflows continue to work via From adapters. Tests pass cleanly. The workflow-runner-v2 compile error is pre-existing and unrelated to this task.",
+  "commit_message": "Introduce generic SubjectRef and WorkflowArtifact schemas with compatibility adapters\n\n- Add `SubjectRef` as a domain-agnostic workflow subject representation\n  with an open `kind: String` field, replacing the closed `WorkflowSubject`\n  enum for new generic code paths\n- Add bidirectional `From` impls between `WorkflowSubject` and `SubjectRef`\n  so existing task/requirement flows require zero changes\n- Add `WorkflowArtifact` for capturing phase outputs in a domain-neutral way\n- Expose `to_subject_ref()` on `WorkflowSubject`, `SubjectDispatch`, and\n  `SubjectExecutionFact` for ergonomic conversion\n- Add 9 unit tests covering round-trip conversions and builder APIs\n- Re-export `SubjectRef` and `WorkflowArtifact` from the protocol crate root",
+  "evidence": [
+    {
+      "kind": "tests_passed",
+      "description": "cargo build -p protocol succeeds with no warnings on new code"
+    },
+    {
+      "kind": "tests_passed",
+      "description": "cargo test -p protocol: 41 tests pass, 0 fail — all pre-existing tests unaffected"
+    },
+    {
+      "kind": "tests_passed",
+      "description": "cargo check on all production crates (orchestrator-cli, orchestrator-core, orchestrator-web-api, orchestrator-web-server, agent-runner, oai-runner) succeeds"
+    },
+    {
+      "kind": "tests_passed",
+      "description": "9 new unit tests cover task/requirement/custom round-trips, unknown-kind fallback, SubjectRef builders, WorkflowArtifact builders, and SubjectExecutionFact.to_subject_ref()"
+    },
+    {
+      "kind": "requirements_met",
+      "description": "From impls between WorkflowSubject and SubjectRef provide backward-compatible adapters with no changes to existing call sites"
+    }
+  ],
+  "payload": {
+    "changed_files": [
+      "crates/protocol/src/orchestrator.rs",
+      "crates/protocol/src/lib.rs"
+    ],
+    "commit_message": "Introduce generic SubjectRef and WorkflowArtifact schemas with compatibility adapters\n\n- Add `SubjectRef` as a domain-agnostic workflow subject representation\n  with an open `kind: String` field, replacing the closed `WorkflowSubject`\n  enum for new generic code paths\n- Add bidirectional `From` impls between `WorkflowSubject` and `SubjectRef`\n  so existing task/requirement flows require zero changes\n- Add `WorkflowArtifact` for capturing phase outputs in a domain-neutral way\n- Expose `to_subject_ref()` on `WorkflowSubject`, `SubjectDispatch`, and\n  `SubjectExecutionFact` for ergonomic conversion\n- Add 9 unit tests covering round-trip conversions and builder APIs\n- Re-export `SubjectRef` and `WorkflowArtifact` from the protocol crate root",
+    "kind": "implementation_result",
+    "phase_decision": {
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "description": "cargo build -p protocol succeeds with no warnings on new code",
+          "kind": "tests_passed"
+        },
+        {
+          "description": "cargo test -p protocol: 41 tests pass, 0 fail — all pre-existing tests unaffected",
+          "kind": "tests_passed"
+        },
+        {
+          "description": "cargo check on all production crates (orchestrator-cli, orchestrator-core, orchestrator-web-api, orchestrator-web-server, agent-runner, oai-runner) succeeds",
+          "kind": "tests_passed"
+        },
+        {
+          "description": "9 new unit tests cover task/requirement/custom round-trips, unknown-kind fallback, SubjectRef builders, WorkflowArtifact builders, and SubjectExecutionFact.to_subject_ref()",
+          "kind": "tests_passed"
+        },
+        {
+          "description": "From impls between WorkflowSubject and SubjectRef provide backward-compatible adapters with no changes to existing call sites",
+          "kind": "requirements_met"
+        }
+      ],
+      "kind": "phase_decision",
+      "phase_id": "implementation",
+      "reason": "Generic SubjectRef and WorkflowArtifact types are implemented in the protocol crate with full backward compatibility. All existing workflows continue to work via From adapters. Tests pass cleanly. The workflow-runner-v2 compile error is pre-existing and unrelated to this task.",
+      "residual_risks": [
+        "workflow-runner-v2 has a pre-existing missing module error unrelated to this task",
+        "WorkflowArtifact is defined but no persistence layer yet — that is a follow-on task (end-to-end artifact storage)",
+        "SubjectRef serialization stability is not yet covered by the compat_serialization integration test suite"
+      ],
+      "risk": "low",
+      "verdict": "advance"
+    },
+    "summary": "Added SubjectRef (generic domain-agnostic subject type) and WorkflowArtifact (generic phase artifact type) to the protocol crate, with bidirectional From adapters between WorkflowSubject and SubjectRef ensuring full backward compatibility for task and requirement flows. All 41 protocol tests pass, all production crates compile.",
+    "validation_commands": [
+      "cargo build -p protocol",
+      "cargo test -p protocol",
+      "cargo check -p orchestrator-core -p orchestrator-cli -p orchestrator-web-api -p orchestrator-web-server -p agent-runner -p oai-runner"
+    ]
+  }
+}

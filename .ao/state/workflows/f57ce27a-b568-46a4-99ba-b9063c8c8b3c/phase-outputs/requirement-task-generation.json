@@ -1,0 +1,17 @@
+{
+  "phase_id": "requirement-task-generation",
+  "completed_at": "2026-03-10T02:03:18.292414+00:00",
+  "verdict": "advance",
+  "confidence": 0.95,
+  "reason": "All 8 acceptance criteria have concrete, non-overlapping tasks already linked on the task side. Requirement linked_task_ids is now synchronized. No gaps or duplicates found.",
+  "evidence": [
+    {
+      "kind": "custom",
+      "description": "TASK-362 epics CRUD, TASK-363 req multi-epic, TASK-364 subtasks, TASK-365 relations, TASK-366 spike/story, TASK-367 labels/metadata, TASK-368 req list search, TASK-369 task list search, TASK-370 indexes/rollups, TASK-371 MCP/API/docs coverage"
+    },
+    {
+      "kind": "custom",
+      "description": "REQ-042 linked_task_ids updated from [] to 10 task IDs, status promoted to planned"
+    }
+  ]
+}
