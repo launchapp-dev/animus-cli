@@ -2647,6 +2647,7 @@ dependencies = [
  "orchestrator-web-server",
  "protocol",
  "ratatui",
+ "reqwest 0.12.28",
  "rmcp",
  "schemars 1.2.1",
  "semver",

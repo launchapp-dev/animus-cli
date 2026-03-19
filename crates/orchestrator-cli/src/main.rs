@@ -43,6 +43,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Setup(args) => services::operations::handle_setup(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
         Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
+        Command::Update(args) => services::operations::handle_update(args, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -104,8 +105,8 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Version => {
                     unreachable!("version command handled before runtime initialization")
                 }
-                Command::Setup(_) | Command::Doctor(_) => {
-                    unreachable!("setup/doctor commands handled before hub initialization")
+                Command::Setup(_) | Command::Doctor(_) | Command::Update(_) => {
+                    unreachable!("setup/doctor/update commands handled before hub initialization")
                 }
             }
         }

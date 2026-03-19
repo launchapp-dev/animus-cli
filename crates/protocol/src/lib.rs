@@ -20,6 +20,7 @@ pub mod process;
 pub mod repository_scope;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
+pub mod update_config;
 
 pub use agent_runner::*;
 pub use common::*;
@@ -28,6 +29,7 @@ pub use config::{
     cli_tracker_path, daemon_events_log_path, default_allowed_tool_prefixes, parse_env_bool, parse_env_bool_opt,
     Config, ProjectMcpServerEntry,
 };
+pub use update_config::UpdateConfig;
 pub use daemon::*;
 pub use daemon_event_record::*;
 pub use error_classification::*;
