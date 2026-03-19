@@ -155,8 +155,8 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: gpt-5.4-codex
+    tool: codex
 
   system-monitor:
     system_prompt: |
@@ -228,7 +228,7 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: claude-sonnet-4-6
+    model: gpt-5.4-codex
     tool: claude
 
   release-manager:
@@ -356,9 +356,9 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: claude-sonnet-4-6
-    tool: claude
-    mcp_servers: ["ao", "github"]
+    model: gpt-5.4-codex
+    tool: codex
+    mcp_servers: ["ao"]
 
   po-reviewer:
     system_prompt: |
@@ -944,7 +944,7 @@ phases:
 
   code-review:
     mode: agent
-    agent_id: default
+    agent: codex-default
     directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
     decision_contract:
       required_evidence: [code_review_clean]
