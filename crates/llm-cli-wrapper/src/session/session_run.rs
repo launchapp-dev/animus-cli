@@ -8,4 +8,5 @@ pub struct SessionRun {
     pub events: mpsc::Receiver<SessionEvent>,
     pub selected_backend: String,
     pub fallback_reason: Option<String>,
+    pub child_pid: Option<u32>,
 }

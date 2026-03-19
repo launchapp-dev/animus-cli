@@ -19,12 +19,35 @@ pub(crate) async fn start_oai_runner_session(
     resume_session_id: Option<String>,
 ) -> Result<SessionRun> {
     let invocation = oai_runner_invocation_for_request(&request, resume_session_id.as_deref())?;
+
+    let mut command = Command::new(&invocation.command);
+    command
+        .args(&invocation.args)
+        .current_dir(&request.cwd)
+        .env_clear()
+        .envs(request.env_vars.iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let child_pid = child.id();
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if invocation.prompt_via_stdin && !request.prompt.is_empty() {
+            stdin.write_all(request.prompt.as_bytes()).await?;
+        }
+        drop(stdin);
+    }
+
     let control_session_id = Uuid::new_v4().to_string();
     let control_session_id_for_run = control_session_id.clone();
     let (event_tx, event_rx) = mpsc::channel(128);
     let (cancel_tx, cancel_rx) = oneshot::channel();
     register_session(control_session_id.clone(), cancel_tx);
 
+    let timeout_secs = request.timeout_secs;
     tokio::spawn(async move {
         let _ = event_tx
             .send(SessionEvent::Started {
@@ -33,7 +56,7 @@ pub(crate) async fn start_oai_runner_session(
             })
             .await;
 
-        if let Err(error) = run_oai_runner_session(request, invocation, event_tx.clone(), cancel_rx).await {
+        if let Err(error) = manage_oai_runner_child(child, timeout_secs, event_tx.clone(), cancel_rx).await {
             let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
             let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
@@ -45,6 +68,7 @@ pub(crate) async fn start_oai_runner_session(
         events: event_rx,
         selected_backend: "oai-runner-native".to_string(),
         fallback_reason: None,
+        child_pid,
     })
 }
 
@@ -90,32 +114,12 @@ pub(crate) fn oai_runner_invocation_for_request(
     Ok(invocation)
 }
 
-async fn run_oai_runner_session(
-    request: SessionRequest,
-    invocation: LaunchInvocation,
+async fn manage_oai_runner_child(
+    mut child: Child,
+    timeout_secs: Option<u64>,
     event_tx: mpsc::Sender<SessionEvent>,
     mut cancel_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
-    let mut command = Command::new(&invocation.command);
-    command
-        .args(&invocation.args)
-        .current_dir(&request.cwd)
-        .env_clear()
-        .envs(request.env_vars.iter().cloned())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command.spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if invocation.prompt_via_stdin && !request.prompt.is_empty() {
-            stdin.write_all(request.prompt.as_bytes()).await?;
-        }
-        drop(stdin);
-    }
-
     let stdout =
         child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture oai-runner stdout".to_string()))?;
     let stderr =
@@ -146,7 +150,7 @@ async fn run_oai_runner_session(
         }
     });
 
-    let exit_code = wait_for_child(&mut child, request.timeout_secs, &mut cancel_rx, "oai-runner").await?;
+    let exit_code = wait_for_child(&mut child, timeout_secs, &mut cancel_rx, "oai-runner").await?;
     let _ = stdout_task.await;
     let _ = stderr_task.await;
     let _ = event_tx.send(SessionEvent::Finished { exit_code }).await;

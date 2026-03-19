@@ -2,7 +2,7 @@ use std::process::Stdio;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -65,6 +65,29 @@ impl SessionBackend for SubprocessSessionBackend {
         let started_backend_label = backend_label.clone();
         let fallback_reason =
             request.extras.get("fallback_reason").and_then(serde_json::Value::as_str).map(ToOwned::to_owned);
+
+        let mut command = Command::new(&invocation.command);
+        command
+            .args(&invocation.args)
+            .current_dir(&request.cwd)
+            .env_clear()
+            .envs(request.env_vars.iter().cloned())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command.spawn()?;
+        let child_pid = child.id();
+
+        if let Some(mut stdin) = child.stdin.take() {
+            if invocation.prompt_via_stdin && !request.prompt.is_empty() {
+                stdin.write_all(request.prompt.as_bytes()).await?;
+            }
+            drop(stdin);
+        }
+
+        let tool = request.tool.clone();
         let (event_tx, event_rx) = mpsc::channel(128);
 
         tokio::spawn(async move {
@@ -72,7 +95,7 @@ impl SessionBackend for SubprocessSessionBackend {
                 .send(SessionEvent::Started { backend: started_backend_label.clone(), session_id: Some(session_id) })
                 .await;
 
-            if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone()).await {
+            if let Err(error) = manage_subprocess_child(child, tool, event_tx.clone()).await {
                 let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
                 let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
             }
@@ -83,6 +106,7 @@ impl SessionBackend for SubprocessSessionBackend {
             events: event_rx,
             selected_backend: backend_label,
             fallback_reason,
+            child_pid,
         })
     }
 
@@ -98,38 +122,17 @@ impl SessionBackend for SubprocessSessionBackend {
     }
 }
 
-async fn run_subprocess_session(
-    request: SessionRequest,
-    invocation: LaunchInvocation,
+async fn manage_subprocess_child(
+    mut child: Child,
+    tool: String,
     event_tx: mpsc::Sender<SessionEvent>,
 ) -> Result<()> {
-    let mut command = Command::new(&invocation.command);
-    command
-        .args(&invocation.args)
-        .current_dir(&request.cwd)
-        .env_clear()
-        .envs(request.env_vars.iter().cloned())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    command.process_group(0);
-
-    let mut child = command.spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if invocation.prompt_via_stdin && !request.prompt.is_empty() {
-            stdin.write_all(request.prompt.as_bytes()).await?;
-        }
-        drop(stdin);
-    }
-
     let stdout =
         child.stdout.take().ok_or_else(|| Error::ExecutionFailed("failed to capture child stdout".to_string()))?;
     let stderr =
         child.stderr.take().ok_or_else(|| Error::ExecutionFailed("failed to capture child stderr".to_string()))?;
 
-    let stdout_tool = request.tool.clone();
+    let stdout_tool = tool;
     let stdout_tx = event_tx.clone();
     let stdout_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();

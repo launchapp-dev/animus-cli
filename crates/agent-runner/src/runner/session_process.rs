@@ -9,10 +9,11 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, MissedTickBehavior};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
+use crate::cleanup::{track_process, untrack_process};
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2).find_map(|pair| (pair[0] == flag).then_some(pair[1].as_str()))
@@ -97,6 +98,17 @@ pub(super) async fn spawn_session_process(
         None => backend.start_session(session_request).await.context("failed to start native session backend")?,
     };
     let run_session_id = run.session_id.clone();
+    let session_child_pid = run.child_pid;
+    if let Some(pid) = session_child_pid {
+        if let Err(e) = track_process(&run_id.0, pid) {
+            warn!(
+                run_id = %run_id.0,
+                pid,
+                error = %e,
+                "Failed to record native session process in orphan tracker"
+            );
+        }
+    }
     let run_started_at = Instant::now();
     let mut last_activity_at = run_started_at;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
@@ -110,6 +122,7 @@ pub(super) async fn spawn_session_process(
         cwd,
         selected_backend = %run.selected_backend,
         idle_timeout_secs = ?idle_timeout_secs,
+        session_child_pid = ?session_child_pid,
         "Spawning native session backend"
     );
 
@@ -117,6 +130,9 @@ pub(super) async fn spawn_session_process(
         tokio::select! {
             maybe_event = run.events.recv() => {
                 let Some(event) = maybe_event else {
+                    if session_child_pid.is_some() {
+                        let _ = untrack_process(&run_id.0);
+                    }
                     bail!("native session backend closed event stream unexpectedly");
                 };
 
@@ -125,6 +141,9 @@ pub(super) async fn spawn_session_process(
                 }
 
                 if let Some(exit_code) = forward_session_event(run_id, &event, &event_tx).await {
+                    if session_child_pid.is_some() {
+                        let _ = untrack_process(&run_id.0);
+                    }
                     return Ok(exit_code);
                 }
             }
@@ -149,6 +168,9 @@ pub(super) async fn spawn_session_process(
                         if let Some(session_id) = run_session_id.as_deref() {
                             let _ = backend.terminate_session(session_id).await;
                         }
+                        if session_child_pid.is_some() {
+                            let _ = untrack_process(&run_id.0);
+                        }
                         bail!("Process idle timeout after {}s without activity", idle_limit_secs);
                     }
                 }
@@ -156,6 +178,9 @@ pub(super) async fn spawn_session_process(
             _ = &mut cancel_rx => {
                 if let Some(session_id) = run_session_id.as_deref() {
                     let _ = backend.terminate_session(session_id).await;
+                }
+                if session_child_pid.is_some() {
+                    let _ = untrack_process(&run_id.0);
                 }
                 bail!("Process cancelled by user");
             }
