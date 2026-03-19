@@ -2,47 +2,18 @@ use anyhow::{bail, Result};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use std::io::Write;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
+use super::circuit_breaker::{
+    check_circuit, record_failure, record_success, CircuitBreakerConfig, CircuitCheck,
+};
 use super::types::*;
-
-static CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
-static CIRCUIT_OPEN_UNTIL: AtomicU64 = AtomicU64::new(0);
-
-const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
-const CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
-
-fn circuit_is_open() -> bool {
-    let until = CIRCUIT_OPEN_UNTIL.load(Ordering::Relaxed);
-    if until == 0 {
-        return false;
-    }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    now < until
-}
-
-fn record_success() {
-    CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
-    CIRCUIT_OPEN_UNTIL.store(0, Ordering::Relaxed);
-}
-
-fn record_failure() {
-    let count = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
-    if count >= CIRCUIT_BREAKER_THRESHOLD {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-        CIRCUIT_OPEN_UNTIL.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
-        eprintln!(
-            "[oai-runner] Circuit breaker OPEN after {} consecutive failures. Cooling down for {}s.",
-            count, CIRCUIT_BREAKER_COOLDOWN_SECS
-        );
-    }
-}
 
 pub struct ApiClient {
     http: reqwest::Client,
     api_base: String,
     api_key: String,
+    cb_config: CircuitBreakerConfig,
 }
 
 impl ApiClient {
@@ -51,7 +22,7 @@ impl ApiClient {
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("failed to build HTTP client");
-        Self { http, api_base, api_key }
+        Self { http, api_base, api_key, cb_config: CircuitBreakerConfig::default() }
     }
 
     pub async fn stream_chat(
@@ -59,8 +30,21 @@ impl ApiClient {
         request: &ChatRequest,
         on_text_chunk: &mut dyn FnMut(&str),
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
-        if circuit_is_open() {
-            bail!("Circuit breaker is open — too many consecutive API failures. Waiting for cooldown.");
+        match check_circuit(&self.api_base, &self.cb_config) {
+            CircuitCheck::Allow => {}
+            CircuitCheck::AllowProbe => {
+                eprintln!(
+                    "[oai-runner] Circuit half-open for {}. Sending probe request.",
+                    self.api_base
+                );
+            }
+            CircuitCheck::Reject { open_until_secs } => {
+                bail!(
+                    "Circuit breaker OPEN for {} — too many consecutive failures. Retry after {} (unix secs).",
+                    self.api_base,
+                    open_until_secs
+                );
+            }
         }
 
         let url = format!("{}/chat/completions", self.api_base);
@@ -74,7 +58,7 @@ impl ApiClient {
 
             match self.do_stream(&url, request, on_text_chunk).await {
                 Ok(result) => {
-                    record_success();
+                    record_success(&self.api_base);
                     return Ok(result);
                 }
                 Err(e) => {
@@ -86,7 +70,7 @@ impl ApiClient {
                         || err_str.contains("broken pipe")
                         || err_str.contains("reset by peer");
                     if is_rate_limit || is_server_error || is_transient {
-                        record_failure();
+                        record_failure(&self.api_base, &self.cb_config);
                         let reason = if is_rate_limit {
                             "rate limited (429)"
                         } else if is_transient {
@@ -98,7 +82,7 @@ impl ApiClient {
                         last_err = Some(e);
                         continue;
                     }
-                    record_failure();
+                    record_failure(&self.api_base, &self.cb_config);
                     return Err(e);
                 }
             }
