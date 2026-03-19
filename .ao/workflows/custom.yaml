@@ -57,8 +57,8 @@ agents:
 
          | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
          |------------|----------------|---------------------|-------------------------|------------------------------|
-         | low        | bugfix/chore   | quick-fix-glm       | GLM-5-Turbo (oai-runner) | Cheapest for simple fixes    |
-         | low        | docs           | standard-glm        | GLM-5-Turbo (oai-runner) | Cheap, good for docs         |
+         | low        | bugfix/chore   | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest for simple fixes    |
+         | low        | docs           | standard            | Claude Sonnet (claude)  | Reliable; GLM had 0% success |
          | low        | chore          | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Cheapest option              |
          | medium     | feature        | standard            | Claude Sonnet (claude)   | Reliable; Kimi disabled       |
          | medium     | bugfix         | standard            | Claude Sonnet (claude)   | Reliable native CLI          |
@@ -75,6 +75,8 @@ agents:
          All oai-runner models use json_object + schema-in-prompt for structured output.
          Do NOT use standard-kimi — Kimi K2.5 cannot satisfy implementation acceptance criteria.
          Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
+         Only route low-priority chore to oai-runner models as experiments.
+         NOTE: standard-glm and quick-fix-glm are REMOVED — 0% success rate across 56 runs.
 
       6. Enqueue up to 3 new tasks per run to avoid flooding.
 
@@ -1516,39 +1518,7 @@ workflows:
       - create-pr
       - cleanup
 
-  - id: standard-glm
-    name: "Standard (GLM)"
-    description: "Standard workflow using GLM/Z-AI for implementation, Codex for review"
-    phases:
-      - glm-requirements
-      - glm-implementation:
-          skip_if:
-            - "task_type == docs"
-      - unit-test:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - codex-code-review:
-          max_rework_attempts: 3
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - push-branch
-      - create-pr
-      - cleanup
-    post_success:
-      merge:
-        strategy: squash
-        target_branch: develop
-        create_pr: true
-        auto_merge: true
-        cleanup_worktree: true
-
-  - id: standard-glm
+  - id: standard-minimax
     name: "Standard (MiniMax)"
     description: "Standard workflow using MiniMax for implementation, Codex for review"
     phases:
@@ -1644,7 +1614,7 @@ workflows:
         auto_merge: true
         cleanup_worktree: true
 
-  - id: quick-fix-glm
+  - id: quick-fix-minimax
     name: "Quick Fix (MiniMax)"
     description: "Fast workflow for trivial bug fixes using MiniMax — cheapest option"
     phases:
@@ -1657,28 +1627,6 @@ workflows:
           on_verdict:
             rework:
               target: minimax-implementation
-      - cleanup
-    post_success:
-      merge:
-        strategy: squash
-        target_branch: develop
-        create_pr: true
-        auto_merge: true
-        cleanup_worktree: true
-
-  - id: quick-fix-glm
-    name: "Quick Fix (GLM)"
-    description: "Fast workflow for small fixes using GLM"
-    phases:
-      - glm-implementation
-      - unit-test:
-          on_verdict:
-            rework:
-              target: glm-implementation
-      - lint:
-          on_verdict:
-            rework:
-              target: glm-implementation
       - cleanup
     post_success:
       merge:
