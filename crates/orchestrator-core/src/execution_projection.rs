@@ -44,6 +44,36 @@ pub async fn project_task_blocked_with_reason(
     Ok(())
 }
 
+pub async fn project_task_rate_limited(
+    hub: Arc<dyn ServiceHub>,
+    task: &OrchestratorTask,
+    reason: String,
+    retry_after: chrono::DateTime<Utc>,
+) -> Result<()> {
+    let mut updated = task.clone();
+    updated.status = TaskStatus::Blocked;
+    updated.paused = true;
+    updated.blocked_reason = Some(reason);
+    updated.blocked_at = Some(Utc::now());
+    updated.blocked_phase = None;
+    updated.blocked_by = None;
+    updated.rate_limited_until = Some(retry_after);
+    updated.metadata.updated_at = Utc::now();
+    updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
+    updated.metadata.version = updated.metadata.version.saturating_add(1);
+    hub.tasks().replace(updated).await?;
+    Ok(())
+}
+
+pub fn compute_rate_limit_retry_after(consecutive_failures: u32) -> chrono::DateTime<Utc> {
+    const BASE_BACKOFF_MINS: u64 = 5;
+    const MAX_BACKOFF_MINS: u64 = 60;
+    let backoff_mins = BASE_BACKOFF_MINS
+        .saturating_mul(2u64.saturating_pow(consecutive_failures))
+        .min(MAX_BACKOFF_MINS);
+    Utc::now() + chrono::Duration::minutes(backoff_mins as i64)
+}
+
 pub async fn project_task_dispatch_failure(
     hub: Arc<dyn ServiceHub>,
     task_id: &str,
@@ -227,6 +257,7 @@ mod tests {
             consecutive_dispatch_failures: None,
             last_dispatch_failure_at: None,
             dispatch_history: Vec::new(),
+            rate_limited_until: None,
         };
 
         hub.tasks().replace(task.clone()).await.expect("upsert task");

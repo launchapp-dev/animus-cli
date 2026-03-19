@@ -656,6 +656,7 @@ Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constra
                     consecutive_dispatch_failures: None,
                     last_dispatch_failure_at: None,
                     dispatch_history: Vec::new(),
+                    rate_limited_until: None,
                 };
                 lock.tasks.insert(task_id.clone(), task);
                 task_ids_created.push(task_id.clone());

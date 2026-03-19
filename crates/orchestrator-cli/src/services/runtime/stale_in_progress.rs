@@ -110,6 +110,7 @@ mod tests {
             consecutive_dispatch_failures: None,
             last_dispatch_failure_at: None,
             dispatch_history: Vec::new(),
+            rate_limited_until: None,
         }
     }
 

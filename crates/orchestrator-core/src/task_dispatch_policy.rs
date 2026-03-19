@@ -23,6 +23,11 @@ pub fn should_skip_task_dispatch(task: &OrchestratorTask) -> bool {
     const MAX_DISPATCH_RETRIES: u32 = 3;
     const MIN_RETRY_DELAY_SECS: i64 = 60;
 
+    if let Some(rate_limited_until) = task.rate_limited_until {
+        if Utc::now() < rate_limited_until {
+            return true;
+        }
+    }
     if let Some(count) = task.consecutive_dispatch_failures {
         if count >= MAX_DISPATCH_RETRIES {
             return true;

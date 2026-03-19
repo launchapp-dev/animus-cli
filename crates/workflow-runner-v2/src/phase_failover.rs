@@ -87,6 +87,10 @@ fn extract_provider_exhaustion_reason(text: &str) -> Option<String> {
     {
         return Some("provider rate limit exceeded".to_string());
     }
+    if normalized.contains("you've hit your limit") || normalized.contains("you have hit your limit") {
+        let first_line = text.lines().next().unwrap_or(text).trim();
+        return Some(format!("cli rate limit: {}", first_line));
+    }
     if normalized.contains("\"has_credits\":false")
         || normalized.contains("\"balance\":\"0\"")
         || normalized.contains("\"balance\":0")

@@ -4,7 +4,7 @@ use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running
 use anyhow::Result;
 use orchestrator_core::{
     active_workflow_runner_ids, dispatch_workflow_event, load_agent_runtime_config_or_default, services::ServiceHub,
-    WorkflowEvent, WorkflowMachineState, WorkflowStatus,
+    TaskStatus, WorkflowEvent, WorkflowMachineState, WorkflowStatus,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -155,6 +155,54 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
     }
 
     Ok(reconciled)
+}
+
+pub async fn reconcile_rate_limited_tasks(hub: Arc<dyn ServiceHub>, _project_root: &str) -> Result<usize> {
+    let tasks = match hub.tasks().list().await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!("{}: failed to list tasks for rate limit reconciliation: {}", protocol::ACTOR_DAEMON, error);
+            return Ok(0);
+        }
+    };
+
+    let now = chrono::Utc::now();
+    let mut unblocked = 0usize;
+
+    for task in tasks {
+        let Some(rate_limited_until) = task.rate_limited_until else {
+            continue;
+        };
+        if now < rate_limited_until {
+            continue;
+        }
+        if task.status != TaskStatus::Blocked {
+            continue;
+        }
+
+        eprintln!(
+            "{}: unblocking rate-limited task {} (rate limit expired at {})",
+            protocol::ACTOR_DAEMON,
+            task.id,
+            rate_limited_until.to_rfc3339(),
+        );
+
+        match hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await {
+            Ok(_) => {
+                unblocked = unblocked.saturating_add(1);
+            }
+            Err(err) => {
+                eprintln!(
+                    "{}: failed to unblock rate-limited task {}: {}",
+                    protocol::ACTOR_DAEMON,
+                    task.id,
+                    err,
+                );
+            }
+        }
+    }
+
+    Ok(unblocked)
 }
 
 fn workflow_is_waiting_on_manual_phase(project_root: &str, workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {

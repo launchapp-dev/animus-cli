@@ -54,6 +54,7 @@ fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<Dat
         consecutive_dispatch_failures: None,
         last_dispatch_failure_at: None,
         dispatch_history: Vec::new(),
+        rate_limited_until: None,
     }
 }
 

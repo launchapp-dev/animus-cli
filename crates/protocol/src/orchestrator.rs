@@ -559,6 +559,8 @@ pub struct OrchestratorTask {
     pub last_dispatch_failure_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dispatch_history: Vec<DispatchHistoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limited_until: Option<DateTime<Utc>>,
 }
 
 const FRONTEND_TAGS: &[&str] =

@@ -83,6 +83,7 @@ pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus)
         task.blocked_by = None;
         task.consecutive_dispatch_failures = None;
         task.last_dispatch_failure_at = None;
+        task.rate_limited_until = None;
     }
 }
 
@@ -510,6 +511,7 @@ pub(super) fn create_task_in_state(
         consecutive_dispatch_failures: None,
         last_dispatch_failure_at: None,
         dispatch_history: Vec::new(),
+        rate_limited_until: None,
     };
     state.tasks.insert(id, task.clone());
     state.dirty_tasks.insert(task.id.clone());

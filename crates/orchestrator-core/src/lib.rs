@@ -45,7 +45,8 @@ pub use domain_state::{
 pub use execution_projection::{
     builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,
     project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_execution_fact,
-    project_task_blocked_with_reason, project_task_dispatch_failure, project_task_execution_fact, project_task_status,
+    compute_rate_limit_retry_after, project_task_blocked_with_reason, project_task_dispatch_failure,
+    project_task_execution_fact, project_task_rate_limited, project_task_status,
     project_task_terminal_workflow_status, project_task_workflow_start, ExecutionProjector, ExecutionProjectorRegistry,
 };
 pub use model_quality::{
