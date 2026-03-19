@@ -124,7 +124,7 @@ describe("task and workflow control center", () => {
 
     renderInRouter(<WorkflowsPage />);
 
-    expect(screen.getByText("Workflows")).toBeTruthy();
+    expect(screen.getByText("Workflow Command Center")).toBeTruthy();
     expect(screen.getByText("TASK-014")).toBeTruthy();
     expect(screen.getByRole("button", { name: "New Workflow" })).toBeTruthy();
   });

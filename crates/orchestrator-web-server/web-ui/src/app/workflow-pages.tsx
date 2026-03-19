@@ -15,6 +15,7 @@ import {
   ResumeWorkflowDocument,
   CancelWorkflowDocument,
   ApprovePhaseDocument,
+  TasksDocument,
 } from "@/lib/graphql/generated/graphql";
 import { statusColor, StatusDot, PageLoading, PageError, StatCard, SectionHeading, Markdown } from "./shared";
 
@@ -124,11 +125,10 @@ function PhaseOutputPanel({ workflowId, currentPhase, isRunning }: { workflowId:
 type WfPhase = { phaseId: string; status?: string | null; startedAt?: string | null; completedAt?: string | null; attempt?: number | null; errorMessage?: string | null };
 type WfSummary = { id: string; taskId: string; workflowRef?: string | null; status?: string | null; statusRaw?: string | null; currentPhase?: string | null; totalReworks?: number | null; phases?: readonly WfPhase[] | null };
 
-function ActiveWorkflowRow({ wf }: { wf: WfSummary }) {
+function ActiveWorkflowRow({ wf, taskRequirement }: { wf: WfSummary, taskRequirement?: string }) {
   const phases = wf.phases ?? [];
   const completed = phases.filter((p) => p.status === "completed").length;
   const total = phases.length;
-  const pct = total > 0 ? (completed / total) * 100 : 0;
   const startedAt = getWorkflowStartedAt(wf);
   const elapsed = useElapsedTime(startedAt);
 
@@ -140,6 +140,7 @@ function ActiveWorkflowRow({ wf }: { wf: WfSummary }) {
             <StatusDot status={wf.statusRaw ?? ""} />
             <span className="font-mono text-xs text-muted-foreground shrink-0">{wf.taskId}</span>
             <span className="text-sm font-medium truncate">{wf.id}</span>
+            {taskRequirement && <Badge variant="outline" className="text-[10px] ml-2">{taskRequirement}</Badge>}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0 hidden sm:flex">
             {wf.currentPhase && <span className="font-mono">{wf.currentPhase}</span>}
@@ -147,8 +148,10 @@ function ActiveWorkflowRow({ wf }: { wf: WfSummary }) {
             {elapsed && <span>{elapsed}</span>}
           </div>
         </div>
-        <div className="mt-2 h-1 rounded-full bg-muted/30">
-          <div className="h-full rounded-full bg-[var(--ao-running)] transition-all" style={{ width: `${pct}%` }} />
+        <div className="mt-2 h-1 flex gap-[1px]">
+          {phases.map((p, i) => (
+            <div key={i} className={`flex-1 h-full rounded-full ${p.status === "completed" ? "bg-[var(--ao-success)]" : p.status === "running" ? "bg-[var(--ao-running)]" : p.status === "failed" ? "bg-destructive" : "bg-muted/30"}`} />
+          ))}
         </div>
         {phases.length > 0 && (
           <div className="flex gap-1 mt-2 flex-wrap">
@@ -164,29 +167,66 @@ function ActiveWorkflowRow({ wf }: { wf: WfSummary }) {
   );
 }
 
-function RecentWorkflowRow({ wf }: { wf: WfSummary }) {
+function RecentWorkflowRow({ wf, taskTitle }: { wf: WfSummary, taskTitle?: string }) {
   const startedAt = getWorkflowStartedAt(wf);
   const completedAt = getWorkflowCompletedAt(wf);
   const duration = startedAt && completedAt ? formatDuration(new Date(completedAt).getTime() - new Date(startedAt).getTime()) : "";
   const failedPhase = (wf.phases ?? []).find((p) => p.status === "failed");
-  const statusIcon = wf.statusRaw === "completed" ? "\u2713" : wf.statusRaw === "failed" ? "\u2717" : "\u2014";
+  const statusIcon = wf.statusRaw === "completed" ? "\u2713" : wf.statusRaw === "failed" ? "\u2717" : wf.statusRaw === "cancelled" ? "\u2205" : "\u2014";
 
   return (
     <Link to={`/workflows/${wf.id}`} className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-muted/20 transition-colors">
-      <span className={`text-xs w-4 text-center ${wf.statusRaw === "failed" ? "text-destructive" : "text-muted-foreground"}`}>{statusIcon}</span>
-      <span className="font-mono text-xs text-muted-foreground">{wf.taskId}</span>
-      <span className="text-sm truncate flex-1">{wf.id}</span>
-      {failedPhase && <span className="text-xs text-destructive font-mono">{failedPhase.phaseId}</span>}
-      {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
-      {completedAt && <span className="text-xs text-muted-foreground">{formatTimeAgo(completedAt)}</span>}
+      <span className={`text-xs w-4 text-center ${wf.statusRaw === "failed" ? "text-destructive" : wf.statusRaw === "completed" ? "text-[var(--ao-success)]" : "text-muted-foreground"}`}>{statusIcon}</span>
+      <span className="font-mono text-xs text-muted-foreground w-20 shrink-0">{wf.taskId}</span>
+      <span className="text-sm truncate flex-1">{taskTitle || wf.id}</span>
+      {wf.workflowRef && <Badge variant="outline" className="text-[10px]">{wf.workflowRef}</Badge>}
+      {failedPhase && <span className="text-[10px] text-destructive font-mono bg-destructive/10 px-1.5 py-0.5 rounded">failed: {failedPhase.phaseId}</span>}
+      {duration && <span className="text-xs text-muted-foreground w-16 text-right shrink-0">{duration}</span>}
+      {completedAt && <span className="text-xs text-muted-foreground w-16 text-right shrink-0">{formatTimeAgo(completedAt)}</span>}
     </Link>
   );
 }
 
+type AttentionItem = {
+  id: string;
+  taskId: string;
+  type: "escalated" | "approval" | "conflict";
+  urgency: number;
+  workflow: WfSummary;
+  phaseId?: string;
+  message?: string;
+};
+
+function AttentionItemRow({ item }: { item: AttentionItem }) {
+  return (
+    <Card className={`border-l-4 ${item.type === 'escalated' ? 'border-amber-500 bg-amber-500/5' : item.type === 'approval' ? 'border-blue-500 bg-blue-500/5' : 'border-destructive bg-destructive/5'} p-3 hover:bg-muted/10 transition-colors`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-muted-foreground">{item.taskId}</span>
+            <span className="text-sm font-medium">{item.id}</span>
+            <Badge variant="outline" className="text-[10px]">
+              {item.type === 'escalated' ? 'Escalated' : item.type === 'approval' ? 'Needs Approval' : 'Merge Conflict'}
+            </Badge>
+          </div>
+          {item.type === 'conflict' && <p className="text-xs text-destructive mt-1 line-clamp-1">{item.message}</p>}
+          {item.type === 'approval' && <p className="text-xs text-muted-foreground mt-1">Phase: <span className="font-mono">{item.phaseId}</span></p>}
+        </div>
+        <div className="flex items-center gap-2">
+           <Link to={`/workflows/${item.id}`}>
+             <Button size="sm" variant="outline">
+               {item.type === 'escalated' ? 'Review Escalation' : item.type === 'approval' ? 'Review Phase' : 'Resolve Conflict'}
+             </Button>
+           </Link>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export function WorkflowsPage() {
-  const [result, reexecute] = useQuery({
-    query: WorkflowsDocument,
-  });
+  const [result, reexecute] = useQuery({ query: WorkflowsDocument });
+  const [tasksResult] = useQuery({ query: TasksDocument });
   const [, runWf] = useMutation(RunWorkflowDocument);
   const [, pauseWf] = useMutation(PauseWorkflowDocument);
   const [, resumeWf] = useMutation(ResumeWorkflowDocument);
@@ -194,10 +234,10 @@ export function WorkflowsPage() {
   const [runTaskId, setRunTaskId] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
-  const [recentPage, setRecentPage] = useState(0);
 
   const { data, fetching, error } = result;
   const workflows = data?.workflows ?? [];
+  const tasks = tasksResult.data?.tasks ?? [];
 
   const counts = useMemo(() => {
     const c = { running: 0, queued: 0, completed: 0, failed: 0, paused: 0, escalated: 0 };
@@ -213,11 +253,52 @@ export function WorkflowsPage() {
     return c;
   }, [workflows]);
 
+  const attentionItems = useMemo(() => {
+    const items: AttentionItem[] = [];
+    for (const w of workflows) {
+      const s = (w.statusRaw ?? "").toLowerCase();
+      const phases = w.phases ?? [];
+      const currentPhase = phases.find(p => p.phaseId === w.currentPhase);
+      
+      if (s === "escalated") {
+        items.push({ id: w.id, taskId: w.taskId, type: "escalated", urgency: 0, workflow: w });
+        continue;
+      }
+      
+      if (currentPhase && s !== "completed" && s !== "failed" && s !== "cancelled" && s !== "running" && currentPhase.status !== "completed" && currentPhase.status !== "running" && currentPhase.status !== "failed") {
+        items.push({ id: w.id, taskId: w.taskId, type: "approval", urgency: 1, workflow: w, phaseId: currentPhase.phaseId });
+        continue;
+      }
+      
+      if (s === "failed") {
+        const failedPhase = phases.find(p => p.status === "failed");
+        if (failedPhase && failedPhase.errorMessage) {
+          const lowerMsg = failedPhase.errorMessage.toLowerCase();
+          if (lowerMsg.includes("merge conflict") || lowerMsg.includes("automatic merge failed") || lowerMsg.includes("conflict")) {
+            items.push({ id: w.id, taskId: w.taskId, type: "conflict", urgency: 2, workflow: w, phaseId: failedPhase.phaseId, message: failedPhase.errorMessage });
+          }
+        }
+      }
+    }
+    items.sort((a, b) => a.urgency - b.urgency);
+    return items;
+  }, [workflows]);
+
   const activeWorkflows = useMemo(() => workflows.filter((w) => ["running", "paused", "queued"].includes((w.statusRaw ?? "").toLowerCase())), [workflows]);
-  const escalatedWorkflows = useMemo(() => workflows.filter((w) => (w.statusRaw ?? "").toLowerCase() === "escalated"), [workflows]);
+  
+  const activeWorkflowsGrouped = useMemo(() => {
+    const groups: Record<string, WfSummary[]> = {};
+    for (const w of activeWorkflows) {
+      const task = tasks.find(t => t.id === w.taskId);
+      const reqId = task?.linkedRequirementIds?.[0] ?? "Uncategorized";
+      if (!groups[reqId]) groups[reqId] = [];
+      groups[reqId].push(w);
+    }
+    return groups;
+  }, [activeWorkflows, tasks]);
+
   const allRecentWorkflows = useMemo(() => workflows.filter((w) => ["completed", "failed", "cancelled"].includes((w.statusRaw ?? "").toLowerCase())), [workflows]);
-  const recentTotalPages = Math.max(1, Math.ceil(allRecentWorkflows.length / 10));
-  const recentWorkflows = useMemo(() => allRecentWorkflows.slice(recentPage * 10, (recentPage + 1) * 10), [allRecentWorkflows, recentPage]);
+  const recentWorkflows = useMemo(() => allRecentWorkflows.slice(0, 20), [allRecentWorkflows]);
 
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -248,7 +329,7 @@ export function WorkflowsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Workflows</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Workflow Command Center</h1>
           <p className="text-sm text-muted-foreground">{counts.running} running &middot; {counts.queued} queued</p>
         </div>
         <div className="relative">
@@ -271,66 +352,67 @@ export function WorkflowsPage() {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Running" value={counts.running} accent={counts.running > 0} />
+        <StatCard label="Queued" value={counts.queued} />
+        <StatCard label="Completed" value={counts.completed} />
+        <StatCard label="Failed" value={counts.failed} accent={counts.failed > 0} />
+      </div>
+
       {feedback && (
         <Alert variant={feedback.kind === "error" ? "destructive" : "default"} role={feedback.kind === "error" ? "alert" : "status"}>
           <AlertDescription>{feedback.message}</AlertDescription>
         </Alert>
       )}
 
-      {(escalatedWorkflows.length > 0) && (
-        <Card className="border-amber-500/40 bg-amber-500/5">
-          <CardContent className="pt-3 pb-3 px-4">
-            <p className="text-xs uppercase tracking-wider text-amber-500/80 font-medium mb-2">Attention Required</p>
-            <div className="space-y-1">
-              {escalatedWorkflows.map((wf) => (
-                <Link key={wf.id} to={`/workflows/${wf.id}`} className="flex items-center gap-2 text-sm hover:underline">
-                  <span className="font-mono text-xs text-muted-foreground">{wf.taskId}</span>
-                  <span>{wf.id}</span>
-                  <Badge variant="outline" className="text-amber-500 border-amber-500/40 text-[10px]">escalated</Badge>
-                </Link>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      {attentionItems.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <SectionHeading>Needs Attention</SectionHeading>
+            <Badge variant="destructive" className="rounded-full px-2">{attentionItems.length}</Badge>
+          </div>
+          <div className="space-y-2">
+            {attentionItems.map(item => <AttentionItemRow key={`${item.id}-${item.type}`} item={item} />)}
+          </div>
+        </div>
       )}
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <StatCard label="Running" value={counts.running} accent />
-        <StatCard label="Queued" value={counts.queued} />
-        <StatCard label="Completed" value={counts.completed} />
-        <StatCard label="Failed" value={counts.failed} />
-      </div>
 
       {activeWorkflows.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <SectionHeading>Active</SectionHeading>
+            <SectionHeading>Active Workflows</SectionHeading>
             <div className="flex gap-1">
               <Button size="sm" variant="outline" onClick={() => onBatchAction("pause")} disabled={counts.running === 0}>Pause All</Button>
               <Button size="sm" variant="ghost" className="text-destructive/60 hover:text-destructive" onClick={() => onBatchAction("cancel")}>Cancel All</Button>
             </div>
           </div>
-          <div className="space-y-2">
-            {activeWorkflows.map((wf) => <ActiveWorkflowRow key={wf.id} wf={wf} />)}
+          <div className="space-y-4">
+            {Object.entries(activeWorkflowsGrouped).map(([reqId, wfs]) => (
+              <div key={reqId} className="space-y-2">
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{reqId === "Uncategorized" ? "Other Workflows" : `Requirement: ${reqId}`}</h3>
+                <div className="space-y-2">
+                  {wfs.map((wf) => <ActiveWorkflowRow key={wf.id} wf={wf} taskRequirement={reqId !== "Uncategorized" ? reqId : undefined} />)}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
 
       {recentWorkflows.length > 0 && (
         <div className="space-y-2">
-          <SectionHeading>Recent</SectionHeading>
-          <div>
-            {recentWorkflows.map((wf) => <RecentWorkflowRow key={wf.id} wf={wf} />)}
+          <div className="flex items-center justify-between">
+            <SectionHeading>Recent Workflows</SectionHeading>
+            <Link to="/history">
+              <Button size="sm" variant="ghost" className="text-xs text-muted-foreground hover:text-foreground">View all</Button>
+            </Link>
           </div>
-          {allRecentWorkflows.length > 10 && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Page {recentPage + 1} of {recentTotalPages}</span>
-              <div className="flex gap-1">
-                <Button size="sm" variant="outline" className="h-6" disabled={recentPage === 0} onClick={() => setRecentPage((p) => p - 1)}>Prev</Button>
-                <Button size="sm" variant="outline" className="h-6" disabled={recentPage >= recentTotalPages - 1} onClick={() => setRecentPage((p) => p + 1)}>Next</Button>
-              </div>
-            </div>
-          )}
+          <div>
+            {recentWorkflows.map((wf) => {
+              const taskTitle = tasks.find(t => t.id === wf.taskId)?.title ?? undefined;
+              return <RecentWorkflowRow key={wf.id} wf={wf} taskTitle={taskTitle} />;
+            })}
+          </div>
         </div>
       )}
 
