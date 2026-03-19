@@ -41,7 +41,9 @@ agents:
          Handle ALL rework/rebase before moving to new work.
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
-      3. If pending queue < 5, call ao.task.prioritized to get highest priority ready tasks.
+      3. If total queue size (pending + assigned) >= 5, STOP — queue is full. Do NOT enqueue more.
+         If total queue < 5, call ao.task.prioritized to get highest priority ready tasks.
+         Enqueue at most 2 new tasks per run to avoid flooding.
       4. For each candidate task, call ao.task.get to check its dependencies field.
          - If dependencies is non-empty, check each blocked_by dependency:
            - Call ao.task.get for the dependency task_id
