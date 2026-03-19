@@ -111,7 +111,9 @@ impl IpcServer {
                                     info!(connection_id, "Client connected via unix socket");
                                     let conn_runner = Arc::clone(&runner);
                                     tokio::spawn(async move {
-                                        if let Err(e) = router::handle_connection(stream, conn_runner, connection_id).await {
+                                        if let Err(e) =
+                                            router::handle_connection(stream, conn_runner, connection_id).await
+                                        {
                                             error!(connection_id, error = %e, "Connection error");
                                         }
                                         info!(connection_id, "Connection closed");
@@ -151,7 +153,9 @@ impl IpcServer {
                                     info!(connection_id, %addr, "Client connected over TCP");
                                     let conn_runner = Arc::clone(&runner);
                                     tokio::spawn(async move {
-                                        if let Err(e) = router::handle_connection(stream, conn_runner, connection_id).await {
+                                        if let Err(e) =
+                                            router::handle_connection(stream, conn_runner, connection_id).await
+                                        {
                                             error!(connection_id, error = %e, "Connection error");
                                         }
                                         info!(connection_id, "Connection closed");
