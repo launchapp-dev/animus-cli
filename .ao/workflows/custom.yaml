@@ -157,7 +157,7 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: gpt-5.4-codex
+    model: gpt-5.4
     tool: codex
 
   system-monitor:
@@ -230,7 +230,7 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: gpt-5.4-codex
+    model: gpt-5.4
     tool: claude
 
   release-manager:
@@ -358,7 +358,7 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: gpt-5.4-codex
+    model: gpt-5.4
     tool: codex
     mcp_servers: ["ao"]
 
@@ -732,7 +732,7 @@ agents:
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
-    model: gpt-5.4-codex
+    model: gpt-5.4
     tool: codex
     mcp_servers: ["ao", "context7", "rust-docs"]
 
