@@ -1175,6 +1175,76 @@ fn machine_state_to_workflow_status_mapping() {
 }
 
 #[test]
+fn impl_skip_guard_reroutes_to_implementation_before_code_review() {
+    let mut guards = HashMap::new();
+    guards.insert("implementation".to_string(), vec!["task_type == 'docs'".to_string()]);
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "unit-test".to_string(),
+        "code-review".to_string(),
+    ])
+    .with_skip_guards(guards);
+
+    let mut workflow = executor.bootstrap(
+        "WF-impl-skip-guard".to_string(),
+        WorkflowRunInput::for_task("TASK-impl-skip".to_string(), Some("standard".to_string())),
+    );
+    let task = make_task(TaskType::Docs, Priority::Medium);
+    let subject_context = task_subject_context(&task);
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+
+    executor.skip_guarded_phases(&mut workflow, &subject_context);
+    assert_eq!(workflow.current_phase.as_deref(), Some("unit-test"));
+    assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Skipped);
+
+    executor.mark_current_phase_success(&mut workflow);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+    assert_eq!(workflow.current_phase_index, 1);
+    assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Running);
+    assert!(
+        !workflow.rework_counts.contains_key("implementation"),
+        "impl-skip guard must not consume rework budget"
+    );
+    let last = workflow.decision_history.last().unwrap();
+    assert_eq!(last.decision, WorkflowDecisionAction::Rework);
+    assert_eq!(last.target_phase.as_deref(), Some("implementation"));
+    assert!(last.reason.contains("skipped"), "reason should mention skipped: {}", last.reason);
+}
+
+#[test]
+fn impl_skip_guard_does_not_fire_when_implementation_ran() {
+    let executor = WorkflowLifecycleExecutor::new(vec![
+        "requirements".to_string(),
+        "implementation".to_string(),
+        "unit-test".to_string(),
+        "code-review".to_string(),
+    ]);
+
+    let mut workflow = executor.bootstrap(
+        "WF-impl-ran-guard".to_string(),
+        WorkflowRunInput::for_task("TASK-impl-ran".to_string(), Some("standard".to_string())),
+    );
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+
+    executor.mark_current_phase_success(&mut workflow);
+    assert_eq!(workflow.current_phase.as_deref(), Some("unit-test"));
+    assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Success);
+
+    executor.mark_current_phase_success(&mut workflow);
+
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    assert_eq!(workflow.current_phase_index, 3);
+    assert_eq!(workflow.phases[3].status, WorkflowPhaseStatus::Running);
+}
+
+#[test]
 fn sync_status_derives_from_machine_state() {
     let mut workflow = make_workflow(WorkflowStatus::Pending);
     workflow.machine_state = WorkflowMachineState::RunPhase;
