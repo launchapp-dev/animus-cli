@@ -36,10 +36,7 @@ pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<Str
 }
 
 fn infer_structured_output_support(normalized_model: &str) -> StructuredOutputSupport {
-    if normalized_model.starts_with("zai")
-        || normalized_model.starts_with("glm")
-        || normalized_model.contains("glm")
-    {
+    if normalized_model.starts_with("zai") || normalized_model.starts_with("glm") || normalized_model.contains("glm") {
         return StructuredOutputSupport::JsonObjectOnly;
     }
     if normalized_model.starts_with("minimax/") || normalized_model.contains("minimax") {
