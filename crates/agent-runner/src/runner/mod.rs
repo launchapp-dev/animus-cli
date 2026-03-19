@@ -233,6 +233,14 @@ impl Runner {
         })
     }
 
+    pub fn active_agent_count(&self) -> usize {
+        self.running_agents.len()
+    }
+
+    pub fn active_run_ids(&self) -> Vec<RunId> {
+        self.running_agents.keys().cloned().collect()
+    }
+
     pub fn stop_agent(&mut self, run_id: &RunId) -> bool {
         if let Some(entry) = self.running_agents.remove(run_id) {
             let _ = entry.cancel_tx.send(());

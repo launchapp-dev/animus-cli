@@ -115,3 +115,31 @@ pub fn untrack_process(run_id: &str) -> Result<()> {
         Ok(())
     })
 }
+
+pub fn kill_all_tracked_processes() -> Result<()> {
+    with_tracker_lock(|tracker_path| {
+        if !tracker_path.exists() {
+            return Ok(());
+        }
+        let tracked = read_tracker(tracker_path)?;
+        if tracked.is_empty() {
+            let _ = fs::remove_file(tracker_path);
+            return Ok(());
+        }
+        info!(count = tracked.len(), "Killing tracked child processes for graceful shutdown");
+        let mut killed = 0;
+        for (run_id, pid) in &tracked {
+            if process_exists(*pid as i32) {
+                info!(run_id = run_id.as_str(), pid, "Terminating tracked process");
+                if graceful_kill_process(*pid as i32) {
+                    killed += 1;
+                } else {
+                    warn!(run_id = run_id.as_str(), pid, "Failed to kill tracked process during shutdown");
+                }
+            }
+        }
+        let _ = fs::remove_file(tracker_path);
+        info!(killed, "Shutdown process cleanup complete");
+        Ok(())
+    })
+}
