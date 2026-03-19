@@ -28,9 +28,9 @@ detect_version() {
     return
   fi
 
-  local latest
-  latest="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | awk -F'"' '/"tag_name"/{print $4; exit}')" || true
+  local latest response
+  response="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || true
+  latest="$(printf '%s' "${response}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 
   if [[ -z "${latest}" ]]; then
     error "Could not determine latest release. Set AO_VERSION=vX.Y.Z to install a specific version."
