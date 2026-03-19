@@ -94,11 +94,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release binaries
-        shell: bash
-        run: |
-          cargo ao-bin-build-release --locked --target ${{ matrix.target }}
-
       - name: Compute release version
         id: version
         shell: bash
@@ -113,6 +108,40 @@ jobs:
             VERSION="${BRANCH_SANITIZED}-${GITHUB_SHA::7}"
           fi
           echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "build_number=${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+          echo "build_id=${GITHUB_RUN_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Enforce Cargo.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(grep '^version' crates/orchestrator-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          if [[ "${TAG_VERSION}" != "${CARGO_VERSION}" ]]; then
+            echo "::error::Version mismatch: tag is v${TAG_VERSION} but Cargo.toml has ${CARGO_VERSION}"
+            echo "Update crates/orchestrator-cli/Cargo.toml version to ${TAG_VERSION} before tagging."
+            exit 1
+          fi
+          echo "Version verified: v${CARGO_VERSION}"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          cargo ao-bin-build-release --locked --target ${{ matrix.target }}
+
+      - name: Verify binary version
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          BIN_VERSION="$(target/${{ matrix.target }}/release/ao --version 2>&1 | awk '{print $2}')"
+          if [[ "${BIN_VERSION}" != "${TAG_VERSION}" ]]; then
+            echo "::error::Binary reports version ${BIN_VERSION} but tag is v${TAG_VERSION}"
+            exit 1
+          fi
+          echo "Binary version verified: ${BIN_VERSION}"
 
       - name: Package artifact (unix)
         if: runner.os != 'Windows'
@@ -132,7 +161,9 @@ jobs:
             cp "target/${TARGET}/release/${binary}" "${STAGE_DIR}/"
           done
 
-          export VERSION TARGET STAGE_DIR
+          export VERSION TARGET STAGE_DIR BUILD_NUMBER BUILD_ID
+          BUILD_NUMBER="${{ steps.version.outputs.build_number }}"
+          BUILD_ID="${{ steps.version.outputs.build_id }}"
           python3 - <<'PY'
           import json
           import os
@@ -143,6 +174,8 @@ jobs:
               "schema": "ao.release.v1",
               "version": os.environ["VERSION"],
               "target": os.environ["TARGET"],
+              "build_number": int(os.environ.get("BUILD_NUMBER", "0")),
+              "build_id": os.environ.get("BUILD_ID", ""),
               "git_ref": os.environ["GITHUB_REF"],
               "git_sha": os.environ["GITHUB_SHA"],
               "event_name": os.environ["GITHUB_EVENT_NAME"],
