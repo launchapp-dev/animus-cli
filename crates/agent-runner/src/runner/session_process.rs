@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
+use super::mcp_policy::{apply_native_mcp_policy, is_tool_call_allowed, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -134,6 +134,45 @@ pub(super) async fn spawn_session_process(
 
                 if !matches!(event, SessionEvent::Started { .. }) {
                     last_activity_at = Instant::now();
+                }
+
+                if let SessionEvent::ToolCall { tool_name, arguments, server } = &event {
+                    let mut params = arguments.clone();
+                    if let Some(server_name) = server {
+                        if let Some(obj) = params.as_object_mut() {
+                            obj.insert("server".to_string(), Value::String(server_name.clone()));
+                        }
+                    }
+                    if !is_tool_call_allowed(tool_name, &params, &enforcement) {
+                        let policy = enforcement.allowed_prefixes.join(", ");
+                        let error =
+                            if let Some(server_name) = server.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                                format!(
+                                    "MCP-only policy violation: tool '{}' on server '{}' is not allowed (allowed prefixes: [{}], allowed server: '{}')",
+                                    tool_name, server_name, policy, enforcement.agent_id
+                                )
+                            } else {
+                                format!(
+                                    "MCP-only policy violation: tool '{}' is not allowed (allowed prefixes: [{}])",
+                                    tool_name, policy
+                                )
+                            };
+                        warn!(
+                            run_id = %run_id.0.as_str(),
+                            tool_name = %tool_name,
+                            tool_server = ?server,
+                            allowed_prefixes = ?enforcement.allowed_prefixes,
+                            "Session emitted disallowed tool call under MCP-only policy"
+                        );
+                        let _ = forward_session_event(run_id, &event, &event_tx).await;
+                        let _ = event_tx
+                            .send(AgentRunEvent::Error { run_id: run_id.clone(), error: error.clone() })
+                            .await;
+                        if let Some(session_id) = run_session_id.as_deref() {
+                            let _ = backend.terminate_session(session_id).await;
+                        }
+                        break Err(anyhow!("{error}"));
+                    }
                 }
 
                 if let Some(exit_code) = forward_session_event(run_id, &event, &event_tx).await {
@@ -928,5 +967,173 @@ mod tests {
 
         assert_eq!(exit_code, 0);
         assert!(saw_output, "expected output forwarded through resume session path");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn spawn_session_process_rejects_disallowed_tool_call_under_mcp_policy() {
+        let temp_dir = unique_test_dir("claude-policy");
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let fixture_path = temp_dir.join("policy_violation.jsonl");
+        fs::write(
+            &fixture_path,
+            "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}}\n",
+        )
+        .expect("fixture should be written");
+        let shim_path = temp_dir.join("claude");
+        fs::write(
+            &shim_path,
+            format!("#!/bin/sh\ncat \"{}\"\n", fixture_path.display()),
+        )
+        .expect("shim should be written");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&shim_path).expect("shim should exist").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&shim_path, perms).expect("shim should be executable");
+        }
+
+        let run_id = RunId("run-policy-session".to_string());
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let runtime_contract = json!({
+            "cli": {
+                "name": "claude",
+                "capabilities": { "supports_mcp": true },
+                "launch": {
+                    "command": "claude",
+                    "args": ["--print", "hello"],
+                    "prompt_via_stdin": false
+                }
+            },
+            "mcp": {
+                "endpoint": "http://127.0.0.1:19999/mcp/ao",
+                "agent_id": "ao",
+                "enforce_only": true
+            }
+        });
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), format!("{}:{original_path}", temp_dir.display()));
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let result = spawn_session_process(
+            "claude",
+            "claude-sonnet-4-6",
+            "",
+            Some(&runtime_contract),
+            ".",
+            env,
+            Some(30),
+            &run_id,
+            event_tx,
+            cancel_rx,
+            None,
+        )
+        .await;
+
+        assert!(result.is_err(), "disallowed tool call should cause an error");
+        let error_message = result.unwrap_err().to_string();
+        assert!(
+            error_message.contains("MCP-only policy violation") && error_message.contains("Bash"),
+            "error should identify the disallowed tool, got: {error_message}"
+        );
+
+        let mut saw_tool_call_event = false;
+        let mut saw_error_event = false;
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                AgentRunEvent::ToolCall { ref tool_info, .. } if tool_info.tool_name == "Bash" => {
+                    saw_tool_call_event = true;
+                }
+                AgentRunEvent::Error { ref error, .. } if error.contains("MCP-only policy violation") => {
+                    saw_error_event = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_tool_call_event, "ToolCall event should be forwarded before the violation error");
+        assert!(saw_error_event, "Error event should be emitted on policy violation");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn spawn_session_process_allows_permitted_tool_call_under_mcp_policy() {
+        let temp_dir = unique_test_dir("claude-policy-allow");
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let fixture_path = temp_dir.join("policy_allowed.jsonl");
+        fs::write(
+            &fixture_path,
+            "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"ao.task.list\",\"input\":{}}}\n\
+             {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"PINEAPPLE_42\"}\n",
+        )
+        .expect("fixture should be written");
+        let shim_path = temp_dir.join("claude");
+        fs::write(
+            &shim_path,
+            format!("#!/bin/sh\ncat \"{}\"\n", fixture_path.display()),
+        )
+        .expect("shim should be written");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&shim_path).expect("shim should exist").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&shim_path, perms).expect("shim should be executable");
+        }
+
+        let run_id = RunId("run-policy-allow-session".to_string());
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let runtime_contract = json!({
+            "cli": {
+                "name": "claude",
+                "capabilities": { "supports_mcp": true },
+                "launch": {
+                    "command": "claude",
+                    "args": ["--print", "hello"],
+                    "prompt_via_stdin": false
+                }
+            },
+            "mcp": {
+                "endpoint": "http://127.0.0.1:19999/mcp/ao",
+                "agent_id": "ao",
+                "enforce_only": true
+            }
+        });
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), format!("{}:{original_path}", temp_dir.display()));
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let result = spawn_session_process(
+            "claude",
+            "claude-sonnet-4-6",
+            "",
+            Some(&runtime_contract),
+            ".",
+            env,
+            Some(30),
+            &run_id,
+            event_tx,
+            cancel_rx,
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok(), "allowed tool call should not cause an error, got: {:?}", result.err());
+
+        let mut saw_tool_call_event = false;
+        let mut saw_error_event = false;
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                AgentRunEvent::ToolCall { ref tool_info, .. } if tool_info.tool_name == "ao.task.list" => {
+                    saw_tool_call_event = true;
+                }
+                AgentRunEvent::Error { .. } => {
+                    saw_error_event = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_tool_call_event, "allowed ToolCall event should be forwarded");
+        assert!(!saw_error_event, "no Error event should be emitted for an allowed tool call");
     }
 }
