@@ -2,13 +2,36 @@ use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
+use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
 
 pub use protocol::{graceful_kill_process, process_exists};
 
 #[cfg(windows)]
 pub use protocol::untrack_job;
+
+fn write_tracker_atomic(tracker_path: &Path, tracked: &HashMap<String, u32>) -> Result<()> {
+    let parent = tracker_path.parent().unwrap_or_else(|| Path::new("."));
+    let payload = serde_json::to_vec(tracked)?;
+    let mut temp_file = NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temp file for {}", tracker_path.display()))?;
+    temp_file
+        .write_all(&payload)
+        .with_context(|| format!("failed to write temp file for {}", tracker_path.display()))?;
+    temp_file
+        .flush()
+        .with_context(|| format!("failed to flush temp file for {}", tracker_path.display()))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("failed to sync temp file for {}", tracker_path.display()))?;
+    temp_file
+        .persist(tracker_path)
+        .with_context(|| format!("failed to persist temp file to {}", tracker_path.display()))?;
+    Ok(())
+}
 
 fn read_tracker(tracker_path: &Path) -> Result<HashMap<String, u32>> {
     if !tracker_path.exists() {
@@ -85,7 +108,7 @@ pub fn track_process(run_id: &str, pid: u32) -> Result<()> {
     with_tracker_lock(|tracker_path| {
         let mut tracked = read_tracker(tracker_path)?;
         tracked.insert(run_id.to_string(), pid);
-        fs::write(tracker_path, serde_json::to_string(&tracked)?)?;
+        write_tracker_atomic(tracker_path, &tracked)?;
         debug!(
             run_id,
             pid,
@@ -104,7 +127,7 @@ pub fn untrack_process(run_id: &str) -> Result<()> {
         }
         let mut tracked = read_tracker(tracker_path)?;
         let removed = tracked.remove(run_id).is_some();
-        fs::write(tracker_path, serde_json::to_string(&tracked)?)?;
+        write_tracker_atomic(tracker_path, &tracked)?;
         debug!(
             run_id,
             removed,
