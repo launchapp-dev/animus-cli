@@ -355,6 +355,33 @@ impl MutationRoot {
         Ok(GqlWorkflow(raw))
     }
 
+    async fn reject_phase(
+        &self,
+        ctx: &Context<'_>,
+        workflow_id: ID,
+        phase_id: String,
+        note: Option<String>,
+    ) -> Result<GqlWorkflow> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api.workflows_phase_reject(&workflow_id, &phase_id, note).await.map_err(gql_err)?;
+        let raw: RawWorkflow = serde_json::from_value(val)
+            .map_err(|e| async_graphql::Error::new(format!("failed to parse workflow: {e}")))?;
+        Ok(GqlWorkflow(raw))
+    }
+
+    async fn trigger_rework(
+        &self,
+        ctx: &Context<'_>,
+        workflow_id: ID,
+        note: Option<String>,
+    ) -> Result<GqlWorkflow> {
+        let api = ctx.data::<WebApiService>()?;
+        let val = api.workflows_trigger_rework(&workflow_id, note).await.map_err(gql_err)?;
+        let raw: RawWorkflow = serde_json::from_value(val)
+            .map_err(|e| async_graphql::Error::new(format!("failed to parse workflow: {e}")))?;
+        Ok(GqlWorkflow(raw))
+    }
+
     // -----------------------------------------------------------------------
     // Daemon mutations
     // -----------------------------------------------------------------------

@@ -136,6 +136,9 @@ fn build_router(state: AppState) -> Router {
         .route("/workflows/{id}/resume", post(workflows_resume_handler))
         .route("/workflows/{id}/pause", post(workflows_pause_handler))
         .route("/workflows/{id}/cancel", post(workflows_cancel_handler))
+        .route("/workflows/{id}/phases/{phase_id}/approve", post(workflows_phase_approve_handler))
+        .route("/workflows/{id}/phases/{phase_id}/reject", post(workflows_phase_reject_handler))
+        .route("/workflows/{id}/rework", post(workflows_trigger_rework_handler))
         .route("/reviews/handoff", post(reviews_handoff_handler))
         .route("/queue", get(queue_list_handler))
         .route("/queue/stats", get(queue_stats_handler))
@@ -712,6 +715,42 @@ async fn workflows_pause_handler(State(state): State<AppState>, AxumPath(id): Ax
 
 async fn workflows_cancel_handler(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.api.workflows_cancel(&id).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn workflows_phase_approve_handler(
+    State(state): State<AppState>,
+    AxumPath((id, phase_id)): AxumPath<(String, String)>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let note = body.and_then(|Json(v)| v.get("note").and_then(|n| n.as_str()).map(ToOwned::to_owned));
+    match state.api.workflows_phase_approve(&id, &phase_id, note).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn workflows_phase_reject_handler(
+    State(state): State<AppState>,
+    AxumPath((id, phase_id)): AxumPath<(String, String)>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let note = body.and_then(|Json(v)| v.get("note").and_then(|n| n.as_str()).map(ToOwned::to_owned));
+    match state.api.workflows_phase_reject(&id, &phase_id, note).await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn workflows_trigger_rework_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let note = body.and_then(|Json(v)| v.get("note").and_then(|n| n.as_str()).map(ToOwned::to_owned));
+    match state.api.workflows_trigger_rework(&id, note).await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }

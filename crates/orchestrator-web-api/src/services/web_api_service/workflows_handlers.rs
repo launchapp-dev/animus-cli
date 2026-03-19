@@ -346,6 +346,61 @@ impl WebApiService {
         Ok(json!(workflow))
     }
 
+    pub async fn workflows_phase_reject(
+        &self,
+        workflow_id: &str,
+        phase_id: &str,
+        note: Option<String>,
+    ) -> Result<Value, WebApiError> {
+        let outcome = dispatch_workflow_event(
+            self.context.hub.clone(),
+            &self.context.project_root,
+            WorkflowEvent::RejectManualPhase {
+                workflow_id: workflow_id.to_string(),
+                phase_id: phase_id.to_string(),
+                note,
+            },
+        )
+        .await?;
+        let workflow =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        self.publish_event(
+            "workflow-phase-reject",
+            json!({ "workflow_id": workflow.id, "phase_id": phase_id, "status": workflow.status }),
+        );
+        Ok(json!(workflow))
+    }
+
+    pub async fn workflows_trigger_rework(
+        &self,
+        workflow_id: &str,
+        note: Option<String>,
+    ) -> Result<Value, WebApiError> {
+        let workflow = self.context.hub.workflows().get(workflow_id).await.map_err(WebApiError::from)?;
+        let phase_id = workflow
+            .current_phase
+            .clone()
+            .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|p| p.phase_id.clone()))
+            .ok_or_else(|| WebApiError::new("invalid_state", "workflow has no active phase".to_string(), 2))?;
+        let outcome = dispatch_workflow_event(
+            self.context.hub.clone(),
+            &self.context.project_root,
+            WorkflowEvent::RejectManualPhase {
+                workflow_id: workflow_id.to_string(),
+                phase_id: phase_id.clone(),
+                note,
+            },
+        )
+        .await?;
+        let updated =
+            outcome.workflow.ok_or_else(|| WebApiError::new("not_found", "workflow not found".to_string(), 3))?;
+        self.publish_event(
+            "workflow-rework-trigger",
+            json!({ "workflow_id": updated.id, "phase_id": phase_id, "status": updated.status }),
+        );
+        Ok(json!(updated))
+    }
+
     pub async fn save_workflow_config(&self, config_json: &str) -> Result<(), WebApiError> {
         let config: orchestrator_config::workflow_config::WorkflowConfig = serde_json::from_str(config_json)
             .map_err(|e| WebApiError::new("invalid_input", format!("invalid workflow config JSON: {e}"), 2))?;
