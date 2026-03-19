@@ -176,9 +176,7 @@ fn enforce_write_capable_phase_target(
     if !phase_writes_files {
         return (normalized_tool_id, model_id);
     }
-    if !protocol::parse_env_bool("AO_ALLOW_NON_EDITING_PHASE_TOOL")
-        && !tool_supports_repository_writes(&normalized_tool_id)
-    {
+    if !routing.allow_non_editing_phase_tool && !tool_supports_repository_writes(&normalized_tool_id) {
         let fallback_model = routing.file_edit_model.as_deref().map(canonical_model_id).filter(|v| !v.is_empty());
         let fallback_tool = routing.file_edit_tool.as_deref().map(normalize_tool_id).filter(|v| !v.is_empty());
         if let (Some(m), Some(t)) = (&fallback_model, &fallback_tool) {

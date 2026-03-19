@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use protocol::CLAUDE_CODE_SESSION_VARS;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
@@ -373,13 +374,10 @@ pub(crate) async fn run_workflow_phase_with_command(
     let started = std::time::Instant::now();
 
     let mut process = TokioCommand::new(&command.program);
-    process
-        .args(&args)
-        .current_dir(&cwd)
-        .env_remove("CLAUDECODE")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    process.args(&args).current_dir(&cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for var in CLAUDE_CODE_SESSION_VARS {
+        process.env_remove(var);
+    }
 
     for (key, value) in &env {
         process.env(key, value);

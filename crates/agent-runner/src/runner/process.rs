@@ -86,17 +86,10 @@ pub async fn spawn_cli_process(
     );
 
     let mut command = Command::new(&invocation.command);
-    command
-        .args(&invocation.args)
-        .current_dir(cwd)
-        .envs(env)
-        .env_remove("CLAUDECODE")
-        .env_remove("CLAUDE_CODE_ENTRYPOINT")
-        .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.args(&invocation.args).current_dir(cwd).envs(env).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for var in protocol::CLAUDE_CODE_SESSION_VARS {
+        command.env_remove(var);
+    }
 
     #[cfg(unix)]
     command.process_group(0);

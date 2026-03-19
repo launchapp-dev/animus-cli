@@ -843,15 +843,12 @@ fn looks_like_merge_conflict(text: &str) -> bool {
 }
 
 async fn run_git_output(program: &str, cwd: &str, args: &[&str]) -> Result<std::process::Output> {
-    Command::new(program)
-        .current_dir(cwd)
-        .args(args)
-        .env_remove("CLAUDECODE")
-        .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .output()
-        .await
-        .with_context(|| format!("failed to run command {program} in {cwd}"))
+    let mut cmd = Command::new(program);
+    cmd.current_dir(cwd).args(args);
+    for var in protocol::CLAUDE_CODE_SESSION_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.output().await.with_context(|| format!("failed to run command {program} in {cwd}"))
 }
 
 async fn perform_push_with_fallback(

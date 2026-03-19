@@ -7,6 +7,8 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::debug;
 
+use protocol::CLAUDE_CODE_SESSION_VARS;
+
 use super::types::CliMetadata;
 use crate::error::{Error, Result};
 
@@ -153,8 +155,9 @@ pub trait CliInterface: Send + Sync {
             cmd.env(key, value);
         }
 
-        cmd.env_remove("CLAUDECODE");
-        cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+        for var in CLAUDE_CODE_SESSION_VARS {
+            cmd.env_remove(var);
+        }
 
         debug!("About to spawn command...");
         let child = cmd.spawn()?;

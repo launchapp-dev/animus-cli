@@ -50,6 +50,11 @@ pub struct PhaseRoutingConfig {
     pub complexity: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_phase: HashMap<String, PhaseOverride>,
+    /// When true, allows non-write-capable tools (e.g. gemini) to run file-writing phases
+    /// without being redirected to a write-capable fallback. Configure via workflow routing
+    /// config rather than the AO_ALLOW_NON_EDITING_PHASE_TOOL environment variable.
+    #[serde(default)]
+    pub allow_non_editing_phase_tool: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

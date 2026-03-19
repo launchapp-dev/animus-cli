@@ -13,9 +13,8 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "TERM",
     "COLORTERM",
     "SSH_AUTH_SOCK",
-    // Claude CLI configuration
+    // Claude CLI configuration paths (not credentials)
     "CLAUDE_CODE_SETTINGS_PATH",
-    "CLAUDE_API_KEY",
     "CLAUDE_CODE_DIR",
 ];
 
@@ -125,12 +124,14 @@ mod tests {
         let _lock = env_lock();
         let _openai = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
         let _anthropic = EnvVarGuard::set("ANTHROPIC_API_KEY", Some("ant-test-key"));
+        let _claude = EnvVarGuard::set("CLAUDE_API_KEY", Some("claude-test-key"));
         let _aws = EnvVarGuard::set("AWS_SECRET_ACCESS_KEY", Some("blocked-secret"));
 
         let env = sanitize_env();
 
         assert!(!env.contains_key("OPENAI_API_KEY"));
         assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!env.contains_key("CLAUDE_API_KEY"));
         assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY"));
     }
 
@@ -224,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_specific_env_vars_allowed() {
+    fn claude_config_paths_allowed_but_api_key_blocked() {
         let _lock = env_lock();
         let _settings = EnvVarGuard::set("CLAUDE_CODE_SETTINGS_PATH", Some("/tmp/.claude/settings.json"));
         let _api = EnvVarGuard::set("CLAUDE_API_KEY", Some("claude-key-123"));
@@ -233,7 +234,7 @@ mod tests {
         let env = sanitize_env();
 
         assert_eq!(env.get("CLAUDE_CODE_SETTINGS_PATH").map(String::as_str), Some("/tmp/.claude/settings.json"));
-        assert_eq!(env.get("CLAUDE_API_KEY").map(String::as_str), Some("claude-key-123"));
         assert_eq!(env.get("CLAUDE_CODE_DIR").map(String::as_str), Some("/tmp/claude-dir"));
+        assert!(!env.contains_key("CLAUDE_API_KEY"), "CLAUDE_API_KEY is an API credential and must not be forwarded");
     }
 }

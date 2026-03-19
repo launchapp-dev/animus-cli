@@ -393,10 +393,9 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         command.arg("--runner-scope").arg(runner_scope_value(scope));
     }
 
-    command.env_remove("CLAUDECODE");
-    command.env_remove("CLAUDE_CODE_ENTRYPOINT");
-    command.env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN");
-    command.env_remove("CLAUDE_CODE_SESSION_ID");
+    for var in protocol::CLAUDE_CODE_SESSION_VARS {
+        command.env_remove(var);
+    }
 
     #[cfg(unix)]
     {

@@ -37,6 +37,8 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 regex = "1.10"
 which = "8.0"
 
+protocol = { path = "../protocol" }
+
 [dev-dependencies]
 protocol = { path = "../protocol", features = ["test-utils"] }
 tempfile = "3.8"

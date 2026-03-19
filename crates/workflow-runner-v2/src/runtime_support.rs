@@ -27,19 +27,15 @@ pub struct WorkflowPhaseRuntimeSettings {
     pub max_continuations: Option<usize>,
 }
 
-fn parse_env_usize(key: &str) -> Option<usize> {
-    std::env::var(key).ok().and_then(|value| value.trim().parse::<usize>().ok())
-}
-
-const DEFAULT_PHASE_RUN_ATTEMPTS: usize = 3;
-const DEFAULT_PHASE_MAX_CONTINUATIONS: usize = 3;
+pub const DEFAULT_PHASE_RUN_ATTEMPTS: usize = 3;
+pub const DEFAULT_PHASE_MAX_CONTINUATIONS: usize = 3;
 
 pub fn phase_runner_attempts() -> usize {
-    parse_env_usize("AO_PHASE_RUN_ATTEMPTS").unwrap_or(DEFAULT_PHASE_RUN_ATTEMPTS).clamp(1, 10)
+    DEFAULT_PHASE_RUN_ATTEMPTS
 }
 
 pub fn phase_max_continuations() -> usize {
-    parse_env_usize("AO_PHASE_MAX_CONTINUATIONS").unwrap_or(DEFAULT_PHASE_MAX_CONTINUATIONS).clamp(0, 10)
+    DEFAULT_PHASE_MAX_CONTINUATIONS
 }
 
 fn codex_web_search_enabled(web_search_override: Option<bool>) -> bool {

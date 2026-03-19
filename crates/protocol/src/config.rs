@@ -162,6 +162,16 @@ pub fn default_allowed_tool_prefixes(agent_id: &str) -> Vec<String> {
     prefixes
 }
 
+/// Environment variables set by Claude Code that must be stripped before spawning any
+/// subprocess tool (claude, codex, gemini, etc.) to prevent claude CLI from detecting
+/// it is running inside a Claude Code session and refusing to start.
+pub const CLAUDE_CODE_SESSION_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+    "CLAUDE_CODE_SESSION_ID",
+];
+
 /// Parses a boolean environment variable.
 ///
 /// Returns true if the value is not "0", "false", "no", or "off" (case-insensitive).
