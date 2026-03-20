@@ -693,7 +693,7 @@ agents:
 
   kimi-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
-    model: openrouter/moonshotai/kimi-k2.5
+    model: kimi-code/kimi-for-coding
     tool: oai-runner
 
   opus-default:
