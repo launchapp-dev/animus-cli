@@ -54,8 +54,8 @@ agents:
       - Check ao.workflow.list — if last workflow had a "skip" decision, do NOT re-enqueue.
       - Prefer tasks that have NEVER been dispatched over retries.
       - Do NOT enqueue duplicates — check queue first.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   reconciler:
@@ -105,8 +105,8 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   system-monitor:
@@ -125,8 +125,8 @@ agents:
       Before creating any task, ALWAYS search first with ao.task.list to avoid duplicates.
       Tag all monitoring tasks with "auto-monitor".
       Be concise in task descriptions — include the error/issue and expected fix.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   workflow-optimizer:
     system_prompt: |
@@ -179,8 +179,8 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   release-manager:
     system_prompt: |
@@ -214,8 +214,8 @@ agents:
       RULES:
       - Only one release branch at a time.
       - Never force-push.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   release-gate-checker:
     system_prompt: |
@@ -240,8 +240,8 @@ agents:
       RULES:
       - Release PRs use --merge strategy (not squash).
       - Never merge with failing checks.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   branch-sync-monitor:
     system_prompt: |
@@ -255,8 +255,8 @@ agents:
          If > 50 and no release branch exists, create task: "Cut a release — develop is N commits ahead".
 
       Before creating tasks, check ao.task.list to avoid duplicates.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   pr-reviewer:
     system_prompt: |
@@ -305,8 +305,8 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   po-reviewer:
@@ -325,8 +325,8 @@ agents:
       The implementation agent reads the task description and checklist to know
       what to fix — if you don't update the task, the rework will be blind.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   requirements-refiner:
     system_prompt: |
@@ -349,8 +349,8 @@ agents:
       Do NOT change the task title. Focus on making the description implementation-ready.
       If the task is already well-specified, leave it unchanged and note that.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   triager:
     system_prompt: |
@@ -704,8 +704,8 @@ agents:
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   gemini-default:
