@@ -120,6 +120,23 @@ pub fn canonical_model_id(model_id: &str) -> String {
         | "gpt_5.3_codex_spark"
         | "gpt_5_3_codex_spark"
         | "codex-spark" => "gpt-5.3-codex-spark".to_string(),
+        "gpt-4.1"
+        | "gpt4.1"
+        | "gpt_4.1"
+        | "gpt-4.1-nano"
+        | "gpt4.1nano"
+        | "gpt_4_1_nano"
+        | "gpt-4.1_nano"
+        | "gpt-4.1nano"
+        | "gpt-4.1-nano-latest"
+        | "gpt-4.1-nano-2026-03-20"
+        | "gpt-4.1-2026-03-20" => "gpt-4.1".to_string(),
+        "gpt-4.1-mini"
+        | "gpt4.1mini"
+        | "gpt_4_1_mini"
+        | "gpt-4.1_mini"
+        | "gpt-4.1mini-latest"
+        | "gpt-4.1-mini-latest" => "gpt-4.1-mini".to_string(),
         "gemini" | "gemini-pro" | "gemini-2.5" | "gemini-2.5-pro-latest" | "gemini-pro-2.5" => {
             "gemini-2.5-pro".to_string()
         }
@@ -173,6 +190,26 @@ pub fn tool_for_model_id(model_id: &str) -> &'static str {
         return "oai-runner";
     }
 
+    if normalized.starts_with("gpt")
+        || normalized.starts_with("oai/")
+        || normalized.starts_with("openai/")
+    {
+        // GPT-4.1 and variants are REST chat models that must route to oai-runner
+        // Codex models (gpt-5.3-codex, etc.) route to codex
+        if normalized.contains("codex") || normalized.contains("o1") || normalized.contains("o2") || normalized.contains("o3") {
+            return "codex";
+        }
+        if normalized.starts_with("gpt-4.1")
+            || normalized.starts_with("gpt4.1")
+            || normalized.contains("gpt-4.1")
+            || normalized.contains("oai/gpt-4.1")
+            || normalized.contains("openai/gpt-4.1")
+        {
+            return "oai-runner";
+        }
+        return "codex";
+    }
+
     if normalized.starts_with("opencode")
         || normalized.starts_with("qwen")
         || normalized.starts_with("deepseek")
@@ -205,6 +242,8 @@ pub fn default_model_specs() -> Vec<(String, String)> {
         ("gemini-3.1-pro-preview".to_string(), "gemini".to_string()),
         ("minimax/MiniMax-M2.7".to_string(), "oai-runner".to_string()),
         ("zai-coding-plan/glm-5".to_string(), "oai-runner".to_string()),
+        ("gpt-4.1".to_string(), "oai-runner".to_string()),
+        ("gpt-4.1-mini".to_string(), "oai-runner".to_string()),
     ]
 }
 
@@ -325,6 +364,8 @@ pub fn default_fallback_models_for_phase(
         return vec![
             "claude-sonnet-4-6",
             "gemini-2.5-pro",
+            "gpt-4.1",
+            "gpt-4.1-mini",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.7",
             "gpt-5.3-codex",
@@ -336,12 +377,16 @@ pub fn default_fallback_models_for_phase(
             ModelRoutingComplexity::High => vec![
                 "claude-sonnet-4-6",
                 "gemini-3.1-pro-preview",
+                "gpt-4.1",
+                "gpt-4.1-mini",
                 "zai-coding-plan/glm-5",
                 "minimax/MiniMax-M2.7",
                 "gpt-5.3-codex",
             ],
             ModelRoutingComplexity::Low | ModelRoutingComplexity::Medium => vec![
                 "gemini-3.1-pro-preview",
+                "gpt-4.1",
+                "gpt-4.1-mini",
                 "zai-coding-plan/glm-5",
                 "minimax/MiniMax-M2.7",
                 "gpt-5.3-codex",
@@ -352,13 +397,14 @@ pub fn default_fallback_models_for_phase(
 
     match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
         ModelRoutingComplexity::Low => {
-            vec!["minimax/MiniMax-M2.7", "claude-sonnet-4-6", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+            vec!["gpt-4.1-mini", "minimax/MiniMax-M2.7", "gpt-4.1", "claude-sonnet-4-6", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
         }
         ModelRoutingComplexity::Medium => {
-            vec!["zai-coding-plan/glm-5", "minimax/MiniMax-M2.7", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+            vec!["gpt-4.1", "zai-coding-plan/glm-5", "gpt-4.1-mini", "minimax/MiniMax-M2.7", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
         }
         ModelRoutingComplexity::High => vec![
             "claude-opus-4-6",
+            "gpt-4.1",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.7",
             "gemini-3.1-pro-preview",
@@ -393,6 +439,20 @@ mod tests {
     }
 
     #[test]
+    fn canonical_model_aliases_normalize_gpt_41_ids() {
+        assert_eq!(canonical_model_id("gpt-4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("GPT-4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4.1-nano"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt4.1nano"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4.1-nano-latest"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4.1-2026-03-20"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4.1-mini"), "gpt-4.1-mini");
+        assert_eq!(canonical_model_id("gpt4.1mini"), "gpt-4.1-mini");
+        assert_eq!(canonical_model_id("gpt-4.1-mini-latest"), "gpt-4.1-mini");
+    }
+
+    #[test]
     fn tool_routing_detects_claude_opencode_and_gemini_families() {
         assert_eq!(tool_for_model_id("claude-sonnet-4-6"), "claude");
         assert_eq!(tool_for_model_id("claude-opus-4-6"), "claude");
@@ -401,6 +461,20 @@ mod tests {
         assert_eq!(tool_for_model_id("minimax/MiniMax-M2.7"), "oai-runner");
         assert_eq!(tool_for_model_id("gemini-2.5-pro"), "gemini");
         assert_eq!(tool_for_model_id("gpt-5.3-codex"), "codex");
+    }
+
+    #[test]
+    fn tool_routing_gpt_41_routes_to_oai_runner() {
+        // GPT-4.1 is a REST chat model and must route to oai-runner, not codex
+        assert_eq!(tool_for_model_id("gpt-4.1"), "oai-runner");
+        assert_eq!(tool_for_model_id("GPT-4.1"), "oai-runner");
+        assert_eq!(tool_for_model_id("gpt-4.1-nano"), "oai-runner");
+        assert_eq!(tool_for_model_id("gpt-4.1-mini"), "oai-runner");
+        assert_eq!(tool_for_model_id("oai/gpt-4.1"), "oai-runner");
+        assert_eq!(tool_for_model_id("openai/gpt-4.1"), "oai-runner");
+        // Codex models still route to codex
+        assert_eq!(tool_for_model_id("gpt-5.3-codex"), "codex");
+        assert_eq!(tool_for_model_id("gpt-5.3-codex-spark"), "codex");
     }
 
     #[test]
