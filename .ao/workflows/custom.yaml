@@ -39,6 +39,13 @@ agents:
          - If a PR has CHANGES_REQUESTED reviews: enqueue its task with workflow_ref="rework".
          - If a PR is CONFLICTING: enqueue its task with workflow_ref="rebase-and-retry".
          Handle ALL rework/rebase before moving to new work.
+
+      0b. RELEASE CHECK (after rework/rebase):
+         Count merged PRs to develop since the last release tag:
+         `git log --oneline $(git describe --tags --abbrev=0)..origin/develop | wc -l`
+         If >= 10 merged PRs since last release AND no release workflow is already queued:
+         - Enqueue with workflow_ref="release-manager" and title="Cut next release"
+         This ensures releases happen automatically when enough work accumulates.
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
       3. QUEUE CAP: If total queue size (pending + assigned) >= 10, STOP — do NOT enqueue more.
