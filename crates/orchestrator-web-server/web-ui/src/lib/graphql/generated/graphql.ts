@@ -470,6 +470,8 @@ export type MutationRoot = {
   draftRequirement: GqlRequirement;
   loadProject: GqlProject;
   pauseWorkflow: GqlWorkflow;
+  queueDrop: Scalars['Boolean']['output'];
+  queueEnqueue: Scalars['Boolean']['output'];
   queueHold: Scalars['Boolean']['output'];
   queueRelease: Scalars['Boolean']['output'];
   queueReorder: Scalars['Boolean']['output'];
@@ -603,6 +605,18 @@ export type MutationRootLoadProjectArgs = {
 
 export type MutationRootPauseWorkflowArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationRootQueueDropArgs = {
+  taskId: Scalars['String']['input'];
+};
+
+
+export type MutationRootQueueEnqueueArgs = {
+  position?: InputMaybe<Scalars['Int']['input']>;
+  taskId: Scalars['String']['input'];
+  workflowRef?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -1114,6 +1128,22 @@ export type QueueQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type QueueQuery = { __typename?: 'QueryRoot', queue: Array<{ __typename?: 'GqlQueueEntry', taskId: string, title?: string | null, priority?: GqlPriority | null, status?: GqlTaskStatus | null, waitTime?: number | null, position?: number | null }>, queueStats: { __typename?: 'GqlQueueStats', depth: number, readyCount: number, heldCount: number, avgWait?: number | null, throughput?: number | null } };
+
+export type QueueEnqueueMutationVariables = Exact<{
+  taskId: Scalars['String']['input'];
+  workflowRef?: InputMaybe<Scalars['String']['input']>;
+  position?: InputMaybe<Scalars['Int']['input']>;
+}>;
+
+
+export type QueueEnqueueMutation = { __typename?: 'MutationRoot', queueEnqueue: boolean };
+
+export type QueueDropMutationVariables = Exact<{
+  taskId: Scalars['String']['input'];
+}>;
+
+
+export type QueueDropMutation = { __typename?: 'MutationRoot', queueDrop: boolean };
 
 export type QueueHoldMutationVariables = Exact<{
   taskId: Scalars['String']['input'];
@@ -1731,6 +1761,16 @@ export const QueueDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<QueueQuery, QueueQueryVariables>;
+export const QueueEnqueueDocument = new TypedDocumentString(`
+    mutation QueueEnqueue($taskId: String!, $workflowRef: String, $position: Int) {
+  queueEnqueue(taskId: $taskId, workflowRef: $workflowRef, position: $position)
+}
+    `) as unknown as TypedDocumentString<QueueEnqueueMutation, QueueEnqueueMutationVariables>;
+export const QueueDropDocument = new TypedDocumentString(`
+    mutation QueueDrop($taskId: String!) {
+  queueDrop(taskId: $taskId)
+}
+    `) as unknown as TypedDocumentString<QueueDropMutation, QueueDropMutationVariables>;
 export const QueueHoldDocument = new TypedDocumentString(`
     mutation QueueHold($taskId: String!, $reason: String) {
   queueHold(taskId: $taskId, reason: $reason)

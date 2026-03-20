@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -18,18 +19,23 @@ import {
   QueueHoldDocument,
   QueueReleaseDocument,
   QueueReorderDocument,
+  QueueEnqueueDocument,
+  QueueDropDocument,
 } from "@/lib/graphql/generated/graphql";
 import { statusColor, priorityColor, StatusDot, PageLoading, PageError, StatCard } from "./shared";
-import { ArrowUp, ArrowDown, Pause, Play, ArrowUpDown, RefreshCw, Layers, GripVertical } from "lucide-react";
+import { ArrowUp, ArrowDown, Pause, Play, ArrowUpDown, RefreshCw, Layers, GripVertical, Plus, Trash2 } from "lucide-react";
 
 export function QueuePage() {
   const [result, reexecute] = useQuery({ query: QueueDocument });
   const [, holdMut] = useMutation(QueueHoldDocument);
   const [, releaseMut] = useMutation(QueueReleaseDocument);
   const [, reorderMut] = useMutation(QueueReorderDocument);
+  const [, enqueueMut] = useMutation(QueueEnqueueDocument);
+  const [, dropMut] = useMutation(QueueDropDocument);
   const { data, fetching, error } = result;
   const dragSrcIndex = useRef<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [enqueueTaskId, setEnqueueTaskId] = useState("");
 
   if (fetching) return <PageLoading />;
   if (error) return <PageError message={error.message} />;
@@ -99,6 +105,27 @@ export function QueuePage() {
     setDragOverIndex(null);
   };
 
+  const onEnqueue = async () => {
+    const taskId = enqueueTaskId.trim();
+    if (!taskId) return;
+    const { error: err } = await enqueueMut({ taskId });
+    if (err) toast.error(err.message);
+    else {
+      toast.success(`${taskId} added to queue.`);
+      setEnqueueTaskId("");
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
+  const onDropEntry = async (taskId: string) => {
+    const { error: err } = await dropMut({ taskId });
+    if (err) toast.error(err.message);
+    else {
+      toast.success(`${taskId} removed from queue.`);
+      reexecute({ requestPolicy: "network-only" });
+    }
+  };
+
   const sortByPriority = async () => {
     const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
     const sorted = [...entries].sort((a, b) => (priorityOrder[a.priority ?? ""] ?? 9) - (priorityOrder[b.priority ?? ""] ?? 9));
@@ -126,6 +153,27 @@ export function QueuePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Input
+              value={enqueueTaskId}
+              onChange={(e) => setEnqueueTaskId(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onEnqueue()}
+              placeholder="TASK-ID"
+              className="h-7 w-28 text-xs font-mono"
+              aria-label="Task ID to enqueue"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onEnqueue}
+              disabled={!enqueueTaskId.trim()}
+              className="h-7 text-xs gap-1.5"
+              aria-label="Add task to queue"
+            >
+              <Plus className="h-3 w-3" />
+              Add
+            </Button>
+          </div>
           {entries.length > 1 && (
             <Button size="sm" variant="outline" onClick={sortByPriority} className="h-7 text-xs gap-1.5">
               <ArrowUpDown className="h-3 w-3" />
@@ -309,6 +357,15 @@ export function QueuePage() {
                               Hold
                             </Button>
                           )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-6 p-0 text-destructive/60 hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => onDropEntry(entry.taskId)}
+                            aria-label={`Remove ${entry.taskId} from queue`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>

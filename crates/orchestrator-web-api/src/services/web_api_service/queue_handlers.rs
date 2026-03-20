@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
+use orchestrator_core::workflow_ref_for_task;
 use orchestrator_daemon_runtime::{
-    hold_subject, queue_snapshot, release_subject, reorder_subjects, DispatchQueueEntryStatus, QueueEntrySnapshot,
-    QueueSnapshot,
+    drop_subject, enqueue_subject_dispatch, hold_subject, queue_snapshot, release_subject, reorder_subjects,
+    DispatchQueueEntryStatus, QueueEntrySnapshot, QueueSnapshot,
 };
-use protocol::orchestrator::OrchestratorTask;
+use protocol::{orchestrator::OrchestratorTask, SubjectDispatch};
 
 use super::{
     parsing::parse_json_body,
-    requests::{QueueHoldRequest, QueueReleaseRequest, QueueReorderRequest},
+    requests::{QueueDropRequest, QueueEnqueueRequest, QueueHoldRequest, QueueReleaseRequest, QueueReorderRequest},
     WebApiError, WebApiService,
 };
 
@@ -172,6 +173,60 @@ impl WebApiService {
         }
 
         Ok(response)
+    }
+
+    pub async fn queue_enqueue(&self, body: serde_json::Value) -> Result<serde_json::Value, WebApiError> {
+        let request: QueueEnqueueRequest = parse_json_body(body)?;
+        let project_root = &self.context.project_root;
+
+        let task = self
+            .context
+            .hub
+            .tasks()
+            .get(&request.task_id)
+            .await
+            .map_err(|e| WebApiError::new("not_found", format!("task not found: {}", e), 1))?;
+
+        let workflow_ref = request.workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task));
+        let dispatch =
+            SubjectDispatch::for_task_with_metadata(task.id.clone(), workflow_ref, "web-queue-enqueue", Utc::now());
+
+        let result = enqueue_subject_dispatch(project_root, dispatch)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to enqueue task: {}", e), 1))?;
+
+        if result.enqueued {
+            self.publish_event("queue-enqueue", serde_json::json!({ "task_id": task.id, "enqueued": true }));
+
+            if let Some(position) = request.position {
+                let snapshot = queue_snapshot(project_root)
+                    .map_err(|e| WebApiError::new("internal_error", format!("failed to load queue: {}", e), 1))?;
+                let mut ids: Vec<String> =
+                    snapshot.entries.iter().map(|e| e.subject_id.clone()).collect();
+                if let Some(current_pos) = ids.iter().position(|id| id == &task.id) {
+                    let id = ids.remove(current_pos);
+                    let insert_at = position.saturating_sub(1).min(ids.len());
+                    ids.insert(insert_at, id);
+                    reorder_subjects(project_root, ids)
+                        .map_err(|e| WebApiError::new("internal_error", format!("failed to reorder: {}", e), 1))?;
+                }
+            }
+        }
+
+        Ok(serde_json::json!({ "enqueued": result.enqueued, "task_id": task.id }))
+    }
+
+    pub async fn queue_drop(&self, task_id: &str, body: serde_json::Value) -> Result<serde_json::Value, WebApiError> {
+        let _request: QueueDropRequest = parse_json_body(body).unwrap_or(QueueDropRequest {});
+        let project_root = &self.context.project_root;
+
+        let removed = drop_subject(project_root, task_id)
+            .map_err(|e| WebApiError::new("internal_error", format!("failed to drop task: {}", e), 1))?;
+
+        if removed > 0 {
+            self.publish_event("queue-drop", serde_json::json!({ "task_id": task_id, "dropped": true }));
+        }
+
+        Ok(serde_json::json!({ "dropped": removed > 0, "task_id": task_id }))
     }
 }
 

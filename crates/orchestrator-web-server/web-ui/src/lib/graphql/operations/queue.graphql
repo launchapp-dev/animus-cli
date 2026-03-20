@@ -6,3 +6,5 @@ query Queue {
 mutation QueueHold($taskId: String!, $reason: String) { queueHold(taskId: $taskId, reason: $reason) }
 mutation QueueRelease($taskId: String!) { queueRelease(taskId: $taskId) }
 mutation QueueReorder($taskIds: [String!]!) { queueReorder(taskIds: $taskIds) }
+mutation QueueEnqueue($taskId: String!, $workflowRef: String, $position: Int) { queueEnqueue(taskId: $taskId, workflowRef: $workflowRef, position: $position) }
+mutation QueueDrop($taskId: String!) { queueDrop(taskId: $taskId) }

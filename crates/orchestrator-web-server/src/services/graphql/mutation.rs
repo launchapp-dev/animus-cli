@@ -478,6 +478,26 @@ impl MutationRoot {
         Ok(true)
     }
 
+    async fn queue_enqueue(
+        &self,
+        ctx: &Context<'_>,
+        task_id: String,
+        workflow_ref: Option<String>,
+        position: Option<i32>,
+    ) -> Result<bool> {
+        let api = ctx.data::<WebApiService>()?;
+        let body = json!({ "task_id": task_id, "workflow_ref": workflow_ref, "position": position.map(|p| p as usize) });
+        let result = api.queue_enqueue(body).await.map_err(gql_err)?;
+        Ok(result.get("enqueued").and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
+    async fn queue_drop(&self, ctx: &Context<'_>, task_id: String) -> Result<bool> {
+        let api = ctx.data::<WebApiService>()?;
+        let body = json!({});
+        let result = api.queue_drop(&task_id, body).await.map_err(gql_err)?;
+        Ok(result.get("dropped").and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
     // -----------------------------------------------------------------------
     // Vision mutations
     // -----------------------------------------------------------------------

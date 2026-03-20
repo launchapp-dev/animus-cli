@@ -243,3 +243,16 @@ pub(super) struct QueueReleaseRequest {
     #[serde(default)]
     pub(super) reason: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QueueEnqueueRequest {
+    #[serde(alias = "task_id")]
+    pub(super) task_id: String,
+    #[serde(default)]
+    pub(super) workflow_ref: Option<String>,
+    #[serde(default)]
+    pub(super) position: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QueueDropRequest {}
