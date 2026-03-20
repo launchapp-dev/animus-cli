@@ -209,7 +209,7 @@ Required keys by tool:
 | `claude` | `ANTHROPIC_API_KEY` |
 | `codex` | `OPENAI_API_KEY` |
 | `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
-| `oai-runner` | `MINIMAX_API_KEY`, `ZAI_API_KEY`, or `OPENAI_API_KEY` |
+| `oai-runner` | `MINIMAX_API_KEY`, `ZAI_API_KEY`, `GROQ_API_KEY`, or `OPENAI_API_KEY` |
 
 ## Gemini Redirected on Write Phases
 

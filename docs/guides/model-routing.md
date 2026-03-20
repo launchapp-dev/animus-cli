@@ -80,7 +80,7 @@ Each model maps to a CLI tool. The mapping is determined by model name prefix:
 | `claude-*` | `claude` | `ANTHROPIC_API_KEY` |
 | `gpt-*` | `codex` | `OPENAI_API_KEY` |
 | `gemini-*` | `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
-| `zai-*`, `minimax-*`, `glm-*` | `oai-runner` | `MINIMAX_API_KEY`, `ZAI_API_KEY`, or `OPENAI_API_KEY` |
+| `zai-*`, `minimax-*`, `glm-*`, `groq-*` | `oai-runner` | `MINIMAX_API_KEY`, `ZAI_API_KEY`, `GROQ_API_KEY`, or `OPENAI_API_KEY` |
 | `deepseek-*`, `qwen-*` | `opencode` | Multiple keys supported |
 
 You can check model and API key status:
@@ -122,7 +122,7 @@ When the primary model fails, AO tries fallback models in order. Fallbacks vary 
 | `ANTHROPIC_API_KEY` | Required for claude tool |
 | `OPENAI_API_KEY` | Required for codex tool |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Required for gemini tool |
-| `MINIMAX_API_KEY` / `ZAI_API_KEY` | Required for oai-runner tool |
+| `MINIMAX_API_KEY` / `ZAI_API_KEY` / `GROQ_API_KEY` | Required for oai-runner tool |
 
 ## Validating Model Selection
 

@@ -120,6 +120,8 @@ pub fn canonical_model_id(model_id: &str) -> String {
         | "gpt_5.3_codex_spark"
         | "gpt_5_3_codex_spark"
         | "codex-spark" => "gpt-5.3-codex-spark".to_string(),
+        "gpt-4.1" | "gpt-4-1" | "gpt4.1" | "gpt4-1" => "gpt-4.1".to_string(),
+        "gpt-4.1-nano" | "gpt-4-1-nano" | "gpt4.1-nano" | "gpt4-1-nano" => "gpt-4.1-nano".to_string(),
         "gemini" | "gemini-pro" | "gemini-2.5" | "gemini-2.5-pro-latest" | "gemini-pro-2.5" => {
             "gemini-2.5-pro".to_string()
         }
@@ -199,6 +201,8 @@ pub fn default_model_specs() -> Vec<(String, String)> {
         ("gpt-5.4".to_string(), "codex".to_string()),
         ("gpt-5.3-codex-spark".to_string(), "codex".to_string()),
         ("gpt-5".to_string(), "codex".to_string()),
+        ("gpt-4.1".to_string(), "codex".to_string()),
+        ("gpt-4.1-nano".to_string(), "codex".to_string()),
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
         ("gemini-3-pro".to_string(), "gemini".to_string()),
@@ -390,6 +394,19 @@ mod tests {
         assert_eq!(canonical_model_id("glm-5"), "zai-coding-plan/glm-5");
         assert_eq!(canonical_model_id("minimax-m2.1"), "minimax/MiniMax-M2.1");
         assert_eq!(canonical_model_id("minimax-m2.5"), "minimax/MiniMax-M2.7");
+    }
+
+    #[test]
+    fn canonical_model_aliases_normalize_gpt_4_1() {
+        assert_eq!(canonical_model_id("gpt-4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4-1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt4-1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("GPT-4.1"), "gpt-4.1");
+        assert_eq!(canonical_model_id("gpt-4.1-nano"), "gpt-4.1-nano");
+        assert_eq!(canonical_model_id("gpt-4-1-nano"), "gpt-4.1-nano");
+        assert_eq!(canonical_model_id("gpt4.1-nano"), "gpt-4.1-nano");
+        assert_eq!(canonical_model_id("GPT-4.1-NANO"), "gpt-4.1-nano");
     }
 
     #[test]

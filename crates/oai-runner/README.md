@@ -82,7 +82,7 @@ The binary currently exposes a single `run` subcommand.
 4. AO global credentials
 5. OpenCode auth-file fallback
 
-Current built-in provider inference includes MiniMax, Z AI / GLM, DeepSeek, and OpenRouter.
+Current built-in provider inference includes MiniMax, Z AI / GLM, DeepSeek, OpenRouter, and Groq.
 
 ### Agent loop
 
