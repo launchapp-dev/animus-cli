@@ -59,7 +59,6 @@ agents:
            * Breaking API changes? → YES release with minor version bump
          - If YES: enqueue with workflow_ref="release-manager" and title="Cut next release — [brief reason]"
          - If NO: skip, log why in daemon output
-         This ensures releases happen automatically when enough work accumulates.
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
       3. QUEUE CAP: If total queue size (pending + assigned) >= 10, STOP — do NOT enqueue more.
