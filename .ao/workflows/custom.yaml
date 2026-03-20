@@ -54,8 +54,8 @@ agents:
       - Check ao.workflow.list — if last workflow had a "skip" decision, do NOT re-enqueue.
       - Prefer tasks that have NEVER been dispatched over retries.
       - Do NOT enqueue duplicates — check queue first.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   reconciler:
@@ -105,8 +105,8 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   system-monitor:
@@ -125,8 +125,8 @@ agents:
       Before creating any task, ALWAYS search first with ao.task.list to avoid duplicates.
       Tag all monitoring tasks with "auto-monitor".
       Be concise in task descriptions — include the error/issue and expected fix.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   workflow-optimizer:
     system_prompt: |
@@ -179,8 +179,8 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: gpt-5.4
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   release-manager:
     system_prompt: |
@@ -214,8 +214,8 @@ agents:
       RULES:
       - Only one release branch at a time.
       - Never force-push.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   release-gate-checker:
     system_prompt: |
@@ -240,8 +240,8 @@ agents:
       RULES:
       - Release PRs use --merge strategy (not squash).
       - Never merge with failing checks.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   branch-sync-monitor:
     system_prompt: |
@@ -255,8 +255,8 @@ agents:
          If > 50 and no release branch exists, create task: "Cut a release — develop is N commits ahead".
 
       Before creating tasks, check ao.task.list to avoid duplicates.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   pr-reviewer:
     system_prompt: |
@@ -305,8 +305,8 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   po-reviewer:
@@ -325,8 +325,8 @@ agents:
       The implementation agent reads the task description and checklist to know
       what to fix — if you don't update the task, the rework will be blind.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   requirements-refiner:
     system_prompt: |
@@ -349,8 +349,8 @@ agents:
       Do NOT change the task title. Focus on making the description implementation-ready.
       If the task is already well-specified, leave it unchanged and note that.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   triager:
     system_prompt: |
@@ -394,8 +394,8 @@ agents:
       - Check ao.queue.list before dispatching — do NOT enqueue duplicates.
       - Be thorough in validation — search the actual code, not just task titles.
       - Use "advance" verdict after successful dispatch, "skip" for invalid/done/duplicate tasks.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   web-ui-improver:
@@ -431,8 +431,8 @@ agents:
       - Do NOT create tasks for things already working well.
       - Prefer small, focused improvements over large rewrites.
       - Tag all tasks with "web-ui-improvement".
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7"]
 
   mcp-server-improver:
@@ -468,8 +468,8 @@ agents:
       - Do NOT propose new tools unless there's a clear core service method to back them.
       - Prefer fixing existing tools over adding new ones.
       - Tag all tasks with "mcp-improvement".
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   docs-drift-checker:
     system_prompt: |
@@ -501,8 +501,8 @@ agents:
       - Every task must cite the exact doc section AND the source of truth.
       - Tag all tasks with "docs-drift".
       - Set task_type to "docs" so the work-planner routes them to cheap models.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
 
   po-oai-runner:
     system_prompt: |
@@ -516,8 +516,8 @@ agents:
       - Session management and resumption
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-oai-runner". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-web:
@@ -532,8 +532,8 @@ agents:
       - Type safety (GraphQL types vs Rust contracts)
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-web". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7"]
 
   po-mcp:
@@ -548,8 +548,8 @@ agents:
       - Output format improvements
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-mcp". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-workflow:
@@ -564,8 +564,8 @@ agents:
       - Fallback and failover behavior
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-workflow". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-agent-runner:
@@ -580,8 +580,8 @@ agents:
       - New CLI tool support
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-agent-runner". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-cli:
@@ -596,8 +596,8 @@ agents:
       - Configuration ergonomics
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-cli". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   architect-rust:
@@ -613,8 +613,8 @@ agents:
       Read Cargo.toml in each crate to map the dependency graph.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "architect-rust". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "rust-docs"]
 
   architect-infra:
@@ -628,8 +628,8 @@ agents:
       - Cross-platform support (macOS, Linux, Windows)
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "architect-infra". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   researcher-models:
@@ -643,8 +643,8 @@ agents:
       Use WebSearch to find latest model announcements and pricing.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "researcher-models". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   researcher-ecosystem:
@@ -659,8 +659,8 @@ agents:
       Use context7 and rust-docs to check current crate APIs.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "researcher-ecosystem". Max 2 per run.
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   requirement-reviewer:
@@ -677,8 +677,8 @@ agents:
          e. If rejected: update requirement status to explain why.
       3. Max 5 task conversions per run to avoid flooding.
       4. Prefer requirements from POs over researchers (POs know their domain better).
-    model: claude-sonnet-4-6
-    tool: claude
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao"]
 
   glm-default:
@@ -704,8 +704,8 @@ agents:
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
-    model: gpt-5.4
-    tool: codex
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   gemini-default:
