@@ -83,7 +83,7 @@ describe("web gui release workflow gates", () => {
 
     expect(workflow).toContain("cargo ao-bin-build-release --locked --target ${{ matrix.target }}");
     expect(cargoConfig).toContain(
-      'ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"',
+      'ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p oai-runner -p workflow-runner-v2"',
     );
     expect(countMatches(workflow, /\n\s*-\sos:\s/g)).toBe(4);
     expect(
@@ -94,11 +94,11 @@ describe("web gui release workflow gates", () => {
     ).toBe(4);
     expect(countMatches(workflow, /archive_ext:\s*(tar\.gz|zip)/g)).toBe(4);
 
-    expect(workflow).toContain("BINARIES=(ao agent-runner llm-cli-wrapper)");
+    expect(workflow).toContain("BINARIES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)");
     expect(workflow).toContain('"files": binaries');
     expect(workflow).toContain('json.dumps(metadata, indent=2, sort_keys=True) + "\\n"');
     expect(workflow).toContain('$BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }');
-    expect(workflow).toContain('$Binaries = @("ao", "agent-runner", "llm-cli-wrapper")');
+    expect(workflow).toContain('$Binaries = @("ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner")');
     expect(workflow).toContain("dry_run_note");
     expect(workflow).toContain("event_name");
     expect(workflow).toContain("files = $BinaryFiles");
@@ -182,7 +182,7 @@ describe("web gui release workflow gates", () => {
     const readme = readFileSync(README_PATH, "utf8");
 
     expect(readme).toContain(
-      "always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`",
+      "always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`, `ao-oai-runner`, `ao-workflow-runner`",
     );
     expect(readme).toContain("| `ubuntu-latest` | `x86_64-unknown-linux-gnu` | `.tar.gz` |");
     expect(readme).toContain("| `macos-15-intel` | `x86_64-apple-darwin` | `.tar.gz` |");
