@@ -2669,6 +2669,7 @@ dependencies = [
  "anyhow",
  "croner",
  "dirs",
+ "include_dir",
  "protocol",
  "semver",
  "serde",
