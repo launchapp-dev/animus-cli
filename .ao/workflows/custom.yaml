@@ -25,9 +25,9 @@ mcp_servers:
 
 agents:
   default:
-    model: claude-sonnet-4-6
-    tool: claude
-    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking"]
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
+    mcp_servers: ["ao"]
 
   work-planner:
     system_prompt: |
