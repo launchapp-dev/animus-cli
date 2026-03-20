@@ -305,8 +305,8 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: gpt-5.4
-    tool: codex
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   po-reviewer:
