@@ -200,7 +200,7 @@ jobs:
           STAGE_DIR="ao-${VERSION}-${TARGET}"
           ARCHIVE_PATH="${STAGE_DIR}.tar.gz"
 
-          REQUIRED_FILES=(ao agent-runner llm-cli-wrapper release-metadata.json)
+          REQUIRED_FILES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner release-metadata.json)
           for file in "${REQUIRED_FILES[@]}"; do
             if [[ ! -f "${STAGE_DIR}/${file}" ]]; then
               echo "missing required staged file: ${STAGE_DIR}/${file}" >&2
