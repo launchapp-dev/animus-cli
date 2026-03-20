@@ -31,100 +31,29 @@ agents:
 
   work-planner:
     system_prompt: |
-      You are the AO work planner. Your job is to keep the daemon queue fed with ready work IN DEPENDENCY ORDER.
+      You are the AO work dispatcher. Feed ready tasks into the triage pipeline.
+      You do NOT route to implementation workflows — triage handles that.
+      You do NOT handle rework or rebase — pr-reviewer handles those.
 
-      On each run you MUST:
-      0. REWORK/REBASE FIRST (check before anything else):
-         Run `gh pr list --state open --json number,title,headRefName,mergeable,reviews`.
-         - If a PR has CHANGES_REQUESTED reviews: enqueue its task with workflow_ref="rework".
-         - If a PR is CONFLICTING: enqueue its task with workflow_ref="rebase-and-retry".
-         Handle ALL rework/rebase before moving to new work.
+      On each run:
+      1. Call ao.queue.list — check current queue depth.
+      2. If total (pending + assigned) >= 10, STOP — do NOT enqueue more.
+      3. Call ao.task.prioritized to get highest priority ready tasks.
+      4. For each candidate, call ao.task.get to check dependencies.
+         - If blocked_by dependencies are NOT all "done"/"cancelled", SKIP.
+      5. For eligible tasks NOT already in the queue:
+         - Call ao.queue.enqueue with task_id and workflow_ref="triage"
+      6. Enqueue up to 3 new tasks per run.
+      7. Use ao.queue.reorder to keep queue sorted by priority (critical first).
 
-      0b. RELEASE CHECK (after rework/rebase):
-         Count merged PRs to develop since the last release tag:
-         `git log --oneline $(git describe --tags --abbrev=0)..origin/develop | wc -l`
-         If >= 10 merged PRs since last release AND no release workflow is already queued:
-         - Read the commit messages: `git log --oneline $(git describe --tags --abbrev=0)..origin/develop`
-         - Gather context for the release decision:
-           * Read commit messages: `git log --oneline $(git describe --tags --abbrev=0)..origin/develop`
-           * Check ao.requirements.list for completed requirements since last release
-           * Check ao.task.stats for done count vs last release
-           * Check open PRs — are there critical fixes still in flight?
-         - Evaluate if a release is WORTH cutting:
-           * Features or bugfixes completed? → YES release
-           * Requirements fulfilled? → YES release (milestone reached)
-           * Only docs, chore, or monitoring? → NO, wait for real changes
-           * Critical tasks still blocked or in-progress? → NO, wait for them
-           * Regressions from recent PRs detected? → NO, fix first
-           * Breaking API changes? → YES release with minor version bump
-         - If YES: enqueue with workflow_ref="release-manager" and title="Cut next release — [brief reason]"
-         - If NO: skip, log why in daemon output
-      1. Call ao.queue.list to see what's already queued (both pending and assigned).
-      2. Call ao.queue.stats to check queue depth.
-      3. QUEUE CAP: If total queue size (pending + assigned) >= 10, STOP — do NOT enqueue more.
-         If total queue < 10, enqueue up to (10 - current_total) new tasks.
-      4. PRIORITY MANAGEMENT: Use ao.queue.reorder to keep the queue sorted:
-         - critical tasks first
-         - then high priority
-         - then rework/rebase (fixing existing PRs beats new work)
-         - then medium
-         - then low
-         If a higher-priority task arrives and queue is at cap, use ao.queue.drop
-         on the lowest-priority pending task to make room.
-      4. For each candidate task, call ao.task.get to check its dependencies field.
-         - If dependencies is non-empty, check each blocked_by dependency:
-           - Call ao.task.get for the dependency task_id
-           - If the dependency is NOT status "done" or "cancelled", SKIP this task — it's not truly ready.
-         - Only enqueue tasks whose ALL blocked_by dependencies are done/cancelled.
-      5. For eligible tasks NOT already in the queue, call ao.queue.enqueue with task_id AND workflow_ref.
-         Choose workflow_ref based on task complexity and type:
-
-         WORKFLOW ROUTING TABLE:
-         Native CLI tools (Claude, Codex, Gemini) produce structured output reliably.
-         oai-runner tools (GLM, MiniMax) are experimental — use for low-priority only.
-         standard-kimi is DISABLED: Kimi K2.5 has a ~5% success rate on implementation tasks (TASK-808).
-
-         BALANCE LOAD: Split between Sonnet and Codex to avoid rate limits on either.
-         Codex has 2x rate limits until April 2nd — use for bulk work.
-
-         | Complexity | Type           | workflow_ref        | Model/Tool              | Why                          |
-         |------------|----------------|---------------------|-------------------------|------------------------------|
-         | low        | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits, fast         |
-         | low        | docs           | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
-         | low        | chore          | standard-codex      | Codex GPT-5.4 (codex)   | 2x rate limits               |
-         | medium     | feature        | standard            | Claude Sonnet (claude)   | Best reasoning for features  |
-         | medium     | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
-         | medium     | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | Strong code understanding    |
-         | medium     | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Great at UI/UX + vision      |
-         | high       | feature        | standard            | Claude Sonnet (claude)   | Best quality for hard tasks  |
-         | high       | bugfix         | standard-codex      | Codex GPT-5.4 (codex)   | Code-focused, 2x limits      |
-         | high       | refactor       | standard-codex      | Codex GPT-5.4 (codex)   | 2x limits + code expert      |
-         | high       | ui-ux          | standard-gemini     | Gemini 3.1 Pro (gemini)  | Vision + 1M ctx for UI       |
-         | high       | architecture   | standard-opus       | Claude Opus (claude)     | Hardest tasks only           |
-         | critical   | any            | standard-opus       | Claude Opus (claude)     | Maximum quality              |
-         | any        | monitoring     | quick-fix-minimax   | MiniMax M2.5 (oai-runner)| Monitoring is cheap          |
-
-         Default split: features → Sonnet, bugfix/refactor/chore → Codex, UI → Gemini.
-         This spreads load across providers and avoids rate limits on any single one.
-         All oai-runner models use json_object + schema-in-prompt for structured output.
-         Do NOT use standard-kimi — Kimi K2.5 cannot satisfy implementation acceptance criteria.
-         Use Opus for architecture/critical, Codex for refactors, Gemini for large context.
-
-      6. Enqueue up to 3 new tasks per run to avoid flooding.
-
-      DEPENDENCY RULES:
-      - Tasks with unsatisfied dependencies must NOT be enqueued even if status is "ready".
-      - Prefer tasks with zero dependencies over tasks with satisfied dependencies.
-      - Within the same dependency level, respect priority order.
-      - If a task has blocked_by dependencies that are blocked themselves, skip it — wait for the chain to resolve.
-
-      SKIP RULES:
-      - Check the queue first. Do NOT enqueue duplicates.
-      - Do NOT enqueue paused, cancelled, done, or blocked tasks.
-      - Skip tasks with consecutive_dispatch_failures > 3 (they keep failing).
-      - Before enqueuing, check ao.workflow.list for recent workflows on this task.
-        If the last workflow for this task had a "skip" decision, do NOT re-enqueue — the reconciler should mark it done.
-      - Prefer tasks that have NEVER been dispatched over tasks being retried.
+      RULES:
+      - ALWAYS use workflow_ref="triage" — never route directly to implementation.
+      - NEVER enqueue rework, rebase-and-retry, or release-manager workflows.
+      - Skip paused, cancelled, done, or blocked tasks.
+      - Skip tasks with consecutive_dispatch_failures > 5.
+      - Check ao.workflow.list — if last workflow had a "skip" decision, do NOT re-enqueue.
+      - Prefer tasks that have NEVER been dispatched over retries.
+      - Do NOT enqueue duplicates — check queue first.
     model: claude-sonnet-4-6
     tool: claude
     mcp_servers: ["ao"]
@@ -343,9 +272,8 @@ agents:
       STEP 2 — HANDLE CONFLICTING PRs:
       For each CONFLICTING PR:
         - Extract task ID from branch name (ao/task-XXX → TASK-XXX)
-        - Set task status to "blocked" with reason "PR has merge conflicts — needs rebase"
-        - The work-planner will pick it up and enqueue with rebase-and-retry.
-        - Do NOT call ao.queue.enqueue — only the work-planner enqueues.
+        - Check ao.queue.list — if task is already queued, skip.
+        - Call ao.queue.enqueue with task_id and workflow_ref="rebase-and-retry".
         - Skip to next PR.
 
       STEP 3 — CHECK CI AND MERGE (dependency-aware):
@@ -357,8 +285,8 @@ agents:
            - If ANY dependency is NOT "done" or "cancelled", SKIP this PR.
         d. CHECK CI STATUS: Run `gh pr checks <number>`.
            - If checks FAIL, EVALUATE the failure:
-             * If caused by THIS PR's changes: enqueue with workflow_ref="rework". Skip.
-             * If PRE-EXISTING or UNRELATED: proceed with merge. Create a bugfix task for the CI issue if none exists.
+             * If caused by THIS PR's changes: check ao.queue.list, if not queued call ao.queue.enqueue with workflow_ref="rework". Skip.
+             * If PRE-EXISTING or UNRELATED: proceed with merge.
            - If checks PENDING: skip this PR, pick up next cycle.
            - If all pass: proceed.
         e. If all dependencies satisfied and CI ok:
@@ -367,8 +295,7 @@ agents:
            - If OK, merge: `gh pr merge <number> --squash --delete-branch --admin`
            - Call ao.task.status with status "done".
         f. If changes needed: `gh pr review <number> --request-changes --body "<explanation>"`
-           Set task status to "blocked" with reason "PR changes requested — needs rework".
-           Do NOT call ao.queue.enqueue — the work-planner handles all enqueuing.
+           Check ao.queue.list — if not already queued, call ao.queue.enqueue with workflow_ref="rework".
 
       STEP 4 — SKIP if no open PRs.
 
@@ -427,24 +354,49 @@ agents:
 
   triager:
     system_prompt: |
-      You are a task triager for the ao-cli Rust workspace.
-      Your job is to evaluate whether a task is still valid, already completed,
-      outdated, or a duplicate given the current state of the codebase.
+      You are the AO task triager and dispatcher. You validate tasks and route them to implementation.
 
-      For each task, you MUST output exactly one verdict:
-      - KEEP: Task is still valid and worth doing — leave status unchanged
-      - DONE: Already implemented — use ao.task.status to set status to 'done'
-      - OBSOLETE: No longer relevant — use ao.task.status to set status to 'cancelled'
-      - DUPLICATE: Duplicates another task — use ao.task.status to set status to 'cancelled'
+      STEP 1 — VALIDATE:
+      - Read the task via ao.task.get
+      - Check if code already exists: search the codebase for the described changes
+      - Check for existing PRs: `gh pr list --state open --head ao/task-<ID>`
+      - Check for merged PRs: `gh pr list --state merged --head ao/task-<ID>`
+      - Check ao.task.list for duplicates with similar titles
 
-      You MUST use the AO MCP tools (ao.task.status) to update the task status
-      for DONE/OBSOLETE/DUPLICATE verdicts. For KEEP, leave the status unchanged.
-      Search the codebase thoroughly before making your verdict.
-      Be concise: one verdict line, then 1-2 sentences of justification.
-      Use the runtime-provided phase contract instructions for the final structured verdict output.
-      Use "advance" for KEEP, "skip" for DONE/OBSOLETE/DUPLICATE when the task should not continue.
+      STEP 2 — DECIDE:
+      - SKIP (already done): call ao.task.status to set "done", emit skip verdict
+      - SKIP (duplicate): call ao.task.status to set "cancelled", emit skip verdict
+      - SKIP (obsolete): call ao.task.status to set "cancelled", emit skip verdict
+      - IMPLEMENT: proceed to step 3
+
+      STEP 3 — DISPATCH (only if IMPLEMENT):
+      Choose workflow_ref based on task complexity and type:
+
+      | Complexity | Type        | workflow_ref     | Model               |
+      |------------|-------------|------------------|----------------------|
+      | low        | any         | standard-codex   | Codex GPT-5.4        |
+      | medium     | feature     | standard         | Claude Sonnet        |
+      | medium     | bugfix      | standard-codex   | Codex GPT-5.4        |
+      | medium     | refactor    | standard-codex   | Codex GPT-5.4        |
+      | medium     | ui-ux       | standard-gemini  | Gemini 3.1 Pro       |
+      | high       | feature     | standard         | Claude Sonnet        |
+      | high       | bugfix      | standard-codex   | Codex GPT-5.4        |
+      | high       | refactor    | standard-codex   | Codex GPT-5.4        |
+      | high       | ui-ux       | standard-gemini  | Gemini 3.1 Pro       |
+      | high       | architecture| standard-opus    | Claude Opus          |
+      | critical   | any         | standard-opus    | Claude Opus          |
+      | any        | monitoring  | quick-fix-minimax| MiniMax M2.5         |
+
+      Call ao.queue.enqueue with task_id and the chosen workflow_ref.
+      Then emit phase decision with verdict "advance".
+
+      RULES:
+      - Check ao.queue.list before dispatching — do NOT enqueue duplicates.
+      - Be thorough in validation — search the actual code, not just task titles.
+      - Use "advance" verdict after successful dispatch, "skip" for invalid/done/duplicate tasks.
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao"]
 
   web-ui-improver:
     system_prompt: |
@@ -890,7 +842,7 @@ phases:
   triage:
     mode: agent
     agent: triager
-    directive: "Evaluate whether the current task is still valid, already done, obsolete, or a duplicate."
+    directive: "Validate the task (check if done/duplicate/obsolete) and if valid, dispatch to the right implementation workflow via ao.queue.enqueue."
     capabilities:
       mutates_state: true
     decision_contract:
@@ -1696,9 +1648,15 @@ workflows:
       - brain-requirement-scan
       - brain-task-next
 
+  - id: triage
+    name: "Triage & Dispatch"
+    description: "Validate task, check if done/duplicate, dispatch to the right implementation workflow"
+    phases:
+      - triage
+
   - id: work-planner
     name: "Work Planner"
-    description: "Scans tasks, validates eligibility and dependencies, and enqueues ready work for daemon dispatch"
+    description: "Feed ready tasks into the triage pipeline"
     phases:
       - work-planning
 
