@@ -36,9 +36,9 @@ wt-build = "build --manifest-path"
 wt-test = "test --manifest-path"
 
 # Runtime binary set used by ao in local dev and release packaging
-ao-bin-build = "build -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
-ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
-ao-bin-check = "check -p orchestrator-cli -p agent-runner -p llm-cli-wrapper"
+ao-bin-build = "build -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p oai-runner -p workflow-runner-v2"
+ao-bin-build-release = "build --release -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p oai-runner -p workflow-runner-v2"
+ao-bin-check = "check -p orchestrator-cli -p agent-runner -p llm-cli-wrapper -p oai-runner -p workflow-runner-v2"
 
 # Linting
 ao-lint = "clippy --workspace --all-targets"

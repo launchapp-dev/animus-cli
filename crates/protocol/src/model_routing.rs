@@ -185,7 +185,7 @@ pub fn tool_for_model_id(model_id: &str) -> &'static str {
 }
 
 pub fn tool_supports_repository_writes(tool_id: &str) -> bool {
-    matches!(normalize_tool_id(tool_id).as_str(), "codex" | "claude" | "opencode" | "oai-runner")
+    matches!(normalize_tool_id(tool_id).as_str(), "codex" | "claude" | "gemini" | "opencode" | "oai-runner")
 }
 
 pub fn required_api_keys_for_tool(_tool_id: &str) -> &'static [&'static str] {

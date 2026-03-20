@@ -111,7 +111,7 @@ Enforced by CI: `.github/workflows/rust-only-dependency-policy.yml`
 
 ## Release
 
-CI/CD via `.github/workflows/release.yml` always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`:
+CI/CD via `.github/workflows/release.yml` always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`, `ao-oai-runner`, `ao-workflow-runner`:
 
 | Runner | Target | Archive |
 |---|---|---|
