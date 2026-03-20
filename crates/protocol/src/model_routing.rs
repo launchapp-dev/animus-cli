@@ -133,7 +133,7 @@ pub fn canonical_model_id(model_id: &str) -> String {
         | "minimax/m2.5"
         | "minimax/m2-5"
         | "minimax/minimax-m2.5"
-        | "minimax/MiniMax-M2.5" => "minimax/MiniMax-M2.5".to_string(),
+        | "minimax/MiniMax-M2.7" => "minimax/MiniMax-M2.7".to_string(),
         "minimax-m2.1"
         | "minimax-m2-1"
         | "minimax/m2.1"
@@ -196,14 +196,14 @@ pub fn default_model_specs() -> Vec<(String, String)> {
     vec![
         ("claude-sonnet-4-6".to_string(), "claude".to_string()),
         ("claude-opus-4-6".to_string(), "claude".to_string()),
-        ("gpt-5.3-codex".to_string(), "codex".to_string()),
+        ("gpt-5.4".to_string(), "codex".to_string()),
         ("gpt-5.3-codex-spark".to_string(), "codex".to_string()),
         ("gpt-5".to_string(), "codex".to_string()),
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
         ("gemini-3-pro".to_string(), "gemini".to_string()),
         ("gemini-3.1-pro-preview".to_string(), "gemini".to_string()),
-        ("minimax/MiniMax-M2.5".to_string(), "oai-runner".to_string()),
+        ("minimax/MiniMax-M2.7".to_string(), "oai-runner".to_string()),
         ("zai-coding-plan/glm-5".to_string(), "oai-runner".to_string()),
     ]
 }
@@ -211,10 +211,10 @@ pub fn default_model_specs() -> Vec<(String, String)> {
 pub fn default_model_for_tool(tool_id: &str) -> Option<&'static str> {
     match normalize_tool_id(tool_id).as_str() {
         "claude" => Some("claude-sonnet-4-6"),
-        "codex" | "openai" => Some("gpt-5.3-codex"),
+        "codex" | "openai" => Some("gpt-5.4"),
         "gemini" => Some("gemini-2.5-pro"),
         "opencode" => Some("zai-coding-plan/glm-5"),
-        "oai-runner" => Some("minimax/MiniMax-M2.5"),
+        "oai-runner" => Some("minimax/MiniMax-M2.7"),
         _ => None,
     }
 }
@@ -299,14 +299,14 @@ pub fn default_primary_model_for_phase(
 
     if caps.is_requirements {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
-            ModelRoutingComplexity::Low => "minimax/MiniMax-M2.5",
+            ModelRoutingComplexity::Low => "minimax/MiniMax-M2.7",
             ModelRoutingComplexity::Medium | ModelRoutingComplexity::High => "claude-sonnet-4-6",
         };
     }
 
     if caps.is_testing {
         return match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
-            ModelRoutingComplexity::Low => "minimax/MiniMax-M2.5",
+            ModelRoutingComplexity::Low => "minimax/MiniMax-M2.7",
             ModelRoutingComplexity::Medium | ModelRoutingComplexity::High => "claude-sonnet-4-6",
         };
     }
@@ -326,7 +326,7 @@ pub fn default_fallback_models_for_phase(
             "claude-sonnet-4-6",
             "gemini-2.5-pro",
             "zai-coding-plan/glm-5",
-            "minimax/MiniMax-M2.5",
+            "minimax/MiniMax-M2.7",
             "gpt-5.3-codex",
         ];
     }
@@ -337,13 +337,13 @@ pub fn default_fallback_models_for_phase(
                 "claude-sonnet-4-6",
                 "gemini-3.1-pro-preview",
                 "zai-coding-plan/glm-5",
-                "minimax/MiniMax-M2.5",
+                "minimax/MiniMax-M2.7",
                 "gpt-5.3-codex",
             ],
             ModelRoutingComplexity::Low | ModelRoutingComplexity::Medium => vec![
                 "gemini-3.1-pro-preview",
                 "zai-coding-plan/glm-5",
-                "minimax/MiniMax-M2.5",
+                "minimax/MiniMax-M2.7",
                 "gpt-5.3-codex",
                 "claude-opus-4-6",
             ],
@@ -352,15 +352,15 @@ pub fn default_fallback_models_for_phase(
 
     match complexity.unwrap_or(ModelRoutingComplexity::Medium) {
         ModelRoutingComplexity::Low => {
-            vec!["minimax/MiniMax-M2.5", "claude-sonnet-4-6", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+            vec!["minimax/MiniMax-M2.7", "claude-sonnet-4-6", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
         }
         ModelRoutingComplexity::Medium => {
-            vec!["zai-coding-plan/glm-5", "minimax/MiniMax-M2.5", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
+            vec!["zai-coding-plan/glm-5", "minimax/MiniMax-M2.7", "gemini-3.1-pro-preview", "gpt-5.3-codex"]
         }
         ModelRoutingComplexity::High => vec![
             "claude-opus-4-6",
             "zai-coding-plan/glm-5",
-            "minimax/MiniMax-M2.5",
+            "minimax/MiniMax-M2.7",
             "gemini-3.1-pro-preview",
             "gpt-5.3-codex",
         ],
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(canonical_model_id("gemini-3.0-pro"), "gemini-3-pro");
         assert_eq!(canonical_model_id("glm-5"), "zai-coding-plan/glm-5");
         assert_eq!(canonical_model_id("minimax-m2.1"), "minimax/MiniMax-M2.1");
-        assert_eq!(canonical_model_id("minimax-m2.5"), "minimax/MiniMax-M2.5");
+        assert_eq!(canonical_model_id("minimax-m2.5"), "minimax/MiniMax-M2.7");
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(tool_for_model_id("claude-opus-4-6"), "claude");
         assert_eq!(tool_for_model_id("openrouter/anthropic/claude-sonnet"), "claude");
         assert_eq!(tool_for_model_id("zai-coding-plan/glm-5"), "oai-runner");
-        assert_eq!(tool_for_model_id("minimax/MiniMax-M2.5"), "oai-runner");
+        assert_eq!(tool_for_model_id("minimax/MiniMax-M2.7"), "oai-runner");
         assert_eq!(tool_for_model_id("gemini-2.5-pro"), "gemini");
         assert_eq!(tool_for_model_id("gpt-5.3-codex"), "codex");
     }
@@ -420,12 +420,12 @@ mod tests {
         let req_caps = PhaseCapabilities::defaults_for_phase("requirements");
         assert_eq!(
             default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &req_caps),
-            "minimax/MiniMax-M2.5"
+            "minimax/MiniMax-M2.7"
         );
         let test_caps = PhaseCapabilities::defaults_for_phase("testing");
         assert_eq!(
             default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &test_caps),
-            "minimax/MiniMax-M2.5"
+            "minimax/MiniMax-M2.7"
         );
     }
 
@@ -492,10 +492,10 @@ mod tests {
     #[test]
     fn tool_defaults_are_stable() {
         assert_eq!(default_model_for_tool("claude"), Some("claude-sonnet-4-6"));
-        assert_eq!(default_model_for_tool("codex"), Some("gpt-5.3-codex"));
+        assert_eq!(default_model_for_tool("codex"), Some("gpt-5.4"));
         assert_eq!(default_model_for_tool("gemini"), Some("gemini-2.5-pro"));
         assert_eq!(default_model_for_tool("opencode"), Some("zai-coding-plan/glm-5"));
-        assert_eq!(default_model_for_tool("oai-runner"), Some("minimax/MiniMax-M2.5"));
+        assert_eq!(default_model_for_tool("oai-runner"), Some("minimax/MiniMax-M2.7"));
         assert_eq!(default_model_for_tool("unknown"), None);
     }
 
