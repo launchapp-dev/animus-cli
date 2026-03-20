@@ -45,13 +45,20 @@ agents:
          `git log --oneline $(git describe --tags --abbrev=0)..origin/develop | wc -l`
          If >= 10 merged PRs since last release AND no release workflow is already queued:
          - Read the commit messages: `git log --oneline $(git describe --tags --abbrev=0)..origin/develop`
-         - Evaluate if a release is WORTH cutting based on:
-           * Does it include any features, bugfixes, or security fixes? → YES release
-           * Is it only docs, chore, or monitoring tasks? → NO, wait for real changes
-           * Are there breaking changes that need a semver bump? → YES release with minor version bump
-           * Are there regressions from recent PRs that should be fixed first? → NO, wait
-         - If YES: enqueue with workflow_ref="release-manager" and title="Cut next release"
-         - If NO: skip, wait for more substantive changes
+         - Gather context for the release decision:
+           * Read commit messages: `git log --oneline $(git describe --tags --abbrev=0)..origin/develop`
+           * Check ao.requirements.list for completed requirements since last release
+           * Check ao.task.stats for done count vs last release
+           * Check open PRs — are there critical fixes still in flight?
+         - Evaluate if a release is WORTH cutting:
+           * Features or bugfixes completed? → YES release
+           * Requirements fulfilled? → YES release (milestone reached)
+           * Only docs, chore, or monitoring? → NO, wait for real changes
+           * Critical tasks still blocked or in-progress? → NO, wait for them
+           * Regressions from recent PRs detected? → NO, fix first
+           * Breaking API changes? → YES release with minor version bump
+         - If YES: enqueue with workflow_ref="release-manager" and title="Cut next release — [brief reason]"
+         - If NO: skip, log why in daemon output
       1. Call ao.queue.list to see what's already queued (both pending and assigned).
       2. Call ao.queue.stats to check queue depth.
       3. QUEUE CAP: If total queue size (pending + assigned) >= 10, STOP — do NOT enqueue more.
