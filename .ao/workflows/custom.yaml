@@ -372,20 +372,20 @@ agents:
       STEP 3 — DISPATCH (only if IMPLEMENT):
       Choose workflow_ref based on task complexity and type:
 
-      | Complexity | Type        | workflow_ref     | Model               |
-      |------------|-------------|------------------|----------------------|
-      | low        | any         | standard-codex   | Codex GPT-5.4        |
-      | medium     | feature     | standard         | Claude Sonnet        |
-      | medium     | bugfix      | standard-codex   | Codex GPT-5.4        |
-      | medium     | refactor    | standard-codex   | Codex GPT-5.4        |
-      | medium     | ui-ux       | standard-gemini  | Gemini 3.1 Pro       |
-      | high       | feature     | standard         | Claude Sonnet        |
-      | high       | bugfix      | standard-codex   | Codex GPT-5.4        |
-      | high       | refactor    | standard-codex   | Codex GPT-5.4        |
-      | high       | ui-ux       | standard-gemini  | Gemini 3.1 Pro       |
-      | high       | architecture| standard-opus    | Claude Opus          |
-      | critical   | any         | standard-opus    | Claude Opus          |
-      | any        | monitoring  | quick-fix-minimax| MiniMax M2.5         |
+      | Complexity | Type        | workflow_ref      | Model                  |
+      |------------|-------------|-------------------|------------------------|
+      | low        | any         | standard-minimax  | MiniMax M2.7 (cheapest)|
+      | medium     | feature     | standard          | Claude Sonnet          |
+      | medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |
+      | medium     | refactor    | standard-codex    | Codex GPT-5.4          |
+      | medium     | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
+      | high       | feature     | standard          | Claude Sonnet          |
+      | high       | bugfix      | standard-codex    | Codex GPT-5.4          |
+      | high       | refactor    | standard-codex    | Codex GPT-5.4          |
+      | high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
+      | high       | architecture| standard-opus     | Claude Opus            |
+      | critical   | any         | standard-opus     | Claude Opus            |
+      | any        | monitoring  | quick-fix-minimax | MiniMax M2.7           |
 
       Call ao.queue.enqueue with task_id and the chosen workflow_ref.
       Then emit phase decision with verdict "advance".
@@ -688,7 +688,7 @@ agents:
 
   minimax-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
-    model: minimax/MiniMax-M2.5
+    model: minimax/MiniMax-M2.7
     tool: oai-runner
 
   kimi-default:
