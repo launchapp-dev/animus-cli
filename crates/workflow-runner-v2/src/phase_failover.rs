@@ -9,6 +9,8 @@ pub enum PhaseFailureKind {
     TransientRunner,
     ProviderExhaustion { reason: String },
     TargetUnavailable,
+    ContextExceeded,
+    OutputInvalid,
     Unknown,
 }
 
@@ -18,7 +20,12 @@ impl PhaseFailureKind {
     }
 
     pub fn should_failover_target(&self) -> bool {
-        matches!(self, PhaseFailureKind::ProviderExhaustion { .. } | PhaseFailureKind::TargetUnavailable)
+        matches!(
+            self,
+            PhaseFailureKind::ProviderExhaustion { .. }
+                | PhaseFailureKind::TargetUnavailable
+                | PhaseFailureKind::ContextExceeded
+        )
     }
 
     pub fn exhaustion_reason(&self) -> Option<&str> {
@@ -27,6 +34,32 @@ impl PhaseFailureKind {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorClass {
+    Transient,
+    RateLimited,
+    AuthFailure,
+    ProviderUnavailable,
+    ContextExceeded,
+    OutputInvalid,
+    Permanent,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecommendedAction {
+    RetryTransient,
+    FallbackModel,
+    Abort,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifiedPhaseError {
+    pub error_class: ErrorClass,
+    pub provider: Option<String>,
+    pub recommended_action: RecommendedAction,
 }
 
 pub fn classify_phase_failure(message: &str) -> PhaseFailureKind {
@@ -39,7 +72,80 @@ pub fn classify_phase_failure(message: &str) -> PhaseFailureKind {
     if is_target_unavailable_pattern(message) {
         return PhaseFailureKind::TargetUnavailable;
     }
+    if is_context_exceeded_pattern(message) {
+        return PhaseFailureKind::ContextExceeded;
+    }
+    if is_output_invalid_pattern(message) {
+        return PhaseFailureKind::OutputInvalid;
+    }
     PhaseFailureKind::Unknown
+}
+
+pub fn classify_phase_failure_structured(message: &str) -> ClassifiedPhaseError {
+    let kind = classify_phase_failure(message);
+    let provider = extract_provider_name(message);
+    match kind {
+        PhaseFailureKind::TransientRunner => ClassifiedPhaseError {
+            error_class: ErrorClass::Transient,
+            provider,
+            recommended_action: RecommendedAction::RetryTransient,
+        },
+        PhaseFailureKind::ProviderExhaustion { ref reason } => {
+            let normalized = reason.to_ascii_lowercase();
+            if normalized.contains("rate limit") || normalized.contains("rate-limit") {
+                ClassifiedPhaseError {
+                    error_class: ErrorClass::RateLimited,
+                    provider,
+                    recommended_action: RecommendedAction::FallbackModel,
+                }
+            } else if normalized.contains("authentication") || normalized.contains("auth") {
+                ClassifiedPhaseError {
+                    error_class: ErrorClass::AuthFailure,
+                    provider,
+                    recommended_action: RecommendedAction::Abort,
+                }
+            } else {
+                ClassifiedPhaseError {
+                    error_class: ErrorClass::ProviderUnavailable,
+                    provider,
+                    recommended_action: RecommendedAction::FallbackModel,
+                }
+            }
+        }
+        PhaseFailureKind::TargetUnavailable => ClassifiedPhaseError {
+            error_class: ErrorClass::Permanent,
+            provider,
+            recommended_action: RecommendedAction::FallbackModel,
+        },
+        PhaseFailureKind::ContextExceeded => ClassifiedPhaseError {
+            error_class: ErrorClass::ContextExceeded,
+            provider,
+            recommended_action: RecommendedAction::FallbackModel,
+        },
+        PhaseFailureKind::OutputInvalid => ClassifiedPhaseError {
+            error_class: ErrorClass::OutputInvalid,
+            provider,
+            recommended_action: RecommendedAction::RetryTransient,
+        },
+        PhaseFailureKind::Unknown => ClassifiedPhaseError {
+            error_class: ErrorClass::Unknown,
+            provider,
+            recommended_action: RecommendedAction::Abort,
+        },
+    }
+}
+
+fn extract_provider_name(message: &str) -> Option<String> {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("anthropic") || normalized.contains("claude") {
+        Some("anthropic".to_string())
+    } else if normalized.contains("openai") || normalized.contains("gpt") {
+        Some("openai".to_string())
+    } else if normalized.contains("google") || normalized.contains("gemini") {
+        Some("google".to_string())
+    } else {
+        None
+    }
 }
 
 fn is_transient_runner_pattern(message: &str) -> bool {
@@ -51,6 +157,28 @@ fn is_transient_runner_pattern(message: &str) -> bool {
         || normalized.contains("broken pipe")
         || normalized.contains("timed out")
         || normalized.contains("timeout")
+}
+
+fn is_context_exceeded_pattern(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("context length exceeded")
+        || normalized.contains("context window exceeded")
+        || normalized.contains("maximum context length")
+        || normalized.contains("token limit exceeded")
+        || normalized.contains("too many tokens")
+        || normalized.contains("prompt too long")
+        || normalized.contains("context_length_exceeded")
+        || normalized.contains("max_tokens_exceeded")
+}
+
+fn is_output_invalid_pattern(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("failed to parse phase output")
+        || normalized.contains("invalid phase output")
+        || normalized.contains("output parse error")
+        || normalized.contains("malformed response")
+        || normalized.contains("unexpected output format")
+        || normalized.contains("phase result deserialization failed")
 }
 
 fn is_target_unavailable_pattern(message: &str) -> bool {
@@ -90,6 +218,8 @@ fn extract_provider_exhaustion_reason(text: &str) -> Option<String> {
     if normalized.contains("\"has_credits\":false")
         || normalized.contains("\"balance\":\"0\"")
         || normalized.contains("\"balance\":0")
+        || normalized.contains("credits exhausted")
+        || normalized.contains("credit balance exhausted")
     {
         return Some("provider credits exhausted".to_string());
     }
@@ -145,6 +275,141 @@ impl PhaseFailureClassifier {
             return None;
         }
         Some(lines.iter().cloned().collect::<Vec<_>>().join(" | "))
+    }
+
+    pub fn classify_structured(message: &str) -> ClassifiedPhaseError {
+        classify_phase_failure_structured(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_runner_errors_retry() {
+        let cases = [
+            "failed to connect runner",
+            "runner disconnected before workflow",
+            "connection reset by peer",
+            "timed out waiting for response",
+        ];
+        for msg in cases {
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::Transient, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::RetryTransient, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn rate_limit_errors_fallback() {
+        let cases = ["rate limit exceeded", "too many requests", "rate-limit hit"];
+        for msg in cases {
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::RateLimited, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::FallbackModel, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn auth_failure_errors_abort() {
+        let cases = ["authentication_error occurred", "invalid authentication credentials", "failed to authenticate"];
+        for msg in cases {
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::AuthFailure, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::Abort, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn quota_errors_fallback() {
+        let cases = ["insufficient_quota for this model", "quota exceeded", "provider credits exhausted"];
+        for msg in cases {
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::ProviderUnavailable, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::FallbackModel, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn context_exceeded_errors_fallback() {
+        let cases = [
+            "context length exceeded",
+            "context window exceeded for this request",
+            "maximum context length reached",
+            "too many tokens in prompt",
+            "prompt too long",
+            "context_length_exceeded",
+        ];
+        for msg in cases {
+            let kind = classify_phase_failure(msg);
+            assert_eq!(kind, PhaseFailureKind::ContextExceeded, "msg: {}", msg);
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::ContextExceeded, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::FallbackModel, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn output_invalid_errors_retry() {
+        let cases = [
+            "failed to parse phase output",
+            "invalid phase output received",
+            "output parse error in phase result",
+            "malformed response from agent",
+        ];
+        for msg in cases {
+            let kind = classify_phase_failure(msg);
+            assert_eq!(kind, PhaseFailureKind::OutputInvalid, "msg: {}", msg);
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::OutputInvalid, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::RetryTransient, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn target_unavailable_errors_fallback() {
+        let cases = [
+            "unsupported tool requested",
+            "missing runtime contract launch for ai cli",
+            "command not found: claude",
+        ];
+        for msg in cases {
+            let result = classify_phase_failure_structured(msg);
+            assert_eq!(result.error_class, ErrorClass::Permanent, "msg: {}", msg);
+            assert_eq!(result.recommended_action, RecommendedAction::FallbackModel, "msg: {}", msg);
+        }
+    }
+
+    #[test]
+    fn unknown_errors_abort() {
+        let result = classify_phase_failure_structured("some completely unknown error");
+        assert_eq!(result.error_class, ErrorClass::Unknown);
+        assert_eq!(result.recommended_action, RecommendedAction::Abort);
+    }
+
+    #[test]
+    fn provider_extracted_for_anthropic_messages() {
+        let result = classify_phase_failure_structured("anthropic api timed out");
+        assert_eq!(result.provider, Some("anthropic".to_string()));
+        assert_eq!(result.error_class, ErrorClass::Transient);
+    }
+
+    #[test]
+    fn context_exceeded_should_failover_target() {
+        assert!(PhaseFailureKind::ContextExceeded.should_failover_target());
+    }
+
+    #[test]
+    fn output_invalid_should_not_failover_target() {
+        assert!(!PhaseFailureKind::OutputInvalid.should_failover_target());
+    }
+
+    #[test]
+    fn classifier_struct_classify_structured_delegates() {
+        let result = PhaseFailureClassifier::classify_structured("context length exceeded");
+        assert_eq!(result.error_class, ErrorClass::ContextExceeded);
+        assert_eq!(result.recommended_action, RecommendedAction::FallbackModel);
     }
 }
 
