@@ -30,7 +30,7 @@ export default defineConfig({
   },
   build: {
     outDir: "../embedded",
-    emptyOutDir: false,
+    emptyOutDir: true,
     cssCodeSplit: true,
     chunkSizeWarningLimit: 240,
     rollupOptions: {

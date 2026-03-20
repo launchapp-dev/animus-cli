@@ -43,6 +43,12 @@ async-graphql = "7"
 async-graphql-axum = "7"
 croner = "3.0.1"
 
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "z"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "warn"

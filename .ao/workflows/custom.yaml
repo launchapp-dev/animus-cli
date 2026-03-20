@@ -129,6 +129,7 @@ agents:
       - Prefer tasks that have NEVER been dispatched over tasks being retried.
     model: claude-sonnet-4-6
     tool: claude
+    mcp_servers: ["ao"]
 
   reconciler:
     system_prompt: |
@@ -179,6 +180,7 @@ agents:
       - Process leaf tasks first.
     model: gpt-5.4
     tool: codex
+    mcp_servers: ["ao"]
 
   system-monitor:
     system_prompt: |

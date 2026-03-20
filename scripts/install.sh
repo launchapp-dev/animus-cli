@@ -96,6 +96,9 @@ main() {
     fi
     cp "${stage_dir}/${bin}" "${INSTALL_DIR}/${bin}"
     chmod +x "${INSTALL_DIR}/${bin}"
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
+      codesign --force --sign - "${INSTALL_DIR}/${bin}" 2>/dev/null || true
+    fi
   done
 
   info "Installed to ${INSTALL_DIR}:"
