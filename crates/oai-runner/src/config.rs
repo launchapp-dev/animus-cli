@@ -58,6 +58,9 @@ fn infer_api_base(normalized_model: &str) -> Result<String> {
     if normalized_model.starts_with("openrouter/") {
         return Ok("https://openrouter.ai/api/v1".to_string());
     }
+    if normalized_model.starts_with("kimi-code/") || (normalized_model.contains("kimi") && normalized_model.contains("code")) {
+        return Ok("https://api.kimi.com/coding/v1".to_string());
+    }
     if normalized_model.starts_with("kimi/") || normalized_model.starts_with("moonshot/") || normalized_model.contains("kimi") {
         return Ok("https://api.moonshot.ai/v1".to_string());
     }
