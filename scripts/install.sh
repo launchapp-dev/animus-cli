@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO="launchapp-dev/ao"
 INSTALL_DIR="${AO_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARIES=(ao agent-runner llm-cli-wrapper)
+BINARIES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
