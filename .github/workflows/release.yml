@@ -169,7 +169,7 @@ jobs:
           import os
           from pathlib import Path
 
-          binaries = ["ao", "agent-runner", "llm-cli-wrapper"]
+          binaries = ["ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner"]
           metadata = {
               "schema": "ao.release.v1",
               "version": os.environ["VERSION"],
