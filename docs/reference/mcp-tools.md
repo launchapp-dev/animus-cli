@@ -116,7 +116,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Queue Operations (6 tools)
+## Queue Operations (7 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -126,6 +126,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | `ao.queue.reorder` | Set preferred dispatch order | `subject_ids[]` |
 | `ao.queue.hold` | Hold a pending subject from dispatch | `subject_id` |
 | `ao.queue.release` | Release a held subject for dispatch | `subject_id` |
+| `ao.queue.drop` | Remove a queued subject dispatch regardless of status (pending, assigned, or held) | `subject_id`, `project_root` |
 
 ---
 
