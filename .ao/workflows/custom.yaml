@@ -27,7 +27,7 @@ agents:
   default:
     model: minimax/MiniMax-M2.7
     tool: oai-runner
-    mcp_servers: ["ao"]
+    mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking"]
 
   work-planner:
     system_prompt: |
