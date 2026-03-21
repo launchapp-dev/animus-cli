@@ -356,9 +356,10 @@ impl WebApiService {
         let project_root = std::path::Path::new(&self.context.project_root);
         let loaded = load_workflow_config_or_default(project_root);
         let mut config = loaded.config;
-        let profile = config.agent_profiles.get_mut(&name).ok_or_else(|| {
-            WebApiError::new("not_found", format!("agent profile '{name}' not found"), 3)
-        })?;
+        let profile = config
+            .agent_profiles
+            .get_mut(&name)
+            .ok_or_else(|| WebApiError::new("not_found", format!("agent profile '{name}' not found"), 3))?;
         if let Some(m) = model {
             profile.model = if m.is_empty() { None } else { Some(m) };
         }

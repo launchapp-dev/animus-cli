@@ -20,19 +20,26 @@ ao workflow run --task-id TASK-001  # Run workflow for a task
 
 ## Workspace Layout
 
-10-crate Rust workspace:
+16-crate Rust workspace:
 
 ```
 crates/
-├── orchestrator-cli/        # Main `ao` binary (clap CLI, 24 top-level commands)
-├── orchestrator-core/       # Domain logic, state management, ServiceHub DI
-├── orchestrator-web-api/    # Web API business logic
-├── orchestrator-web-server/ # Axum web server + embedded static assets
-├── orchestrator-web-contracts/ # Shared web types
-├── protocol/                # Wire protocol types shared across all crates
-├── agent-runner/            # Standalone daemon managing LLM CLI processes via IPC
-├── llm-cli-wrapper/         # Abstraction over AI CLI tools (claude, codex, gemini, etc.)
-└── oai-runner/              # OpenAI-compatible streaming API client
+├── orchestrator-cli/            # Main `ao` binary (clap CLI, 24 top-level commands)
+├── orchestrator-core/           # Domain logic, state management, ServiceHub DI
+├── orchestrator-config/         # Configuration management and validation
+├── orchestrator-store/          # Persistent state storage and persistence
+├── orchestrator-web-api/        # Web API business logic
+├── orchestrator-web-server/     # Axum web server + embedded static assets
+├── orchestrator-web-contracts/  # Shared web types
+├── protocol/                    # Wire protocol types shared across all crates
+├── agent-runner/                # Standalone daemon managing LLM CLI processes via IPC
+├── llm-cli-wrapper/            # Abstraction over AI CLI tools (claude, codex, gemini, etc.)
+├── oai-runner/                  # OpenAI-compatible streaming API client
+├── workflow-runner-v2/          # Multi-phase workflow execution engine
+├── orchestrator-daemon-runtime/ # Daemon scheduling and runtime orchestration
+├── orchestrator-providers/      # LLM provider abstraction and routing
+├── orchestrator-git-ops/        # Git operations and worktree management
+└── orchestrator-notifications/  # Notification delivery and subscription management
 ```
 
 ## Build & Test
@@ -75,8 +82,8 @@ See `docs/reference/cli/index.md` for the full command tree with all flags.
 | Group | Commands | Purpose |
 |---|---|---|
 | **Core** | `task`, `workflow`, `daemon`, `agent` | Task management, workflow execution, daemon lifecycle, agent runs |
-| **Planning** | `vision`, `requirements`, `execute`, `architecture` | Project vision, requirements drafting, execution planning |
-| **Operations** | `runner`, `output`, `errors`, `history` | Runner health, run output, error tracking, execution history |
+| **Planning** | `vision`, `requirements`, `architecture` | Project vision, requirements drafting, architecture design |
+| **Operations** | `runner`, `output`, `errors`, `history`, `queue` | Runner health, run output, error tracking, execution history, dispatch queue |
 | **Infrastructure** | `git`, `model`, `skill`, `mcp`, `web` | Git ops, model routing, skill packages, MCP server, web UI |
 | **UX** | `status`, `setup`, `doctor`, `tui` | Dashboard, onboarding, diagnostics, terminal UI |
 | **Review/QA** | `review`, `qa` | Review decisions, QA gate evaluation |

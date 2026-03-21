@@ -134,6 +134,7 @@ mod tests {
         let request = ChatRequest {
             model: "minimax/MiniMax-M2.1".to_string(),
             messages: vec![ChatMessage {
+                reasoning_content: None,
                 role: "user".to_string(),
                 content: Some("hello".to_string()),
                 tool_calls: None,
@@ -181,7 +182,13 @@ mod tests {
 
     #[test]
     fn chat_message_skips_none_fields() {
-        let msg = ChatMessage { role: "assistant".to_string(), content: None, tool_calls: None, tool_call_id: None };
+        let msg = ChatMessage {
+            reasoning_content: None,
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json.get("content").is_none());
         assert!(json.get("tool_calls").is_none());

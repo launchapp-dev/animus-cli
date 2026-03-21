@@ -33,10 +33,7 @@ fn get_provider_state(api_base: &str) -> Arc<ProviderState> {
     let map = write.get_or_insert_with(HashMap::new);
     map.entry(api_base.to_string())
         .or_insert_with(|| {
-            Arc::new(ProviderState {
-                consecutive_failures: AtomicU32::new(0),
-                circuit_open_until: AtomicU64::new(0),
-            })
+            Arc::new(ProviderState { consecutive_failures: AtomicU32::new(0), circuit_open_until: AtomicU64::new(0) })
         })
         .clone()
 }
@@ -89,7 +86,10 @@ impl ApiClient {
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
         let state = get_provider_state(&self.api_base);
         if circuit_is_open(&state) {
-            bail!("Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.", self.api_base);
+            bail!(
+                "Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.",
+                self.api_base
+            );
         }
 
         let url = format!("{}/chat/completions", self.api_base);
@@ -103,7 +103,9 @@ impl ApiClient {
                     // If we already sent chunks to the user, retrying the whole request
                     // will lead to duplicate output. Better to fail or implement resume.
                     // OpenAI-style APIs usually don't support resume mid-stream.
-                    return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content")));
+                    return Err(
+                        last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content"))
+                    );
                 }
 
                 let delay = Duration::from_millis(500 * 2u64.pow(attempt as u32));
@@ -128,7 +130,7 @@ impl ApiClient {
                         || err_str.contains("connection closed")
                         || err_str.contains("broken pipe")
                         || err_str.contains("reset by peer");
-                    
+
                     if is_rate_limit || is_server_error || is_transient {
                         record_failure(&state, &self.api_base);
                         let reason = if is_rate_limit {

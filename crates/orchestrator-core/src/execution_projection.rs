@@ -22,6 +22,7 @@ pub use projector_registry::{
 pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
 pub const WORKFLOW_RUNNER_CANCELLED_PREFIX: &str = "workflow runner cancelled: ";
 pub const WORKFLOW_RUNNER_EXITED_PREFIX: &str = "workflow runner exited without workflow status";
+pub const ESCALATED_BLOCKED_PREFIX: &str = "escalated to human review: ";
 pub const MAX_RUNNER_FAILURE_RESETS: u32 = 3;
 
 /// Returns true when a task is blocked specifically because a workflow runner
@@ -48,6 +49,13 @@ pub async fn reconcile_runner_blocked_task(hub: Arc<dyn ServiceHub>, task: &Orch
     let count = task.consecutive_dispatch_failures.unwrap_or(0).saturating_add(1);
 
     if count > MAX_RUNNER_FAILURE_RESETS {
+        // If the blocked_reason has already been updated to the escalation prefix
+        // on a previous tick, silently skip — the escalation has already been
+        // logged and persisted.
+        if task.blocked_reason.as_deref().is_some_and(|r| r.starts_with(ESCALATED_BLOCKED_PREFIX)) {
+            return Ok(false);
+        }
+
         eprintln!(
             "{}: task {} has been reset {} times after runner failures — escalating to human review (blocked_reason={:?})",
             protocol::ACTOR_DAEMON,
@@ -55,6 +63,21 @@ pub async fn reconcile_runner_blocked_task(hub: Arc<dyn ServiceHub>, task: &Orch
             count,
             task.blocked_reason,
         );
+
+        // Persist the escalated reason so `is_workflow_runner_blocked()` returns
+        // false on subsequent ticks, preventing repeated escalation log spam.
+        let mut updated = task.clone();
+        updated.blocked_reason = Some(format!(
+            "{}{} (after {} runner failures)",
+            ESCALATED_BLOCKED_PREFIX,
+            task.blocked_reason.as_deref().unwrap_or("unknown runner failure"),
+            count,
+        ));
+        updated.metadata.updated_at = Utc::now();
+        updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
+        updated.metadata.version = updated.metadata.version.saturating_add(1);
+        let _ = hub.tasks().replace(updated).await;
+
         return Ok(false);
     }
 
@@ -242,7 +265,7 @@ mod tests {
 
     use super::{
         execution_fact_subject_kind, is_workflow_runner_blocked, project_execution_fact, reconcile_runner_blocked_task,
-        MAX_RUNNER_FAILURE_RESETS,
+        ESCALATED_BLOCKED_PREFIX, MAX_RUNNER_FAILURE_RESETS,
     };
     use crate::{
         services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
@@ -563,6 +586,59 @@ mod tests {
         assert!(!result);
         let still_blocked = hub.tasks().get("TASK-R2").await.unwrap();
         assert_eq!(still_blocked.status, TaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn reconcile_updates_blocked_reason_on_escalation() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_runner_blocked_task(
+            &hub,
+            "TASK-R4",
+            "workflow runner failed: workflow runner exited unsuccessfully with status Some(1)",
+            Some(MAX_RUNNER_FAILURE_RESETS),
+        )
+        .await;
+
+        let task = hub.tasks().get("TASK-R4").await.unwrap();
+        let _ = reconcile_runner_blocked_task(hub.clone(), &task).await.unwrap();
+
+        let updated = hub.tasks().get("TASK-R4").await.unwrap();
+        assert!(updated.blocked_reason.is_some());
+        let reason = updated.blocked_reason.as_deref().unwrap();
+        assert!(
+            reason.starts_with(ESCALATED_BLOCKED_PREFIX),
+            "expected blocked_reason to start with escalation prefix, got: {reason}"
+        );
+        // Once escalated, is_workflow_runner_blocked should return false
+        assert!(
+            !is_workflow_runner_blocked(&updated),
+            "escalated task should no longer be considered workflow-runner-blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_does_not_relog_escalation_on_subsequent_ticks() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_runner_blocked_task(
+            &hub,
+            "TASK-R5",
+            "workflow runner failed: workflow runner exited unsuccessfully with status Some(1)",
+            Some(MAX_RUNNER_FAILURE_RESETS),
+        )
+        .await;
+
+        // First call — triggers escalation log and persists updated blocked_reason
+        let task = hub.tasks().get("TASK-R5").await.unwrap();
+        let result1 = reconcile_runner_blocked_task(hub.clone(), &task).await.unwrap();
+        assert!(!result1);
+
+        // Second call — should silently skip because blocked_reason now uses
+        // the escalation prefix, so is_workflow_runner_blocked returns false.
+        let updated = hub.tasks().get("TASK-R5").await.unwrap();
+        assert!(
+            !is_workflow_runner_blocked(&updated),
+            "task should no longer be workflow-runner-blocked after escalation"
+        );
     }
 
     fn base_test_task(id: &str) -> OrchestratorTask {

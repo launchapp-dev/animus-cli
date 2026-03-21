@@ -23,12 +23,15 @@ dependencies = [
  "dirs",
  "fs2",
  "llm-cli-wrapper",
+ "once_cell",
  "protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

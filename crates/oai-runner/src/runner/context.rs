@@ -133,7 +133,13 @@ mod tests {
     use super::*;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
-        ChatMessage { reasoning_content: None, role: role.to_string(), content: Some(content.to_string()), tool_calls: None, tool_call_id: None }
+        ChatMessage {
+            reasoning_content: None,
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 
     #[test]

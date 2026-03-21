@@ -52,6 +52,15 @@ ao
 │   ├── archive              Archive project
 │   └── remove               Remove project
 │
+├── queue                     Inspect and mutate the daemon dispatch queue
+│   ├── list                 List queued dispatches
+│   ├── stats                Show queue statistics
+│   ├── enqueue              Enqueue a task-backed subject dispatch
+│   ├── hold                 Hold a queued subject
+│   ├── release              Release a held queued subject
+│   ├── drop                 Drop (remove) a queued subject dispatch
+│   └── reorder              Reorder queued subjects by subject id
+│
 ├── task                     Task management
 │   ├── list                 List tasks (filterable)
 │   ├── prioritized          Tasks sorted by priority
@@ -237,6 +246,18 @@ ao
 │   │   └── cleanup          Clean orphans
 │   └── restart-stats        Restart statistics
 │
+├── pack                     Install, inspect, and pin workflow packs
+│   ├── install              Install a pack from local path or marketplace
+│   ├── list                 List discovered packs (active/inactive)
+│   ├── inspect              Inspect a discovered pack or local manifest
+│   ├── pin                  Pin a pack version/source or toggle enablement
+│   ├── search               Search packs across marketplace registries
+│   └── registry
+│       ├── add              Add a marketplace registry (git URL)
+│       ├── remove           Remove a marketplace registry
+│       ├── list             List all registered marketplace registries
+│       └── sync             Sync (re-clone) a registry for latest catalog
+│
 ├── output                   Run output inspection
 │   ├── run                  Read run events
 │   ├── artifacts            List artifacts
@@ -258,7 +279,7 @@ ao
 
 | Metric | Count |
 |---|---|
-| Top-level commands | 24 |
+| Top-level commands | 26 |
 | Total subcommands (all levels) | ~130+ |
 | Commands with `--confirmation` pattern | 8 |
 | Commands with `--input-json` | 15+ |
