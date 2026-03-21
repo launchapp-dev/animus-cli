@@ -213,18 +213,10 @@ mod tests {
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
-        let err = resolve_enqueue_dispatch(
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect_err("missing subject should fail");
+        let err =
+            resolve_enqueue_dispatch(hub, temp.path().to_string_lossy().as_ref(), None, None, None, None, None, None)
+                .await
+                .expect_err("missing subject should fail");
 
         let msg = err.to_string();
         assert!(msg.contains("--task-id"), "error should mention --task-id");
