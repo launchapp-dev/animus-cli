@@ -24,15 +24,46 @@ fn session_file_path_in(base: &Path, session_id: &str) -> PathBuf {
     base.join("sessions").join(format!("{}.json", session_id))
 }
 
+/// Maximum number of prior session messages to load on resume.
+/// When sessions grow very large (e.g., 300+ messages), loading all prior
+/// messages can overwhelm the context window before truncation has a chance
+/// to trim them, leading to repeated "[oai-runner] Context management: truncated"
+/// cycles that stall the agent. Capping at the most recent messages preserves
+/// enough context for continuity while keeping the initial context within bounds.
+const MAX_RESUME_MESSAGES: usize = 50;
+
 fn load_session_messages_from(base: &Path, session_id: &str) -> Vec<ChatMessage> {
     let path = session_file_path_in(base, session_id);
     if !path.exists() {
         return Vec::new();
     }
-    match std::fs::read_to_string(&path) {
+    let mut messages: Vec<ChatMessage> = match std::fs::read_to_string(&path) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
         Err(_) => Vec::new(),
+    };
+
+    if messages.len() > MAX_RESUME_MESSAGES {
+        let original_len = messages.len();
+        // Keep the system message (if present) and the most recent messages.
+        let system_idx = messages.iter().position(|m| m.role == "system");
+        let keep_from_start = system_idx.map_or(0, |idx| idx + 1);
+        let keep_count = MAX_RESUME_MESSAGES.saturating_sub(keep_from_start);
+        let trim_start = keep_from_start;
+        let trim_end = messages.len().saturating_sub(keep_count);
+
+        if trim_end > trim_start {
+            let dropped = trim_end - trim_start;
+            messages.drain(trim_start..trim_end);
+            eprintln!(
+                "[oai-runner] Capped resumed session from {} to {} messages (dropped {} oldest non-system messages)",
+                original_len,
+                messages.len(),
+                dropped
+            );
+        }
     }
+
+    messages
 }
 
 fn save_session_messages_to(base: &Path, session_id: &str, messages: &[ChatMessage]) -> Result<()> {
@@ -729,5 +760,100 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let loaded = load_session_messages_from(dir.path(), "nonexistent-session-id");
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_session_caps_large_history_to_max_resume_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let sid = "test-session-cap";
+
+        // Build a session with system + 80 user/assistant pairs = 161 messages
+        let mut messages = vec![ChatMessage {
+            reasoning_content: None,
+            role: "system".to_string(),
+            content: Some("You are helpful.".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        for i in 0..80 {
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "user".to_string(),
+                content: Some(format!("Question {}", i)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "assistant".to_string(),
+                content: Some(format!("Answer {}", i)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        save_session_messages_to(base, sid, &messages).unwrap();
+        let loaded = load_session_messages_from(base, sid);
+
+        // Should be capped: 1 system + 49 most recent messages = 50
+        assert_eq!(loaded.len(), MAX_RESUME_MESSAGES);
+        assert_eq!(loaded[0].role, "system");
+        // The most recent messages should be preserved
+        assert_eq!(loaded.last().unwrap().content.as_deref(), Some("Answer 79"));
+        // After capping, the first non-system message should be partway through the history
+        assert!(loaded[1].content.as_deref().unwrap().contains("55"));
+    }
+
+    #[test]
+    fn load_session_preserves_small_history_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let sid = "test-session-small";
+
+        let messages = vec![
+            ChatMessage {
+                reasoning_content: None,
+                role: "system".to_string(),
+                content: Some("You are helpful.".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                reasoning_content: None,
+                role: "user".to_string(),
+                content: Some("Hello".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        save_session_messages_to(base, sid, &messages).unwrap();
+        let loaded = load_session_messages_from(base, sid);
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn load_session_caps_at_exact_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let sid = "test-session-boundary";
+
+        // Build exactly MAX_RESUME_MESSAGES messages
+        let mut messages = Vec::new();
+        for i in 0..MAX_RESUME_MESSAGES {
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "user".to_string(),
+                content: Some(format!("Message {}", i)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        save_session_messages_to(base, sid, &messages).unwrap();
+        let loaded = load_session_messages_from(base, sid);
+        // Exactly at the boundary — no capping needed
+        assert_eq!(loaded.len(), MAX_RESUME_MESSAGES);
     }
 }

@@ -3,6 +3,9 @@ use cli_wrapper::{is_ai_cli_tool, parse_launch_from_runtime_contract, LaunchInvo
 use std::collections::HashMap;
 use tracing::{debug, warn};
 
+/// Default idle timeout for AI CLI processes when no override is specified (seconds).
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
+
 pub(super) fn resolve_idle_timeout_secs(
     tool: &str,
     hard_timeout_secs: Option<u64>,
@@ -20,7 +23,7 @@ pub(super) fn resolve_idle_timeout_secs(
             .and_then(|value| value.as_u64())
     });
 
-    let requested = contract_override.unwrap_or(600);
+    let requested = contract_override.unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
     if requested == 0 {
         return None;
     }

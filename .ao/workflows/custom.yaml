@@ -1367,6 +1367,7 @@ phases:
     directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested code."
     runtime:
       fallback_models: ["zai-coding-plan/glm-5-turbo", "minimax/MiniMax-M2.5", "claude-sonnet-4-6"]
+      timeout_secs: 900
     capabilities:
       mutates_state: true
   gemini-implementation:

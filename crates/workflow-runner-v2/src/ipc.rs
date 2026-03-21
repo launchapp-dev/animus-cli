@@ -8,7 +8,7 @@ use orchestrator_core::runtime_contract;
 use protocol::{AgentRunEvent, IpcAuthRequest, IpcAuthResult, OutputStreamType, RunId, MAX_UNIX_SOCKET_PATH_LEN};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::time::Duration;
+use tokio::time::{sleep, Duration};
 
 fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
     protocol::scoped_state_root(project_root)
@@ -49,42 +49,102 @@ fn shorten_runner_config_dir_if_needed(config_dir: PathBuf) -> PathBuf {
     shortened
 }
 
+/// Maximum number of socket connection retry attempts for transient failures.
+const CONNECT_RUNNER_RETRY_ATTEMPTS: usize = 3;
+
+/// Initial backoff delay between socket connection retries (milliseconds).
+const CONNECT_RUNNER_INITIAL_BACKOFF_MS: u64 = 200;
+
+/// Maximum backoff delay between socket connection retries (seconds).
+const CONNECT_RUNNER_MAX_BACKOFF_SECS: u64 = 3;
+
 #[cfg(unix)]
 pub async fn connect_runner(config_dir: &Path) -> Result<tokio::net::UnixStream> {
     let socket_path = config_dir.join("agent-runner.sock");
     let connect_timeout_secs: u64 = 5;
-    let connect_future = tokio::net::UnixStream::connect(&socket_path);
-    match tokio::time::timeout(Duration::from_secs(connect_timeout_secs), connect_future).await {
-        Ok(Ok(mut stream)) => {
-            authenticate_runner_stream(&mut stream, config_dir)
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "failed to authenticate runner connection at {}: {error}",
+    let mut backoff = Duration::from_millis(CONNECT_RUNNER_INITIAL_BACKOFF_MS);
+
+    for attempt in 1..=CONNECT_RUNNER_RETRY_ATTEMPTS {
+        let connect_future = tokio::net::UnixStream::connect(&socket_path);
+        match tokio::time::timeout(Duration::from_secs(connect_timeout_secs), connect_future).await {
+            Ok(Ok(mut stream)) => match authenticate_runner_stream(&mut stream, config_dir).await {
+                Ok(()) => return Ok(stream),
+                Err(auth_error) => {
+                    if attempt < CONNECT_RUNNER_RETRY_ATTEMPTS {
+                        eprintln!(
+                            "[ao] Runner auth failed (attempt {}/{}): {}, retrying in {:?}...",
+                            attempt, CONNECT_RUNNER_RETRY_ATTEMPTS, auth_error, backoff
+                        );
+                        sleep(backoff).await;
+                        backoff = std::cmp::min(
+                            backoff.saturating_mul(2),
+                            Duration::from_secs(CONNECT_RUNNER_MAX_BACKOFF_SECS),
+                        );
+                        continue;
+                    }
+                    return Err(anyhow!(
+                        "failed to authenticate runner connection at {}: {auth_error}",
                         socket_path.display()
+                    ));
+                }
+            },
+            Ok(Err(error)) => {
+                if attempt < CONNECT_RUNNER_RETRY_ATTEMPTS {
+                    let base_message = format!(
+                        "failed to connect to runner socket at {} (timeout={}s)",
+                        socket_path.display(),
+                        connect_timeout_secs
+                    );
+                    eprintln!(
+                        "[ao] {} (attempt {}/{}): {}, retrying in {:?}...",
+                        base_message, attempt, CONNECT_RUNNER_RETRY_ATTEMPTS, error, backoff
+                    );
+                    sleep(backoff).await;
+                    backoff =
+                        std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(CONNECT_RUNNER_MAX_BACKOFF_SECS));
+                    continue;
+                }
+                let hint = if socket_path.exists() {
+                    format!(
+                        "failed to connect to runner socket at {} (timeout={}s). socket file exists and may be stale",
+                        socket_path.display(),
+                        connect_timeout_secs
                     )
-                })?;
-            Ok(stream)
+                } else {
+                    format!(
+                        "failed to connect to runner socket at {} (timeout={}s)",
+                        socket_path.display(),
+                        connect_timeout_secs
+                    )
+                };
+                return Err(anyhow!("{hint}: {error}"));
+            }
+            Err(_) => {
+                if attempt < CONNECT_RUNNER_RETRY_ATTEMPTS {
+                    eprintln!(
+                        "[ao] Timed out connecting to runner socket at {} after {}s (attempt {}/{}), retrying in {:?}...",
+                        socket_path.display(), connect_timeout_secs, attempt, CONNECT_RUNNER_RETRY_ATTEMPTS, backoff
+                    );
+                    sleep(backoff).await;
+                    backoff =
+                        std::cmp::min(backoff.saturating_mul(2), Duration::from_secs(CONNECT_RUNNER_MAX_BACKOFF_SECS));
+                    continue;
+                }
+                return Err(anyhow!(
+                    "timed out connecting to runner socket at {} after {}s ({} attempts); if no runner is active, remove stale socket and restart runner",
+                    socket_path.display(),
+                    connect_timeout_secs,
+                    CONNECT_RUNNER_RETRY_ATTEMPTS
+                ));
+            }
         }
-        Ok(Err(error)) => {
-            let base_message = format!(
-                "failed to connect to runner socket at {} (timeout={}s)",
-                socket_path.display(),
-                connect_timeout_secs
-            );
-            let hint = if socket_path.exists() {
-                format!("{base_message}. socket file exists and may be stale")
-            } else {
-                base_message
-            };
-            Err(anyhow!("{hint}: {error}"))
-        }
-        Err(_) => Err(anyhow!(
-            "timed out connecting to runner socket at {} after {}s; if no runner is active, remove stale socket and restart runner",
-            socket_path.display(),
-            connect_timeout_secs
-        )),
     }
+
+    Err(anyhow!(
+        "exhausted {} connection attempts to runner socket at {}",
+        CONNECT_RUNNER_RETRY_ATTEMPTS,
+        socket_path.display()
+    ))
 }
 
 #[cfg(not(unix))]
