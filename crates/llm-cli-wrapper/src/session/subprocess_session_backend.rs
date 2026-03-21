@@ -18,6 +18,58 @@ use super::{
     session_request::SessionRequest, session_run::SessionRun, session_stability::SessionStability,
 };
 
+/// Check if the runtime contract specifies an active MCP tool policy.
+///
+/// A tool policy is "active" when:
+/// - MCP is configured (endpoint or stdio) AND enforcement is explicitly enabled (`enforce_only: true`), OR
+/// - MCP is configured (endpoint or stdio) AND any tool allow/deny patterns are defined
+fn has_active_tool_policy(runtime_contract: Option<&serde_json::Value>) -> bool {
+    let Some(contract) = runtime_contract else {
+        return false;
+    };
+
+    // Check for explicit endpoint or stdio config (indicates MCP is enabled)
+    let has_endpoint = contract
+        .pointer("/mcp/endpoint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+
+    let has_stdio = contract
+        .pointer("/mcp/stdio/command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+
+    if !has_endpoint && !has_stdio {
+        return false;
+    }
+
+    // Check if MCP enforcement is explicitly enabled
+    let enforce_only = contract
+        .pointer("/mcp/enforce_only")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    // Check for tool policy patterns
+    let has_tool_policy_allow = contract
+        .pointer("/mcp/tool_policy/allow")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|arr| !arr.is_empty());
+
+    let has_tool_policy_deny = contract
+        .pointer("/mcp/tool_policy/deny")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|arr| !arr.is_empty());
+
+    // Policy is active if:
+    // 1. MCP is configured AND enforcement is explicitly enabled, OR
+    // 2. MCP is configured AND any tool policy patterns are defined
+    enforce_only || has_tool_policy_allow || has_tool_policy_deny
+}
+
 pub struct SubprocessSessionBackend;
 
 impl Default for SubprocessSessionBackend {
@@ -48,7 +100,7 @@ impl SessionBackend for SubprocessSessionBackend {
             supports_resume: false,
             supports_terminate: false,
             supports_permissions: false,
-            supports_mcp: true,
+            supports_mcp: false,
             supports_tool_events: false,
             supports_thinking_events: false,
             supports_artifact_events: false,
@@ -57,6 +109,17 @@ impl SessionBackend for SubprocessSessionBackend {
     }
 
     async fn start_session(&self, request: SessionRequest) -> Result<SessionRun> {
+        let runtime_contract = request.extras.get("runtime_contract");
+
+        // Pre-spawn guard: reject subprocess runs when there's an active MCP tool policy.
+        // The subprocess backend cannot enforce MCP tool restrictions, so we must refuse
+        // to run rather than silently bypassing the policy.
+        if has_active_tool_policy(runtime_contract) {
+            return Err(Error::PolicyViolation(
+                "subprocess backend cannot enforce MCP tool policy; refusing to spawn subprocess".to_string(),
+            ));
+        }
+
         let session_id = Uuid::new_v4().to_string();
         let session_id_for_run = session_id.clone();
         let invocation = launch_invocation_for_request(&request)?;
@@ -283,5 +346,189 @@ mod tests {
 
         let finished = run.events.recv().await.expect("finished event");
         assert_eq!(finished, SessionEvent::Finished { exit_code: Some(0) });
+    }
+
+    #[tokio::test]
+    async fn subprocess_backend_refuses_runtime_with_enforce_only_and_mcp_endpoint() {
+        let backend = SubprocessSessionBackend::new();
+        let request = SessionRequest {
+            tool: "sh".to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({
+                "runtime_contract": {
+                    "cli": {
+                        "launch": {
+                            "command": "sh",
+                            "args": ["-c", "echo hello"],
+                            "prompt_via_stdin": false
+                        }
+                    },
+                    "mcp": {
+                        "endpoint": "http://localhost:3000",
+                        "enforce_only": true,
+                        "agent_id": "ao"
+                    }
+                }
+            }),
+        };
+
+        let result = backend.start_session(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::PolicyViolation(ref msg) if msg.contains("cannot enforce MCP tool policy"))
+        );
+    }
+
+    #[tokio::test]
+    async fn subprocess_backend_refuses_runtime_with_tool_policy_allow() {
+        let backend = SubprocessSessionBackend::new();
+        let request = SessionRequest {
+            tool: "sh".to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({
+                "runtime_contract": {
+                    "cli": {
+                        "launch": {
+                            "command": "sh",
+                            "args": ["-c", "echo hello"],
+                            "prompt_via_stdin": false
+                        }
+                    },
+                    "mcp": {
+                        "stdio": {
+                            "command": "npx",
+                            "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+                        },
+                        "tool_policy": {
+                            "allow": ["Read", "Write"]
+                        }
+                    }
+                }
+            }),
+        };
+
+        let result = backend.start_session(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::PolicyViolation(ref msg) if msg.contains("cannot enforce MCP tool policy"))
+        );
+    }
+
+    #[tokio::test]
+    async fn subprocess_backend_refuses_runtime_with_tool_policy_deny() {
+        let backend = SubprocessSessionBackend::new();
+        let request = SessionRequest {
+            tool: "sh".to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({
+                "runtime_contract": {
+                    "cli": {
+                        "launch": {
+                            "command": "sh",
+                            "args": ["-c", "echo hello"],
+                            "prompt_via_stdin": false
+                        }
+                    },
+                    "mcp": {
+                        "stdio": {
+                            "command": "npx",
+                            "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+                        },
+                        "tool_policy": {
+                            "deny": ["Delete", "Write"]
+                        }
+                    }
+                }
+            }),
+        };
+
+        let result = backend.start_session(request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::PolicyViolation(ref msg) if msg.contains("cannot enforce MCP tool policy"))
+        );
+    }
+
+    #[tokio::test]
+    async fn subprocess_backend_allows_runtime_with_mcp_endpoint_without_tool_policy() {
+        // MCP endpoint alone without tool policy patterns does not constitute an active tool policy
+        // that requires enforcement - the subprocess can run without tool restrictions
+        let backend = SubprocessSessionBackend::new();
+        let request = SessionRequest {
+            tool: "sh".to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({
+                "runtime_contract": {
+                    "cli": {
+                        "launch": {
+                            "command": "sh",
+                            "args": ["-c", "echo hello"],
+                            "prompt_via_stdin": false
+                        }
+                    },
+                    "mcp": {
+                        "endpoint": "http://localhost:3000"
+                    }
+                }
+            }),
+        };
+
+        // Without tool policy patterns, subprocess can run (MCP may be available but not enforced)
+        let result = backend.start_session(request).await;
+        assert!(result.is_ok(), "MCP endpoint alone without tool policy should be allowed");
+    }
+
+    #[tokio::test]
+    async fn subprocess_backend_allows_runtime_without_mcp_config() {
+        // This is the existing test renamed to clarify its purpose
+        let backend = SubprocessSessionBackend::new();
+        let request = SessionRequest {
+            tool: "sh".to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            cwd: PathBuf::from("."),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            // No runtime_contract at all - no MCP config
+            extras: json!({}),
+        };
+
+        let result = backend.start_session(request).await;
+        // Without runtime_contract, no MCP policy is configured, so should succeed
+        assert!(result.is_ok());
     }
 }

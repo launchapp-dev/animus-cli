@@ -27,6 +27,9 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    #[error("Policy violation: {0}")]
+    PolicyViolation(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
