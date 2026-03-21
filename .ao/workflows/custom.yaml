@@ -211,7 +211,7 @@ agents:
          b. If no PR, create one with the changelog as the PR body:
             `gh pr create --base main --head release/vX.Y.Z --title "Release vX.Y.Z" --body-file CHANGELOG-vX.Y.Z.md`
          c. If PR exists and is merged:
-            - Tag: `git tag vX.Y.Z origin/main && git push origin vX.Y.Z` (triggers release.yml CI)
+            - Do NOT tag manually — GitHub Actions auto-tags when release PR merges to main.
             - Sync develop: `git fetch origin && git checkout develop && git merge origin/main && git push origin develop`
             - Delete release branch: `git push origin --delete release/vX.Y.Z`
             - Mark release task as done.

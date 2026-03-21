@@ -1,0 +1,44 @@
+name: Auto-tag release on merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-tag:
+    name: Tag release version
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from branch name
+        id: version
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#release/}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Auto-tagging: ${VERSION}"
+
+      - name: Check tag doesn't already exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ steps.version.outputs.version }} already exists, skipping"
+            exit 0
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name "AO Release Bot"
+          git config user.email "noreply@launchapp.dev"
+          git tag "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+          echo "Tagged and pushed ${{ steps.version.outputs.version }}"
