@@ -440,12 +440,32 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
 
+          PREV_TAG="$(gh release list --repo launchapp-dev/ao --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo '')"
+          if [[ -n "${PREV_TAG}" ]]; then
+            CHANGELOG="$(git log --oneline "${PREV_TAG}..${VERSION}" --no-merges 2>/dev/null | head -30 || echo 'No changelog available')"
+          else
+            CHANGELOG="Initial release"
+          fi
+
           gh release create "${VERSION}" \
             --repo launchapp-dev/ao \
             --title "AO ${VERSION}" \
-            --notes "Release ${VERSION} — download the archive for your platform and run install.sh, or use:
+            --notes "## AO ${VERSION}
 
+          ### Install
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
-          \`\`\`" \
+          \`\`\`
+
+          ### Changelog
+          \`\`\`
+          ${CHANGELOG}
+          \`\`\`
+
+          ### Binaries
+          - \`ao\` — Main CLI + daemon
+          - \`agent-runner\` — IPC agent session manager
+          - \`llm-cli-wrapper\` — CLI tool abstraction
+          - \`ao-oai-runner\` — OpenAI-compatible model runner
+          - \`ao-workflow-runner\` — Phase executor" \
             dist/release-assets/*
