@@ -931,7 +931,24 @@ phases:
   code-review:
     mode: agent
     agent: opus-default
-    directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
+    directive: |
+      You are reviewing a Rust implementation in a 16-crate workspace. This is the quality gate before merge.
+
+      REVIEW CHECKLIST:
+      1. CORRECTNESS: Does the code do what the task description requires? Check edge cases.
+      2. SAFETY: No panics in production paths, no unwrap() on user input, proper error propagation.
+      3. ARCHITECTURE: Does it respect crate boundaries? No circular deps? Clean public API?
+      4. PERFORMANCE: No unnecessary allocations, clones, or O(n²) loops on large data.
+      5. SECURITY: No command injection, path traversal, or unvalidated input at system boundaries.
+      6. TESTS: Are the changes tested? Do existing tests still make sense?
+      7. SCOPE: Does it only change what the task requires? No unrelated refactors or feature creep.
+
+      VERDICT:
+      - advance: Code is production-ready. All checks pass.
+      - rework: Issues found. Provide EXACT file:line references and what must change.
+      - fail: Fundamentally wrong approach. Explain why and suggest alternative.
+
+      Do NOT make changes yourself. Only review and decide.
     decision_contract:
       required_evidence: [code_review_clean]
       min_confidence: 0.7
