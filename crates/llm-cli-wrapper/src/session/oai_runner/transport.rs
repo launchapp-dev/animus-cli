@@ -30,7 +30,17 @@ pub(crate) async fn start_oai_runner_session(
         let backend_label = "oai-runner-native".to_string();
         let session_id_for_event = Some(control_session_id.clone());
 
-        if let Err(error) = run_oai_runner_session(request, invocation, event_tx.clone(), cancel_rx, pid_tx, backend_label, session_id_for_event).await {
+        if let Err(error) = run_oai_runner_session(
+            request,
+            invocation,
+            event_tx.clone(),
+            cancel_rx,
+            pid_tx,
+            backend_label,
+            session_id_for_event,
+        )
+        .await
+        {
             let _ = event_tx.send(SessionEvent::Error { message: error.to_string(), recoverable: false }).await;
             let _ = event_tx.send(SessionEvent::Finished { exit_code: Some(1) }).await;
         }
@@ -113,9 +123,7 @@ async fn run_oai_runner_session(
     let _ = pid_tx.send(child.id());
 
     let pid = child.id();
-    let _ = event_tx
-        .send(SessionEvent::Started { backend, session_id, pid })
-        .await;
+    let _ = event_tx.send(SessionEvent::Started { backend, session_id, pid }).await;
 
     if let Some(mut stdin) = child.stdin.take() {
         if invocation.prompt_via_stdin && !request.prompt.is_empty() {

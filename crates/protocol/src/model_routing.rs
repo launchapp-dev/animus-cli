@@ -454,10 +454,7 @@ mod tests {
     #[test]
     fn research_phases_route_to_flash_lite() {
         let research_caps = PhaseCapabilities::defaults_for_phase("research");
-        assert_eq!(
-            default_primary_model_for_phase(None, &research_caps),
-            "gemini-2.5-flash-lite"
-        );
+        assert_eq!(default_primary_model_for_phase(None, &research_caps), "gemini-2.5-flash-lite");
         assert_eq!(
             default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &research_caps),
             "gemini-2.5-flash-lite"
@@ -471,10 +468,7 @@ mod tests {
     #[test]
     fn ui_ux_phases_still_use_pro_preview() {
         let design_caps = PhaseCapabilities::defaults_for_phase("design");
-        assert_eq!(
-            default_primary_model_for_phase(None, &design_caps),
-            "gemini-3.1-pro-preview"
-        );
+        assert_eq!(default_primary_model_for_phase(None, &design_caps), "gemini-3.1-pro-preview");
     }
 
     #[test]
