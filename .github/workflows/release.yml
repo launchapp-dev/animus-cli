@@ -442,10 +442,14 @@ jobs:
 
           PREV_TAG="$(gh release list --repo launchapp-dev/ao --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo '')"
           if [[ -n "${PREV_TAG}" ]]; then
-            CHANGELOG="$(git log --oneline "${PREV_TAG}..${VERSION}" --no-merges 2>/dev/null | head -30 || echo 'No changelog available')"
+            RAW_LOG="$(git log --oneline "${PREV_TAG}..${VERSION}" --no-merges 2>/dev/null | head -30 || echo '')"
           else
-            CHANGELOG="Initial release"
+            RAW_LOG="Initial release"
           fi
+
+          CHANGELOG="$(claude --print "Write a concise, user-facing changelog from these git commits. Group by category (Features, Fixes, Improvements). Use bullet points. No commit hashes. Keep it under 20 lines:
+
+          ${RAW_LOG}" 2>/dev/null || echo "${RAW_LOG}")"
 
           gh release create "${VERSION}" \
             --repo launchapp-dev/ao \
