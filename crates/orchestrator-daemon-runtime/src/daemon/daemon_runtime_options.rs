@@ -76,9 +76,8 @@ mod tests {
     use super::*;
 
     fn stable_test_home() -> std::path::PathBuf {
-        let home_dir = std::env::temp_dir()
-            .join(format!("ao-daemon-rt-test-config-{}", std::process::id()))
-            .join("home");
+        let home_dir =
+            std::env::temp_dir().join(format!("ao-daemon-rt-test-config-{}", std::process::id())).join("home");
         let _ = std::fs::create_dir_all(&home_dir);
         std::env::set_var("HOME", &home_dir);
         home_dir
@@ -114,8 +113,7 @@ mod tests {
     fn reload_from_project_config_applies_max_tasks_per_tick() {
         stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let config =
-            orchestrator_core::DaemonProjectConfig { max_tasks_per_tick: Some(10), ..Default::default() };
+        let config = orchestrator_core::DaemonProjectConfig { max_tasks_per_tick: Some(10), ..Default::default() };
         orchestrator_core::write_daemon_project_config(temp.path(), &config).expect("write config");
 
         let mut options = DaemonRuntimeOptions::default();
@@ -128,8 +126,7 @@ mod tests {
     fn reload_from_project_config_applies_auto_run_ready() {
         stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let config =
-            orchestrator_core::DaemonProjectConfig { auto_run_ready: Some(false), ..Default::default() };
+        let config = orchestrator_core::DaemonProjectConfig { auto_run_ready: Some(false), ..Default::default() };
         orchestrator_core::write_daemon_project_config(temp.path(), &config).expect("write config");
 
         let mut options = DaemonRuntimeOptions::default();
@@ -142,10 +139,7 @@ mod tests {
     fn reload_from_project_config_applies_stale_threshold_hours() {
         stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let config = orchestrator_core::DaemonProjectConfig {
-            stale_threshold_hours: Some(48),
-            ..Default::default()
-        };
+        let config = orchestrator_core::DaemonProjectConfig { stale_threshold_hours: Some(48), ..Default::default() };
         orchestrator_core::write_daemon_project_config(temp.path(), &config).expect("write config");
 
         let mut options = DaemonRuntimeOptions::default();

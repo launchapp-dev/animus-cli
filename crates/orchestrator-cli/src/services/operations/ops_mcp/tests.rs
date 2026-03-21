@@ -1028,13 +1028,7 @@ fn build_daemon_config_set_args_defaults_minimal() {
 fn build_daemon_config_set_args_wires_pool_size() {
     let input = DaemonConfigSetInput { pool_size: Some(8), ..Default::default() };
     let args = build_daemon_config_set_args(&input);
-    assert_eq!(
-        args,
-        vec!["daemon", "config", "--pool-size", "8"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(args, vec!["daemon", "config", "--pool-size", "8"].into_iter().map(String::from).collect::<Vec<_>>());
 }
 
 #[test]
@@ -1043,10 +1037,7 @@ fn build_daemon_config_set_args_wires_interval_secs() {
     let args = build_daemon_config_set_args(&input);
     assert_eq!(
         args,
-        vec!["daemon", "config", "--interval-secs", "15"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>()
+        vec!["daemon", "config", "--interval-secs", "15"].into_iter().map(String::from).collect::<Vec<_>>()
     );
 }
 
@@ -1056,10 +1047,7 @@ fn build_daemon_config_set_args_wires_max_tasks_per_tick() {
     let args = build_daemon_config_set_args(&input);
     assert_eq!(
         args,
-        vec!["daemon", "config", "--max-tasks-per-tick", "10"]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>()
+        vec!["daemon", "config", "--max-tasks-per-tick", "10"].into_iter().map(String::from).collect::<Vec<_>>()
     );
 }
 
