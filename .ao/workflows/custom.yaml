@@ -1925,7 +1925,7 @@ schedules:
     enabled: true
 
   - id: release-manager
-    cron: "0 */6 * * *"
+    cron: "0 */2 * * *"
     workflow_ref: release-manager
     enabled: true
 
