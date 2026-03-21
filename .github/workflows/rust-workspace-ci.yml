@@ -61,6 +61,14 @@ jobs:
           - orchestrator-web-contracts
           - orchestrator-web-api
           - orchestrator-web-server
+          - orchestrator-daemon-runtime
+          - orchestrator-notifications
+          - orchestrator-git-ops
+          - orchestrator-config
+          - orchestrator-store
+          - oai-runner
+          - workflow-runner-v2
+          - orchestrator-providers
     env:
       CARGO_TERM_COLOR: always
 
