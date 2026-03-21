@@ -1930,7 +1930,7 @@ schedules:
     enabled: true
 
   - id: release-manager
-    cron: "0 * * * *"
+    cron: "*/10 * * * *"
     workflow_ref: release-manager
     enabled: true
 
