@@ -197,15 +197,18 @@ agents:
          Check ao.task.stats — how many tasks are done since last release?
          Check ao.requirements.list — any requirements completed?
          Check `git log --oneline <prev_tag>..origin/develop --no-merges` for changes.
-         RELEASE if any of:
-         - A requirement was completed (milestone reached)
-         - 3+ bugfixes or features completed since last release
-         - A critical fix was merged
-         - Significant oai-runner, daemon, or workflow improvements landed
-         SKIP if only docs, monitoring, or trivial chore tasks.
+         RELEASE only if ALL of these are true:
+         - At least 10 meaningful commits (features or fixes) since the last release tag
+         - At least 1 requirement was completed OR a critical/security fix was merged
+         - The last release was more than 7 days ago (check tag date with `git log -1 --format=%ci <prev_tag>`)
+         SKIP if:
+         - Only docs, monitoring, config, or trivial chore tasks landed
+         - Fewer than 10 commits since last release
+         - Last release was less than 7 days ago (unless a critical security fix requires it)
+         When in doubt, SKIP. Releases should be deliberate, not frequent.
 
       3. CUT RELEASE BRANCH:
-         a. Parse the latest tag (e.g., v0.0.10) and bump: minor for features, patch for bugfixes only.
+         a. Parse the latest tag (e.g., v0.0.10) and bump the PATCH version only. Never bump major or minor — always patch (e.g., v0.1.0 → v0.1.1).
          b. Run `git checkout -b release/vX.Y.Z origin/develop && git push origin release/vX.Y.Z`
          c. Create a tracking task via ao.task.create: title "Release vX.Y.Z", priority "critical", type "chore"
          d. WRITE CHANGELOG: Read the commits since last tag with `git log --oneline <prev_tag>..HEAD --no-merges`.
