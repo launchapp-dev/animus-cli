@@ -48,7 +48,7 @@ impl SessionBackend for SubprocessSessionBackend {
             supports_resume: false,
             supports_terminate: false,
             supports_permissions: false,
-            supports_mcp: true,
+            supports_mcp: false,
             supports_tool_events: false,
             supports_thinking_events: false,
             supports_artifact_events: false,
