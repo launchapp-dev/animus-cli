@@ -19,15 +19,6 @@ pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
     }
 }
 
-pub(super) fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
-    match value.to_ascii_lowercase().as_str() {
-        "squash" => Ok(MergeStrategy::Squash),
-        "merge" => Ok(MergeStrategy::Merge),
-        "rebase" => Ok(MergeStrategy::Rebase),
-        _ => Err(anyhow!("phases['merge'].strategy must be one of: squash, merge, rebase (got '{}')", value)),
-    }
-}
-
 pub(super) fn yaml_phase_to_execution_definition(
     phase_id: &str,
     yaml: YamlPhaseDefinition,
@@ -128,26 +119,7 @@ pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
         name: Some(definition.name.clone()),
         description: Some(definition.description.clone()),
         phases: definition.phases.iter().map(workflow_phase_entry_to_yaml).collect(),
-        post_success: definition.post_success.clone().map(post_success_config_to_yaml),
         variables: definition.variables.clone(),
-    }
-}
-
-pub(super) fn post_success_config_to_yaml(config: PostSuccessConfig) -> YamlPostSuccessConfig {
-    YamlPostSuccessConfig { merge: config.merge.map(merge_config_to_yaml) }
-}
-
-pub(super) fn merge_config_to_yaml(config: MergeConfig) -> YamlMergeConfig {
-    YamlMergeConfig {
-        strategy: Some(match config.strategy {
-            MergeStrategy::Squash => "squash".to_string(),
-            MergeStrategy::Merge => "merge".to_string(),
-            MergeStrategy::Rebase => "rebase".to_string(),
-        }),
-        target_branch: config.target_branch,
-        create_pr: config.create_pr,
-        auto_merge: config.auto_merge,
-        cleanup_worktree: config.cleanup_worktree,
     }
 }
 
@@ -239,37 +211,13 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
 }
 
 pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition) -> Result<WorkflowDefinition> {
-    let post_success = match yaml.post_success {
-        Some(post_success) => Some(yaml_post_success_to_post_success_config(post_success)?),
-        None => None,
-    };
-
     let phases = yaml.phases.into_iter().map(yaml_phase_entry_to_workflow_phase_entry).collect::<Result<Vec<_>>>()?;
     Ok(WorkflowDefinition {
         id: yaml.id.clone(),
         name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
         description: yaml.description.unwrap_or_default(),
         phases,
-        post_success,
         variables: yaml.variables,
-    })
-}
-
-pub(super) fn yaml_post_success_to_post_success_config(yaml: YamlPostSuccessConfig) -> Result<PostSuccessConfig> {
-    let merge = match yaml.merge {
-        Some(merge) => Some(yaml_merge_to_merge_config(merge)?),
-        None => None,
-    };
-    Ok(PostSuccessConfig { merge })
-}
-
-pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeConfig> {
-    Ok(MergeConfig {
-        strategy: yaml.strategy.as_deref().map(parse_merge_strategy).transpose()?.unwrap_or_default(),
-        target_branch: yaml.target_branch,
-        create_pr: yaml.create_pr,
-        auto_merge: yaml.auto_merge,
-        cleanup_worktree: yaml.cleanup_worktree,
     })
 }
 

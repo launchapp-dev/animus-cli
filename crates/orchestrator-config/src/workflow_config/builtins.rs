@@ -98,7 +98,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 name: "AO Task Standard".to_string(),
                 description: "Canonical pack-qualified task workflow ref.".to_string(),
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "standard".to_string() })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -108,7 +107,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "ui-ux-standard".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -118,7 +116,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/requirement-plan".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -128,7 +125,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/requirements-execute".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -138,7 +134,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/task-quick-fix".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -148,7 +143,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/task-gated".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -158,7 +152,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/task-triage".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -168,7 +161,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/task-refine".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -178,7 +170,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/review-cycle".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -188,7 +179,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/requirements-draft".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -198,7 +188,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/requirements-refine".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -208,7 +197,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/vision-draft".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -218,7 +206,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef {
                     workflow_ref: "builtin/vision-refine".to_string(),
                 })],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -232,7 +219,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                     "code-review".to_string().into(),
                     "testing".to_string().into(),
                 ],
-                post_success: None,
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -249,7 +235,6 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                     "code-review".to_string().into(),
                     "testing".to_string().into(),
                 ],
-                post_success: None,
                 variables: Vec::new(),
             },
         ],

@@ -48,30 +48,8 @@ pub(super) struct YamlWorkflowDefinition {
     pub(super) description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) phases: Vec<YamlPhaseEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) post_success: Option<YamlPostSuccessConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) variables: Vec<WorkflowVariable>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct YamlPostSuccessConfig {
-    #[serde(default)]
-    pub(super) merge: Option<YamlMergeConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct YamlMergeConfig {
-    #[serde(default)]
-    pub(super) strategy: Option<String>,
-    #[serde(default = "default_target_branch")]
-    pub(super) target_branch: String,
-    #[serde(default)]
-    pub(super) create_pr: bool,
-    #[serde(default)]
-    pub(super) auto_merge: bool,
-    #[serde(default)]
-    pub(super) cleanup_worktree: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

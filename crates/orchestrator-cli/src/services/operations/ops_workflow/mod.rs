@@ -508,7 +508,6 @@ pub(crate) async fn handle_workflow(
                     name: args.name,
                     description: args.description.unwrap_or_default(),
                     phases: args.phases.into_iter().map(orchestrator_core::WorkflowPhaseEntry::Simple).collect(),
-                    post_success: None,
                     variables: Vec::new(),
                 })
             })?;

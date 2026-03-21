@@ -1,14 +1,8 @@
 use super::*;
 
+/// Configuration for automated worktree management after task completion.
 #[derive(Debug, Clone)]
-pub struct PostSuccessGitConfig {
-    pub auto_merge_enabled: bool,
-    pub auto_pr_enabled: bool,
-    pub auto_commit_before_merge: bool,
-    pub auto_merge_target_branch: String,
-    pub auto_merge_no_ff: bool,
-    pub auto_push_remote: String,
-    pub auto_cleanup_worktree_enabled: bool,
+pub struct WorktreePruneConfig {
     pub auto_prune_worktrees_after_merge: bool,
 }
 
