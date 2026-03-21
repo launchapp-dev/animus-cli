@@ -5602,6 +5602,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "jsonschema",
  "orchestrator-config",
  "orchestrator-core",
  "protocol",

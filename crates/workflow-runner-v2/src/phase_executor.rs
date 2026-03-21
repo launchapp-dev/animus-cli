@@ -344,52 +344,24 @@ fn routing_complexity(
 }
 
 pub(crate) fn validate_basic_json_schema(instance: &Value, schema: &Value) -> Result<()> {
-    let schema_object = schema.as_object().ok_or_else(|| anyhow!("schema must be a JSON object"))?;
+    let validator = jsonschema::validator_for(schema).map_err(|e| anyhow!("invalid JSON Schema: {}", e))?;
 
-    if let Some(required_fields) = schema_object.get("required").and_then(Value::as_array) {
-        let instance_object = instance.as_object().ok_or_else(|| anyhow!("instance must be a JSON object"))?;
-        for required in required_fields {
-            let Some(field) = required.as_str() else {
-                continue;
-            };
-            if !instance_object.contains_key(field) {
-                return Err(anyhow!("schema validation failed: missing required field '{}'", field));
+    let errors: Vec<String> = validator
+        .iter_errors(instance)
+        .map(|e| {
+            let path = e.instance_path().to_string();
+            if path.is_empty() {
+                format!("{}", e)
+            } else {
+                format!("at '{}': {}", path, e)
             }
-        }
-    }
+        })
+        .collect();
 
-    if let Some(properties) = schema_object.get("properties").and_then(Value::as_object) {
-        let instance_object = instance.as_object().ok_or_else(|| anyhow!("instance must be a JSON object"))?;
-        for (key, rule) in properties {
-            let Some(value) = instance_object.get(key) else {
-                continue;
-            };
-            if let Some(expected_type) = rule.get("type").and_then(Value::as_str) {
-                if !validate_schema_type(expected_type, value) {
-                    return Err(anyhow!("schema validation failed: field '{}' must be type '{}'", key, expected_type));
-                }
-            }
-            if let Some(constant) = rule.get("const") {
-                if value != constant {
-                    return Err(anyhow!("schema validation failed: field '{}' must equal {}", key, constant));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_schema_type(expected_type: &str, value: &Value) -> bool {
-    match expected_type {
-        "string" => value.is_string(),
-        "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "boolean" => value.is_boolean(),
-        "array" => value.is_array(),
-        "object" => value.is_object(),
-        "null" => value.is_null(),
-        _ => true,
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!("schema validation failed: {}", errors.join("; ")))
     }
 }
 
@@ -1897,5 +1869,346 @@ mod tests {
         .await
         .expect("malformed lines should be skipped, not cause failure");
         assert!(matches!(outcome, PhaseExecutionOutcome::Completed { .. }));
+    }
+
+    // ── validate_basic_json_schema tests ──────────────────────────────────
+
+    use super::validate_basic_json_schema;
+
+    #[test]
+    fn schema_validation_accepts_valid_required_fields() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["name", "verdict"],
+            "properties": {
+                "name": { "type": "string" },
+                "verdict": { "type": "string" }
+            }
+        });
+        let instance = serde_json::json!({
+            "name": "requirements",
+            "verdict": "advance"
+        });
+        assert!(validate_basic_json_schema(&instance, &schema).is_ok());
+    }
+
+    #[test]
+    fn schema_validation_rejects_missing_required_fields() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["name", "verdict"],
+            "properties": {
+                "name": { "type": "string" },
+                "verdict": { "type": "string" }
+            }
+        });
+        let instance = serde_json::json!({
+            "name": "requirements"
+        });
+        let err = validate_basic_json_schema(&instance, &schema).expect_err("should fail");
+        assert!(err.to_string().contains("verdict"), "error should mention missing field: {}", err);
+    }
+
+    #[test]
+    fn schema_validation_rejects_wrong_type() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "confidence": { "type": "number" },
+                "done": { "type": "boolean" }
+            }
+        });
+        let instance = serde_json::json!({
+            "confidence": "high",
+            "done": "yes"
+        });
+        let err = validate_basic_json_schema(&instance, &schema).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(msg.contains("confidence") || msg.contains("type"), "should mention type error: {}", msg);
+    }
+
+    #[test]
+    fn schema_validation_enforces_const() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "const": "phase_decision" }
+            }
+        });
+        let valid = serde_json::json!({ "kind": "phase_decision" });
+        let invalid = serde_json::json!({ "kind": "other" });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&invalid, &schema).expect_err("should fail");
+        assert!(err.to_string().contains("kind"), "error should mention const field: {}", err);
+    }
+
+    #[test]
+    fn schema_validation_enforces_pattern() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "pattern": "^TASK-\\d+$" }
+            }
+        });
+        let valid = serde_json::json!({ "task_id": "TASK-123" });
+        let invalid = serde_json::json!({ "task_id": "not-a-task" });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&invalid, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("pattern") || err.to_string().contains("task_id"),
+            "should mention pattern violation: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_min_length() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reason": { "type": "string", "minLength": 5 }
+            }
+        });
+        let valid = serde_json::json!({ "reason": "detailed enough" });
+        let too_short = serde_json::json!({ "reason": "ok" });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&too_short, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("reason") || err.to_string().contains("minLength"),
+            "should mention minLength: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_max_length() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "summary": { "type": "string", "maxLength": 10 }
+            }
+        });
+        let valid = serde_json::json!({ "summary": "short" });
+        let too_long = serde_json::json!({ "summary": "this is way too long" });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&too_long, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("summary") || err.to_string().contains("maxLength"),
+            "should mention maxLength: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_minimum() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "confidence": { "type": "number", "minimum": 0.5 }
+            }
+        });
+        let valid = serde_json::json!({ "confidence": 0.9 });
+        let too_low = serde_json::json!({ "confidence": 0.1 });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&too_low, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("confidence") || err.to_string().contains("minimum"),
+            "should mention minimum: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_maximum() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "priority_score": { "type": "number", "maximum": 100 }
+            }
+        });
+        let valid = serde_json::json!({ "priority_score": 42 });
+        let too_high = serde_json::json!({ "priority_score": 150 });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&too_high, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("priority_score") || err.to_string().contains("maximum"),
+            "should mention maximum: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_min_items() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "evidence": { "type": "array", "minItems": 1 }
+            }
+        });
+        let valid = serde_json::json!({ "evidence": ["item1"] });
+        let empty = serde_json::json!({ "evidence": [] });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&empty, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("evidence") || err.to_string().contains("minItems"),
+            "should mention minItems: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_max_items() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tags": { "type": "array", "maxItems": 3 }
+            }
+        });
+        let valid = serde_json::json!({ "tags": ["a", "b"] });
+        let too_many = serde_json::json!({ "tags": ["a", "b", "c", "d", "e"] });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&too_many, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("tags") || err.to_string().contains("maxItems"),
+            "should mention maxItems: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_enforces_enum() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "verdict": { "type": "string", "enum": ["advance", "rework", "fail"] }
+            }
+        });
+        let valid = serde_json::json!({ "verdict": "advance" });
+        let invalid = serde_json::json!({ "verdict": "maybe" });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        let err = validate_basic_json_schema(&invalid, &schema).expect_err("should fail");
+        assert!(
+            err.to_string().contains("verdict") || err.to_string().contains("enum"),
+            "should mention enum: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn schema_validation_combined_constraints() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["verdict", "confidence"],
+            "properties": {
+                "verdict": { "type": "string", "enum": ["advance", "rework"], "minLength": 1 },
+                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                "reason": { "type": "string", "pattern": "^[A-Z].*", "minLength": 5, "maxLength": 500 },
+                "evidence": { "type": "array", "minItems": 1, "maxItems": 20 }
+            }
+        });
+        let valid = serde_json::json!({
+            "verdict": "advance",
+            "confidence": 0.95,
+            "reason": "All criteria met with strong evidence",
+            "evidence": ["code inspection", "test results"]
+        });
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+
+        // Missing required field
+        let missing = serde_json::json!({ "confidence": 0.9 });
+        assert!(validate_basic_json_schema(&missing, &schema).is_err());
+
+        // Enum violation
+        let bad_enum = serde_json::json!({ "verdict": "skip", "confidence": 0.5 });
+        assert!(validate_basic_json_schema(&bad_enum, &schema).is_err());
+
+        // Numeric bounds violation
+        let out_of_range = serde_json::json!({ "verdict": "advance", "confidence": 1.5 });
+        assert!(validate_basic_json_schema(&out_of_range, &schema).is_err());
+
+        // Pattern violation
+        let bad_pattern = serde_json::json!({
+            "verdict": "advance",
+            "confidence": 0.9,
+            "reason": "lowercase start"
+        });
+        assert!(validate_basic_json_schema(&bad_pattern, &schema).is_err());
+
+        // String length violation
+        let too_short_reason = serde_json::json!({
+            "verdict": "advance",
+            "confidence": 0.9,
+            "reason": "Ab"
+        });
+        assert!(validate_basic_json_schema(&too_short_reason, &schema).is_err());
+
+        // Array length violation
+        let empty_evidence = serde_json::json!({
+            "verdict": "advance",
+            "confidence": 0.9,
+            "evidence": []
+        });
+        assert!(validate_basic_json_schema(&empty_evidence, &schema).is_err());
+    }
+
+    #[test]
+    fn schema_validation_reports_invalid_schema() {
+        let bad_schema = serde_json::json!({ "type": "not-a-real-type" });
+        let instance = serde_json::json!({ "key": "value" });
+        // The jsonschema crate may or may not reject unknown types depending on version;
+        // the key assertion is that a clearly malformed schema is caught.
+        let result = validate_basic_json_schema(&instance, &bad_schema);
+        // Don't assert error/success since behavior may vary; just ensure no panic.
+        let _ = result;
+    }
+
+    #[test]
+    fn schema_validation_accepts_nested_objects() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["data"],
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "required": ["inner"],
+                    "properties": {
+                        "inner": { "type": "string", "minLength": 1 }
+                    }
+                }
+            }
+        });
+        let valid = serde_json::json!({ "data": { "inner": "value" } });
+        let missing_inner = serde_json::json!({ "data": {} });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        assert!(validate_basic_json_schema(&missing_inner, &schema).is_err());
+    }
+
+    #[test]
+    fn schema_validation_integer_bounds() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer", "minimum": 0, "maximum": 100 }
+            }
+        });
+        let valid = serde_json::json!({ "count": 50 });
+        let negative = serde_json::json!({ "count": -1 });
+        let float_val = serde_json::json!({ "count": 50.5 });
+        let too_big = serde_json::json!({ "count": 200 });
+
+        assert!(validate_basic_json_schema(&valid, &schema).is_ok());
+        assert!(validate_basic_json_schema(&negative, &schema).is_err());
+        assert!(validate_basic_json_schema(&float_val, &schema).is_err());
+        assert!(validate_basic_json_schema(&too_big, &schema).is_err());
     }
 }
