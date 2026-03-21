@@ -3,11 +3,12 @@ use crate::cli_types::{RunnerCommand, RunnerOrphanCommand};
 use crate::print_value;
 use crate::shared::{connect_runner, runner_config_dir, write_json_line};
 use anyhow::Result;
+use fs2::FileExt;
 use orchestrator_core::ServiceHub;
 use protocol::{kill_process, process_exists, RunnerStatusRequest, RunnerStatusResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -36,6 +37,23 @@ fn load_cli_tracker() -> Result<CliTrackerStateCli> {
 
 fn save_cli_tracker(tracker: &CliTrackerStateCli) -> Result<()> {
     write_json_pretty(&protocol::cli_tracker_path(), tracker)
+}
+
+/// Acquire an exclusive file lock on the CLI tracker for atomic read-modify-write.
+/// The lock is released when the returned guard is dropped.
+fn acquire_tracker_lock() -> Result<std::fs::File> {
+    let tracker_path = protocol::cli_tracker_path();
+    if let Some(parent) = tracker_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = tracker_path.with_extension("lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    lock_file.lock_exclusive()?;
+    Ok(lock_file)
 }
 
 async fn query_runner_status_direct(project_root: &str) -> Option<RunnerStatusResponse> {
@@ -95,6 +113,9 @@ pub(crate) async fn handle_runner(
                 print_value(detection, json)
             }
             RunnerOrphanCommand::Cleanup(args) => {
+                // Hold the tracker lock for the entire read-modify-write cycle
+                // to prevent races with agent-runner cleanup.rs or concurrent CLI calls.
+                let _lock = acquire_tracker_lock()?;
                 let mut tracker = load_cli_tracker()?;
                 let mut cleaned = Vec::new();
                 for run_id in args.run_id {
