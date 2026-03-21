@@ -42,6 +42,9 @@ where
     let reconciled_runner_blocked_tasks = hooks.reconcile_runner_blocked_tasks(root).await?;
     let (executed_workflow_phases, failed_workflow_phases) = hooks.reconcile_completed_processes(root).await?;
     let reconciled_zombie_workflows = hooks.reconcile_zombie_workflows(root).await?;
+    if args.reconcile_stale {
+        hooks.reconcile_stale_in_progress_tasks(root).await?;
+    }
     let mut execution_outcome = ProjectTickExecutionOutcome {
         reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
         reconciled_runner_blocked_tasks,

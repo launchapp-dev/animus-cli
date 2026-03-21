@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum DispatchSelectionSource {
     DispatchQueue,
     FallbackPicker,
+    ReadyQueue,
 }
 
 impl DispatchSelectionSource {
@@ -11,6 +12,7 @@ impl DispatchSelectionSource {
         match self {
             Self::DispatchQueue => "dispatch_queue",
             Self::FallbackPicker => "fallback_picker",
+            Self::ReadyQueue => "queue",
         }
     }
 }
