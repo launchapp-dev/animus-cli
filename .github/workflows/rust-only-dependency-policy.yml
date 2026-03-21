@@ -19,5 +19,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Validate dependency policy
         run: cargo test -p orchestrator-cli --test rust_only_dependency_policy
