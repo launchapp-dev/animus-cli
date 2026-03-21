@@ -1,8 +1,10 @@
+use protocol::model_routing::token_cost_usd;
 use serde_json::json;
 use std::io::Write;
 
 pub struct OutputFormatter {
     json_mode: bool,
+    model: String,
     text_buffer: String,
     total_input_tokens: u64,
     total_output_tokens: u64,
@@ -10,8 +12,15 @@ pub struct OutputFormatter {
 }
 
 impl OutputFormatter {
-    pub fn new(json_mode: bool) -> Self {
-        Self { json_mode, text_buffer: String::new(), total_input_tokens: 0, total_output_tokens: 0, request_count: 0 }
+    pub fn new(json_mode: bool, model: String) -> Self {
+        Self {
+            json_mode,
+            model,
+            text_buffer: String::new(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            request_count: 0,
+        }
     }
 
     pub fn text_chunk(&mut self, text: &str) {
@@ -77,13 +86,17 @@ impl OutputFormatter {
         self.total_output_tokens += output_tokens;
         self.request_count += 1;
         if self.json_mode {
-            let event = json!({
+            let cost_usd = token_cost_usd(&self.model, input_tokens, output_tokens);
+            let mut event = json!({
                 "type": "metadata",
                 "tokens": {
                     "input": input_tokens,
                     "output": output_tokens
                 }
             });
+            if let Some(cost) = cost_usd {
+                event["cost_usd"] = json!(cost);
+            }
             println!("{}", event);
         }
     }
@@ -93,8 +106,9 @@ impl OutputFormatter {
         if total == 0 {
             return;
         }
+        let cost_usd = token_cost_usd(&self.model, self.total_input_tokens, self.total_output_tokens);
         if self.json_mode {
-            let event = json!({
+            let mut event = json!({
                 "type": "session_summary",
                 "tokens": {
                     "total_input": self.total_input_tokens,
@@ -103,11 +117,15 @@ impl OutputFormatter {
                     "requests": self.request_count
                 }
             });
+            if let Some(cost) = cost_usd {
+                event["cost_usd"] = json!(cost);
+            }
             println!("{}", event);
         } else {
+            let cost_str = cost_usd.map(|c| format!(", estimated cost ${:.6}", c)).unwrap_or_default();
             eprintln!(
-                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens",
-                self.request_count, self.total_input_tokens, self.total_output_tokens, total
+                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens{}",
+                self.request_count, self.total_input_tokens, self.total_output_tokens, total, cost_str
             );
         }
     }
@@ -123,21 +141,21 @@ mod tests {
 
     #[test]
     fn output_formatter_json_mode_initializes_empty_buffer() {
-        let formatter = OutputFormatter::new(true);
+        let formatter = OutputFormatter::new(true, "claude-sonnet-4-6".to_string());
         assert!(formatter.text_buffer.is_empty());
         assert!(formatter.json_mode);
     }
 
     #[test]
     fn output_formatter_text_mode_does_not_buffer() {
-        let formatter = OutputFormatter::new(false);
+        let formatter = OutputFormatter::new(false, "claude-sonnet-4-6".to_string());
         assert!(!formatter.json_mode);
         assert!(formatter.text_buffer.is_empty());
     }
 
     #[test]
     fn text_chunk_accumulates_in_buffer_for_json_mode() {
-        let mut formatter = OutputFormatter::new(true);
+        let mut formatter = OutputFormatter::new(true, "claude-sonnet-4-6".to_string());
         formatter.text_buffer.push_str("hello ");
         formatter.text_buffer.push_str("world");
         assert_eq!(formatter.text_buffer, "hello world");
@@ -145,10 +163,20 @@ mod tests {
 
     #[test]
     fn flush_result_clears_buffer() {
-        let mut formatter = OutputFormatter::new(true);
+        let mut formatter = OutputFormatter::new(true, "claude-sonnet-4-6".to_string());
         formatter.text_buffer.push_str("accumulated text");
         assert!(!formatter.text_buffer.is_empty());
         formatter.text_buffer.clear();
         assert!(formatter.text_buffer.is_empty());
+    }
+
+    #[test]
+    fn metadata_accumulates_tokens_and_tracks_request_count() {
+        let mut formatter = OutputFormatter::new(false, "zai-coding-plan/glm-5".to_string());
+        formatter.metadata(100, 50);
+        formatter.metadata(200, 75);
+        assert_eq!(formatter.total_input_tokens, 300);
+        assert_eq!(formatter.total_output_tokens, 125);
+        assert_eq!(formatter.request_count, 2);
     }
 }

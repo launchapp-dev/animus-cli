@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use cli_wrapper::{is_ai_cli_tool, LaunchInvocation, SessionBackendResolver, SessionEvent, SessionRequest};
 use protocol::{
-    AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage, ToolCallInfo,
-    ToolResultInfo,
+    model_routing::token_cost_usd, AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp,
+    TokenUsage, ToolCallInfo, ToolResultInfo,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -136,7 +136,7 @@ pub(super) async fn spawn_session_process(
                     last_activity_at = Instant::now();
                 }
 
-                if let Some(exit_code) = forward_session_event(run_id, &event, &event_tx).await {
+                if let Some(exit_code) = forward_session_event(run_id, model, &event, &event_tx).await {
                     break Ok(exit_code);
                 }
             }
@@ -249,6 +249,7 @@ fn build_session_request(
 
 async fn forward_session_event(
     run_id: &RunId,
+    model: &str,
     event: &SessionEvent,
     event_tx: &mpsc::Sender<AgentRunEvent>,
 ) -> Option<i32> {
@@ -322,8 +323,10 @@ async fn forward_session_event(
         }
         SessionEvent::Metadata { metadata } => {
             let tokens = tokens_from_metadata(metadata);
-            if tokens.is_some() {
-                let _ = event_tx.send(AgentRunEvent::Metadata { run_id: run_id.clone(), cost: None, tokens }).await;
+            if let Some(ref t) = tokens {
+                let cost = token_cost_usd(model, t.input as u64, t.output as u64);
+                let _ =
+                    event_tx.send(AgentRunEvent::Metadata { run_id: run_id.clone(), cost, tokens }).await;
             }
             None
         }
@@ -382,6 +385,16 @@ fn tokens_from_metadata(metadata: &Value) -> Option<TokenUsage> {
                 output: tokens.get("candidates").or_else(|| tokens.get("output")).and_then(Value::as_u64)? as u32,
                 reasoning: tokens.get("thoughts").and_then(Value::as_u64).map(|value| value as u32),
                 cache_read: tokens.get("cached").and_then(Value::as_u64).map(|value| value as u32),
+                cache_write: None,
+            })
+        }
+        Some("oai_runner_usage") => {
+            let tokens = metadata.get("tokens")?;
+            Some(TokenUsage {
+                input: tokens.get("input")?.as_u64()? as u32,
+                output: tokens.get("output")?.as_u64()? as u32,
+                reasoning: None,
+                cache_read: None,
                 cache_write: None,
             })
         }

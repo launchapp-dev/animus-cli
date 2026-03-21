@@ -317,6 +317,84 @@ pub fn default_primary_model_for_phase(
     }
 }
 
+pub fn token_cost_usd(model_id: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+    let normalized = canonical_model_id(model_id).to_ascii_lowercase();
+    let (input_price, output_price) = pricing_per_million_tokens(&normalized)?;
+    Some((input_tokens as f64 * input_price + output_tokens as f64 * output_price) / 1_000_000.0)
+}
+
+fn pricing_per_million_tokens(normalized: &str) -> Option<(f64, f64)> {
+    let specific: Option<(f64, f64)> = match normalized {
+        "claude-opus-4-6" | "claude-opus-4-5" | "claude-opus-4-1" => Some((15.00, 75.00)),
+        "claude-sonnet-4-6" | "claude-sonnet-4-5" => Some((3.00, 15.00)),
+        "gemini-2.5-flash" => Some((0.15, 0.60)),
+        "gemini-2.5-pro" => Some((1.25, 10.00)),
+        "gemini-3-pro" | "gemini-3.1-pro-preview" => Some((2.50, 15.00)),
+        "minimax/minimax-m2.7" => Some((0.80, 2.30)),
+        "minimax/minimax-m2.1" => Some((0.50, 1.50)),
+        "zai-coding-plan/glm-5" => Some((0.10, 0.10)),
+        "gpt-5.4" => Some((15.00, 60.00)),
+        "gpt-5.3-codex" => Some((3.00, 12.00)),
+        "gpt-5.3-codex-spark" => Some((1.50, 6.00)),
+        _ => None,
+    };
+    if specific.is_some() {
+        return specific;
+    }
+    if normalized.starts_with("claude-opus") {
+        return Some((15.00, 75.00));
+    }
+    if normalized.starts_with("claude-sonnet") {
+        return Some((3.00, 15.00));
+    }
+    if normalized.starts_with("claude-haiku") {
+        return Some((0.80, 4.00));
+    }
+    if normalized.starts_with("gemini") && normalized.contains("flash") {
+        return Some((0.15, 0.60));
+    }
+    if normalized.starts_with("gemini") {
+        return Some((1.25, 10.00));
+    }
+    if normalized.starts_with("minimax/") {
+        return Some((0.80, 2.30));
+    }
+    if normalized.starts_with("zai") || normalized.starts_with("glm") {
+        return Some((0.10, 0.10));
+    }
+    if normalized.starts_with("deepseek/") || normalized.contains("deepseek") {
+        return Some((0.27, 1.10));
+    }
+    if normalized.starts_with("gpt-5") {
+        return Some((10.00, 30.00));
+    }
+    if normalized.starts_with("gpt-4") {
+        return Some((5.00, 15.00));
+    }
+    if normalized.starts_with("groq/") {
+        return Some((0.05, 0.10));
+    }
+    if normalized.starts_with("together/") {
+        return Some((0.18, 0.18));
+    }
+    if normalized.starts_with("fireworks/") {
+        return Some((0.20, 0.20));
+    }
+    if normalized.starts_with("mistral/") {
+        if normalized.contains("large") || normalized.contains("medium") {
+            return Some((2.00, 6.00));
+        }
+        return Some((0.20, 0.60));
+    }
+    if normalized.starts_with("openrouter/") {
+        return Some((1.00, 3.00));
+    }
+    if normalized.starts_with("kimi") || normalized.starts_with("moonshot") {
+        return Some((0.30, 0.90));
+    }
+    None
+}
+
 pub fn default_fallback_models_for_phase(
     complexity: Option<ModelRoutingComplexity>,
     caps: &PhaseCapabilities,
@@ -371,6 +449,29 @@ pub fn default_fallback_models_for_phase(
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn token_cost_usd_returns_correct_estimates() {
+        let cost = token_cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000).unwrap();
+        assert!((cost - 18.00).abs() < 0.01, "claude-sonnet cost should be ~$18 for 1M/1M tokens");
+
+        let cost = token_cost_usd("zai-coding-plan/glm-5", 1_000_000, 1_000_000).unwrap();
+        assert!((cost - 0.20).abs() < 0.01, "glm-5 cost should be ~$0.20 for 1M/1M tokens");
+
+        let cost = token_cost_usd("minimax/MiniMax-M2.7", 1_000_000, 1_000_000).unwrap();
+        assert!((cost - 3.10).abs() < 0.01, "minimax-m2.7 cost should be ~$3.10 for 1M/1M tokens");
+
+        assert!(token_cost_usd("unknown-model-xyz", 100, 100).is_none());
+    }
+
+    #[test]
+    fn token_cost_usd_handles_provider_prefix_models() {
+        assert!(token_cost_usd("groq/llama-3.1-70b", 1000, 1000).is_some());
+        assert!(token_cost_usd("together/meta-llama/llama-3-70b", 1000, 1000).is_some());
+        assert!(token_cost_usd("fireworks/llama-v3p1-70b", 1000, 1000).is_some());
+        assert!(token_cost_usd("mistral/mistral-large-latest", 1000, 1000).is_some());
+        assert!(token_cost_usd("deepseek/deepseek-chat", 1000, 1000).is_some());
+    }
 
     #[test]
     fn canonical_model_aliases_normalize_legacy_claude_ids() {
