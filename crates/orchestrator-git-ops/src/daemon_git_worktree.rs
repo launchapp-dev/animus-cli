@@ -244,6 +244,31 @@ pub async fn cleanup_task_worktree_if_enabled(
     Ok(())
 }
 
+pub fn managed_worktrees_disk_bytes(project_root: &str) -> u64 {
+    let root = match repo_worktrees_root(project_root) {
+        Ok(r) => r,
+        Err(_) => return 0,
+    };
+    if !root.exists() {
+        return 0;
+    }
+    worktree_dir_size_bytes(&root)
+}
+
+fn worktree_dir_size_bytes(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else { return 0 };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total += worktree_dir_size_bytes(&entry.path());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
 pub(crate) fn remove_worktree_path(project_root: &str, worktree_path: &str) {
     let _ = ProcessCommand::new("git")
         .arg("-C")

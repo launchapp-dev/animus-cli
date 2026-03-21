@@ -774,6 +774,10 @@ pub struct DaemonHealth {
     pub total_agents_completed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_agents_failed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_disk_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

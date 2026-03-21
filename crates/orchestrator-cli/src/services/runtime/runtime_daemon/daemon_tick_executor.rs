@@ -4,11 +4,12 @@ use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
     reconcile_manual_phase_timeouts, reconcile_runner_blocked_tasks, recover_orphaned_running_workflows,
 };
 use anyhow::Result;
-use orchestrator_core::services::ServiceHub;
+use orchestrator_core::{load_daemon_project_config, services::ServiceHub};
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
     DispatchNotice, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
 };
+use orchestrator_git_ops::{auto_prune_completed_task_worktrees_after_merge, PostSuccessGitConfig};
 use std::sync::Arc;
 
 pub(crate) struct CliProjectTickServices;
@@ -50,6 +51,24 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     }
 
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {
+        let project_path = std::path::Path::new(root);
+        if let Ok(daemon_cfg) = load_daemon_project_config(project_path) {
+            let should_prune = daemon_cfg.auto_prune_worktrees_after_merge
+                || daemon_cfg.worktree_disk_threshold_mb.is_some_and(|threshold_mb| {
+                    orchestrator_git_ops::managed_worktrees_disk_bytes(root) > threshold_mb * 1024 * 1024
+                });
+            let git_cfg = PostSuccessGitConfig {
+                auto_merge_enabled: daemon_cfg.auto_merge_enabled,
+                auto_pr_enabled: daemon_cfg.auto_pr_enabled,
+                auto_commit_before_merge: daemon_cfg.auto_commit_before_merge,
+                auto_merge_target_branch: daemon_cfg.auto_merge_target_branch,
+                auto_merge_no_ff: daemon_cfg.auto_merge_no_ff,
+                auto_push_remote: daemon_cfg.auto_push_remote,
+                auto_cleanup_worktree_enabled: daemon_cfg.auto_cleanup_worktree_enabled,
+                auto_prune_worktrees_after_merge: should_prune,
+            };
+            let _ = auto_prune_completed_task_worktrees_after_merge(hub.clone(), root, &git_cfg).await;
+        }
         reconcile_manual_phase_timeouts(hub, root).await
     }
 

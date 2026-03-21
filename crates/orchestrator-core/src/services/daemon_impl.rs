@@ -1,5 +1,41 @@
 use super::*;
 
+fn managed_worktrees_root(project_root: &Path) -> Option<PathBuf> {
+    protocol::scoped_state_root(project_root).map(|r| r.join("worktrees"))
+}
+
+fn count_managed_worktrees(project_root: &Path) -> u32 {
+    let Some(root) = managed_worktrees_root(project_root) else { return 0 };
+    if !root.exists() {
+        return 0;
+    }
+    std::fs::read_dir(&root)
+        .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count() as u32)
+        .unwrap_or(0)
+}
+
+fn managed_worktrees_disk_bytes(project_root: &Path) -> u64 {
+    let Some(root) = managed_worktrees_root(project_root) else { return 0 };
+    if !root.exists() {
+        return 0;
+    }
+    worktree_dir_size_bytes(&root)
+}
+
+fn worktree_dir_size_bytes(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total += worktree_dir_size_bytes(&entry.path());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
 async fn ensure_runner_started(project_root: &Path, config: &DaemonStartConfig) -> Result<Option<u32>> {
     #[cfg(test)]
     if let Some(result) = take_test_ensure_result() {
@@ -131,6 +167,8 @@ impl DaemonServiceApi for InMemoryServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            worktree_count: None,
+            worktree_disk_bytes: None,
         })
     }
 
@@ -299,6 +337,8 @@ impl DaemonServiceApi for FileServiceHub {
         let pool_utilization_percent =
             lock.daemon_pool_size.map(|ps| if ps == 0 { 0.0 } else { (active_agents as f64 / ps as f64) * 100.0 });
         let queued_tasks = lock.tasks.values().filter(|t| t.status == TaskStatus::Ready).count() as u32;
+        let worktree_count = count_managed_worktrees(&self.project_root);
+        let worktree_disk_bytes = managed_worktrees_disk_bytes(&self.project_root);
 
         Ok(DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused) && runner_connected,
@@ -315,6 +355,8 @@ impl DaemonServiceApi for FileServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            worktree_count: Some(worktree_count),
+            worktree_disk_bytes: Some(worktree_disk_bytes),
         })
     }
 

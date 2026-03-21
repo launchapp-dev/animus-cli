@@ -26,6 +26,8 @@ pub struct DaemonProjectConfig {
     pub auto_cleanup_worktree_enabled: bool,
     #[serde(default)]
     pub auto_prune_worktrees_after_merge: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_disk_threshold_mb: Option<u64>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -41,6 +43,7 @@ impl Default for DaemonProjectConfig {
             auto_push_remote: default_auto_push_remote(),
             auto_cleanup_worktree_enabled: default_auto_cleanup_worktree_enabled(),
             auto_prune_worktrees_after_merge: false,
+            worktree_disk_threshold_mb: None,
             extra: BTreeMap::new(),
         }
     }

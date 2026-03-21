@@ -22,6 +22,7 @@ cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 orchestrator-daemon-runtime = { workspace = true }
 orchestrator-notifications = { workspace = true }
 workflow-runner-v2 = { path = "../workflow-runner-v2" }
+orchestrator-git-ops = { path = "../orchestrator-git-ops" }
 orchestrator-config = { workspace = true }
 dirs = "6.0"
 uuid = { version = "1", features = ["v4"] }

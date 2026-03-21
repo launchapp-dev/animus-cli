@@ -2645,6 +2645,7 @@ dependencies = [
  "orchestrator-config",
  "orchestrator-core",
  "orchestrator-daemon-runtime",
+ "orchestrator-git-ops",
  "orchestrator-notifications",
  "orchestrator-web-api",
  "orchestrator-web-server",

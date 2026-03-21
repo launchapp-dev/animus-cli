@@ -441,6 +441,8 @@ fn render_status_dashboard_uses_required_section_order() {
                 total_agents_spawned: None,
                 total_agents_completed: None,
                 total_agents_failed: None,
+                worktree_count: None,
+                worktree_disk_bytes: None,
             }),
             None,
         ),
