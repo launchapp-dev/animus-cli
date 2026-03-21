@@ -65,6 +65,32 @@ fn is_target_unavailable_pattern(message: &str) -> bool {
         || normalized.contains("missing api key")
         || normalized.contains("missing cli")
         || normalized.contains("model not available")
+        || is_http_provider_error_pattern(&normalized)
+}
+
+fn is_http_provider_error_pattern(normalized: &str) -> bool {
+    normalized.contains("http 500")
+        || normalized.contains("http 502")
+        || normalized.contains("http 503")
+        || normalized.contains("http 504")
+        || normalized.contains("status 500")
+        || normalized.contains("status 502")
+        || normalized.contains("status 503")
+        || normalized.contains("status 504")
+        || normalized.contains("status: 500")
+        || normalized.contains("status: 502")
+        || normalized.contains("status: 503")
+        || normalized.contains("status: 504")
+        || normalized.contains("500 internal server error")
+        || normalized.contains("502 bad gateway")
+        || normalized.contains("503 service unavailable")
+        || normalized.contains("504 gateway timeout")
+        || normalized.contains("internal server error")
+        || normalized.contains("bad gateway")
+        || normalized.contains("service unavailable")
+        || normalized.contains("gateway timeout")
+        || normalized.contains("overloaded_error")
+        || normalized.contains("provider overloaded")
 }
 
 fn extract_provider_exhaustion_reason(text: &str) -> Option<String> {

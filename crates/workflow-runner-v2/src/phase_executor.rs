@@ -28,6 +28,7 @@ use crate::skill_dispatch;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
+use chrono::Utc;
 use orchestrator_config::{skill_resolution::ResolvedSkill, SkillApplicationResult};
 use orchestrator_core::ServiceHub;
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,7 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use protocol::{canonical_model_id, AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
+use protocol::{canonical_model_id, daemon_events_log_path, AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Default)]
 pub struct PhaseExecuteOverrides {
@@ -1114,6 +1115,15 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                                 "target {}:{} failed: {}",
                                 effective_tool_id, effective_model_id, message
                             ));
+                            emit_phase_failover_event(
+                                project_root,
+                                workflow_id,
+                                phase_id,
+                                &effective_tool_id,
+                                &effective_model_id,
+                                &message,
+                                target_index + 1,
+                            );
                             orchestrator_core::record_model_phase_outcome(
                                 std::path::Path::new(project_root),
                                 &effective_model_id,
@@ -1195,6 +1205,46 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
             fallover_errors.join(" || ")
         }
     ))
+}
+
+fn emit_phase_failover_event(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    from_tool: &str,
+    from_model: &str,
+    reason: &str,
+    next_target_index: usize,
+) {
+    let path = daemon_events_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let timestamp = Utc::now().to_rfc3339();
+    let event = serde_json::json!({
+        "schema": "ao.daemon.event.v1",
+        "id": Uuid::new_v4().to_string(),
+        "seq": 0_u64,
+        "timestamp": timestamp,
+        "event_type": "phase-failover",
+        "project_root": project_root,
+        "data": {
+            "workflow_id": workflow_id,
+            "phase_id": phase_id,
+            "from_tool": from_tool,
+            "from_model": from_model,
+            "reason": reason,
+            "next_target_index": next_target_index,
+        },
+    });
+    let Ok(mut line) = serde_json::to_string(&event) else {
+        return;
+    };
+    line.push('\n');
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = file.write_all(line.as_bytes());
+    }
 }
 
 fn manual_phase_marker_path(project_root: &str) -> std::path::PathBuf {

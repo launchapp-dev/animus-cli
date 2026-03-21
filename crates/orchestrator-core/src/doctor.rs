@@ -214,6 +214,21 @@ impl DoctorReport {
             None,
         ));
 
+        let provider_keys = detect_provider_api_keys();
+        checks.push(build_check(
+            "provider_api_key_configured",
+            if provider_keys.is_empty() { DoctorCheckStatus::Warn } else { DoctorCheckStatus::Ok },
+            if provider_keys.is_empty() {
+                "no provider API keys detected (checked ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY)".to_string()
+            } else {
+                format!("provider API keys configured for: {}", provider_keys.join(", "))
+            },
+            "configure_provider_api_key",
+            false,
+            "set at least one provider API key environment variable (e.g. ANTHROPIC_API_KEY)",
+            None,
+        ));
+
         #[cfg(unix)]
         let runner_socket_path = protocol::Config::global_config_dir().join("agent-runner.sock");
         #[cfg(unix)]
@@ -334,6 +349,22 @@ fn build_ao_file_check(check_id: &str, expected_path: &Path, ao_dir_state: Direc
         "create baseline AO state/config files",
         Some("ao doctor --fix"),
     )
+}
+
+fn detect_provider_api_keys() -> Vec<String> {
+    let mut providers = Vec::new();
+    if std::env::var("ANTHROPIC_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        providers.push("anthropic".to_string());
+    }
+    if std::env::var("OPENAI_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        providers.push("openai".to_string());
+    }
+    if std::env::var("GOOGLE_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false)
+        || std::env::var("GOOGLE_GENERATIVE_AI_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false)
+    {
+        providers.push("google".to_string());
+    }
+    providers
 }
 
 fn detect_llm_clis() -> Vec<String> {
