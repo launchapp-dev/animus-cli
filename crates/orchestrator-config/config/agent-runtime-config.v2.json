@@ -279,9 +279,9 @@
         "is_research": true
       },
       "runtime": {
-        "tool": null,
-        "model": null,
-        "fallback_models": [],
+        "tool": "codex",
+        "model": "gpt-5-nano",
+        "fallback_models": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gpt-5-mini"],
         "reasoning_effort": null,
         "web_search": true,
         "timeout_secs": 900,

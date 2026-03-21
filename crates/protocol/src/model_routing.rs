@@ -110,6 +110,8 @@ pub fn canonical_model_id(model_id: &str) -> String {
         "claude-opus-4.1" | "claude-opus-4-1" | "claude-4.1-opus" | "claude-4-1-opus" => "claude-opus-4-1".to_string(),
         "claude-opus-4.6" | "claude-opus-4-6" | "claude-4.6-opus" | "claude-4-6-opus" => "claude-opus-4-6".to_string(),
         "claude-opus-4.5" | "claude-opus-4-5" | "claude-4.5-opus" | "claude-4-5-opus" => "claude-opus-4-5".to_string(),
+        "gpt-5-nano" | "gpt5-nano" | "gpt5nano" | "gpt_5_nano" | "gpt-5.nano" => "gpt-5-nano".to_string(),
+        "gpt-5-mini" | "gpt5-mini" | "gpt5mini" | "gpt_5_mini" | "gpt-5.mini" => "gpt-5-mini".to_string(),
         "gpt-5.3-codex" | "gpt-5-3-codex" | "gpt5.3-codex" | "gpt5-3-codex" | "gpt_5.3_codex" | "gpt_5_3_codex" => {
             "gpt-5.3-codex".to_string()
         }
@@ -199,9 +201,14 @@ pub fn default_model_specs() -> Vec<(String, String)> {
     vec![
         ("claude-sonnet-4-6".to_string(), "claude".to_string()),
         ("claude-opus-4-6".to_string(), "claude".to_string()),
+        // gpt-5.4: standard OpenAI codex model
         ("gpt-5.4".to_string(), "codex".to_string()),
         ("gpt-5.3-codex-spark".to_string(), "codex".to_string()),
         ("gpt-5".to_string(), "codex".to_string()),
+        // gpt-5-nano: $0.05/M input, $0.20/M output — lightweight tasks, summarization, status checks
+        ("gpt-5-nano".to_string(), "codex".to_string()),
+        // gpt-5-mini: $0.25/M input, $1.00/M output — moderate tasks, low-complexity review
+        ("gpt-5-mini".to_string(), "codex".to_string()),
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash-lite".to_string(), "gemini".to_string()),
@@ -411,6 +418,20 @@ mod tests {
         assert_eq!(canonical_model_id("glm-5"), "zai-coding-plan/glm-5");
         assert_eq!(canonical_model_id("minimax-m2.1"), "minimax/MiniMax-M2.1");
         assert_eq!(canonical_model_id("minimax-m2.5"), "minimax/MiniMax-M2.7");
+    }
+
+    #[test]
+    fn gpt5_nano_and_mini_canonicalize_correctly() {
+        assert_eq!(canonical_model_id("gpt-5-nano"), "gpt-5-nano");
+        assert_eq!(canonical_model_id("gpt5-nano"), "gpt-5-nano");
+        assert_eq!(canonical_model_id("gpt5nano"), "gpt-5-nano");
+        assert_eq!(canonical_model_id("gpt-5.nano"), "gpt-5-nano");
+        assert_eq!(canonical_model_id("gpt-5-mini"), "gpt-5-mini");
+        assert_eq!(canonical_model_id("gpt5-mini"), "gpt-5-mini");
+        assert_eq!(canonical_model_id("gpt5mini"), "gpt-5-mini");
+        assert_eq!(canonical_model_id("gpt-5.mini"), "gpt-5-mini");
+        assert_eq!(tool_for_model_id("gpt-5-nano"), "codex");
+        assert_eq!(tool_for_model_id("gpt-5-mini"), "codex");
     }
 
     #[test]
