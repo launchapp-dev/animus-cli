@@ -250,10 +250,7 @@ mod tests {
         for entry in fs::read_dir(temp_dir.path()).unwrap() {
             let entry = entry.unwrap();
             let name = entry.file_name();
-            assert!(
-                !name.to_string_lossy().contains(".stale."),
-                "Found orphaned temp file"
-            );
+            assert!(!name.to_string_lossy().contains(".stale."), "Found orphaned temp file");
         }
     }
 
