@@ -375,13 +375,13 @@ agents:
       | Complexity | Type        | workflow_ref      | Model                  |
       |------------|-------------|-------------------|------------------------|
       | low        | any         | standard-minimax  | MiniMax M2.7 (cheapest)|
-      | medium     | feature     | standard          | Claude Sonnet          |
-      | medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |
-      | medium     | refactor    | standard-codex    | Codex GPT-5.4          |
+      | medium     | feature     | standard-kimi     | Kimi for Coding        |
+      | medium     | bugfix      | standard-kimi     | Kimi for Coding        |
+      | medium     | refactor    | standard-kimi     | Kimi for Coding        |
       | medium     | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
-      | high       | feature     | standard          | Claude Sonnet          |
-      | high       | bugfix      | standard-codex    | Codex GPT-5.4          |
-      | high       | refactor    | standard-codex    | Codex GPT-5.4          |
+      | high       | feature     | standard-kimi     | Kimi for Coding        |
+      | high       | bugfix      | standard-kimi     | Kimi for Coding        |
+      | high       | refactor    | standard-kimi     | Kimi for Coding        |
       | high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
       | high       | architecture| standard-opus     | Claude Opus            |
       | critical   | any         | standard-opus     | Claude Opus            |
