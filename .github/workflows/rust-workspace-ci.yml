@@ -26,6 +26,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -42,6 +44,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked
 
@@ -71,6 +75,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Check package
         run: cargo check --locked --all-targets -p ${{ matrix.package }}
 
@@ -88,6 +95,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Smoke test ao help
         run: cargo run --locked -p orchestrator-cli --bin ao -- --help

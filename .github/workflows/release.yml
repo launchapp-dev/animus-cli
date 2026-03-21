@@ -94,6 +94,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
       - name: Compute release version
         id: version
         shell: bash
