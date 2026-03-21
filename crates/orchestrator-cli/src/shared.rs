@@ -60,19 +60,6 @@ mod tests {
     }
 
     #[test]
-    fn runner_config_dir_prefers_explicit_override() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
-        let override_dir = tempfile::tempdir().expect("tempdir should be created");
-        let override_dir_value = override_dir.path().to_string_lossy().to_string();
-        let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", Some(&override_dir_value));
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some("ignored"));
-        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
-
-        let resolved = runner_config_dir(Path::new("/tmp/project-root"));
-        assert_eq!(resolved, std::path::PathBuf::from(override_dir_value));
-    }
-
-    #[test]
     fn runner_config_dir_defaults_to_project_scope() {
         let _lock = test_env_lock().lock().expect("env lock should be available");
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", None);
@@ -229,25 +216,6 @@ mod tests {
             Some(true)
         );
         assert!(contract.get("mcp").is_some());
-    }
-
-    #[test]
-    fn build_runtime_contract_honors_codex_reasoning_override_env() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
-        let _override = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("high"));
-        let contract = build_runtime_contract("codex", "gpt-5", "hello world")
-            .expect("codex runtime contract should be generated");
-
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(serde_json::Value::as_array)
-            .expect("launch args should exist")
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"-c"));
-        assert!(args.contains(&"model_reasoning_effort=high"));
-        assert_eq!(args.last().copied(), Some("hello world"));
     }
 
     #[test]

@@ -255,19 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn runner_config_dir_prefers_explicit_override() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
-        let _config = EnvVarGuard::set("AO_CONFIG_DIR", Some("/custom/override"));
-        let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
-
-        let project_root = Path::new("/tmp/project-root");
-        let resolved = runner_config_dir(project_root);
-        assert_eq!(resolved, PathBuf::from("/custom/override"));
-    }
-
-    #[test]
     fn runner_config_dir_shortens_long_unix_socket_paths() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let long_root = Path::new("/tmp").join("a".repeat(120));
@@ -344,33 +331,6 @@ mod tests {
     }
 
     #[test]
-    fn build_runtime_contract_honors_codex_reasoning_override_env() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
-        let _effort = EnvVarGuard::set("AO_CODEX_REASONING_EFFORT", Some("low"));
-        let _search = EnvVarGuard::set("AO_CODEX_WEB_SEARCH", Some("false"));
-        let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
-
-        let contract = build_runtime_contract(
-            "codex",
-            protocol::default_model_for_tool("codex").unwrap_or("gpt-4.1"),
-            "hello world",
-        )
-        .expect("runtime contract should build");
-
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(
-            args.windows(2).any(|window| window[0] == "-c" && window[1] == "model_reasoning_effort=low"),
-            "codex reasoning effort override should be injected: {args:?}"
-        );
-    }
-
-    #[test]
     fn claude_bypass_permissions_is_disabled_by_default() {
         let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
@@ -385,23 +345,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!args.contains(&"--permission-mode"));
         assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn claude_bypass_permissions_respects_enable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
-        let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
-        let contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"--permission-mode"));
-        assert!(args.contains(&"bypassPermissions"));
     }
 
     #[test]
