@@ -36,10 +36,10 @@ termimad = "0.34"
 ratatui = "0.30"
 axum = { workspace = true }
 libc = "0.2"
+fs2 = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2"
-fs2 = "0.4"
 protocol = { path = "../protocol", features = ["test-utils"] }
 tempfile = "3"
 toml = "1.0"
