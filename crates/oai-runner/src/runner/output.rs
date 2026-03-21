@@ -6,12 +6,24 @@ pub struct OutputFormatter {
     text_buffer: String,
     total_input_tokens: u64,
     total_output_tokens: u64,
+    total_cost_usd: f64,
     request_count: u32,
 }
 
 impl OutputFormatter {
     pub fn new(json_mode: bool) -> Self {
-        Self { json_mode, text_buffer: String::new(), total_input_tokens: 0, total_output_tokens: 0, request_count: 0 }
+        Self {
+            json_mode,
+            text_buffer: String::new(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cost_usd: 0.0,
+            request_count: 0,
+        }
+    }
+
+    pub fn total_cost_usd(&self) -> f64 {
+        self.total_cost_usd
     }
 
     pub fn text_chunk(&mut self, text: &str) {
@@ -72,9 +84,10 @@ impl OutputFormatter {
         }
     }
 
-    pub fn metadata(&mut self, input_tokens: u64, output_tokens: u64) {
+    pub fn metadata(&mut self, input_tokens: u64, output_tokens: u64, cost_usd: f64) {
         self.total_input_tokens += input_tokens;
         self.total_output_tokens += output_tokens;
+        self.total_cost_usd += cost_usd;
         self.request_count += 1;
         if self.json_mode {
             let event = json!({
@@ -82,7 +95,8 @@ impl OutputFormatter {
                 "tokens": {
                     "input": input_tokens,
                     "output": output_tokens
-                }
+                },
+                "cost_usd": cost_usd
             });
             println!("{}", event);
         }
@@ -101,13 +115,18 @@ impl OutputFormatter {
                     "total_output": self.total_output_tokens,
                     "total": total,
                     "requests": self.request_count
-                }
+                },
+                "total_cost_usd": self.total_cost_usd
             });
             println!("{}", event);
         } else {
             eprintln!(
-                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens",
-                self.request_count, self.total_input_tokens, self.total_output_tokens, total
+                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens, ${:.6} total cost",
+                self.request_count,
+                self.total_input_tokens,
+                self.total_output_tokens,
+                total,
+                self.total_cost_usd
             );
         }
     }
@@ -150,5 +169,23 @@ mod tests {
         assert!(!formatter.text_buffer.is_empty());
         formatter.text_buffer.clear();
         assert!(formatter.text_buffer.is_empty());
+    }
+
+    #[test]
+    fn metadata_accumulates_cost() {
+        let mut formatter = OutputFormatter::new(true);
+        formatter.metadata(1000, 500, 0.005);
+        formatter.metadata(2000, 1000, 0.012);
+        assert_eq!(formatter.total_input_tokens, 3000);
+        assert_eq!(formatter.total_output_tokens, 1500);
+        assert!((formatter.total_cost_usd - 0.017).abs() < 1e-9);
+        assert_eq!(formatter.request_count, 2);
+    }
+
+    #[test]
+    fn total_cost_usd_getter() {
+        let mut formatter = OutputFormatter::new(false);
+        formatter.metadata(0, 0, 1.23);
+        assert!((formatter.total_cost_usd() - 1.23).abs() < 1e-9);
     }
 }

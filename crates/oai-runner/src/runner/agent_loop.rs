@@ -11,6 +11,20 @@ use crate::tools::{executor, mcp_client};
 use super::context;
 use super::output::OutputFormatter;
 
+#[derive(Debug)]
+pub struct BudgetExceededError {
+    pub spent_usd: f64,
+    pub limit_usd: f64,
+}
+
+impl std::fmt::Display for BudgetExceededError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cost budget exceeded: ${:.6} spent of ${:.6} limit", self.spent_usd, self.limit_usd)
+    }
+}
+
+impl std::error::Error for BudgetExceededError {}
+
 const SCHEMA_RETRY_LIMIT: usize = 3;
 
 fn config_dir() -> PathBuf {
@@ -86,6 +100,7 @@ fn synthesize_fallback(model: &str, summary: &str, confidence: f64) -> Value {
 pub async fn run_agent_loop(
     client: &ApiClient,
     model: &str,
+    api_base: &str,
     system_prompt: &str,
     user_prompt: &str,
     tools: &[ToolDefinition],
@@ -99,6 +114,7 @@ pub async fn run_agent_loop(
     cancel_token: CancellationToken,
     context_limit: usize,
     max_tokens: usize,
+    max_cost_usd: Option<f64>,
 ) -> Result<()> {
     let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -191,7 +207,16 @@ pub async fn run_agent_loop(
             .await?;
 
         if let Some(u) = &usage {
-            output.metadata(u.prompt_tokens, u.completion_tokens);
+            let cost = crate::pricing::compute_cost(api_base, model, u.prompt_tokens, u.completion_tokens);
+            output.metadata(u.prompt_tokens, u.completion_tokens, cost);
+        }
+
+        if let Some(limit) = max_cost_usd {
+            let spent = output.total_cost_usd();
+            if spent > limit {
+                output.emit_session_summary();
+                return Err(anyhow::Error::new(BudgetExceededError { spent_usd: spent, limit_usd: limit }));
+            }
         }
 
         let has_tool_calls = assistant_msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
@@ -397,7 +422,7 @@ async fn retry_schema_validation(
         };
 
         if let Some(u) = &usage {
-            output.metadata(u.prompt_tokens, u.completion_tokens);
+            output.metadata(u.prompt_tokens, u.completion_tokens, 0.0);
         }
 
         let content = retry_msg.content.clone().unwrap_or_default();

@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod pricing;
 mod runner;
 mod tools;
 
@@ -65,6 +66,9 @@ enum Commands {
         #[arg(long, default_value = "16384", help = "Maximum output tokens per response")]
         max_tokens: usize,
 
+        #[arg(long, help = "Cancel run with exit code 2 when accumulated cost exceeds this USD amount")]
+        max_cost_usd: Option<f64>,
+
         prompt: String,
     },
 }
@@ -90,6 +94,7 @@ async fn main() -> Result<()> {
             no_response_format,
             context_limit,
             max_tokens,
+            max_cost_usd,
             prompt,
         } => {
             let working_dir =
@@ -98,6 +103,7 @@ async fn main() -> Result<()> {
             let json_mode = format.as_deref() == Some("json");
 
             let resolved_config = config::resolve_config(&model, api_base, api_key)?;
+            let api_base_url = resolved_config.api_base.clone();
 
             let system = match system_prompt {
                 Some(path) => std::fs::read_to_string(&path)
@@ -161,6 +167,7 @@ async fn main() -> Result<()> {
             let result = runner::agent_loop::run_agent_loop(
                 &client,
                 &resolved_config.model_id,
+                &api_base_url,
                 &system,
                 &prompt,
                 &all_tools,
@@ -174,10 +181,28 @@ async fn main() -> Result<()> {
                 cancel_token,
                 context_limit,
                 max_tokens,
+                max_cost_usd,
             )
             .await;
 
             if let Err(e) = result {
+                if let Some(budget_err) = e.downcast_ref::<runner::agent_loop::BudgetExceededError>() {
+                    if json_mode {
+                        let err_json = serde_json::json!({
+                            "type": "error",
+                            "error": "budget_exceeded",
+                            "cost_usd": budget_err.spent_usd,
+                            "limit_usd": budget_err.limit_usd
+                        });
+                        println!("{}", err_json);
+                    } else {
+                        eprintln!(
+                            "[oai-runner] Budget exceeded: ${:.6} spent, limit ${:.6}",
+                            budget_err.spent_usd, budget_err.limit_usd
+                        );
+                    }
+                    std::process::exit(2);
+                }
                 if json_mode {
                     let err_json = serde_json::json!({
                         "type": "error",
