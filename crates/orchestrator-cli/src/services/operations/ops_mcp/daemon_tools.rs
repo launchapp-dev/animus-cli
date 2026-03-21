@@ -105,7 +105,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.daemon.config",
-        description = "Read daemon configuration. Purpose: View current daemon automation settings (auto-merge, auto-PR, etc). Prerequisites: None. Example: {}. Sequencing: Use ao.daemon.config-set to update values, or ao.daemon.status to check if daemon is running.",
+        description = "Read daemon configuration. Purpose: View current daemon automation settings (auto-merge, auto-PR, etc) and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, etc). Prerequisites: None. Example: {}. Sequencing: Use ao.daemon.config-set to update values, or ao.daemon.status to check if daemon is running.",
         input_schema = ao_schema_for_type::<DaemonConfigInput>()
     )]
     async fn ao_daemon_config(&self, params: Parameters<DaemonConfigInput>) -> Result<CallToolResult, McpError> {
@@ -114,7 +114,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.daemon.config-set",
-        description = "Update daemon configuration. Purpose: Persist daemon automation settings like auto-merge, auto-PR, auto-commit-before-merge, auto-prune-worktrees-after-merge, and auto-run-ready. Prerequisites: None. Example: {\"auto_merge\": true, \"auto_pr\": true}. Sequencing: Use ao.daemon.config to read current values first.",
+        description = "Update daemon configuration. Purpose: Persist daemon automation settings and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, auto_run_ready, stale_threshold_hours, phase_timeout_secs, idle_timeout_secs). Runtime settings are hot-reloaded by the running daemon without restart. Prerequisites: None. Example: {\"pool_size\": 4, \"interval_secs\": 10, \"auto_merge\": true}. Sequencing: Use ao.daemon.config to read current values first.",
         input_schema = ao_schema_for_type::<DaemonConfigSetInput>()
     )]
     async fn ao_daemon_config_set(&self, params: Parameters<DaemonConfigSetInput>) -> Result<CallToolResult, McpError> {

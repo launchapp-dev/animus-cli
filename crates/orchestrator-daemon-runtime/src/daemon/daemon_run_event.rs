@@ -48,6 +48,10 @@ pub enum DaemonRunEvent {
         stage: String,
         message: String,
     },
+    ConfigReloaded {
+        project_root: String,
+        setting: String,
+    },
     Shutdown {
         project_root: String,
         daemon_pid: u32,

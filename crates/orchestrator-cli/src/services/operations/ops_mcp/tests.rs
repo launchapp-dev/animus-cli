@@ -1018,6 +1018,86 @@ fn build_daemon_start_args_includes_stale_threshold_hours() {
 }
 
 #[test]
+fn build_daemon_config_set_args_defaults_minimal() {
+    let input = DaemonConfigSetInput::default();
+    let args = build_daemon_config_set_args(&input);
+    assert_eq!(args, vec!["daemon".to_string(), "config".to_string()]);
+}
+
+#[test]
+fn build_daemon_config_set_args_wires_pool_size() {
+    let input = DaemonConfigSetInput { pool_size: Some(8), ..Default::default() };
+    let args = build_daemon_config_set_args(&input);
+    assert_eq!(
+        args,
+        vec!["daemon", "config", "--pool-size", "8"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn build_daemon_config_set_args_wires_interval_secs() {
+    let input = DaemonConfigSetInput { interval_secs: Some(15), ..Default::default() };
+    let args = build_daemon_config_set_args(&input);
+    assert_eq!(
+        args,
+        vec!["daemon", "config", "--interval-secs", "15"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn build_daemon_config_set_args_wires_max_tasks_per_tick() {
+    let input = DaemonConfigSetInput { max_tasks_per_tick: Some(10), ..Default::default() };
+    let args = build_daemon_config_set_args(&input);
+    assert_eq!(
+        args,
+        vec!["daemon", "config", "--max-tasks-per-tick", "10"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn build_daemon_config_set_args_wires_all_runtime_settings() {
+    let input = DaemonConfigSetInput {
+        auto_merge: Some(true),
+        auto_pr: Some(false),
+        auto_run_ready: Some(false),
+        pool_size: Some(4),
+        interval_secs: Some(10),
+        max_tasks_per_tick: Some(5),
+        stale_threshold_hours: Some(48),
+        phase_timeout_secs: Some(300),
+        idle_timeout_secs: Some(600),
+        ..Default::default()
+    };
+    let args = build_daemon_config_set_args(&input);
+    assert!(args.contains(&"--pool-size".to_string()));
+    assert!(args.contains(&"4".to_string()));
+    assert!(args.contains(&"--interval-secs".to_string()));
+    assert!(args.contains(&"10".to_string()));
+    assert!(args.contains(&"--max-tasks-per-tick".to_string()));
+    assert!(args.contains(&"5".to_string()));
+    assert!(args.contains(&"--auto-run-ready".to_string()));
+    assert!(args.contains(&"false".to_string()));
+    assert!(args.contains(&"--stale-threshold-hours".to_string()));
+    assert!(args.contains(&"48".to_string()));
+    assert!(args.contains(&"--phase-timeout-secs".to_string()));
+    assert!(args.contains(&"300".to_string()));
+    assert!(args.contains(&"--idle-timeout-secs".to_string()));
+    assert!(args.contains(&"600".to_string()));
+    assert!(args.contains(&"--auto-merge".to_string()));
+    assert!(args.contains(&"true".to_string()));
+    assert!(args.contains(&"--auto-pr".to_string()));
+}
+
+#[test]
 fn build_queue_enqueue_args_includes_optional_fields() {
     let input = QueueEnqueueInput {
         task_id: Some("TASK-123".to_string()),

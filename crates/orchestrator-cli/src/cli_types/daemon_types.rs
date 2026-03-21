@@ -182,6 +182,55 @@ pub(crate) struct DaemonConfigArgs {
         help = "Persist automatic pruning of completed task worktrees after successful merges."
     )]
     pub(crate) auto_prune_worktrees_after_merge: Option<bool>,
+    // Runtime-reconfigurable settings (hot-reloaded by daemon without restart)
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Set agent pool size (max concurrent agents). Hot-reloaded by running daemon."
+    )]
+    pub(crate) pool_size: Option<usize>,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Set scheduler housekeeping interval in seconds. Hot-reloaded by running daemon."
+    )]
+    pub(crate) interval_secs: Option<u64>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = parse_positive_usize,
+        help = "Set max new workflows to dispatch per scheduler tick (queue cap). Hot-reloaded by running daemon."
+    )]
+    pub(crate) max_tasks_per_tick: Option<usize>,
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        help = "Enable or disable automatic dispatch of ready tasks."
+    )]
+    pub(crate) auto_run_ready: Option<bool>,
+    #[arg(
+        long,
+        value_name = "HOURS",
+        value_parser = parse_positive_u64,
+        help = "Set stale-task threshold in hours."
+    )]
+    pub(crate) stale_threshold_hours: Option<u64>,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Set phase timeout override in seconds."
+    )]
+    pub(crate) phase_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Set workflow idle timeout override in seconds."
+    )]
+    pub(crate) idle_timeout_secs: Option<u64>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]

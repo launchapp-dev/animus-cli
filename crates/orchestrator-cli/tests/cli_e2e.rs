@@ -624,6 +624,114 @@ fn e2e_daemon_config_persists_auto_prune_worktrees_after_merge() -> Result<()> {
 }
 
 #[test]
+fn e2e_daemon_config_persists_pool_size() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&["daemon", "config", "--pool-size", "8"])?;
+    assert_eq!(configured.pointer("/data/pool_size").and_then(Value::as_u64), Some(8));
+    assert!(configured.pointer("/data/updated").and_then(Value::as_bool).unwrap_or(false));
+
+    // Verify persisted in pm-config.json
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
+    let pm_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&pm_config_path).context("pm-config readable")?)?;
+    assert_eq!(pm_config.get("pool_size").and_then(Value::as_u64), Some(8));
+
+    Ok(())
+}
+
+#[test]
+fn e2e_daemon_config_persists_interval_secs() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&["daemon", "config", "--interval-secs", "15"])?;
+    assert_eq!(configured.pointer("/data/interval_secs").and_then(Value::as_u64), Some(15));
+
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
+    let pm_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&pm_config_path).context("pm-config readable")?)?;
+    assert_eq!(pm_config.get("interval_secs").and_then(Value::as_u64), Some(15));
+
+    Ok(())
+}
+
+#[test]
+fn e2e_daemon_config_persists_max_tasks_per_tick() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&["daemon", "config", "--max-tasks-per-tick", "10"])?;
+    assert_eq!(configured.pointer("/data/max_tasks_per_tick").and_then(Value::as_u64), Some(10));
+
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
+    let pm_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&pm_config_path).context("pm-config readable")?)?;
+    assert_eq!(pm_config.get("max_tasks_per_tick").and_then(Value::as_u64), Some(10));
+
+    Ok(())
+}
+
+#[test]
+fn e2e_daemon_config_persists_auto_run_ready() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&["daemon", "config", "--auto-run-ready", "false"])?;
+    assert_eq!(configured.pointer("/data/auto_run_ready").and_then(Value::as_bool), Some(false));
+
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
+    let pm_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&pm_config_path).context("pm-config readable")?)?;
+    assert_eq!(pm_config.get("auto_run_ready").and_then(Value::as_bool), Some(false));
+
+    Ok(())
+}
+
+#[test]
+fn e2e_daemon_config_shows_runtime_settings() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    // Set multiple settings then read back
+    harness.run_json_ok(&["daemon", "config", "--pool-size", "4", "--interval-secs", "20"])?;
+    let result = harness.run_json_ok(&["daemon", "config"])?;
+    assert_eq!(result.pointer("/data/pool_size").and_then(Value::as_u64), Some(4));
+    assert_eq!(result.pointer("/data/interval_secs").and_then(Value::as_u64), Some(20));
+    // auto_run_ready should show default true when not explicitly set
+    assert_eq!(result.pointer("/data/auto_run_ready").and_then(Value::as_bool), Some(true));
+
+    Ok(())
+}
+
+#[test]
+fn e2e_daemon_config_multiple_runtime_settings_at_once() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let configured = harness.run_json_ok(&[
+        "daemon",
+        "config",
+        "--pool-size",
+        "6",
+        "--interval-secs",
+        "12",
+        "--max-tasks-per-tick",
+        "8",
+        "--stale-threshold-hours",
+        "48",
+        "--phase-timeout-secs",
+        "300",
+        "--idle-timeout-secs",
+        "600",
+    ])?;
+
+    assert_eq!(configured.pointer("/data/pool_size").and_then(Value::as_u64), Some(6));
+    assert_eq!(configured.pointer("/data/interval_secs").and_then(Value::as_u64), Some(12));
+    assert_eq!(configured.pointer("/data/max_tasks_per_tick").and_then(Value::as_u64), Some(8));
+    assert_eq!(configured.pointer("/data/stale_threshold_hours").and_then(Value::as_u64), Some(48));
+    assert_eq!(configured.pointer("/data/phase_timeout_secs").and_then(Value::as_u64), Some(300));
+    assert_eq!(configured.pointer("/data/idle_timeout_secs").and_then(Value::as_u64), Some(600));
+
+    Ok(())
+}
+
+#[test]
 fn e2e_task_delete_requires_confirmation_and_supports_dry_run() -> Result<()> {
     let harness = CliHarness::new()?;
 

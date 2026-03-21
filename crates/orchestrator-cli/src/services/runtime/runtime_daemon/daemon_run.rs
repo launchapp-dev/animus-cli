@@ -91,6 +91,39 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
         }
     }
 
+    // Persist runtime-reconfigurable settings from CLI overrides so they survive
+    // daemon restart and are available for hot-reload.
+    if let Some(value) = args.scheduler.pool_size {
+        if config.pool_size != Some(value) {
+            config.pool_size = Some(value);
+            changed = true;
+        }
+    }
+    if config.interval_secs != Some(args.scheduler.interval_secs) {
+        config.interval_secs = Some(args.scheduler.interval_secs);
+        changed = true;
+    }
+    if config.max_tasks_per_tick != Some(args.scheduler.max_tasks_per_tick) {
+        config.max_tasks_per_tick = Some(args.scheduler.max_tasks_per_tick);
+        changed = true;
+    }
+    if config.auto_run_ready != Some(args.scheduler.auto_run_ready) {
+        config.auto_run_ready = Some(args.scheduler.auto_run_ready);
+        changed = true;
+    }
+    if config.stale_threshold_hours != Some(args.scheduler.stale_threshold_hours) {
+        config.stale_threshold_hours = Some(args.scheduler.stale_threshold_hours);
+        changed = true;
+    }
+    if args.scheduler.phase_timeout_secs.is_some() && config.phase_timeout_secs != args.scheduler.phase_timeout_secs {
+        config.phase_timeout_secs = args.scheduler.phase_timeout_secs;
+        changed = true;
+    }
+    if args.scheduler.idle_timeout_secs.is_some() && config.idle_timeout_secs != args.scheduler.idle_timeout_secs {
+        config.idle_timeout_secs = args.scheduler.idle_timeout_secs;
+        changed = true;
+    }
+
     if changed {
         let _ = write_daemon_project_config(project_path, &config);
     }
@@ -98,7 +131,7 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
 
 pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, json: bool) -> Result<()> {
     apply_scheduler_overrides_to_pm_config(&args, project_root);
-    let runtime_options = runtime_options_from_cli(&args);
+    let mut runtime_options = runtime_options_from_cli(&args, project_root);
     let start_config = DaemonStartConfig {
         pool_size: runtime_options.pool_size,
         skip_runner: args.skip_runner,
@@ -113,7 +146,7 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut host = CliDaemonRunHost::new(project_root, json, start_config);
 
     let run_result =
-        run_daemon(project_root, &runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
+        run_daemon(project_root, &mut runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
             .await;
 
     run_result
