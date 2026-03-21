@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use crate::{
-    DaemonRuntimeOptions, ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickRunMode, ProjectTickSummary,
-    ProjectTickTime,
+    schedule_headroom, DaemonRuntimeOptions, ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickRunMode,
+    ProjectTickSummary, ProjectTickTime,
 };
 
 pub async fn run_project_tick<H>(
@@ -32,12 +32,20 @@ where
     let now = tick_time.local_time();
     let context = mode.load_context(root, args, now, pool_draining);
 
+    // Compute schedule dispatch headroom BEFORE processing schedules so that
+    // they respect the pool cap.  Uses the pre-tick active count (captured by
+    // the caller before the tick loop iteration).
+    let headroom = schedule_headroom(args.pool_size, mode.active_process_count);
     if context.initial_preparation.schedule_plan.should_process_due_schedules {
-        hooks.process_due_schedules(root, tick_time.schedule_at());
+        hooks.process_due_schedules(root, tick_time.schedule_at(), headroom);
     }
 
     let snapshot = hooks.capture_snapshot(root).await?;
-    let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot);
+
+    // Re-count active processes AFTER schedule dispatches so that ready-task
+    // headroom accounts for any processes spawned by the schedule path.
+    let updated_active_count = hooks.active_process_count();
+    let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot, updated_active_count);
     let reconciled_workflows = hooks.reconcile_manual_timeouts(root).await?;
     let reconciled_runner_blocked_tasks = hooks.reconcile_runner_blocked_tasks(root).await?;
     let (executed_workflow_phases, failed_workflow_phases) = hooks.reconcile_completed_processes(root).await?;

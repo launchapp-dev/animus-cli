@@ -35,6 +35,13 @@ fn dispatch_headroom(max_tasks_per_tick: usize, active_agents: usize, capacity_l
     }
 }
 
+/// Compute how many additional processes can be spawned given a pool size and
+/// current active count.  Returns `None` when no pool cap is configured
+/// (unlimited capacity).
+pub fn schedule_headroom(pool_size: Option<usize>, active_process_count: usize) -> Option<usize> {
+    pool_size.map(|limit| limit.saturating_sub(active_process_count))
+}
+
 pub fn normalize_optional_id(value: Option<&str>) -> Option<String> {
     value.map(str::trim).filter(|candidate| !candidate.is_empty()).map(|candidate| candidate.to_string())
 }
@@ -80,7 +87,7 @@ pub fn workflow_current_phase_id(workflow: &OrchestratorWorkflow) -> Option<Stri
 mod tests {
     use orchestrator_core::{DaemonHealth, DaemonStatus};
 
-    use super::{ready_dispatch_limit, ready_dispatch_limit_for_options};
+    use super::{ready_dispatch_limit, ready_dispatch_limit_for_options, schedule_headroom};
     use crate::DaemonRuntimeOptions;
 
     #[test]
@@ -118,5 +125,17 @@ mod tests {
         let options = DaemonRuntimeOptions { max_tasks_per_tick: 4, ..DaemonRuntimeOptions::default() };
 
         assert_eq!(ready_dispatch_limit_for_options(&options, 2, None), 4);
+    }
+
+    #[test]
+    fn schedule_headroom_with_pool_cap() {
+        assert_eq!(schedule_headroom(Some(3), 1), Some(2));
+        assert_eq!(schedule_headroom(Some(3), 3), Some(0));
+        assert_eq!(schedule_headroom(Some(3), 5), Some(0));
+    }
+
+    #[test]
+    fn schedule_headroom_without_pool_cap() {
+        assert_eq!(schedule_headroom(None, 10), None);
     }
 }
