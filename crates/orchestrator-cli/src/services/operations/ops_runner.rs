@@ -47,11 +47,7 @@ fn acquire_tracker_lock() -> Result<std::fs::File> {
         fs::create_dir_all(parent)?;
     }
     let lock_path = tracker_path.with_extension("lock");
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
+    let lock_file = OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
     lock_file.lock_exclusive()?;
     Ok(lock_file)
 }

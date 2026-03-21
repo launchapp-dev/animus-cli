@@ -31,14 +31,10 @@ fn atomic_write_tracker(tracker_path: &Path, data: &HashMap<String, u32>) -> Res
     let payload = serde_json::to_vec_pretty(data)?;
     let mut temp = NamedTempFile::new_in(parent)
         .with_context(|| format!("failed to create temp file for {}", tracker_path.display()))?;
-    temp.write_all(&payload)
-        .with_context(|| format!("failed to write temp file for {}", tracker_path.display()))?;
-    temp.flush()
-        .with_context(|| format!("failed to flush temp file for {}", tracker_path.display()))?;
-    temp.as_file().sync_all()
-        .with_context(|| format!("failed to sync temp file for {}", tracker_path.display()))?;
-    temp.persist(tracker_path)
-        .with_context(|| format!("failed to atomically replace {}", tracker_path.display()))?;
+    temp.write_all(&payload).with_context(|| format!("failed to write temp file for {}", tracker_path.display()))?;
+    temp.flush().with_context(|| format!("failed to flush temp file for {}", tracker_path.display()))?;
+    temp.as_file().sync_all().with_context(|| format!("failed to sync temp file for {}", tracker_path.display()))?;
+    temp.persist(tracker_path).with_context(|| format!("failed to atomically replace {}", tracker_path.display()))?;
     Ok(())
 }
 
@@ -155,11 +151,7 @@ mod tests {
             std::fs::create_dir_all(parent)?;
         }
         let lock_path = tracker_path.with_extension("lock");
-        let lock_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)?;
+        let lock_file = OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
         lock_file.lock_exclusive()?;
         let result = f(tracker_path);
         lock_file.unlock().ok();
@@ -284,9 +276,6 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(
-            entries.iter().all(|e| !e.starts_with('.')),
-            "no hidden temp files should remain: {entries:?}"
-        );
+        assert!(entries.iter().all(|e| !e.starts_with('.')), "no hidden temp files should remain: {entries:?}");
     }
 }
