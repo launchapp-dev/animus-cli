@@ -1,6 +1,7 @@
 mod project_requirement_workflow_status;
 mod project_task_terminal_workflow_status;
 mod projector_registry;
+mod regression_detection;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,10 +19,15 @@ pub use project_task_terminal_workflow_status::project_task_terminal_workflow_st
 pub use projector_registry::{
     builtin_execution_projector_registry, execution_fact_subject_kind, ExecutionProjector, ExecutionProjectorRegistry,
 };
+pub use regression_detection::{
+    check_regression_on_failure, load_regression_state, record_fix_completion, RegressionState, TrackedFix,
+    REGRESSION_FAILURE_THRESHOLD, REGRESSION_WINDOW_SECS,
+};
 
 pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
 pub const WORKFLOW_RUNNER_CANCELLED_PREFIX: &str = "workflow runner cancelled: ";
 pub const WORKFLOW_RUNNER_EXITED_PREFIX: &str = "workflow runner exited without workflow status";
+pub const ESCALATED_BLOCKED_PREFIX: &str = "workflow escalated: ";
 pub const MAX_RUNNER_FAILURE_RESETS: u32 = 3;
 
 /// Returns true when a task is blocked specifically because a workflow runner

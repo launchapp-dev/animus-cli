@@ -1,6 +1,10 @@
+use std::path::Path;
 use std::sync::Arc;
 
-use orchestrator_core::{project_task_terminal_workflow_status, services::ServiceHub, WorkflowStatus};
+use orchestrator_core::{
+    check_regression_on_failure, project_task_terminal_workflow_status, record_fix_completion, services::ServiceHub,
+    WorkflowStatus,
+};
 use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
 
 #[allow(clippy::too_many_arguments)]
@@ -27,5 +31,19 @@ pub(crate) async fn project_terminal_workflow_result(
         return;
     };
 
-    project_task_terminal_workflow_status(hub, task_id, workflow_status, failure_reason.map(ToOwned::to_owned)).await;
+    project_task_terminal_workflow_status(hub.clone(), task_id, workflow_status, failure_reason.map(ToOwned::to_owned))
+        .await;
+
+    if let Some(workflow_ref) = workflow_ref.filter(|r| !r.trim().is_empty()) {
+        let root = Path::new(project_root);
+        match workflow_status {
+            WorkflowStatus::Completed => {
+                record_fix_completion(hub, root, task_id, workflow_ref).await;
+            }
+            WorkflowStatus::Failed | WorkflowStatus::Escalated => {
+                check_regression_on_failure(hub, root, task_id, workflow_ref).await;
+            }
+            _ => {}
+        }
+    }
 }
