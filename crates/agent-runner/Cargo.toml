@@ -24,6 +24,7 @@ fs2 = "0.4"
 dirs = "6.0"
 chrono = "0.4"
 uuid = { version = "1.7", features = ["v4"] }
+tempfile = "3"
 
 [dev-dependencies]
 protocol = { path = "../protocol", features = ["test-utils"] }
