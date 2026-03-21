@@ -96,8 +96,7 @@ impl OutputFormatter {
         let req_total = usage.effective_total();
         self.total_tokens += req_total;
 
-        let req_cost = pricing::lookup(&self.model)
-            .map(|p| p.cost(usage.prompt_tokens, usage.completion_tokens));
+        let req_cost = pricing::lookup(&self.model).map(|p| p.cost(usage.prompt_tokens, usage.completion_tokens));
         if let Some(cost) = req_cost {
             self.total_cost_usd += cost;
         }
@@ -191,8 +190,12 @@ impl OutputFormatter {
             };
             eprintln!(
                 "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens (model: {}){}",
-                self.request_count, self.total_input_tokens, self.total_output_tokens, self.total_tokens,
-                self.model, pricing_info
+                self.request_count,
+                self.total_input_tokens,
+                self.total_output_tokens,
+                self.total_tokens,
+                self.model,
+                pricing_info
             );
         }
     }
@@ -242,11 +245,7 @@ mod tests {
     fn metadata_accumulates_tokens_and_cost() {
         let mut formatter = OutputFormatter::new(true, "gpt-4o");
         // gpt-4o: $2.50/1M input, $10.00/1M output
-        let usage = crate::api::types::UsageInfo {
-            prompt_tokens: 1000,
-            completion_tokens: 500,
-            total_tokens: 1500,
-        };
+        let usage = crate::api::types::UsageInfo { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 };
         formatter.metadata(&usage);
         assert_eq!(formatter.total_input_tokens, 1000);
         assert_eq!(formatter.total_output_tokens, 500);

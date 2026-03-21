@@ -6,7 +6,6 @@
 ///
 /// Unknown models return `None` from [`lookup`], and callers can choose to
 /// skip cost reporting rather than invent a bogus number.
-
 use std::sync::LazyLock;
 
 /// Per-million-token pricing for a single model.
@@ -45,244 +44,70 @@ struct PricingEntry {
 static PRICING_TABLE: LazyLock<Vec<PricingEntry>> = LazyLock::new(|| {
     vec![
         // ── OpenAI ────────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["o4-mini"],
-            pricing: ModelPricing::new(1.10, 4.40),
-        },
-        PricingEntry {
-            prefixes: &["o3-pro"],
-            pricing: ModelPricing::new(10.00, 40.00),
-        },
-        PricingEntry {
-            prefixes: &["o3"],
-            pricing: ModelPricing::new(2.00, 8.00),
-        },
-        PricingEntry {
-            prefixes: &["o1-pro"],
-            pricing: ModelPricing::new(150.00, 600.00),
-        },
-        PricingEntry {
-            prefixes: &["o1-preview"],
-            pricing: ModelPricing::new(15.00, 60.00),
-        },
-        PricingEntry {
-            prefixes: &["o1-mini"],
-            pricing: ModelPricing::new(3.00, 12.00),
-        },
-        PricingEntry {
-            prefixes: &["o1"],
-            pricing: ModelPricing::new(15.00, 60.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4.1-mini"],
-            pricing: ModelPricing::new(0.40, 1.60),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4.1-nano"],
-            pricing: ModelPricing::new(0.10, 0.40),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4.1"],
-            pricing: ModelPricing::new(2.00, 8.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4.5-preview"],
-            pricing: ModelPricing::new(75.00, 150.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4.5"],
-            pricing: ModelPricing::new(75.00, 150.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4o-mini"],
-            pricing: ModelPricing::new(0.15, 0.60),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4o"],
-            pricing: ModelPricing::new(2.50, 10.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4-turbo"],
-            pricing: ModelPricing::new(10.00, 30.00),
-        },
-        PricingEntry {
-            prefixes: &["gpt-4"],
-            pricing: ModelPricing::new(30.00, 60.00),
-        },
-
+        PricingEntry { prefixes: &["o4-mini"], pricing: ModelPricing::new(1.10, 4.40) },
+        PricingEntry { prefixes: &["o3-pro"], pricing: ModelPricing::new(10.00, 40.00) },
+        PricingEntry { prefixes: &["o3"], pricing: ModelPricing::new(2.00, 8.00) },
+        PricingEntry { prefixes: &["o1-pro"], pricing: ModelPricing::new(150.00, 600.00) },
+        PricingEntry { prefixes: &["o1-preview"], pricing: ModelPricing::new(15.00, 60.00) },
+        PricingEntry { prefixes: &["o1-mini"], pricing: ModelPricing::new(3.00, 12.00) },
+        PricingEntry { prefixes: &["o1"], pricing: ModelPricing::new(15.00, 60.00) },
+        PricingEntry { prefixes: &["gpt-4.1-mini"], pricing: ModelPricing::new(0.40, 1.60) },
+        PricingEntry { prefixes: &["gpt-4.1-nano"], pricing: ModelPricing::new(0.10, 0.40) },
+        PricingEntry { prefixes: &["gpt-4.1"], pricing: ModelPricing::new(2.00, 8.00) },
+        PricingEntry { prefixes: &["gpt-4.5-preview"], pricing: ModelPricing::new(75.00, 150.00) },
+        PricingEntry { prefixes: &["gpt-4.5"], pricing: ModelPricing::new(75.00, 150.00) },
+        PricingEntry { prefixes: &["gpt-4o-mini"], pricing: ModelPricing::new(0.15, 0.60) },
+        PricingEntry { prefixes: &["gpt-4o"], pricing: ModelPricing::new(2.50, 10.00) },
+        PricingEntry { prefixes: &["gpt-4-turbo"], pricing: ModelPricing::new(10.00, 30.00) },
+        PricingEntry { prefixes: &["gpt-4"], pricing: ModelPricing::new(30.00, 60.00) },
         // ── Anthropic ─────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["claude-opus-4"],
-            pricing: ModelPricing::new(15.00, 75.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-sonnet-4"],
-            pricing: ModelPricing::new(3.00, 15.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3.7-sonnet", "claude-3-7-sonnet"],
-            pricing: ModelPricing::new(3.00, 15.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3.5-haiku", "claude-3-5-haiku"],
-            pricing: ModelPricing::new(0.80, 4.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3.5-sonnet", "claude-3-5-sonnet"],
-            pricing: ModelPricing::new(3.00, 15.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3-opus"],
-            pricing: ModelPricing::new(15.00, 75.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3-sonnet"],
-            pricing: ModelPricing::new(3.00, 15.00),
-        },
-        PricingEntry {
-            prefixes: &["claude-3-haiku"],
-            pricing: ModelPricing::new(0.25, 1.25),
-        },
-        PricingEntry {
-            prefixes: &["claude"],
-            pricing: ModelPricing::new(3.00, 15.00),
-        },
-
+        PricingEntry { prefixes: &["claude-opus-4"], pricing: ModelPricing::new(15.00, 75.00) },
+        PricingEntry { prefixes: &["claude-sonnet-4"], pricing: ModelPricing::new(3.00, 15.00) },
+        PricingEntry { prefixes: &["claude-3.7-sonnet", "claude-3-7-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
+        PricingEntry { prefixes: &["claude-3.5-haiku", "claude-3-5-haiku"], pricing: ModelPricing::new(0.80, 4.00) },
+        PricingEntry { prefixes: &["claude-3.5-sonnet", "claude-3-5-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
+        PricingEntry { prefixes: &["claude-3-opus"], pricing: ModelPricing::new(15.00, 75.00) },
+        PricingEntry { prefixes: &["claude-3-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
+        PricingEntry { prefixes: &["claude-3-haiku"], pricing: ModelPricing::new(0.25, 1.25) },
+        PricingEntry { prefixes: &["claude"], pricing: ModelPricing::new(3.00, 15.00) },
         // ── Google / Gemini ───────────────────────────────────────
-        PricingEntry {
-            prefixes: &["gemini-2.5-pro"],
-            pricing: ModelPricing::new(1.25, 10.00),
-        },
-        PricingEntry {
-            prefixes: &["gemini-2.5-flash"],
-            pricing: ModelPricing::new(0.15, 0.60),
-        },
-        PricingEntry {
-            prefixes: &["gemini-2.0-flash"],
-            pricing: ModelPricing::new(0.10, 0.40),
-        },
-        PricingEntry {
-            prefixes: &["gemini-1.5-pro"],
-            pricing: ModelPricing::new(1.25, 5.00),
-        },
-        PricingEntry {
-            prefixes: &["gemini-1.5-flash"],
-            pricing: ModelPricing::new(0.075, 0.30),
-        },
-        PricingEntry {
-            prefixes: &["gemini"],
-            pricing: ModelPricing::new(0.10, 0.40),
-        },
-
+        PricingEntry { prefixes: &["gemini-2.5-pro"], pricing: ModelPricing::new(1.25, 10.00) },
+        PricingEntry { prefixes: &["gemini-2.5-flash"], pricing: ModelPricing::new(0.15, 0.60) },
+        PricingEntry { prefixes: &["gemini-2.0-flash"], pricing: ModelPricing::new(0.10, 0.40) },
+        PricingEntry { prefixes: &["gemini-1.5-pro"], pricing: ModelPricing::new(1.25, 5.00) },
+        PricingEntry { prefixes: &["gemini-1.5-flash"], pricing: ModelPricing::new(0.075, 0.30) },
+        PricingEntry { prefixes: &["gemini"], pricing: ModelPricing::new(0.10, 0.40) },
         // ── DeepSeek ──────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["deepseek-r1"],
-            pricing: ModelPricing::new(0.55, 2.19),
-        },
-        PricingEntry {
-            prefixes: &["deepseek-chat", "deepseek-v3"],
-            pricing: ModelPricing::new(0.14, 0.28),
-        },
-        PricingEntry {
-            prefixes: &["deepseek"],
-            pricing: ModelPricing::new(0.14, 0.28),
-        },
-
+        PricingEntry { prefixes: &["deepseek-r1"], pricing: ModelPricing::new(0.55, 2.19) },
+        PricingEntry { prefixes: &["deepseek-chat", "deepseek-v3"], pricing: ModelPricing::new(0.14, 0.28) },
+        PricingEntry { prefixes: &["deepseek"], pricing: ModelPricing::new(0.14, 0.28) },
         // ── Meta Llama (via various providers) ────────────────────
-        PricingEntry {
-            prefixes: &["llama-4-maverick"],
-            pricing: ModelPricing::new(0.20, 0.60),
-        },
-        PricingEntry {
-            prefixes: &["llama-4-scout"],
-            pricing: ModelPricing::new(0.10, 0.30),
-        },
-        PricingEntry {
-            prefixes: &["llama-3.3-70b"],
-            pricing: ModelPricing::new(0.59, 0.79),
-        },
-        PricingEntry {
-            prefixes: &["llama-3.1-405b"],
-            pricing: ModelPricing::new(2.00, 8.00),
-        },
-        PricingEntry {
-            prefixes: &["llama-3.1-70b"],
-            pricing: ModelPricing::new(0.59, 0.79),
-        },
-        PricingEntry {
-            prefixes: &["llama-3.1-8b"],
-            pricing: ModelPricing::new(0.06, 0.06),
-        },
-        PricingEntry {
-            prefixes: &["llama-3-70b"],
-            pricing: ModelPricing::new(0.59, 0.79),
-        },
-        PricingEntry {
-            prefixes: &["llama-3-8b"],
-            pricing: ModelPricing::new(0.05, 0.05),
-        },
-
+        PricingEntry { prefixes: &["llama-4-maverick"], pricing: ModelPricing::new(0.20, 0.60) },
+        PricingEntry { prefixes: &["llama-4-scout"], pricing: ModelPricing::new(0.10, 0.30) },
+        PricingEntry { prefixes: &["llama-3.3-70b"], pricing: ModelPricing::new(0.59, 0.79) },
+        PricingEntry { prefixes: &["llama-3.1-405b"], pricing: ModelPricing::new(2.00, 8.00) },
+        PricingEntry { prefixes: &["llama-3.1-70b"], pricing: ModelPricing::new(0.59, 0.79) },
+        PricingEntry { prefixes: &["llama-3.1-8b"], pricing: ModelPricing::new(0.06, 0.06) },
+        PricingEntry { prefixes: &["llama-3-70b"], pricing: ModelPricing::new(0.59, 0.79) },
+        PricingEntry { prefixes: &["llama-3-8b"], pricing: ModelPricing::new(0.05, 0.05) },
         // ── Mistral ───────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["mistral-large"],
-            pricing: ModelPricing::new(2.00, 6.00),
-        },
-        PricingEntry {
-            prefixes: &["mistral-medium"],
-            pricing: ModelPricing::new(2.70, 8.10),
-        },
-        PricingEntry {
-            prefixes: &["mistral-small"],
-            pricing: ModelPricing::new(0.50, 1.50),
-        },
-        PricingEntry {
-            prefixes: &["codestral"],
-            pricing: ModelPricing::new(0.30, 0.90),
-        },
-        PricingEntry {
-            prefixes: &["mistral"],
-            pricing: ModelPricing::new(2.00, 6.00),
-        },
-
+        PricingEntry { prefixes: &["mistral-large"], pricing: ModelPricing::new(2.00, 6.00) },
+        PricingEntry { prefixes: &["mistral-medium"], pricing: ModelPricing::new(2.70, 8.10) },
+        PricingEntry { prefixes: &["mistral-small"], pricing: ModelPricing::new(0.50, 1.50) },
+        PricingEntry { prefixes: &["codestral"], pricing: ModelPricing::new(0.30, 0.90) },
+        PricingEntry { prefixes: &["mistral"], pricing: ModelPricing::new(2.00, 6.00) },
         // ── Qwen ──────────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["qwen3-235b-a22b"],
-            pricing: ModelPricing::new(0.14, 0.42),
-        },
-        PricingEntry {
-            prefixes: &["qwen3-32b"],
-            pricing: ModelPricing::new(0.02, 0.06),
-        },
-        PricingEntry {
-            prefixes: &["qwen3-coder"],
-            pricing: ModelPricing::new(0.14, 0.42),
-        },
-        PricingEntry {
-            prefixes: &["qwen2.5-coder-32b", "qwen-2.5-coder-32b"],
-            pricing: ModelPricing::new(0.14, 0.42),
-        },
-        PricingEntry {
-            prefixes: &["qwen"],
-            pricing: ModelPricing::new(0.14, 0.42),
-        },
-
+        PricingEntry { prefixes: &["qwen3-235b-a22b"], pricing: ModelPricing::new(0.14, 0.42) },
+        PricingEntry { prefixes: &["qwen3-32b"], pricing: ModelPricing::new(0.02, 0.06) },
+        PricingEntry { prefixes: &["qwen3-coder"], pricing: ModelPricing::new(0.14, 0.42) },
+        PricingEntry { prefixes: &["qwen2.5-coder-32b", "qwen-2.5-coder-32b"], pricing: ModelPricing::new(0.14, 0.42) },
+        PricingEntry { prefixes: &["qwen"], pricing: ModelPricing::new(0.14, 0.42) },
         // ── MiniMax ───────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["minimax"],
-            pricing: ModelPricing::new(0.11, 0.11),
-        },
-
+        PricingEntry { prefixes: &["minimax"], pricing: ModelPricing::new(0.11, 0.11) },
         // ── Kimi / Moonshot ───────────────────────────────────────
-        PricingEntry {
-            prefixes: &["moonshot", "kimi"],
-            pricing: ModelPricing::new(1.00, 2.00),
-        },
-
+        PricingEntry { prefixes: &["moonshot", "kimi"], pricing: ModelPricing::new(1.00, 2.00) },
         // ── GLM / ZAI ─────────────────────────────────────────────
-        PricingEntry {
-            prefixes: &["glm"],
-            pricing: ModelPricing::new(0.50, 0.50),
-        },
+        PricingEntry { prefixes: &["glm"], pricing: ModelPricing::new(0.50, 0.50) },
     ]
 });
 
