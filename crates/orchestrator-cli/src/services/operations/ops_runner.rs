@@ -13,16 +13,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct CliTrackerStateCli {
-    #[serde(default)]
-    processes: HashMap<String, i32>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RunnerOrphanCli {
     run_id: String,
-    pid: i32,
+    pid: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,11 +25,11 @@ struct RunnerOrphanDetectionCli {
     count: usize,
 }
 
-fn load_cli_tracker() -> Result<CliTrackerStateCli> {
+fn load_cli_tracker() -> Result<HashMap<String, u32>> {
     read_json_or_default(&protocol::cli_tracker_path())
 }
 
-fn save_cli_tracker(tracker: &CliTrackerStateCli) -> Result<()> {
+fn save_cli_tracker(tracker: &HashMap<String, u32>) -> Result<()> {
     write_json_pretty(&protocol::cli_tracker_path(), tracker)
 }
 
@@ -92,35 +86,31 @@ pub(crate) async fn handle_runner(
         RunnerCommand::Orphans { command } => match command {
             RunnerOrphanCommand::Detect => {
                 let tracker = load_cli_tracker()?;
-                let orphans: Vec<_> = tracker
-                    .processes
-                    .into_iter()
-                    .filter_map(
-                        |(run_id, pid)| {
-                            if process_exists(pid) {
+                let orphans: Vec<_> =
+                    tracker
+                        .into_iter()
+                        .filter_map(|(run_id, pid)| {
+                            if process_exists(pid as i32) {
                                 Some(RunnerOrphanCli { run_id, pid })
                             } else {
                                 None
                             }
-                        },
-                    )
-                    .collect();
+                        })
+                        .collect();
                 let detection = RunnerOrphanDetectionCli { count: orphans.len(), orphans };
                 print_value(detection, json)
             }
             RunnerOrphanCommand::Cleanup(args) => {
-                // Hold the tracker lock for the entire read-modify-write cycle
-                // to prevent races with agent-runner cleanup.rs or concurrent CLI calls.
                 let _lock = acquire_tracker_lock()?;
                 let mut tracker = load_cli_tracker()?;
                 let mut cleaned = Vec::new();
                 for run_id in args.run_id {
-                    let Some(pid) = tracker.processes.get(&run_id).copied() else {
+                    let Some(pid) = tracker.get(&run_id).copied() else {
                         continue;
                     };
-                    if !process_exists(pid) || kill_process(pid) {
+                    if !process_exists(pid as i32) || kill_process(pid as i32) {
                         cleaned.push(run_id.clone());
-                        tracker.processes.remove(&run_id);
+                        tracker.remove(&run_id);
                     }
                 }
                 save_cli_tracker(&tracker)?;
