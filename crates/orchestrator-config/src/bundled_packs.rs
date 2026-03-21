@@ -27,7 +27,8 @@ fn materialize_bundled_packs() -> Result<&'static PathBuf> {
 }
 
 fn extract_dir(dir: &Dir<'_>, target: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(target).with_context(|| format!("failed to create directory {}", target.display()))?;
+    std::fs::create_dir_all(target)
+        .with_context(|| format!("failed to create directory {}", target.display()))?;
     for file in dir.files() {
         let file_path = target.join(file.path().file_name().unwrap_or(file.path().as_os_str()));
         std::fs::write(&file_path, file.contents())

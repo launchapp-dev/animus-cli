@@ -94,9 +94,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache Cargo build artifacts
-        uses: Swatinem/rust-cache@v2
-
       - name: Compute release version
         id: version
         shell: bash
@@ -159,7 +156,7 @@ jobs:
           STAGE_DIR="ao-${VERSION}-${TARGET}"
           mkdir -p "${STAGE_DIR}"
 
-          BINARIES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)
+          BINARIES=(ao agent-runner llm-cli-wrapper)
           for binary in "${BINARIES[@]}"; do
             cp "target/${TARGET}/release/${binary}" "${STAGE_DIR}/"
           done
@@ -172,7 +169,7 @@ jobs:
           import os
           from pathlib import Path
 
-          binaries = ["ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner"]
+          binaries = ["ao", "agent-runner", "llm-cli-wrapper"]
           metadata = {
               "schema": "ao.release.v1",
               "version": os.environ["VERSION"],
@@ -203,7 +200,7 @@ jobs:
           STAGE_DIR="ao-${VERSION}-${TARGET}"
           ARCHIVE_PATH="${STAGE_DIR}.tar.gz"
 
-          REQUIRED_FILES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner release-metadata.json)
+          REQUIRED_FILES=(ao agent-runner llm-cli-wrapper release-metadata.json)
           for file in "${REQUIRED_FILES[@]}"; do
             if [[ ! -f "${STAGE_DIR}/${file}" ]]; then
               echo "missing required staged file: ${STAGE_DIR}/${file}" >&2
@@ -224,7 +221,7 @@ jobs:
           stage_dir = Path(os.environ["STAGE_DIR"])
           metadata_path = stage_dir / "release-metadata.json"
           metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-          expected_binaries = ["ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner"]
+          expected_binaries = ["ao", "agent-runner", "llm-cli-wrapper"]
 
           required_pairs = {
               "schema": "ao.release.v1",
@@ -262,7 +259,7 @@ jobs:
           $Version = "${{ steps.version.outputs.value }}"
           $Target = "${{ matrix.target }}"
           $StageDir = "ao-$Version-$Target"
-          $Binaries = @("ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner")
+          $Binaries = @("ao", "agent-runner", "llm-cli-wrapper")
           $BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }
 
           New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
@@ -295,7 +292,7 @@ jobs:
           $StageDir = "ao-$Version-$Target"
           $ArchivePath = "$StageDir.zip"
 
-          $Binaries = @("ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner")
+          $Binaries = @("ao", "agent-runner", "llm-cli-wrapper")
           $BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }
           $RequiredFiles = $BinaryFiles + "release-metadata.json"
           foreach ($File in $RequiredFiles) {
@@ -443,37 +440,12 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
 
-          CHANGELOG_FILE="${GITHUB_WORKSPACE}/CHANGELOG-${VERSION}.md"
-          if [[ -f "${CHANGELOG_FILE}" ]]; then
-            CHANGELOG="$(cat "${CHANGELOG_FILE}")"
-          else
-            PREV_TAG="$(gh release list --repo launchapp-dev/ao --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo '')"
-            if [[ -n "${PREV_TAG}" ]]; then
-              CHANGELOG="$(git log --oneline "${PREV_TAG}..${VERSION}" --no-merges 2>/dev/null | head -30 || echo 'No changelog available')"
-            else
-              CHANGELOG="Initial release"
-            fi
-          fi
-
           gh release create "${VERSION}" \
             --repo launchapp-dev/ao \
             --title "AO ${VERSION}" \
-            --notes "## AO ${VERSION}
+            --notes "Release ${VERSION} — download the archive for your platform and run install.sh, or use:
 
-          ### Install
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
-          \`\`\`
-
-          ### Changelog
-          \`\`\`
-          ${CHANGELOG}
-          \`\`\`
-
-          ### Binaries
-          - \`ao\` — Main CLI + daemon
-          - \`agent-runner\` — IPC agent session manager
-          - \`llm-cli-wrapper\` — CLI tool abstraction
-          - \`ao-oai-runner\` — OpenAI-compatible model runner
-          - \`ao-workflow-runner\` — Phase executor" \
+          \`\`\`" \
             dist/release-assets/*

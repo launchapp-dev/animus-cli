@@ -194,7 +194,8 @@ mod tests {
     #[tokio::test]
     async fn write_file_rejects_absolute_path() {
         let dir = setup_temp_dir();
-        let result = execute_tool("write_file", r#"{"path": "/tmp/evil.txt", "content": "evil"}"#, dir.path()).await;
+        let result =
+            execute_tool("write_file", r#"{"path": "/tmp/evil.txt", "content": "evil"}"#, dir.path()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("escape"));
     }

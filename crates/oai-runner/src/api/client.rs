@@ -33,7 +33,10 @@ fn get_provider_state(api_base: &str) -> Arc<ProviderState> {
     let map = write.get_or_insert_with(HashMap::new);
     map.entry(api_base.to_string())
         .or_insert_with(|| {
-            Arc::new(ProviderState { consecutive_failures: AtomicU32::new(0), circuit_open_until: AtomicU64::new(0) })
+            Arc::new(ProviderState {
+                consecutive_failures: AtomicU32::new(0),
+                circuit_open_until: AtomicU64::new(0),
+            })
         })
         .clone()
 }
@@ -86,10 +89,7 @@ impl ApiClient {
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
         let state = get_provider_state(&self.api_base);
         if circuit_is_open(&state) {
-            bail!(
-                "Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.",
-                self.api_base
-            );
+            bail!("Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.", self.api_base);
         }
 
         let url = format!("{}/chat/completions", self.api_base);
@@ -103,9 +103,7 @@ impl ApiClient {
                     // If we already sent chunks to the user, retrying the whole request
                     // will lead to duplicate output. Better to fail or implement resume.
                     // OpenAI-style APIs usually don't support resume mid-stream.
-                    return Err(
-                        last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content"))
-                    );
+                    return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content")));
                 }
 
                 let delay = Duration::from_millis(500 * 2u64.pow(attempt as u32));
@@ -130,7 +128,7 @@ impl ApiClient {
                         || err_str.contains("connection closed")
                         || err_str.contains("broken pipe")
                         || err_str.contains("reset by peer");
-
+                    
                     if is_rate_limit || is_server_error || is_transient {
                         record_failure(&state, &self.api_base);
                         let reason = if is_rate_limit {
@@ -159,15 +157,11 @@ impl ApiClient {
         request: &ChatRequest,
         on_text_chunk: &mut dyn FnMut(&str),
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
-        if std::env::var("AO_DEBUG_REQUESTS").is_ok() {
-            eprintln!("[oai-runner] Request body: {}", serde_json::to_string(request).unwrap_or_default());
-        }
         let resp = self
             .http
             .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
-            .header("User-Agent", "claude-code/2.1.80")
             .json(request)
             .send()
             .await?;
@@ -188,7 +182,6 @@ impl ApiClient {
         }
 
         let mut content = String::new();
-        let mut reasoning_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut usage: Option<UsageInfo> = None;
 
@@ -207,8 +200,7 @@ impl ApiClient {
                 std::io::stdout().flush().ok();
                 let msg = ChatMessage {
                     role: "assistant".to_string(),
-                    content: Some(content),
-                    reasoning_content: Some(reasoning_content),
+                    content: if content.is_empty() { None } else { Some(content) },
                     tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                     tool_call_id: None,
                 };
@@ -229,9 +221,6 @@ impl ApiClient {
                 if let Some(text) = &choice.delta.content {
                     content.push_str(text);
                     on_text_chunk(text);
-                }
-                if let Some(text) = &choice.delta.reasoning_content {
-                    reasoning_content.push_str(text);
                 }
 
                 if let Some(tc_deltas) = &choice.delta.tool_calls {
@@ -266,7 +255,6 @@ impl ApiClient {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: if content.is_empty() { None } else { Some(content) },
-            reasoning_content: Some(reasoning_content),
             tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
             tool_call_id: None,
         };

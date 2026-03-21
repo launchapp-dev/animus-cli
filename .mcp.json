@@ -11,7 +11,7 @@
         "mcp",
         "serve"
       ],
-      "command": "/Users/samishukri/ao-cli/target/debug/ao"
+      "command": "/Users/samishukri/.local/bin/ao"
     }
   }
 }

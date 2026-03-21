@@ -2,7 +2,6 @@ tools_allowlist:
   - cargo
   - git
   - gh
-  - bash
 
 mcp_servers:
   context7:
@@ -26,8 +25,8 @@ mcp_servers:
 
 agents:
   default:
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs", "sequential-thinking"]
 
   work-planner:
@@ -55,8 +54,8 @@ agents:
       - Check ao.workflow.list — if last workflow had a "skip" decision, do NOT re-enqueue.
       - Prefer tasks that have NEVER been dispatched over retries.
       - Do NOT enqueue duplicates — check queue first.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   reconciler:
@@ -106,8 +105,8 @@ agents:
       DEPENDENCY RULES:
       - Never promote/unblock if blocked_by deps aren't done.
       - Process leaf tasks first.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: gpt-5.4
+    tool: codex
     mcp_servers: ["ao"]
 
   system-monitor:
@@ -126,8 +125,8 @@ agents:
       Before creating any task, ALWAYS search first with ao.task.list to avoid duplicates.
       Tag all monitoring tasks with "auto-monitor".
       Be concise in task descriptions — include the error/issue and expected fix.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   workflow-optimizer:
     system_prompt: |
@@ -180,8 +179,8 @@ agents:
       - Be specific — include error messages, phase names, failure counts, and suggested fixes.
       - Create at most 5 tasks per run to avoid flooding.
       - Focus on high-impact improvements: things that will unblock the most work.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: gpt-5.4
+    tool: claude
 
   release-manager:
     system_prompt: |
@@ -194,35 +193,20 @@ agents:
          If a release branch exists, skip to step 4.
 
       2. EVALUATE RELEASE READINESS:
+         Run `git log --oneline origin/main..origin/develop | wc -l` to count unreleased commits.
          Run `git tag --sort=-v:refname | head -1` to get the latest version tag.
-         Check ao.task.stats — how many tasks are done since last release?
-         Check ao.requirements.list — any requirements completed?
-         Check `git log --oneline <prev_tag>..origin/develop --no-merges` for changes.
-         RELEASE only if ALL of these are true:
-         - At least 10 meaningful commits (features or fixes) since the last release tag
-         - At least 1 requirement was completed OR a critical/security fix was merged
-         - The last release was more than 7 days ago (check tag date with `git log -1 --format=%ci <prev_tag>`)
-         SKIP if:
-         - Only docs, monitoring, config, or trivial chore tasks landed
-         - Fewer than 10 commits since last release
-         - Last release was less than 7 days ago (unless a critical security fix requires it)
-         When in doubt, SKIP. Releases should be deliberate, not frequent.
+         If < 10 commits, SKIP — not enough changes yet.
 
       3. CUT RELEASE BRANCH:
-         a. Parse the latest tag (e.g., v0.0.10) and bump the PATCH version only. Never bump major or minor — always patch (e.g., v0.1.0 → v0.1.1).
+         a. Parse the latest tag (e.g., v0.0.10) and bump: minor for features, patch for bugfixes only.
          b. Run `git checkout -b release/vX.Y.Z origin/develop && git push origin release/vX.Y.Z`
          c. Create a tracking task via ao.task.create: title "Release vX.Y.Z", priority "critical", type "chore"
-         d. WRITE CHANGELOG: Read the commits since last tag with `git log --oneline <prev_tag>..HEAD --no-merges`.
-            Also check ao.task.list for tasks marked done since last release.
-            Write a user-facing changelog grouped by: Features, Fixes, Improvements.
-            Save it to CHANGELOG-vX.Y.Z.md in the repo root. Commit it to the release branch.
 
       4. CHECK RELEASE GATE (if release branch exists):
          a. Check if a PR exists: `gh pr list --base main --head release/vX.Y.Z --json number`
-         b. If no PR, create one with the changelog as the PR body:
-            `gh pr create --base main --head release/vX.Y.Z --title "Release vX.Y.Z" --body-file CHANGELOG-vX.Y.Z.md`
+         b. If no PR, create one: `gh pr create --base main --head release/vX.Y.Z --title "Release vX.Y.Z" --body "Release candidate"`
          c. If PR exists and is merged:
-            - Do NOT tag manually — GitHub Actions auto-tags when release PR merges to main.
+            - Tag: `git tag vX.Y.Z origin/main && git push origin vX.Y.Z` (triggers release.yml CI)
             - Sync develop: `git fetch origin && git checkout develop && git merge origin/main && git push origin develop`
             - Delete release branch: `git push origin --delete release/vX.Y.Z`
             - Mark release task as done.
@@ -230,8 +214,8 @@ agents:
       RULES:
       - Only one release branch at a time.
       - Never force-push.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   release-gate-checker:
     system_prompt: |
@@ -256,8 +240,8 @@ agents:
       RULES:
       - Release PRs use --merge strategy (not squash).
       - Never merge with failing checks.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   branch-sync-monitor:
     system_prompt: |
@@ -271,8 +255,8 @@ agents:
          If > 50 and no release branch exists, create task: "Cut a release — develop is N commits ahead".
 
       Before creating tasks, check ao.task.list to avoid duplicates.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   pr-reviewer:
     system_prompt: |
@@ -321,9 +305,9 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: claude-opus-4-6
+    model: claude-sonnet-4-6
     tool: claude
-    mcp_servers: ["ao", "github"]
+    mcp_servers: ["ao"]
 
   po-reviewer:
     system_prompt: |
@@ -341,8 +325,8 @@ agents:
       The implementation agent reads the task description and checklist to know
       what to fix — if you don't update the task, the rework will be blind.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   requirements-refiner:
     system_prompt: |
@@ -365,8 +349,8 @@ agents:
       Do NOT change the task title. Focus on making the description implementation-ready.
       If the task is already well-specified, leave it unchanged and note that.
       Use the runtime-provided phase contract instructions for the final structured verdict output.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   triager:
     system_prompt: |
@@ -391,13 +375,13 @@ agents:
       | Complexity | Type        | workflow_ref      | Model                  |
       |------------|-------------|-------------------|------------------------|
       | low        | any         | standard-minimax  | MiniMax M2.7 (cheapest)|
-      | medium     | feature     | standard-kimi     | Kimi for Coding        |
-      | medium     | bugfix      | standard-kimi     | Kimi for Coding        |
-      | medium     | refactor    | standard-kimi     | Kimi for Coding        |
+      | medium     | feature     | standard          | Claude Sonnet          |
+      | medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |
+      | medium     | refactor    | standard-codex    | Codex GPT-5.4          |
       | medium     | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
-      | high       | feature     | standard-kimi     | Kimi for Coding        |
-      | high       | bugfix      | standard-kimi     | Kimi for Coding        |
-      | high       | refactor    | standard-kimi     | Kimi for Coding        |
+      | high       | feature     | standard          | Claude Sonnet          |
+      | high       | bugfix      | standard-codex    | Codex GPT-5.4          |
+      | high       | refactor    | standard-codex    | Codex GPT-5.4          |
       | high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |
       | high       | architecture| standard-opus     | Claude Opus            |
       | critical   | any         | standard-opus     | Claude Opus            |
@@ -410,8 +394,8 @@ agents:
       - Check ao.queue.list before dispatching — do NOT enqueue duplicates.
       - Be thorough in validation — search the actual code, not just task titles.
       - Use "advance" verdict after successful dispatch, "skip" for invalid/done/duplicate tasks.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   web-ui-improver:
@@ -447,8 +431,8 @@ agents:
       - Do NOT create tasks for things already working well.
       - Prefer small, focused improvements over large rewrites.
       - Tag all tasks with "web-ui-improvement".
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7"]
 
   mcp-server-improver:
@@ -484,8 +468,8 @@ agents:
       - Do NOT propose new tools unless there's a clear core service method to back them.
       - Prefer fixing existing tools over adding new ones.
       - Tag all tasks with "mcp-improvement".
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   docs-drift-checker:
     system_prompt: |
@@ -517,8 +501,8 @@ agents:
       - Every task must cite the exact doc section AND the source of truth.
       - Tag all tasks with "docs-drift".
       - Set task_type to "docs" so the work-planner routes them to cheap models.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
 
   po-oai-runner:
     system_prompt: |
@@ -532,8 +516,8 @@ agents:
       - Session management and resumption
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-oai-runner". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-web:
@@ -548,8 +532,8 @@ agents:
       - Type safety (GraphQL types vs Rust contracts)
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-web". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7"]
 
   po-mcp:
@@ -564,8 +548,8 @@ agents:
       - Output format improvements
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-mcp". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-workflow:
@@ -580,8 +564,8 @@ agents:
       - Fallback and failover behavior
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-workflow". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-agent-runner:
@@ -596,8 +580,8 @@ agents:
       - New CLI tool support
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-agent-runner". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   po-cli:
@@ -612,8 +596,8 @@ agents:
       - Configuration ergonomics
       Check ao.requirements.list and ao.task.list before creating — NEVER duplicate.
       Tag requirements with "po-cli". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   architect-rust:
@@ -629,8 +613,8 @@ agents:
       Read Cargo.toml in each crate to map the dependency graph.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "architect-rust". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "rust-docs"]
 
   architect-infra:
@@ -644,8 +628,8 @@ agents:
       - Cross-platform support (macOS, Linux, Windows)
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "architect-infra". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   researcher-models:
@@ -659,8 +643,8 @@ agents:
       Use WebSearch to find latest model announcements and pricing.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "researcher-models". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   researcher-ecosystem:
@@ -675,8 +659,8 @@ agents:
       Use context7 and rust-docs to check current crate APIs.
       Check ao.requirements.list before creating — NEVER duplicate.
       Tag requirements with "researcher-ecosystem". Max 2 per run.
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   requirement-reviewer:
@@ -693,8 +677,8 @@ agents:
          e. If rejected: update requirement status to explain why.
       3. Max 5 task conversions per run to avoid flooding.
       4. Prefer requirements from POs over researchers (POs know their domain better).
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: claude-sonnet-4-6
+    tool: claude
     mcp_servers: ["ao"]
 
   glm-default:
@@ -709,7 +693,7 @@ agents:
 
   kimi-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write clean, tested code."
-    model: kimi-code/kimi-for-coding
+    model: openrouter/moonshotai/kimi-k2.5
     tool: oai-runner
 
   opus-default:
@@ -720,8 +704,8 @@ agents:
 
   codex-default:
     system_prompt: "You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring, and implementation. Write clean, tested code."
-    model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    model: gpt-5.4
+    tool: codex
     mcp_servers: ["ao", "context7", "rust-docs"]
 
   gemini-default:
@@ -934,33 +918,8 @@ phases:
 
   code-review:
     mode: agent
-    agent: opus-default
-    directive: |
-      You are reviewing a Rust implementation in a 16-crate workspace. This is the quality gate before merge.
-
-      STEP 1 — GATHER CONTEXT:
-      - Read the task via ao.task.get to understand requirements and acceptance criteria
-      - Check linked requirements via ao.requirements.get for formal acceptance criteria
-      - Read the task checklist for specific deliverables
-      - Understand the scope and constraints from the task description
-
-      STEP 2 — REVIEW AGAINST REQUIREMENTS:
-      1. REQUIREMENTS MET: Does the implementation satisfy ALL acceptance criteria from the task and linked requirements?
-      2. CHECKLIST COMPLETE: Are all checklist items addressed?
-      3. CORRECTNESS: Does the code do what the task requires? Check edge cases.
-      4. SAFETY: No panics in production paths, no unwrap() on user input, proper error propagation.
-      5. ARCHITECTURE: Does it respect crate boundaries? No circular deps? Clean public API?
-      6. PERFORMANCE: No unnecessary allocations, clones, or O(n²) loops on large data.
-      7. SECURITY: No command injection, path traversal, or unvalidated input at system boundaries.
-      8. TESTS: Are the changes tested? Do existing tests still make sense?
-      9. SCOPE: Does it only change what the task requires? No unrelated changes.
-
-      VERDICT:
-      - advance: All requirements met. Code is production-ready.
-      - rework: Provide EXACT file:line references, which requirement is not met, and what must change.
-      - fail: Requirements fundamentally misunderstood. Explain why.
-
-      Do NOT make changes yourself. Only review and decide.
+    agent: codex-default
+    directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
     decision_contract:
       required_evidence: [code_review_clean]
       min_confidence: 0.7
@@ -1132,24 +1091,13 @@ phases:
       fields:
         exit_code:
           type: integer
-  ci-conflict-monitor:
-    mode: command
-    directive: "Check GitHub CI for failures and PRs for merge conflicts, enqueue remediation workflows"
-    command:
-      program: bash
-      args: ["scripts/ci-conflict-monitor.sh", "."]
-      cwd_mode: project_root
-      timeout_secs: 120
-      success_exit_codes: [0]
   rebase-on-main:
     mode: agent
     agent: default
     directive: |
-      This branch has merge conflicts with its base branch. Rebase it.
-      The base branch is provided in dispatch_input as "base" (e.g. "develop" or "main").
-      If no base is provided, default to "develop".
-      1. Run: git fetch origin {{base}}
-      2. Run: git rebase origin/{{base}}
+      This branch has merge conflicts with main/develop. Rebase it.
+      1. Run: git fetch origin develop
+      2. Run: git rebase origin/develop
       3. For each conflict, resolve by keeping BOTH sides of changes.
          For Cargo.lock: accept theirs, run cargo build to regenerate.
          For code files: integrate both changes.
@@ -1870,12 +1818,6 @@ workflows:
     phases:
       - sync-main
 
-  - id: ci-conflict-monitor
-    name: "CI & Conflict Monitor"
-    description: "Check CI failures and PR conflicts, enqueue remediation workflows"
-    phases:
-      - ci-conflict-monitor
-
   - id: hotfix
     name: "Hotfix"
     description: "Emergency fix → Push → PR targeting main"
@@ -1892,11 +1834,6 @@ workflows:
         cleanup_worktree: true
 
 schedules:
-  - id: ci-conflict-monitor
-    cron: "*/10 * * * *"
-    workflow_ref: ci-conflict-monitor
-    enabled: true
-
   - id: sync-main
     cron: "*/5 * * * *"
     workflow_ref: sync-main
@@ -1988,7 +1925,7 @@ schedules:
     enabled: true
 
   - id: release-manager
-    cron: "*/10 * * * *"
+    cron: "0 */6 * * *"
     workflow_ref: release-manager
     enabled: true
 

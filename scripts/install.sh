@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO="launchapp-dev/ao"
 INSTALL_DIR="${AO_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARIES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)
+BINARIES=(ao agent-runner llm-cli-wrapper)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -94,7 +94,6 @@ main() {
     if [[ ! -f "${stage_dir}/${bin}" ]]; then
       error "Binary '${bin}' not found in archive"
     fi
-    rm -f "${INSTALL_DIR}/${bin}"
     cp "${stage_dir}/${bin}" "${INSTALL_DIR}/${bin}"
     chmod +x "${INSTALL_DIR}/${bin}"
     if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
