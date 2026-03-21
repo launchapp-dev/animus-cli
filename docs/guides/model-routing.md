@@ -12,7 +12,8 @@ The compiled defaults route models based on phase type and task complexity:
 | **Code Review** | claude-sonnet-4-6 | claude-sonnet-4-6 | claude-opus-4-6 |
 | **Requirements** | minimax/MiniMax-M2.5 | claude-sonnet-4-6 | claude-sonnet-4-6 |
 | **Testing** | minimax/MiniMax-M2.5 | claude-sonnet-4-6 | claude-sonnet-4-6 |
-| **Research / UI-UX** | gemini-3.1-pro-preview | gemini-3.1-pro-preview | gemini-3.1-pro-preview |
+| **Research** | gemini-2.5-flash-lite | gemini-2.5-flash-lite | gemini-2.5-flash-lite |
+| **UI-UX / Design** | gemini-3.1-pro-preview | gemini-3.1-pro-preview | gemini-3.1-pro-preview |
 
 ## Config Cascade
 
