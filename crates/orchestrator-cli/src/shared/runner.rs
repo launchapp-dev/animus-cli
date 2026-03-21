@@ -521,7 +521,7 @@ mod tests {
         };
         let contract = build_runtime_contract_with_resume(
             "codex",
-            protocol::default_model_for_tool("codex").unwrap_or("gpt-4.1"),
+            protocol::default_model_for_tool("codex").unwrap_or("gpt-5.4"),
             "hello",
             Some(&plan),
         )

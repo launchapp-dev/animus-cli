@@ -44,6 +44,12 @@ struct PricingEntry {
 static PRICING_TABLE: LazyLock<Vec<PricingEntry>> = LazyLock::new(|| {
     vec![
         // ── OpenAI ────────────────────────────────────────────────
+        PricingEntry { prefixes: &["gpt-5.4-mini"], pricing: ModelPricing::new(0.40, 1.60) },
+        PricingEntry { prefixes: &["gpt-5.4"], pricing: ModelPricing::new(5.00, 20.00) },
+        PricingEntry { prefixes: &["gpt-5.3-codex-spark"], pricing: ModelPricing::new(1.00, 4.00) },
+        PricingEntry { prefixes: &["gpt-5.3-codex"], pricing: ModelPricing::new(2.00, 8.00) },
+        PricingEntry { prefixes: &["gpt-5.2"], pricing: ModelPricing::new(3.00, 12.00) },
+        PricingEntry { prefixes: &["gpt-5"], pricing: ModelPricing::new(5.00, 20.00) },
         PricingEntry { prefixes: &["o4-mini"], pricing: ModelPricing::new(1.10, 4.40) },
         PricingEntry { prefixes: &["o3-pro"], pricing: ModelPricing::new(10.00, 40.00) },
         PricingEntry { prefixes: &["o3"], pricing: ModelPricing::new(2.00, 8.00) },
@@ -147,6 +153,41 @@ mod tests {
     fn model_pricing_zero_tokens() {
         let pricing = ModelPricing::new(2.50, 10.00);
         assert!((pricing.cost(0, 0) - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_openai_gpt5_4() {
+        let pricing = lookup("gpt-5.4").unwrap();
+        assert!((pricing.input_per_million - 5.00).abs() < 1e-9);
+        assert!((pricing.output_per_million - 20.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_openai_gpt5_4_mini() {
+        let pricing = lookup("gpt-5.4-mini").unwrap();
+        assert!((pricing.input_per_million - 0.40).abs() < 1e-9);
+        assert!((pricing.output_per_million - 1.60).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_openai_gpt5_3_codex() {
+        let pricing = lookup("gpt-5.3-codex").unwrap();
+        assert!((pricing.input_per_million - 2.00).abs() < 1e-9);
+        assert!((pricing.output_per_million - 8.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_openai_gpt5_3_codex_spark() {
+        let pricing = lookup("gpt-5.3-codex-spark").unwrap();
+        assert!((pricing.input_per_million - 1.00).abs() < 1e-9);
+        assert!((pricing.output_per_million - 4.00).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_openai_gpt5_generic() {
+        let pricing = lookup("gpt-5").unwrap();
+        assert!((pricing.input_per_million - 5.00).abs() < 1e-9);
+        assert!((pricing.output_per_million - 20.00).abs() < 1e-9);
     }
 
     #[test]
