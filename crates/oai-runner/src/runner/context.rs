@@ -133,7 +133,6 @@ mod tests {
     use super::*;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
-    fn msg(role: &str, content: &str) -> ChatMessage {
         ChatMessage {
             reasoning_content: None,
             role: role.to_string(),
