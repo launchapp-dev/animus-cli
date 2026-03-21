@@ -243,6 +243,13 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
             DaemonRunEvent::NotificationRuntimeError { project_root, stage, message } => {
                 self.emit_notification_runtime_error(project_root, stage.as_str(), message.as_str())
             }
+            DaemonRunEvent::ConfigReloaded { project_root, setting } => self.emit_daemon_event_with_notifications(
+                "config-reload",
+                Some(project_root),
+                json!({
+                    "setting": setting,
+                }),
+            ),
             DaemonRunEvent::Shutdown { project_root, daemon_pid } => {
                 eprintln!(
                     "{}",

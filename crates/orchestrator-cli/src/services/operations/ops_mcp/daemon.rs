@@ -35,6 +35,13 @@ pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<
     push_bool_set(&mut args, "--auto-pr", input.auto_pr);
     push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
     push_bool_set(&mut args, "--auto-prune-worktrees-after-merge", input.auto_prune_worktrees_after_merge);
+    push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
+    push_opt_usize(&mut args, "--pool-size", input.pool_size);
+    push_opt_num(&mut args, "--interval-secs", input.interval_secs);
+    push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
+    push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
+    push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
+    push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
     args
 }
 

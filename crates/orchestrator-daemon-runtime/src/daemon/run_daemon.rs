@@ -18,7 +18,7 @@ use crate::ProjectTickRunMode;
 
 pub async fn run_daemon<D, H>(
     project_root: &str,
-    options: &DaemonRuntimeOptions,
+    options: &mut DaemonRuntimeOptions,
     driver: &mut D,
     hooks: &mut H,
     mut active_process_count: impl FnMut(&D) -> usize,
@@ -74,9 +74,21 @@ where
         }
     }
 
-    let interval = Duration::from_secs(options.interval_secs.max(1));
+    let mut interval = Duration::from_secs(options.interval_secs.max(1));
     let mut sigterm_stream = SigtermStream::new()?;
     loop {
+        // Hot-reload runtime-reconfigurable settings from persisted project config
+        // so that `ao.daemon config-set` changes take effect without restart.
+        let prev_interval = options.interval_secs;
+        options.reload_from_project_config(Path::new(project_root));
+        if options.interval_secs != prev_interval {
+            interval = Duration::from_secs(options.interval_secs.max(1));
+            hooks.handle_event(DaemonRunEvent::ConfigReloaded {
+                project_root: primary_root.clone(),
+                setting: "interval_secs".to_string(),
+            })?;
+        }
+
         let externally_paused = DaemonRuntimeState::is_runtime_paused(project_root).unwrap_or(false);
         let tick_result = run_project_tick(
             &primary_root,

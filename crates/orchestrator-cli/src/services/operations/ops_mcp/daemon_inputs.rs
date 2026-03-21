@@ -66,6 +66,7 @@ pub(super) struct DaemonConfigInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub(super) struct DaemonConfigSetInput {
+    // Existing automation flags
     #[serde(default)]
     pub(super) auto_merge: Option<bool>,
     #[serde(default)]
@@ -76,6 +77,19 @@ pub(super) struct DaemonConfigSetInput {
     pub(super) auto_prune_worktrees_after_merge: Option<bool>,
     #[serde(default)]
     pub(super) auto_run_ready: Option<bool>,
+    // Runtime-reconfigurable settings (hot-reloaded by daemon without restart)
+    #[serde(default, alias = "max_agents")]
+    pub(super) pool_size: Option<usize>,
+    #[serde(default)]
+    pub(super) interval_secs: Option<u64>,
+    #[serde(default)]
+    pub(super) max_tasks_per_tick: Option<usize>,
+    #[serde(default)]
+    pub(super) stale_threshold_hours: Option<u64>,
+    #[serde(default)]
+    pub(super) phase_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub(super) idle_timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

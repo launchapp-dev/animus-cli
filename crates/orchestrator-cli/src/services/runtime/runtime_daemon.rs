@@ -279,6 +279,36 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         updated = true;
     }
 
+    // Runtime-reconfigurable settings (hot-reloaded by daemon)
+    if let Some(v) = args.pool_size {
+        config["pool_size"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.interval_secs {
+        config["interval_secs"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.max_tasks_per_tick {
+        config["max_tasks_per_tick"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.auto_run_ready {
+        config["auto_run_ready"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.stale_threshold_hours {
+        config["stale_threshold_hours"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.phase_timeout_secs {
+        config["phase_timeout_secs"] = serde_json::json!(v);
+        updated = true;
+    }
+    if let Some(v) = args.idle_timeout_secs {
+        config["idle_timeout_secs"] = serde_json::json!(v);
+        updated = true;
+    }
+
     if args.clear_notification_config {
         clear_notification_config(&mut config);
         updated = true;
@@ -315,6 +345,13 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             "auto_pr_enabled": daemon_config_bool(&config, "auto_pr_enabled").unwrap_or(false),
             "auto_commit_before_merge": daemon_config_bool(&config, "auto_commit_before_merge").unwrap_or(false),
             "auto_prune_worktrees_after_merge": daemon_config_bool(&config, "auto_prune_worktrees_after_merge").unwrap_or(false),
+            "auto_run_ready": daemon_config_bool(&config, "auto_run_ready").unwrap_or(true),
+            "pool_size": config.get("pool_size").and_then(serde_json::Value::as_u64),
+            "interval_secs": config.get("interval_secs").and_then(serde_json::Value::as_u64),
+            "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
+            "stale_threshold_hours": config.get("stale_threshold_hours").and_then(serde_json::Value::as_u64),
+            "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+            "idle_timeout_secs": config.get("idle_timeout_secs").and_then(serde_json::Value::as_u64),
             "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
             "notification_config": serialize_notification_config(&notification_config)?,
             "updated": updated
