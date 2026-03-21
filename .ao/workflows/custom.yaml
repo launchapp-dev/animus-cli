@@ -197,15 +197,18 @@ agents:
          Check ao.task.stats — how many tasks are done since last release?
          Check ao.requirements.list — any requirements completed?
          Check `git log --oneline <prev_tag>..origin/develop --no-merges` for changes.
-         RELEASE if any of:
-         - A requirement was completed (milestone reached)
-         - 3+ bugfixes or features completed since last release
-         - A critical fix was merged
-         - Significant oai-runner, daemon, or workflow improvements landed
-         SKIP if only docs, monitoring, or trivial chore tasks.
+         RELEASE only if ALL of these are true:
+         - At least 10 meaningful commits (features or fixes) since the last release tag
+         - At least 1 requirement was completed OR a critical/security fix was merged
+         - The last release was more than 7 days ago (check tag date with `git log -1 --format=%ci <prev_tag>`)
+         SKIP if:
+         - Only docs, monitoring, config, or trivial chore tasks landed
+         - Fewer than 10 commits since last release
+         - Last release was less than 7 days ago (unless a critical security fix requires it)
+         When in doubt, SKIP. Releases should be deliberate, not frequent.
 
       3. CUT RELEASE BRANCH:
-         a. Parse the latest tag (e.g., v0.0.10) and bump: minor for features, patch for bugfixes only.
+         a. Parse the latest tag (e.g., v0.0.10) and bump the PATCH version only. Never bump major or minor — always patch (e.g., v0.1.0 → v0.1.1).
          b. Run `git checkout -b release/vX.Y.Z origin/develop && git push origin release/vX.Y.Z`
          c. Create a tracking task via ao.task.create: title "Release vX.Y.Z", priority "critical", type "chore"
          d. WRITE CHANGELOG: Read the commits since last tag with `git log --oneline <prev_tag>..HEAD --no-merges`.
@@ -317,8 +320,8 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: kimi-code/kimi-for-coding
-    tool: oai-runner
+    model: claude-opus-4-6
+    tool: claude
     mcp_servers: ["ao", "github"]
 
   po-reviewer:
@@ -930,8 +933,33 @@ phases:
 
   code-review:
     mode: agent
-    agent: codex-default
-    directive: "Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself. If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only advance if the code is production-ready as-is."
+    agent: opus-default
+    directive: |
+      You are reviewing a Rust implementation in a 16-crate workspace. This is the quality gate before merge.
+
+      STEP 1 — GATHER CONTEXT:
+      - Read the task via ao.task.get to understand requirements and acceptance criteria
+      - Check linked requirements via ao.requirements.get for formal acceptance criteria
+      - Read the task checklist for specific deliverables
+      - Understand the scope and constraints from the task description
+
+      STEP 2 — REVIEW AGAINST REQUIREMENTS:
+      1. REQUIREMENTS MET: Does the implementation satisfy ALL acceptance criteria from the task and linked requirements?
+      2. CHECKLIST COMPLETE: Are all checklist items addressed?
+      3. CORRECTNESS: Does the code do what the task requires? Check edge cases.
+      4. SAFETY: No panics in production paths, no unwrap() on user input, proper error propagation.
+      5. ARCHITECTURE: Does it respect crate boundaries? No circular deps? Clean public API?
+      6. PERFORMANCE: No unnecessary allocations, clones, or O(n²) loops on large data.
+      7. SECURITY: No command injection, path traversal, or unvalidated input at system boundaries.
+      8. TESTS: Are the changes tested? Do existing tests still make sense?
+      9. SCOPE: Does it only change what the task requires? No unrelated changes.
+
+      VERDICT:
+      - advance: All requirements met. Code is production-ready.
+      - rework: Provide EXACT file:line references, which requirement is not met, and what must change.
+      - fail: Requirements fundamentally misunderstood. Explain why.
+
+      Do NOT make changes yourself. Only review and decide.
     decision_contract:
       required_evidence: [code_review_clean]
       min_confidence: 0.7
