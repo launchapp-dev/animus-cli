@@ -8,7 +8,7 @@ For the full tool table with parameters, see [MCP Tools Reference](../reference/
 
 ## Overview
 
-AO exposes ~68 MCP tools organized into 8 groups:
+AO exposes ~69 MCP tools organized into 8 groups:
 
 | Group | Tools | Purpose |
 |-------|-------|---------|
@@ -17,7 +17,7 @@ AO exposes ~68 MCP tools organized into 8 groups:
 | `ao.daemon.*` | 11 | Background scheduler management |
 | `ao.requirements.*` | 6 | Requirements tracking |
 | `ao.queue.*` | 6 | Dispatch queue management |
-| `ao.output.*` | 5 | Agent output and monitoring |
+| `ao.output.*` | 6 | Agent output and monitoring |
 | `ao.agent.*` | 3 | Direct agent execution |
 | `ao.runner.*` | 3 | Runner process health |
 
@@ -326,6 +326,12 @@ View what agents have produced during execution.
 
 // ao.output.artifacts — files generated during execution
 { "execution_id": "exec-abc123" }
+
+// ao.output.phase-outputs — persisted workflow phase outputs
+{ "workflow_id": "wf-abc123" }
+
+// ao.output.phase-outputs — with specific phase
+{ "workflow_id": "wf-abc123", "phase_id": "implementation" }
 ```
 
 ---
