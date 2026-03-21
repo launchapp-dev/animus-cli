@@ -1494,6 +1494,8 @@ pub struct ProjectCreateInput {
 }
 
 pub const DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT: u8 = 20;
+pub const DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT: u8 = 10;
+pub const DEFAULT_STALE_BLOCKED_DAYS: u32 = 7;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskPriorityDistribution {
@@ -1513,6 +1515,14 @@ pub struct TaskPriorityPolicyReport {
     pub active_by_priority: TaskPriorityDistribution,
     pub high_budget_compliant: bool,
     pub high_budget_overflow: usize,
+    #[serde(default)]
+    pub critical_budget_percent: u8,
+    #[serde(default)]
+    pub critical_budget_limit: usize,
+    #[serde(default)]
+    pub critical_budget_overflow: usize,
+    #[serde(default)]
+    pub critical_budget_compliant: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1525,6 +1535,8 @@ pub struct TaskPriorityRebalanceChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskPriorityRebalancePlan {
     pub high_budget_percent: u8,
+    #[serde(default)]
+    pub critical_budget_percent: u8,
     pub before: TaskPriorityPolicyReport,
     pub after: TaskPriorityPolicyReport,
     #[serde(default)]
@@ -1535,6 +1547,10 @@ pub struct TaskPriorityRebalancePlan {
 pub struct TaskPriorityRebalanceOptions {
     #[serde(default = "default_high_priority_budget_percent")]
     pub high_budget_percent: u8,
+    #[serde(default = "default_critical_priority_budget_percent")]
+    pub critical_budget_percent: u8,
+    #[serde(default = "default_stale_blocked_days")]
+    pub stale_blocked_days: Option<u32>,
     #[serde(default)]
     pub essential_task_ids: Vec<String>,
     #[serde(default)]
@@ -1545,6 +1561,8 @@ impl Default for TaskPriorityRebalanceOptions {
     fn default() -> Self {
         Self {
             high_budget_percent: DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+            critical_budget_percent: DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT,
+            stale_blocked_days: Some(DEFAULT_STALE_BLOCKED_DAYS),
             essential_task_ids: Vec::new(),
             nice_to_have_task_ids: Vec::new(),
         }
@@ -1553,6 +1571,14 @@ impl Default for TaskPriorityRebalanceOptions {
 
 const fn default_high_priority_budget_percent() -> u8 {
     DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT
+}
+
+const fn default_critical_priority_budget_percent() -> u8 {
+    DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT
+}
+
+const fn default_stale_blocked_days() -> Option<u32> {
+    Some(DEFAULT_STALE_BLOCKED_DAYS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

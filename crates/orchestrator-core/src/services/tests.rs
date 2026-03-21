@@ -1104,7 +1104,7 @@ async fn task_priority_policy_reports_active_high_budget_overflow() {
     TaskServiceApi::set_status(&hub, &done.id, TaskStatus::Done, false).await.expect("set terminal status");
 
     let tasks = TaskServiceApi::list(&hub).await.expect("list tasks");
-    let report = evaluate_task_priority_policy(&tasks, 20).expect("evaluate policy");
+    let report = evaluate_task_priority_policy(&tasks, 20, 10).expect("evaluate policy");
     assert_eq!(report.total_tasks, 3);
     assert_eq!(report.active_tasks, 2);
     assert_eq!(report.high_budget_limit, 0);
@@ -1231,6 +1231,7 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
         high_budget_percent: 40,
         essential_task_ids: vec![essential.id.clone()],
         nice_to_have_task_ids: vec![nice_to_have.id.clone()],
+        ..Default::default()
     };
     let plan = plan_task_priority_rebalance(&tasks, options.clone()).expect("build plan");
     let repeat_plan = plan_task_priority_rebalance(&tasks, options).expect("build repeated plan");
@@ -1239,6 +1240,7 @@ async fn task_priority_rebalance_plan_is_deterministic_and_budget_compliant() {
     assert_eq!(plan.after.active_by_priority.high, 2);
     assert_eq!(plan.after.active_by_priority.critical, 1);
     assert!(plan.after.high_budget_compliant);
+    assert!(plan.after.critical_budget_compliant);
 
     let mut resulting_priorities: std::collections::HashMap<String, Priority> =
         tasks.iter().map(|task| (task.id.clone(), task.priority)).collect();
@@ -1281,6 +1283,7 @@ async fn task_priority_rebalance_rejects_conflicting_override_task_ids() {
             high_budget_percent: 20,
             essential_task_ids: vec![task.id.clone()],
             nice_to_have_task_ids: vec![task.id.clone()],
+            ..Default::default()
         },
     )
     .expect_err("conflicting overrides should fail");

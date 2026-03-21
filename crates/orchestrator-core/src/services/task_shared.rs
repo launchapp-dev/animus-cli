@@ -270,8 +270,10 @@ pub(super) fn build_task_statistics(tasks: &[OrchestratorTask]) -> TaskStatistic
 pub(super) fn evaluate_task_priority_policy_report(
     tasks: &[OrchestratorTask],
     high_budget_percent: u8,
+    critical_budget_percent: u8,
 ) -> Result<TaskPriorityPolicyReport> {
     validate_high_budget_percent(high_budget_percent)?;
+    validate_high_budget_percent(critical_budget_percent)?;
 
     let mut total_by_priority = TaskPriorityDistribution::default();
     let mut active_by_priority = TaskPriorityDistribution::default();
@@ -289,6 +291,10 @@ pub(super) fn evaluate_task_priority_policy_report(
     let active_high_count = active_by_priority.high;
     let high_budget_overflow = active_high_count.saturating_sub(high_budget_limit);
 
+    let critical_budget_limit = compute_critical_budget_limit(active_tasks, critical_budget_percent);
+    let active_critical_count = active_by_priority.critical;
+    let critical_budget_overflow = active_critical_count.saturating_sub(critical_budget_limit);
+
     Ok(TaskPriorityPolicyReport {
         high_budget_percent,
         high_budget_limit,
@@ -298,6 +304,10 @@ pub(super) fn evaluate_task_priority_policy_report(
         active_by_priority,
         high_budget_compliant: high_budget_overflow == 0,
         high_budget_overflow,
+        critical_budget_percent,
+        critical_budget_limit,
+        critical_budget_overflow,
+        critical_budget_compliant: critical_budget_overflow == 0,
     })
 }
 
@@ -306,7 +316,9 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
     options: TaskPriorityRebalanceOptions,
 ) -> Result<TaskPriorityRebalancePlan> {
     let high_budget_percent = options.high_budget_percent;
+    let critical_budget_percent = options.critical_budget_percent;
     validate_high_budget_percent(high_budget_percent)?;
+    validate_high_budget_percent(critical_budget_percent)?;
 
     let task_ids: HashSet<&str> = tasks.iter().map(|task| task.id.as_str()).collect();
     let essential_task_ids = normalized_task_id_set(&options.essential_task_ids);
@@ -315,18 +327,48 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
     validate_override_task_ids(&task_ids, &nice_to_have_task_ids, "nice_to_have_task_ids")?;
     validate_conflicting_override_task_ids(&essential_task_ids, &nice_to_have_task_ids)?;
 
-    let mut target_priorities: HashMap<String, Priority> = HashMap::new();
-    for task in tasks.iter().filter(|task| !task.status.is_terminal() && task.status.is_blocked()) {
-        target_priorities.insert(task.id.clone(), Priority::Critical);
+    let stale_threshold = options
+        .stale_blocked_days
+        .and_then(|days| i64::try_from(days).ok())
+        .map(|days| Utc::now() - chrono::Duration::days(days));
+
+    let mut fresh_blocked: Vec<&OrchestratorTask> = Vec::new();
+    let mut stale_blocked: Vec<&OrchestratorTask> = Vec::new();
+    for task in tasks.iter().filter(|t| !t.status.is_terminal() && t.status.is_blocked()) {
+        let is_stale = stale_threshold
+            .zip(task.blocked_at)
+            .map(|(threshold, blocked_at)| blocked_at < threshold)
+            .unwrap_or(false);
+        if is_stale {
+            stale_blocked.push(task);
+        } else {
+            fresh_blocked.push(task);
+        }
     }
 
     let active_tasks = tasks.iter().filter(|task| !task.status.is_terminal()).count();
+    let critical_budget_limit = compute_critical_budget_limit(active_tasks, critical_budget_percent);
     let high_budget_limit = compute_high_budget_limit(active_tasks, high_budget_percent);
+
+    fresh_blocked.sort_by(|a, b| {
+        essential_rank(a.id.as_str(), &essential_task_ids)
+            .cmp(&essential_rank(b.id.as_str(), &essential_task_ids))
+            .then_with(|| b.blocked_at.cmp(&a.blocked_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let mut target_priorities: HashMap<String, Priority> = HashMap::new();
+    for task in fresh_blocked.iter().take(critical_budget_limit) {
+        target_priorities.insert(task.id.clone(), Priority::Critical);
+    }
+
+    let overflow_blocked = fresh_blocked.iter().skip(critical_budget_limit).copied().chain(stale_blocked.iter().copied());
     let mut high_candidates: Vec<&OrchestratorTask> = tasks
         .iter()
         .filter(|task| {
             !task.status.is_terminal() && !task.status.is_blocked() && !nice_to_have_task_ids.contains(task.id.as_str())
         })
+        .chain(overflow_blocked)
         .collect();
     high_candidates.sort_by(|left, right| {
         essential_rank(left.id.as_str(), &essential_task_ids)
@@ -337,7 +379,9 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
             .then_with(|| left.id.cmp(&right.id))
     });
     for task in high_candidates.into_iter().take(high_budget_limit) {
-        target_priorities.insert(task.id.clone(), Priority::High);
+        if !target_priorities.contains_key(task.id.as_str()) {
+            target_priorities.insert(task.id.clone(), Priority::High);
+        }
     }
 
     for task in tasks {
@@ -359,8 +403,8 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
         }
     }
 
-    let before = evaluate_task_priority_policy_report(tasks, high_budget_percent)?;
-    let after = evaluate_task_priority_policy_report(&planned_tasks, high_budget_percent)?;
+    let before = evaluate_task_priority_policy_report(tasks, high_budget_percent, critical_budget_percent)?;
+    let after = evaluate_task_priority_policy_report(&planned_tasks, high_budget_percent, critical_budget_percent)?;
 
     let mut changes = Vec::new();
     for task in tasks {
@@ -371,7 +415,7 @@ pub(super) fn plan_task_priority_rebalance_from_tasks(
     }
     changes.sort_by(|left, right| left.task_id.cmp(&right.task_id));
 
-    Ok(TaskPriorityRebalancePlan { high_budget_percent, before, after, changes })
+    Ok(TaskPriorityRebalancePlan { high_budget_percent, critical_budget_percent, before, after, changes })
 }
 
 fn validate_high_budget_percent(high_budget_percent: u8) -> Result<()> {
@@ -392,6 +436,10 @@ fn increment_priority_distribution(distribution: &mut TaskPriorityDistribution, 
 
 fn compute_high_budget_limit(active_tasks: usize, high_budget_percent: u8) -> usize {
     active_tasks.saturating_mul(usize::from(high_budget_percent)) / 100
+}
+
+fn compute_critical_budget_limit(active_tasks: usize, critical_budget_percent: u8) -> usize {
+    active_tasks.saturating_mul(usize::from(critical_budget_percent)).saturating_add(99) / 100
 }
 
 fn normalized_task_id_set(task_ids: &[String]) -> HashSet<String> {

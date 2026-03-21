@@ -99,7 +99,8 @@ pub use types::{
     WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
     WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowMetadata,
     WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
-    WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, MAX_DISPATCH_HISTORY_ENTRIES, SUBJECT_KIND_CUSTOM,
+    WorkflowSubject, DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    MAX_DISPATCH_HISTORY_ENTRIES, SUBJECT_KIND_CUSTOM,
     SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 pub use workflow::{

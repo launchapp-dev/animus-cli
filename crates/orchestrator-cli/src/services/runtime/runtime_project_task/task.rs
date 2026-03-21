@@ -8,7 +8,7 @@ use chrono::Utc;
 use orchestrator_core::{
     evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub, ListPageRequest,
     TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskQuery, TaskQuerySort,
-    TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    TaskStatus, TaskType, TaskUpdateInput, DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 
@@ -163,7 +163,7 @@ pub(crate) async fn handle_task(
             let task_list = tasks.list().await?;
             let stats = tasks.statistics().await?;
             let stale_in_progress = stale_in_progress_summary(&task_list, args.stale_threshold_hours, Utc::now());
-            let priority_policy = evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
+            let priority_policy = evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, DEFAULT_CRITICAL_PRIORITY_BUDGET_PERCENT)?;
             print_value(TaskStatsOutput { stats, stale_in_progress, priority_policy }, json)
         }
         TaskCommand::Get(args) => {
@@ -479,6 +479,7 @@ pub(crate) async fn handle_task(
                     high_budget_percent: args.high_budget_percent,
                     essential_task_ids: args.essential_task_id,
                     nice_to_have_task_ids: args.nice_to_have_task_id,
+                    ..Default::default()
                 },
             )?;
 

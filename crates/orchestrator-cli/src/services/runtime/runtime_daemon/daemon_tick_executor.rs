@@ -102,14 +102,8 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         }
 
         let tasks = hub.tasks().list().await?;
-        let plan = orchestrator_core::plan_task_priority_rebalance(
-            &tasks,
-            orchestrator_core::TaskPriorityRebalanceOptions {
-                high_budget_percent: orchestrator_core::DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
-                essential_task_ids: vec![],
-                nice_to_have_task_ids: vec![],
-            },
-        )?;
+        let options = orchestrator_core::TaskPriorityRebalanceOptions::default();
+        let plan = orchestrator_core::plan_task_priority_rebalance(&tasks, options)?;
 
         self.last_auto_rebalance = Some(now);
 
@@ -132,11 +126,13 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         }
 
         eprintln!(
-            "{}: auto-rebalanced priority for {} tasks (high budget: {}%, overflow was: {})",
+            "{}: auto-rebalanced priority for {} tasks (high budget: {}%, critical budget: {}%, overflow was: high={} critical={})",
             protocol::ACTOR_DAEMON,
             changed,
-            orchestrator_core::DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+            plan.high_budget_percent,
+            plan.critical_budget_percent,
             plan.before.high_budget_overflow,
+            plan.before.critical_budget_overflow,
         );
         Ok(changed)
     }

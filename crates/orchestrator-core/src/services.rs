@@ -62,8 +62,9 @@ use task_shared::*;
 pub fn evaluate_task_priority_policy(
     tasks: &[OrchestratorTask],
     high_budget_percent: u8,
+    critical_budget_percent: u8,
 ) -> Result<TaskPriorityPolicyReport> {
-    evaluate_task_priority_policy_report(tasks, high_budget_percent)
+    evaluate_task_priority_policy_report(tasks, high_budget_percent, critical_budget_percent)
 }
 
 pub fn plan_task_priority_rebalance(
