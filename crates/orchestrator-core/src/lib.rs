@@ -73,6 +73,7 @@ pub use runtime_contract::{
 };
 pub use services::{
     evaluate_task_priority_policy, load_schedule_state, plan_task_priority_rebalance, save_schedule_state,
+    stop_agent_runner_process,
     DaemonServiceApi, FileServiceHub, InMemoryServiceHub, PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor,
     PhaseVerdict, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub,
     TaskServiceApi, WorkflowServiceApi,

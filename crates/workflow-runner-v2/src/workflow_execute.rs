@@ -18,6 +18,7 @@ use orchestrator_core::{
     providers::{BuiltinGitProvider, GitProvider},
     register_workflow_runner_pid,
     services::ServiceHub,
+    stop_agent_runner_process,
     unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow, PhaseDecisionVerdict,
     SubjectRef, WorkflowEvent, WorkflowRunInput, WorkflowStatus, SUBJECT_KIND_CUSTOM,
 };
@@ -1277,11 +1278,30 @@ async fn cleanup_worktree_with_fallback(
         });
     };
 
+    // Stop the scoped agent-runner for this worktree before removing it.
+    // Without this, each removed worktree leaves its agent-runner process running
+    // as an orphan, causing a process leak that accumulates over time.
+    let runner_stopped = match stop_agent_runner_process(Path::new(worktree_path)).await {
+        Ok(true) => {
+            tracing::info!(worktree_path, "Stopped scoped agent-runner before worktree removal");
+            true
+        }
+        Ok(false) => {
+            tracing::debug!(worktree_path, "No scoped agent-runner found for worktree");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(worktree_path, error = %e, "Failed to stop scoped agent-runner; proceeding with worktree removal");
+            false
+        }
+    };
+
     match git_provider.remove_worktree(project_root, worktree_path).await {
         Ok(()) => serde_json::json!({
             "status": "completed",
             "method": "git-provider",
             "worktree_path": worktree_path,
+            "runner_stopped": runner_stopped,
         }),
         Err(provider_error) => {
             let output = run_git_output("git", project_root, &["worktree", "remove", worktree_path, "--force"]).await;
@@ -1290,6 +1310,7 @@ async fn cleanup_worktree_with_fallback(
                     "status": "completed",
                     "method": "git-direct",
                     "worktree_path": worktree_path,
+                    "runner_stopped": runner_stopped,
                 }),
                 Ok(output) => serde_json::json!({
                     "status": "failed",
@@ -1297,6 +1318,7 @@ async fn cleanup_worktree_with_fallback(
                     "worktree_path": worktree_path,
                     "error": command_summary(&output),
                     "provider_error": provider_error.to_string(),
+                    "runner_stopped": runner_stopped,
                 }),
                 Err(error) => serde_json::json!({
                     "status": "failed",
@@ -1304,6 +1326,7 @@ async fn cleanup_worktree_with_fallback(
                     "worktree_path": worktree_path,
                     "error": error.to_string(),
                     "provider_error": provider_error.to_string(),
+                    "runner_stopped": runner_stopped,
                 }),
             }
         }

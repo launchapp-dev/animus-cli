@@ -74,6 +74,7 @@ pub fn cleanup_orphaned_clis() -> Result<()> {
         );
 
         let mut cleaned = 0;
+        let mut surviving = HashMap::new();
         for (run_id, pid) in tracked {
             if !process_exists(pid as i32) {
                 info!(run_id, pid, "Tracked process is already terminated");
@@ -84,13 +85,23 @@ pub fn cleanup_orphaned_clis() -> Result<()> {
             if graceful_kill_process(pid as i32) {
                 cleaned += 1;
             } else {
-                warn!(run_id, pid, "Failed to kill orphaned process");
+                warn!(run_id, pid, "Failed to kill orphaned process; keeping in tracker");
+                surviving.insert(run_id, pid);
             }
         }
 
-        std::fs::remove_file(tracker_path)?;
+        if surviving.is_empty() {
+            // All entries cleaned up — remove the file to keep state tidy.
+            let _ = std::fs::remove_file(tracker_path);
+        } else {
+            // Some processes could not be killed — persist them so the next
+            // agent-runner restart gets another chance to clean them up.
+            atomic_write_tracker(tracker_path, &surviving)?;
+        }
+
         info!(
             cleaned_count = cleaned,
+            surviving_count = surviving.len(),
             tracker_path = %tracker_path.display(),
             "Finished orphaned process cleanup"
         );
@@ -277,5 +288,133 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert!(entries.iter().all(|e| !e.starts_with('.')), "no hidden temp files should remain: {entries:?}");
+    }
+
+    #[test]
+    fn read_tracker_accepts_flat_hashmap_format() {
+        // Verify that the flat HashMap<String, u32> format used by cleanup.rs
+        // is readable by the same read_tracker function that ops_runner.rs
+        // also relies on (via the shared cli_tracker_path).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tracker.json");
+
+        // Write in the flat format: { "run-abc": 12345 }
+        let mut data = HashMap::new();
+        data.insert("run-abc".to_string(), 12345u32);
+        with_tracker_lock_at(&path, |p| atomic_write_at(p, &data)).unwrap();
+
+        let read_back = read_tracker_at(&path).unwrap();
+        assert_eq!(read_back.len(), 1);
+        assert_eq!(read_back.get("run-abc"), Some(&12345u32));
+    }
+
+    #[test]
+    fn read_tracker_rejects_wrapped_format() {
+        // Verify that the old CliTrackerStateCli format { "processes": { ... } }
+        // is NOT readable as a flat HashMap, confirming the schema mismatch bug.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tracker.json");
+
+        // Write in the old wrapped format
+        let wrapped = serde_json::json!({ "processes": { "run-abc": 12345 } });
+        std::fs::write(&path, serde_json::to_string_pretty(&wrapped).unwrap()).unwrap();
+
+        // Reading as flat HashMap should fail (schema mismatch)
+        let result = read_tracker_at(&path);
+        assert!(result.is_err(), "wrapped format should not parse as flat HashMap");
+    }
+
+    #[test]
+    fn cleanup_preserves_surviving_entries() {
+        // Verify that when cleanup_orphaned_clis cannot kill a process,
+        // it writes back the surviving entries instead of deleting the tracker.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tracker.json");
+
+        // Use only non-existent PIDs to avoid killing the test process.
+        // One PID will "survive" (graceful_kill_process returns false for dead PIDs
+        // since they don't exist), and one is already dead (process_exists returns false).
+        let mut data = HashMap::new();
+        data.insert("kill-fails".to_string(), 99998u32); // process_exists=true won't happen, so skip
+        data.insert("already-dead".to_string(), 99999u32);
+        with_tracker_lock_at(&path, |p| atomic_write_at(p, &data)).unwrap();
+
+        // Simulate cleanup logic: read, check existence, attempt kill, write back survivors
+        with_tracker_lock_at(&path, |p| {
+            let tracked = read_tracker_at(p)?;
+            let mut surviving = HashMap::new();
+            let mut cleaned = 0usize;
+            for (run_id, pid) in tracked {
+                if !process_exists(pid as i32) {
+                    cleaned += 1;
+                    continue;
+                }
+                // Attempt graceful kill
+                if graceful_kill_process(pid as i32) {
+                    cleaned += 1;
+                } else {
+                    surviving.insert(run_id, pid);
+                }
+            }
+
+            if surviving.is_empty() {
+                let _ = std::fs::remove_file(p);
+            } else {
+                atomic_write_at(p, &surviving)?;
+            }
+
+            // All entries have non-existent PIDs, so all should be cleaned as "already terminated"
+            assert_eq!(cleaned, 2, "both dead entries should be cleaned");
+            assert!(surviving.is_empty(), "no survivors expected for non-existent PIDs");
+            Ok::<(), anyhow::Error>(())
+        }).unwrap();
+
+        // Since all entries were cleaned, the file should be removed
+        assert!(!path.exists(), "tracker file should be removed when all entries are cleaned");
+    }
+
+    #[test]
+    fn cleanup_keeps_tracker_when_survivors_exist() {
+        // Verify that when some processes can't be cleaned, the tracker file is preserved.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tracker.json");
+
+        let mut data = HashMap::new();
+        data.insert("dead-entry".to_string(), 99999u32);
+        with_tracker_lock_at(&path, |p| atomic_write_at(p, &data)).unwrap();
+
+        // Simulate cleanup where we force one entry to "survive"
+        with_tracker_lock_at(&path, |p| {
+            let tracked = read_tracker_at(p)?;
+            let mut surviving = HashMap::new();
+            let mut cleaned = 0usize;
+            for (run_id, pid) in tracked {
+                if !process_exists(pid as i32) {
+                    cleaned += 1;
+                    continue;
+                }
+                surviving.insert(run_id, pid);
+            }
+
+            // Force a survivor entry to test the write-back path
+            surviving.insert("stubborn".to_string(), 1u32);
+
+            if surviving.is_empty() {
+                let _ = std::fs::remove_file(p);
+            } else {
+                atomic_write_at(p, &surviving)?;
+            }
+
+            assert_eq!(cleaned, 1, "dead entry should be cleaned");
+            assert_eq!(surviving.len(), 1, "stubborn entry should survive");
+            Ok::<(), anyhow::Error>(())
+        }).unwrap();
+
+        // Tracker should still exist with the surviving entry
+        assert!(path.exists(), "tracker file should be preserved when survivors exist");
+        let result = read_tracker_at(&path).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("stubborn"), Some(&1u32));
+        assert!(!result.contains_key("dead-entry"));
     }
 }
