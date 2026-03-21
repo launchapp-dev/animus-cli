@@ -70,7 +70,11 @@ impl SessionBackend for SubprocessSessionBackend {
 
         tokio::spawn(async move {
             let _ = event_tx
-                .send(SessionEvent::Started { backend: started_backend_label.clone(), session_id: Some(session_id) })
+                .send(SessionEvent::Started {
+                    backend: started_backend_label.clone(),
+                    session_id: Some(session_id),
+                    pid: None,
+                })
                 .await;
 
             if let Err(error) = run_subprocess_session(request, invocation, event_tx.clone(), pid_tx).await {

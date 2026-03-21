@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod pricing;
 mod runner;
 mod tools;
 
@@ -132,7 +133,7 @@ async fn main() -> Result<()> {
             let mcp_tool_defs = tools::mcp_client::fetch_all_tool_definitions(&mut mcp_clients).await?;
             let all_tools = tools::definitions::merge_tools(native_tools, mcp_tool_defs);
 
-            let mut output = runner::output::OutputFormatter::new(json_mode);
+            let mut output = runner::output::OutputFormatter::new(json_mode, &model);
 
             let cancel_token = CancellationToken::new();
             let cancel_for_signal = cancel_token.clone();

@@ -56,6 +56,10 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
+    async fn reconcile_stale_in_progress_tasks(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -156,10 +160,25 @@ impl<S> ProjectTickHooks for DefaultSlimProjectTickHooks<'_, S>
 where
     S: DefaultProjectTickServices,
 {
-    fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>) {
+    fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>, schedule_headroom: Option<usize>) {
+        // Skip all schedule dispatches when the pool is at capacity.
+        if schedule_headroom == Some(0) {
+            return;
+        }
+
+        let mut dispatched: usize = 0;
+        let capacity = schedule_headroom;
+
         let outcomes = ScheduleDispatch::process_due_schedules(root, now, |schedule_id, dispatch| {
+            // Respect pool capacity — stop dispatching once headroom is exhausted.
+            if let Some(remaining) = capacity {
+                if dispatched >= remaining {
+                    return Err(anyhow::anyhow!("schedule dispatch skipped: pool at capacity"));
+                }
+            }
             match self.process_manager.spawn_workflow_runner(dispatch, root) {
                 Ok(()) => {
+                    dispatched += 1;
                     self.services.dispatch_notice(DispatchNotice::ScheduleDispatched {
                         schedule_id: schedule_id.to_string(),
                         dispatch: dispatch.clone(),
@@ -179,6 +198,10 @@ where
         for outcome in outcomes {
             self.services.record_schedule_dispatch_attempt(root, &outcome.schedule_id, now, &outcome.status);
         }
+    }
+
+    fn active_process_count(&mut self) -> usize {
+        self.process_manager.active_count()
     }
 
     async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot> {
@@ -207,13 +230,37 @@ where
         self.services.reconcile_runner_blocked_tasks(hub, root).await
     }
 
+    async fn reconcile_stale_in_progress_tasks(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.reconcile_stale_in_progress_tasks(hub, root).await
+    }
+
     async fn dispatch_ready_tasks(&mut self, root: &str, limit: usize) -> Result<DispatchWorkflowStartSummary> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.dispatch_ready_tasks(hub, root, limit, Some(self.process_manager)).await
     }
 
     async fn collect_health(&mut self, root: &str) -> Result<Value> {
-        self.services.collect_health(root).await
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        let mut health = serde_json::to_value(hub.daemon().health().await?)?;
+
+        // Override `active_agents` with the process-manager count (child
+        // workflow-runner processes) so that pool-utilisation reflects the
+        // actual semaphore that the daemon enforces, rather than the
+        // runner-level AI-session count which can be much higher.
+        let process_count = self.process_manager.active_count();
+        if let Some(obj) = health.as_object_mut() {
+            obj.insert("active_agents".to_string(), serde_json::json!(process_count));
+
+            // Recompute `pool_utilization_percent` from the corrected count.
+            let pool_size = obj.get("pool_size").and_then(|v| v.as_u64());
+            if let Some(ps) = pool_size {
+                let util = if ps == 0 { 0.0 } else { (process_count as f64 / ps as f64) * 100.0 };
+                obj.insert("pool_utilization_percent".to_string(), serde_json::json!(util));
+            }
+        }
+
+        Ok(health)
     }
 
     async fn build_summary(

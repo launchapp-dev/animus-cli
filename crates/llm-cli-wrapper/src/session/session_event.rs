@@ -2,7 +2,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
-    Started { backend: String, session_id: Option<String> },
+    Started { backend: String, session_id: Option<String>, pid: Option<u32> },
     TextDelta { text: String },
     FinalText { text: String },
     ToolCall { tool_name: String, arguments: Value, server: Option<String> },

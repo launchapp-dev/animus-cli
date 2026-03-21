@@ -5,9 +5,11 @@ use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
 };
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
+use orchestrator_core::{TaskStatus, WorkflowRunInput, WorkflowStatus};
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
-    DispatchNotice, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
+    DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager,
+    ProjectTickSnapshot,
 };
 use std::sync::Arc;
 
@@ -57,17 +59,70 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         reconcile_runner_blocked_tasks(hub, root).await
     }
 
+    async fn reconcile_stale_in_progress_tasks(&mut self, hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        let tasks = hub.tasks().list().await?;
+        let in_progress_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).collect();
+        if in_progress_tasks.is_empty() {
+            return Ok(0);
+        }
+
+        let workflows = hub.workflows().list().await?;
+        let mut reconciled = 0usize;
+        for task in in_progress_tasks {
+            let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
+            if task_workflows.is_empty() {
+                continue;
+            }
+            let all_terminal = task_workflows.iter().all(|w| {
+                matches!(
+                    w.status,
+                    WorkflowStatus::Completed
+                        | WorkflowStatus::Failed
+                        | WorkflowStatus::Cancelled
+                        | WorkflowStatus::Escalated
+                )
+            });
+            if all_terminal {
+                let _ = hub.tasks().set_status(&task.id, TaskStatus::Done, false).await;
+                reconciled += 1;
+            }
+        }
+        Ok(reconciled)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
-        _hub: Arc<dyn ServiceHub>,
+        hub: Arc<dyn ServiceHub>,
         root: &str,
         limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary> {
-        match process_manager {
-            Some(process_manager) => dispatch_queued_entries_via_runner(root, process_manager, limit),
-            None => Ok(DispatchWorkflowStartSummary::default()),
+        let mut summary = match process_manager {
+            Some(process_manager) => dispatch_queued_entries_via_runner(root, process_manager, limit)?,
+            None => DispatchWorkflowStartSummary::default(),
+        };
+
+        let remaining = limit.saturating_sub(summary.started);
+        if remaining > 0 {
+            let tasks = hub.tasks().list_prioritized().await?;
+            let ready_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::Ready).take(remaining).collect();
+            for task in ready_tasks {
+                if let Ok(workflow) = hub.workflows().run(WorkflowRunInput::for_task(task.id.clone(), None)).await {
+                    let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
+                    summary.started += 1;
+                    summary.started_workflows.push(DispatchWorkflowStart {
+                        dispatch: protocol::SubjectDispatch::for_task(
+                            task.id.clone(),
+                            workflow.workflow_ref.unwrap_or_default(),
+                        ),
+                        workflow_id: Some(workflow.id),
+                        selection_source: DispatchSelectionSource::ReadyQueue,
+                    });
+                }
+            }
         }
+
+        Ok(summary)
     }
 
     fn dispatch_notice(&mut self, notice: DispatchNotice) {

@@ -25,13 +25,14 @@ impl ProjectTickRunMode {
         now: NaiveTime,
         pool_draining: bool,
         snapshot: &ProjectTickSnapshot,
+        active_process_count: usize,
     ) -> ProjectTickPreparation {
         context.build_preparation(
             options,
             now,
             pool_draining,
             snapshot.daemon_health.as_ref().and_then(|health| health.pool_size),
-            self.active_process_count,
+            active_process_count,
         )
     }
 

@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 
 use super::mcp_policy::{apply_native_mcp_policy, resolve_mcp_tool_enforcement, TempPathCleanup};
 use super::process_builder::{build_cli_invocation, merge_launch_env, resolve_idle_timeout_secs};
+use crate::cleanup::{track_process, untrack_process};
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2).find_map(|pair| (pair[0] == flag).then_some(pair[1].as_str()))
@@ -253,13 +254,24 @@ async fn forward_session_event(
     event_tx: &mpsc::Sender<AgentRunEvent>,
 ) -> Option<i32> {
     match event {
-        SessionEvent::Started { backend, session_id } => {
+        SessionEvent::Started { backend, session_id, pid } => {
             debug!(
                 run_id = %run_id.0.as_str(),
                 backend,
                 session_id = ?session_id,
+                pid = ?pid,
                 "Native session backend started"
             );
+            if let Some(pid) = pid {
+                if let Err(e) = track_process(&run_id.0, *pid) {
+                    warn!(
+                        run_id = %run_id.0.as_str(),
+                        pid,
+                        error = %e,
+                        "Failed to record native session process in orphan tracker"
+                    );
+                }
+            }
             None
         }
         SessionEvent::TextDelta { text } | SessionEvent::FinalText { text } => {
@@ -341,7 +353,16 @@ async fn forward_session_event(
             }
             None
         }
-        SessionEvent::Finished { exit_code } => Some(exit_code.unwrap_or(0)),
+        SessionEvent::Finished { exit_code } => {
+            if let Err(e) = untrack_process(&run_id.0) {
+                warn!(
+                    run_id = %run_id.0.as_str(),
+                    error = %e,
+                    "Failed to remove native session process from orphan tracker"
+                );
+            }
+            Some(exit_code.unwrap_or(0))
+        }
     }
 }
 
