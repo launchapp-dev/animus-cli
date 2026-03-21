@@ -124,6 +124,9 @@ pub fn canonical_model_id(model_id: &str) -> String {
             "gemini-2.5-pro".to_string()
         }
         "gemini-2.5-flash-latest" | "gemini-flash-2.5" => "gemini-2.5-flash".to_string(),
+        "gemini-2.5-flash-lite" | "gemini-flash-lite-2.5" | "gemini-flash-2.5-lite" => {
+            "gemini-2.5-flash-lite".to_string()
+        }
         "gemini-3" | "gemini-3.0-pro" | "gemini-3-pro-latest" | "gemini-pro-3" => "gemini-3-pro".to_string(),
         "glm-5" | "glm5" | "zai/glm-5" | "z-ai/glm-5" | "zai-coding-plan-glm-5" | "zai-coding-plan/glm-5" => {
             "zai-coding-plan/glm-5".to_string()
@@ -201,6 +204,7 @@ pub fn default_model_specs() -> Vec<(String, String)> {
         ("gpt-5".to_string(), "codex".to_string()),
         ("gemini-2.5-pro".to_string(), "gemini".to_string()),
         ("gemini-2.5-flash".to_string(), "gemini".to_string()),
+        ("gemini-2.5-flash-lite".to_string(), "gemini".to_string()),
         ("gemini-3-pro".to_string(), "gemini".to_string()),
         ("gemini-3.1-pro-preview".to_string(), "gemini".to_string()),
         ("minimax/MiniMax-M2.7".to_string(), "oai-runner".to_string()),
@@ -286,8 +290,12 @@ pub fn default_primary_model_for_phase(
     complexity: Option<ModelRoutingComplexity>,
     caps: &PhaseCapabilities,
 ) -> &'static str {
-    if caps.is_ui_ux || caps.is_research {
+    if caps.is_ui_ux {
         return "gemini-3.1-pro-preview";
+    }
+
+    if caps.is_research {
+        return "gemini-2.5-flash-lite";
     }
 
     if caps.is_review {
@@ -321,13 +329,23 @@ pub fn default_fallback_models_for_phase(
     complexity: Option<ModelRoutingComplexity>,
     caps: &PhaseCapabilities,
 ) -> Vec<&'static str> {
-    if caps.is_ui_ux || caps.is_research {
+    if caps.is_ui_ux {
         return vec![
             "claude-sonnet-4-6",
             "gemini-2.5-pro",
             "zai-coding-plan/glm-5",
             "minimax/MiniMax-M2.7",
             "gpt-5.3-codex",
+        ];
+    }
+
+    if caps.is_research {
+        return vec![
+            "gemini-2.5-flash",
+            "claude-sonnet-4-6",
+            "gemini-3.1-pro-preview",
+            "zai-coding-plan/glm-5",
+            "minimax/MiniMax-M2.7",
         ];
     }
 
@@ -387,6 +405,9 @@ mod tests {
         assert_eq!(canonical_model_id("codex-spark"), "gpt-5.3-codex-spark");
         assert_eq!(canonical_model_id("gemini-pro"), "gemini-2.5-pro");
         assert_eq!(canonical_model_id("gemini-3.0-pro"), "gemini-3-pro");
+        assert_eq!(canonical_model_id("gemini-2.5-flash-lite"), "gemini-2.5-flash-lite");
+        assert_eq!(canonical_model_id("gemini-flash-lite-2.5"), "gemini-2.5-flash-lite");
+        assert_eq!(canonical_model_id("gemini-flash-2.5-lite"), "gemini-2.5-flash-lite");
         assert_eq!(canonical_model_id("glm-5"), "zai-coding-plan/glm-5");
         assert_eq!(canonical_model_id("minimax-m2.1"), "minimax/MiniMax-M2.1");
         assert_eq!(canonical_model_id("minimax-m2.5"), "minimax/MiniMax-M2.7");
@@ -400,6 +421,7 @@ mod tests {
         assert_eq!(tool_for_model_id("zai-coding-plan/glm-5"), "oai-runner");
         assert_eq!(tool_for_model_id("minimax/MiniMax-M2.7"), "oai-runner");
         assert_eq!(tool_for_model_id("gemini-2.5-pro"), "gemini");
+        assert_eq!(tool_for_model_id("gemini-2.5-flash-lite"), "gemini");
         assert_eq!(tool_for_model_id("gpt-5.3-codex"), "codex");
     }
 
@@ -427,6 +449,39 @@ mod tests {
             default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &test_caps),
             "minimax/MiniMax-M2.7"
         );
+    }
+
+    #[test]
+    fn research_phases_route_to_flash_lite() {
+        let research_caps = PhaseCapabilities::defaults_for_phase("research");
+        assert_eq!(
+            default_primary_model_for_phase(None, &research_caps),
+            "gemini-2.5-flash-lite"
+        );
+        assert_eq!(
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::Low), &research_caps),
+            "gemini-2.5-flash-lite"
+        );
+        assert_eq!(
+            default_primary_model_for_phase(Some(ModelRoutingComplexity::High), &research_caps),
+            "gemini-2.5-flash-lite"
+        );
+    }
+
+    #[test]
+    fn ui_ux_phases_still_use_pro_preview() {
+        let design_caps = PhaseCapabilities::defaults_for_phase("design");
+        assert_eq!(
+            default_primary_model_for_phase(None, &design_caps),
+            "gemini-3.1-pro-preview"
+        );
+    }
+
+    #[test]
+    fn research_fallbacks_include_flash_models() {
+        let research_caps = PhaseCapabilities::defaults_for_phase("research");
+        let fallbacks = default_fallback_models_for_phase(None, &research_caps);
+        assert_eq!(fallbacks[0], "gemini-2.5-flash");
     }
 
     #[test]
