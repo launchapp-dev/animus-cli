@@ -201,10 +201,15 @@ agents:
          a. Parse the latest tag (e.g., v0.0.10) and bump: minor for features, patch for bugfixes only.
          b. Run `git checkout -b release/vX.Y.Z origin/develop && git push origin release/vX.Y.Z`
          c. Create a tracking task via ao.task.create: title "Release vX.Y.Z", priority "critical", type "chore"
+         d. WRITE CHANGELOG: Read the commits since last tag with `git log --oneline <prev_tag>..HEAD --no-merges`.
+            Also check ao.task.list for tasks marked done since last release.
+            Write a user-facing changelog grouped by: Features, Fixes, Improvements.
+            Save it to CHANGELOG-vX.Y.Z.md in the repo root. Commit it to the release branch.
 
       4. CHECK RELEASE GATE (if release branch exists):
          a. Check if a PR exists: `gh pr list --base main --head release/vX.Y.Z --json number`
-         b. If no PR, create one: `gh pr create --base main --head release/vX.Y.Z --title "Release vX.Y.Z" --body "Release candidate"`
+         b. If no PR, create one with the changelog as the PR body:
+            `gh pr create --base main --head release/vX.Y.Z --title "Release vX.Y.Z" --body-file CHANGELOG-vX.Y.Z.md`
          c. If PR exists and is merged:
             - Tag: `git tag vX.Y.Z origin/main && git push origin vX.Y.Z` (triggers release.yml CI)
             - Sync develop: `git fetch origin && git checkout develop && git merge origin/main && git push origin develop`
