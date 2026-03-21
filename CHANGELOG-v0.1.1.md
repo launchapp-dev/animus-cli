@@ -4,7 +4,7 @@
 2026-03-21
 
 ## Overview
-This patch release includes 2 new features, 4 bug fixes, and quality improvements.
+This patch release includes 4 new features, 4 bug fixes, CI improvements, and quality enhancements.
 
 ---
 
@@ -13,6 +13,9 @@ This patch release includes 2 new features, 4 bug fixes, and quality improvement
 ### CLI & Developer Experience
 - **CI failure and PR conflict monitor script**: New monitoring script to track CI failures and PR conflicts proactively.
 - **Cost optimization for research phases**: Research phases now route to `gemini-2.5-flash-lite` for reduced API costs.
+- **Enhanced task creation**: `ao.task.create` now supports `tags[]` and `assignee` fields (REQ-287).
+- **Native process tracking**: Track native session CLI processes in file-based process tracker.
+- **Token and cost analytics**: Cumulative token tracking and per-session cost aggregation in oai-runner.
 
 ---
 
@@ -27,6 +30,9 @@ This patch release includes 2 new features, 4 bug fixes, and quality improvement
 ---
 
 ## 🔧 Improvements
+
+### CI/CD & Build Performance
+- **Cargo build caching**: Added Cargo build caching to all Rust CI workflows and release workflows for faster builds.
 
 ### Quality & Process
 - **Stronger code review directive**: Implemented 7-point checklist for Opus quality gate.
