@@ -52,11 +52,7 @@ pub async fn reconcile_runner_blocked_task(hub: Arc<dyn ServiceHub>, task: &Orch
         // If the blocked_reason has already been updated to the escalation prefix
         // on a previous tick, silently skip — the escalation has already been
         // logged and persisted.
-        if task
-            .blocked_reason
-            .as_deref()
-            .is_some_and(|r| r.starts_with(ESCALATED_BLOCKED_PREFIX))
-        {
+        if task.blocked_reason.as_deref().is_some_and(|r| r.starts_with(ESCALATED_BLOCKED_PREFIX)) {
             return Ok(false);
         }
 
