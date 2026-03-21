@@ -110,9 +110,7 @@ impl PhaseTargetPlanner {
                 };
                 configured_fallback_idx += 1;
 
-                let auto_tool = explicit_tool.unwrap_or_else(|| {
-                    Self::tool_for_model_id(&candidate_model).to_string()
-                });
+                let auto_tool = explicit_tool.unwrap_or_else(|| Self::tool_for_model_id(&candidate_model).to_string());
                 enforce_write_capable_phase_target(auto_tool, candidate_model, caps.writes_files, routing)
             };
             targets.push((tool_id, model_id));

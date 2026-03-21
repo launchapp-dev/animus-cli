@@ -429,10 +429,7 @@ mod tests {
         );
         registry.insert(
             "o4-mini".to_string(),
-            super::super::yaml_types::ModelRegistryEntry {
-                model: "o4-mini".to_string(),
-                tool: None,
-            },
+            super::super::yaml_types::ModelRegistryEntry { model: "o4-mini".to_string(), tool: None },
         );
         registry
     }
