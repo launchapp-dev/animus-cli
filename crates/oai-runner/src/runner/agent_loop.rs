@@ -191,7 +191,7 @@ pub async fn run_agent_loop(
             .await?;
 
         if let Some(u) = &usage {
-            output.metadata(u.prompt_tokens, u.completion_tokens);
+            output.metadata(u);
         }
 
         let has_tool_calls = assistant_msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
@@ -397,7 +397,7 @@ async fn retry_schema_validation(
         };
 
         if let Some(u) = &usage {
-            output.metadata(u.prompt_tokens, u.completion_tokens);
+            output.metadata(u);
         }
 
         let content = retry_msg.content.clone().unwrap_or_default();
