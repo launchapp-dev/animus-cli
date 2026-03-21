@@ -2,6 +2,7 @@ tools_allowlist:
   - cargo
   - git
   - gh
+  - bash
 
 mcp_servers:
   context7:
@@ -1131,13 +1132,24 @@ phases:
       fields:
         exit_code:
           type: integer
+  ci-conflict-monitor:
+    mode: command
+    directive: "Check GitHub CI for failures and PRs for merge conflicts, enqueue remediation workflows"
+    command:
+      program: bash
+      args: ["scripts/ci-conflict-monitor.sh", "."]
+      cwd_mode: project_root
+      timeout_secs: 120
+      success_exit_codes: [0]
   rebase-on-main:
     mode: agent
     agent: default
     directive: |
-      This branch has merge conflicts with main/develop. Rebase it.
-      1. Run: git fetch origin develop
-      2. Run: git rebase origin/develop
+      This branch has merge conflicts with its base branch. Rebase it.
+      The base branch is provided in dispatch_input as "base" (e.g. "develop" or "main").
+      If no base is provided, default to "develop".
+      1. Run: git fetch origin {{base}}
+      2. Run: git rebase origin/{{base}}
       3. For each conflict, resolve by keeping BOTH sides of changes.
          For Cargo.lock: accept theirs, run cargo build to regenerate.
          For code files: integrate both changes.
@@ -1858,6 +1870,12 @@ workflows:
     phases:
       - sync-main
 
+  - id: ci-conflict-monitor
+    name: "CI & Conflict Monitor"
+    description: "Check CI failures and PR conflicts, enqueue remediation workflows"
+    phases:
+      - ci-conflict-monitor
+
   - id: hotfix
     name: "Hotfix"
     description: "Emergency fix → Push → PR targeting main"
@@ -1874,6 +1892,11 @@ workflows:
         cleanup_worktree: true
 
 schedules:
+  - id: ci-conflict-monitor
+    cron: "*/10 * * * *"
+    workflow_ref: ci-conflict-monitor
+    enabled: true
+
   - id: sync-main
     cron: "*/5 * * * *"
     workflow_ref: sync-main
