@@ -749,7 +749,7 @@ async fn execute_post_success_actions(
             action_result["actions"]["push"] = push_action;
         }
 
-        let push_status = action_result["actions"]["push"]["status"].as_str().unwrap_or("skipped");
+        let push_status = action_result["actions"]["push"]["status"].as_str().unwrap_or("skipped").to_owned();
         if push_status != "completed" {
             action_result["status"] = serde_json::json!("failed");
             action_result["actions"]["create_pr"] = serde_json::json!({
