@@ -157,6 +157,9 @@ impl ApiClient {
         request: &ChatRequest,
         on_text_chunk: &mut dyn FnMut(&str),
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
+        if std::env::var("AO_DEBUG_REQUESTS").is_ok() {
+            eprintln!("[oai-runner] Request body: {}", serde_json::to_string(request).unwrap_or_default());
+        }
         let resp = self
             .http
             .post(url)
@@ -183,6 +186,7 @@ impl ApiClient {
         }
 
         let mut content = String::new();
+        let mut reasoning_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut usage: Option<UsageInfo> = None;
 
@@ -201,7 +205,8 @@ impl ApiClient {
                 std::io::stdout().flush().ok();
                 let msg = ChatMessage {
                     role: "assistant".to_string(),
-                    content: if content.is_empty() { None } else { Some(content) },
+                    content: Some(content),
+                    reasoning_content: Some(reasoning_content),
                     tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                     tool_call_id: None,
                 };
@@ -222,6 +227,9 @@ impl ApiClient {
                 if let Some(text) = &choice.delta.content {
                     content.push_str(text);
                     on_text_chunk(text);
+                }
+                if let Some(text) = &choice.delta.reasoning_content {
+                    reasoning_content.push_str(text);
                 }
 
                 if let Some(tc_deltas) = &choice.delta.tool_calls {
@@ -256,6 +264,7 @@ impl ApiClient {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: if content.is_empty() { None } else { Some(content) },
+            reasoning_content: Some(reasoning_content),
             tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
             tool_call_id: None,
         };
