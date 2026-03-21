@@ -242,25 +242,9 @@ where
 
     async fn collect_health(&mut self, root: &str) -> Result<Value> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        let mut health = serde_json::to_value(hub.daemon().health().await?)?;
-
-        // Override `active_agents` with the process-manager count (child
-        // workflow-runner processes) so that pool-utilisation reflects the
-        // actual semaphore that the daemon enforces, rather than the
-        // runner-level AI-session count which can be much higher.
         let process_count = self.process_manager.active_count();
-        if let Some(obj) = health.as_object_mut() {
-            obj.insert("active_agents".to_string(), serde_json::json!(process_count));
-
-            // Recompute `pool_utilization_percent` from the corrected count.
-            let pool_size = obj.get("pool_size").and_then(|v| v.as_u64());
-            if let Some(ps) = pool_size {
-                let util = if ps == 0 { 0.0 } else { (process_count as f64 / ps as f64) * 100.0 };
-                obj.insert("pool_utilization_percent".to_string(), serde_json::json!(util));
-            }
-        }
-
-        Ok(health)
+        hub.daemon().set_active_process_count(process_count).await?;
+        Ok(serde_json::to_value(hub.daemon().health().await?)?)
     }
 
     async fn build_summary(

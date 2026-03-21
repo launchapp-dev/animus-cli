@@ -92,6 +92,7 @@ pub trait DaemonServiceApi: Send + Sync {
     async fn logs(&self, limit: Option<usize>) -> Result<Vec<LogEntry>>;
     async fn clear_logs(&self) -> Result<()>;
     async fn active_agents(&self) -> Result<usize>;
+    async fn set_active_process_count(&self, count: usize) -> Result<()>;
 }
 
 #[async_trait]

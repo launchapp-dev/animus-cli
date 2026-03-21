@@ -48,7 +48,7 @@ pub use execution_projection::{
     project_schedule_execution_fact, project_task_blocked_with_reason, project_task_dispatch_failure,
     project_task_execution_fact, project_task_status, project_task_terminal_workflow_status,
     project_task_workflow_start, reconcile_runner_blocked_task, ExecutionProjector, ExecutionProjectorRegistry,
-    ESCALATED_BLOCKED_PREFIX, MAX_RUNNER_FAILURE_RESETS, WORKFLOW_RUNNER_BLOCKED_PREFIX,
+    MAX_RUNNER_FAILURE_RESETS, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path, record_model_phase_outcome,

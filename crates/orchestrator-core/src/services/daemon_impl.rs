@@ -153,6 +153,11 @@ impl DaemonServiceApi for InMemoryServiceHub {
     async fn active_agents(&self) -> Result<usize> {
         Ok(0)
     }
+
+    async fn set_active_process_count(&self, count: usize) -> Result<()> {
+        self.state.write().await.active_process_count = Some(count);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -199,6 +204,7 @@ impl DaemonServiceApi for FileServiceHub {
         mutate_daemon_state(self, |state| {
             state.daemon_status = DaemonStatus::Stopped;
             state.runner_pid = None;
+            state.active_process_count = None;
             state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
@@ -290,10 +296,11 @@ impl DaemonServiceApi for FileServiceHub {
         let status = self.status().await?;
         let config_dir = runner_config_dir(&self.project_root);
         let runner_connected = is_agent_runner_ready(&config_dir).await;
-        let active_agents = if runner_connected {
-            query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0)
-        } else {
-            0
+        let persisted_process_count = self.state.read().await.active_process_count;
+        let active_agents = match persisted_process_count {
+            Some(count) => count,
+            None if runner_connected => query_runner_status(&config_dir).await.map(|s| s.active_agents).unwrap_or(0),
+            None => 0,
         };
         let lock = self.state.read().await;
         let pool_utilization_percent =
@@ -338,11 +345,24 @@ impl DaemonServiceApi for FileServiceHub {
     }
 
     async fn active_agents(&self) -> Result<usize> {
+        let lock = self.state.read().await;
+        if let Some(count) = lock.active_process_count {
+            return Ok(count);
+        }
+        drop(lock);
         let config_dir = runner_config_dir(&self.project_root);
         if !is_agent_runner_ready(&config_dir).await {
             return Ok(0);
         }
         Ok(query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0))
+    }
+
+    async fn set_active_process_count(&self, count: usize) -> Result<()> {
+        mutate_daemon_state(self, |state| {
+            state.active_process_count = Some(count);
+            Ok(())
+        })
+        .await
     }
 }
 

@@ -20,6 +20,8 @@ pub(super) struct CoreState {
     pub(super) requirements: HashMap<String, RequirementItem>,
     #[serde(default)]
     pub(super) architecture: ArchitectureGraph,
+    #[serde(default)]
+    pub(super) active_process_count: Option<usize>,
     #[serde(skip)]
     pub(super) dirty_tasks: HashSet<String>,
     #[serde(skip)]
