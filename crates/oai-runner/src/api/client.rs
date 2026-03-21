@@ -3,7 +3,7 @@ use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -14,10 +14,69 @@ static PROVIDER_STATES: RwLock<Option<HashMap<String, Arc<ProviderState>>>> = Rw
 struct ProviderState {
     consecutive_failures: AtomicU32,
     circuit_open_until: AtomicU64,
+    /// Whether a half-open probe request is currently in flight.
+    /// Only one probe is allowed at a time; other callers see the circuit as open.
+    probe_in_flight: AtomicBool,
 }
 
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 5;
 const CIRCUIT_BREAKER_COOLDOWN_SECS: u64 = 60;
+/// Extended cooldown applied when a half-open probe request fails.
+const CIRCUIT_BREAKER_EXTENDED_COOLDOWN_SECS: u64 = 120;
+
+/// Current circuit breaker state for a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CircuitState {
+    /// Normal operation — requests flow through.
+    Closed,
+    /// Failure threshold exceeded — all requests rejected until cooldown expires.
+    Open,
+    /// Cooldown expired — a single probe request is allowed to test recovery.
+    HalfOpen,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Returns the current circuit breaker state without side effects.
+fn circuit_state(state: &ProviderState) -> CircuitState {
+    let until = state.circuit_open_until.load(Ordering::Relaxed);
+    if until == 0 {
+        return CircuitState::Closed;
+    }
+    if now_secs() < until {
+        return CircuitState::Open;
+    }
+    CircuitState::HalfOpen
+}
+
+/// Check whether the circuit allows a request through.
+///
+/// Returns `Ok(())` if the request may proceed, or `Err(CircuitState)` if blocked.
+/// When entering half-open, atomically claims the single probe slot via CAS
+/// so that only one probe request is in flight at a time.
+fn check_circuit(state: &ProviderState) -> Result<(), CircuitState> {
+    let until = state.circuit_open_until.load(Ordering::Relaxed);
+    if until == 0 {
+        return Ok(()); // Closed — allow
+    }
+    let now = now_secs();
+    if now < until {
+        return Err(CircuitState::Open); // Still in cooldown
+    }
+    // Cooldown expired — half-open. Try to claim the single probe slot.
+    match state
+        .probe_in_flight
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+    {
+        Ok(_) => Ok(()),   // Probe slot claimed
+        Err(_) => Err(CircuitState::Open), // Another probe already in flight
+    }
+}
 
 fn get_provider_state(api_base: &str) -> Arc<ProviderState> {
     {
@@ -33,35 +92,61 @@ fn get_provider_state(api_base: &str) -> Arc<ProviderState> {
     let map = write.get_or_insert_with(HashMap::new);
     map.entry(api_base.to_string())
         .or_insert_with(|| {
-            Arc::new(ProviderState { consecutive_failures: AtomicU32::new(0), circuit_open_until: AtomicU64::new(0) })
+            Arc::new(ProviderState {
+                consecutive_failures: AtomicU32::new(0),
+                circuit_open_until: AtomicU64::new(0),
+                probe_in_flight: AtomicBool::new(false),
+            })
         })
         .clone()
 }
 
-fn circuit_is_open(state: &ProviderState) -> bool {
-    let until = state.circuit_open_until.load(Ordering::Relaxed);
-    if until == 0 {
-        return false;
-    }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    now < until
-}
-
-fn record_success(state: &ProviderState) {
+/// Record a successful request. Resets the failure counter and closes the circuit.
+/// If the circuit was half-open (probe succeeded), logs the state transition.
+fn record_success(state: &ProviderState, api_base: &str) {
+    let prev = circuit_state(state);
     state.consecutive_failures.store(0, Ordering::Relaxed);
     state.circuit_open_until.store(0, Ordering::Relaxed);
+    state.probe_in_flight.store(false, Ordering::Relaxed);
+    if prev == CircuitState::HalfOpen {
+        eprintln!(
+            "[oai-runner] Circuit breaker CLOSED for {} — probe succeeded.",
+            api_base
+        );
+    }
 }
 
+/// Record a failed request. Increments the consecutive failure counter.
+/// Only transitions from Closed → Open when the threshold is exceeded.
+/// Does not modify circuit state when already in Open or HalfOpen
+/// (those transitions are handled by `record_probe_failure`).
 fn record_failure(state: &ProviderState, api_base: &str) {
     let count = state.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
     if count >= CIRCUIT_BREAKER_THRESHOLD {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-        state.circuit_open_until.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
-        eprintln!(
-            "[oai-runner] Circuit breaker OPEN for {} after {} consecutive failures. Cooling down for {}s.",
-            api_base, count, CIRCUIT_BREAKER_COOLDOWN_SECS
-        );
+        let current = circuit_state(state);
+        if current == CircuitState::Closed {
+            let now = now_secs();
+            state.circuit_open_until.store(now + CIRCUIT_BREAKER_COOLDOWN_SECS, Ordering::Relaxed);
+            eprintln!(
+                "[oai-runner] Circuit breaker OPEN for {} after {} consecutive failures. Cooling down for {}s.",
+                api_base, count, CIRCUIT_BREAKER_COOLDOWN_SECS
+            );
+        }
     }
+}
+
+/// Record that a half-open probe request has definitively failed (all retries exhausted
+/// or a non-retryable error). Re-opens the circuit with an extended cooldown.
+fn record_probe_failure(state: &ProviderState, api_base: &str) {
+    let now = now_secs();
+    state
+        .circuit_open_until
+        .store(now + CIRCUIT_BREAKER_EXTENDED_COOLDOWN_SECS, Ordering::Relaxed);
+    state.probe_in_flight.store(false, Ordering::Relaxed);
+    eprintln!(
+        "[oai-runner] Circuit breaker RE-OPENED for {} — probe failed. Extended cooldown for {}s.",
+        api_base, CIRCUIT_BREAKER_EXTENDED_COOLDOWN_SECS
+    );
 }
 
 pub struct ApiClient {
@@ -76,7 +161,11 @@ impl ApiClient {
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .expect("failed to build HTTP client");
-        Self { http, api_base, api_key }
+        Self {
+            http,
+            api_base,
+            api_key,
+        }
     }
 
     pub async fn stream_chat(
@@ -85,9 +174,16 @@ impl ApiClient {
         on_text_chunk: &mut dyn FnMut(&str),
     ) -> Result<(ChatMessage, Option<UsageInfo>)> {
         let state = get_provider_state(&self.api_base);
-        if circuit_is_open(&state) {
+        if let Err(_blocked) = check_circuit(&state) {
             bail!(
                 "Circuit breaker is open for {} — too many consecutive API failures. Waiting for cooldown.",
+                self.api_base
+            );
+        }
+        let is_probe = circuit_state(&state) == CircuitState::HalfOpen;
+        if is_probe {
+            eprintln!(
+                "[oai-runner] Circuit breaker HALF-OPEN for {} — sending probe request.",
                 self.api_base
             );
         }
@@ -103,6 +199,9 @@ impl ApiClient {
                     // If we already sent chunks to the user, retrying the whole request
                     // will lead to duplicate output. Better to fail or implement resume.
                     // OpenAI-style APIs usually don't support resume mid-stream.
+                    if is_probe {
+                        record_probe_failure(&state, &self.api_base);
+                    }
                     return Err(
                         last_err.unwrap_or_else(|| anyhow::anyhow!("Stream interrupted after emitting content"))
                     );
@@ -119,7 +218,7 @@ impl ApiClient {
 
             match self.do_stream(&url, request, &mut chunk_interceptor).await {
                 Ok(result) => {
-                    record_success(&state);
+                    record_success(&state, &self.api_base);
                     return Ok(result);
                 }
                 Err(e) => {
@@ -144,12 +243,20 @@ impl ApiClient {
                         last_err = Some(e);
                         continue;
                     }
+                    // Non-retryable error — record and return
                     record_failure(&state, &self.api_base);
+                    if is_probe {
+                        record_probe_failure(&state, &self.api_base);
+                    }
                     return Err(e);
                 }
             }
         }
 
+        // All retries exhausted
+        if is_probe {
+            record_probe_failure(&state, &self.api_base);
+        }
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("stream_chat failed after retries")))
     }
 
@@ -209,7 +316,11 @@ impl ApiClient {
                     role: "assistant".to_string(),
                     content: Some(content),
                     reasoning_content: Some(reasoning_content),
-                    tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
                     tool_call_id: None,
                 };
                 return Ok((msg, usage));
@@ -242,7 +353,10 @@ impl ApiClient {
                             tool_calls.push(ToolCall {
                                 id: String::new(),
                                 type_: "function".to_string(),
-                                function: FunctionCall { name: String::new(), arguments: String::new() },
+                                function: FunctionCall {
+                                    name: String::new(),
+                                    arguments: String::new(),
+                                },
                             });
                         }
 
@@ -265,11 +379,370 @@ impl ApiClient {
         std::io::stdout().flush().ok();
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: if content.is_empty() { None } else { Some(content) },
+            content: if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
             reasoning_content: Some(reasoning_content),
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
             tool_call_id: None,
         };
         Ok((msg, usage))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a ProviderState in closed (initial) state.
+    fn new_closed_state() -> ProviderState {
+        ProviderState {
+            consecutive_failures: AtomicU32::new(0),
+            circuit_open_until: AtomicU64::new(0),
+            probe_in_flight: AtomicBool::new(false),
+        }
+    }
+
+    /// Helper to create a ProviderState in open state with the given cooldown end time.
+    fn new_open_state(open_until: u64) -> ProviderState {
+        ProviderState {
+            consecutive_failures: AtomicU32::new(CIRCUIT_BREAKER_THRESHOLD),
+            circuit_open_until: AtomicU64::new(open_until),
+            probe_in_flight: AtomicBool::new(false),
+        }
+    }
+
+    // ── circuit_state ──────────────────────────────────────────────
+
+    #[test]
+    fn circuit_starts_closed() {
+        let state = new_closed_state();
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+    }
+
+    #[test]
+    fn circuit_is_open_during_cooldown() {
+        let state = new_open_state(now_secs() + 60);
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+    }
+
+    #[test]
+    fn circuit_is_half_open_after_cooldown_expires() {
+        // circuit_open_until is in the past → half-open
+        let state = new_open_state(now_secs() - 1);
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+    }
+
+    #[test]
+    fn circuit_is_half_open_at_exact_expiry() {
+        let state = new_open_state(now_secs());
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+    }
+
+    // ── check_circuit ──────────────────────────────────────────────
+
+    #[test]
+    fn check_circuit_allows_when_closed() {
+        let state = new_closed_state();
+        assert!(check_circuit(&state).is_ok());
+    }
+
+    #[test]
+    fn check_circuit_blocks_when_open() {
+        let state = new_open_state(now_secs() + 60);
+        assert_eq!(check_circuit(&state), Err(CircuitState::Open));
+    }
+
+    #[test]
+    fn check_circuit_allows_single_probe_when_half_open() {
+        let state = new_open_state(now_secs() - 1);
+        // First caller gets through (claims probe slot)
+        assert!(check_circuit(&state).is_ok());
+        // Second caller is blocked
+        assert_eq!(check_circuit(&state), Err(CircuitState::Open));
+    }
+
+    #[test]
+    fn check_circuit_probe_slot_released_on_success() {
+        let state = new_open_state(now_secs() - 1);
+        assert!(check_circuit(&state).is_ok());
+        record_success(&state, "test-provider");
+        // After success, circuit is closed — probe_in_flight cleared
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+        assert!(check_circuit(&state).is_ok());
+    }
+
+    #[test]
+    fn check_circuit_probe_slot_released_on_probe_failure() {
+        let state = new_open_state(now_secs() - 1);
+        assert!(check_circuit(&state).is_ok());
+        record_probe_failure(&state, "test-provider");
+        // After probe failure, circuit is re-opened with extended cooldown
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+    }
+
+    // ── record_failure ─────────────────────────────────────────────
+
+    #[test]
+    fn record_failure_increments_count() {
+        let state = new_closed_state();
+        record_failure(&state, "test");
+        record_failure(&state, "test");
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[test]
+    fn record_failure_opens_circuit_at_threshold() {
+        let state = new_closed_state();
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            record_failure(&state, "test");
+        }
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+    }
+
+    #[test]
+    fn record_failure_does_not_reopen_when_already_open() {
+        let state = new_open_state(now_secs() + 60);
+        let prev_until = state.circuit_open_until.load(Ordering::Relaxed);
+        record_failure(&state, "test");
+        // circuit_open_until should not have changed
+        assert_eq!(
+            state.circuit_open_until.load(Ordering::Relaxed),
+            prev_until
+        );
+    }
+
+    #[test]
+    fn record_failure_does_not_reopen_when_half_open() {
+        let state = new_open_state(now_secs() - 1);
+        // Enter half-open by claiming probe
+        assert!(check_circuit(&state).is_ok());
+        let prev_until = state.circuit_open_until.load(Ordering::Relaxed);
+        record_failure(&state, "test");
+        // circuit_open_until should not change from intermediate failure
+        assert_eq!(
+            state.circuit_open_until.load(Ordering::Relaxed),
+            prev_until
+        );
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+    }
+
+    // ── record_success ─────────────────────────────────────────────
+
+    #[test]
+    fn record_success_resets_failures_in_closed_state() {
+        let state = new_closed_state();
+        record_failure(&state, "test");
+        record_failure(&state, "test");
+        record_success(&state, "test");
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+    }
+
+    #[test]
+    fn record_success_closes_circuit_from_half_open() {
+        let state = new_open_state(now_secs() - 1);
+        // Enter half-open
+        assert!(check_circuit(&state).is_ok());
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+        // Probe succeeds
+        record_success(&state, "test-provider");
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn record_success_clears_probe_in_flight() {
+        let state = new_open_state(now_secs() - 1);
+        assert!(check_circuit(&state).is_ok());
+        assert!(state.probe_in_flight.load(Ordering::Relaxed));
+        record_success(&state, "test");
+        assert!(!state.probe_in_flight.load(Ordering::Relaxed));
+    }
+
+    // ── record_probe_failure ───────────────────────────────────────
+
+    #[test]
+    fn record_probe_failure_reopens_with_extended_cooldown() {
+        let state = new_open_state(now_secs() - 1);
+        // Enter half-open
+        assert!(check_circuit(&state).is_ok());
+        record_probe_failure(&state, "test-provider");
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+        // Verify extended cooldown duration
+        let until = state.circuit_open_until.load(Ordering::Relaxed);
+        let expected = now_secs() + CIRCUIT_BREAKER_EXTENDED_COOLDOWN_SECS;
+        // Allow 1-second tolerance for test execution time
+        assert!(
+            until >= expected && until <= expected + 2,
+            "Expected cooldown end ~{expected}, got {until}"
+        );
+    }
+
+    #[test]
+    fn record_probe_failure_clears_probe_in_flight() {
+        let state = new_open_state(now_secs() - 1);
+        assert!(check_circuit(&state).is_ok());
+        assert!(state.probe_in_flight.load(Ordering::Relaxed));
+        record_probe_failure(&state, "test");
+        assert!(!state.probe_in_flight.load(Ordering::Relaxed));
+    }
+
+    // ── Full lifecycle: closed → open → half-open → closed ───────
+
+    #[test]
+    fn full_lifecycle_probe_succeeds() {
+        let state = new_closed_state();
+        let api = "https://api.example.com";
+
+        // 1. Accumulate failures until threshold → Open
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            record_failure(&state, api);
+        }
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+
+        // 2. Requests are blocked while open
+        assert_eq!(check_circuit(&state), Err(CircuitState::Open));
+
+        // 3. Simulate cooldown expiry
+        state
+            .circuit_open_until
+            .store(now_secs() - 1, Ordering::Relaxed);
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+
+        // 4. Probe request allowed
+        assert!(check_circuit(&state).is_ok());
+
+        // 5. Other requests blocked while probe in flight
+        assert_eq!(check_circuit(&state), Err(CircuitState::Open));
+
+        // 6. Probe succeeds → circuit closes
+        record_success(&state, api);
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+
+        // 7. Normal requests flow again
+        assert!(check_circuit(&state).is_ok());
+        assert!(check_circuit(&state).is_ok());
+    }
+
+    #[test]
+    fn full_lifecycle_probe_fails_then_succeeds() {
+        let state = new_closed_state();
+        let api = "https://api.example.com";
+
+        // 1. Open circuit
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            record_failure(&state, api);
+        }
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+
+        // 2. Cooldown expires → half-open
+        state
+            .circuit_open_until
+            .store(now_secs() - 1, Ordering::Relaxed);
+
+        // 3. Probe allowed
+        assert!(check_circuit(&state).is_ok());
+
+        // 4. Intermediate retry failure (should NOT re-open)
+        record_failure(&state, api);
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+
+        // 5. Probe ultimately fails → re-open with extended cooldown
+        record_probe_failure(&state, api);
+        assert_eq!(circuit_state(&state), CircuitState::Open);
+        let until = state.circuit_open_until.load(Ordering::Relaxed);
+        let expected = now_secs() + CIRCUIT_BREAKER_EXTENDED_COOLDOWN_SECS;
+        assert!(until >= expected - 1);
+
+        // 6. Extended cooldown expires → half-open again
+        state
+            .circuit_open_until
+            .store(now_secs() - 1, Ordering::Relaxed);
+
+        // 7. New probe allowed
+        assert!(check_circuit(&state).is_ok());
+
+        // 8. Probe succeeds → circuit closes
+        record_success(&state, api);
+        assert_eq!(circuit_state(&state), CircuitState::Closed);
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn failure_count_preserved_across_open_half_open_cycle() {
+        let state = new_closed_state();
+        let api = "https://api.example.com";
+
+        // Open circuit
+        for _ in 0..CIRCUIT_BREAKER_THRESHOLD {
+            record_failure(&state, api);
+        }
+        let count_at_open = state.consecutive_failures.load(Ordering::Relaxed);
+        assert_eq!(count_at_open, CIRCUIT_BREAKER_THRESHOLD as u32);
+
+        // Enter half-open and record intermediate failure
+        state
+            .circuit_open_until
+            .store(now_secs() - 1, Ordering::Relaxed);
+        assert!(check_circuit(&state).is_ok());
+        record_failure(&state, api);
+        // Count should have incremented
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            count_at_open + 1
+        );
+
+        // Probe fails
+        record_probe_failure(&state, api);
+
+        // Enter half-open again, probe succeeds
+        state
+            .circuit_open_until
+            .store(now_secs() - 1, Ordering::Relaxed);
+        assert!(check_circuit(&state).is_ok());
+        record_success(&state, api);
+
+        // Count reset on success
+        assert_eq!(
+            state.consecutive_failures.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn intermediate_probe_failures_do_not_reopen_circuit() {
+        let state = new_open_state(now_secs() - 1);
+        let api = "https://api.example.com";
+
+        // Claim probe
+        assert!(check_circuit(&state).is_ok());
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
+
+        // Multiple intermediate failures (simulating retries)
+        record_failure(&state, api);
+        record_failure(&state, api);
+        record_failure(&state, api);
+
+        // Still half-open — record_failure doesn't re-open
+        assert_eq!(circuit_state(&state), CircuitState::HalfOpen);
     }
 }
