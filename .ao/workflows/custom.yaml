@@ -305,9 +305,9 @@ agents:
       - Use `--admin` flag on merge to bypass branch protection if needed.
       - Process up to 10 PRs per run.
       - Conflicting PRs get enqueued with workflow_ref="rebase-and-retry", not closed.
-    model: minimax/MiniMax-M2.7
+    model: kimi-code/kimi-for-coding
     tool: oai-runner
-    mcp_servers: ["ao"]
+    mcp_servers: ["ao", "github"]
 
   po-reviewer:
     system_prompt: |
