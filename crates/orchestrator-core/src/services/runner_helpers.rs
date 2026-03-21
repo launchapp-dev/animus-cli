@@ -452,7 +452,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
     Err(anyhow!("agent-runner failed health check after start (pid {spawned_pid})"))
 }
 
-pub(super) async fn stop_agent_runner_process(project_root: &Path) -> Result<bool> {
+pub async fn stop_agent_runner_process(project_root: &Path) -> Result<bool> {
     let config_dir = runner_config_dir(project_root);
     stop_agent_runner_process_at_config_dir(&config_dir).await
 }

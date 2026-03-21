@@ -53,6 +53,7 @@ mod workflow_impl;
 
 pub use phase_execution::{PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict};
 use planning_utils::*;
+pub use runner_helpers::stop_agent_runner_process;
 use runner_helpers::*;
 pub use schedule_state::{load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState};
 use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
