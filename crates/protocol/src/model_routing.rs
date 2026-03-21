@@ -22,6 +22,37 @@ impl McpRuntimeConfig {
     }
 }
 
+/// Returns the price per million tokens (input, output) in USD for the given model,
+/// or `None` if no pricing data is available.
+pub fn model_price_per_million_tokens(model_id: &str) -> Option<(f64, f64)> {
+    let normalized = canonical_model_id(model_id);
+    match normalized.to_ascii_lowercase().as_str() {
+        "claude-opus-4-6" | "claude-opus-4-5" | "claude-opus-4-1" => Some((15.0, 75.0)),
+        "claude-sonnet-4-6" | "claude-sonnet-4-5" => Some((3.0, 15.0)),
+        "gemini-3-pro" | "gemini-3.1-pro-preview" => Some((1.25, 10.0)),
+        "gemini-2.5-pro" => Some((1.25, 10.0)),
+        "gemini-2.5-flash" => Some((0.075, 0.30)),
+        "minimax/minimax-m2.7" => Some((0.30, 1.10)),
+        "minimax/minimax-m2.1" => Some((0.20, 0.80)),
+        "zai-coding-plan/glm-5" => Some((0.14, 0.14)),
+        _ => None,
+    }
+}
+
+/// Estimates the USD cost for a single API call given token counts.
+/// Returns `None` if no pricing data is available for the model.
+pub fn model_cost_usd(model_id: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+    let (input_price, output_price) = model_price_per_million_tokens(model_id)?;
+    Some(input_tokens as f64 / 1_000_000.0 * input_price + output_tokens as f64 / 1_000_000.0 * output_price)
+}
+
+/// Returns `true` if the estimated cost for a run exceeds the given budget threshold.
+pub fn exceeds_budget(model_id: &str, total_input_tokens: u64, total_output_tokens: u64, budget_usd: f64) -> bool {
+    model_cost_usd(model_id, total_input_tokens, total_output_tokens)
+        .map(|cost| cost > budget_usd)
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PhaseRoutingConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,6 +81,10 @@ pub struct PhaseRoutingConfig {
     pub complexity: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_phase: HashMap<String, PhaseOverride>,
+    /// Optional maximum spend in USD for a single phase run. When set, model selection
+    /// prefers cheaper models whose estimated cost fits within the budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -280,6 +315,19 @@ impl PhaseCapabilities {
     pub fn is_strictly_read_only(&self) -> bool {
         !self.writes_files && !self.mutates_state
     }
+}
+
+/// Given a list of candidate models in preference order and an optional USD budget,
+/// returns the first candidate whose estimated cost for a nominal 100K-token run fits within
+/// the budget. Falls back to the first candidate if no pricing data is available or no budget
+/// is set.
+pub fn select_model_within_budget<'a>(candidates: &[&'a str], budget_usd: Option<f64>) -> Option<&'a str> {
+    let Some(budget) = budget_usd else {
+        return candidates.first().copied();
+    };
+    candidates.iter().copied().find(|model| {
+        model_cost_usd(model, 50_000, 50_000).map(|cost| cost <= budget).unwrap_or(true)
+    })
 }
 
 pub fn default_primary_model_for_phase(
@@ -531,5 +579,63 @@ mod tests {
             let twice = normalize_tool_id(&once);
             prop_assert_eq!(once, twice);
         }
+    }
+
+    #[test]
+    fn pricing_table_returns_prices_for_known_models() {
+        let (input, output) = model_price_per_million_tokens("claude-sonnet-4-6").unwrap();
+        assert!((input - 3.0).abs() < f64::EPSILON);
+        assert!((output - 15.0).abs() < f64::EPSILON);
+
+        let (input, output) = model_price_per_million_tokens("claude-opus-4-6").unwrap();
+        assert!((input - 15.0).abs() < f64::EPSILON);
+        assert!((output - 75.0).abs() < f64::EPSILON);
+
+        assert!(model_price_per_million_tokens("minimax/MiniMax-M2.7").is_some());
+        assert!(model_price_per_million_tokens("gemini-2.5-pro").is_some());
+    }
+
+    #[test]
+    fn pricing_table_returns_none_for_unknown_model() {
+        assert!(model_price_per_million_tokens("unknown-model-xyz").is_none());
+        assert!(model_price_per_million_tokens("gpt-5.3-codex").is_none());
+    }
+
+    #[test]
+    fn model_cost_usd_calculates_correctly() {
+        let cost = model_cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000).unwrap();
+        assert!((cost - 18.0).abs() < 0.01);
+
+        let cost = model_cost_usd("claude-sonnet-4-6", 0, 0).unwrap();
+        assert!(cost.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn model_cost_usd_returns_none_for_unknown_model() {
+        assert!(model_cost_usd("gpt-5.3-codex", 1000, 1000).is_none());
+    }
+
+    #[test]
+    fn select_model_within_budget_returns_first_when_no_budget() {
+        let candidates = ["claude-opus-4-6", "claude-sonnet-4-6", "minimax/MiniMax-M2.7"];
+        assert_eq!(select_model_within_budget(&candidates, None), Some("claude-opus-4-6"));
+    }
+
+    #[test]
+    fn select_model_within_budget_skips_expensive_models() {
+        let candidates = ["claude-opus-4-6", "claude-sonnet-4-6", "minimax/MiniMax-M2.7"];
+        let tight_budget = Some(0.10);
+        let selected = select_model_within_budget(&candidates, tight_budget).unwrap();
+        assert_ne!(selected, "claude-opus-4-6");
+        assert_ne!(selected, "claude-sonnet-4-6");
+        assert_eq!(selected, "minimax/MiniMax-M2.7");
+    }
+
+    #[test]
+    fn select_model_within_budget_falls_through_to_no_price_models() {
+        let candidates = ["gpt-5.3-codex", "unknown-model"];
+        let any_budget = Some(0.001);
+        let selected = select_model_within_budget(&candidates, any_budget).unwrap();
+        assert_eq!(selected, "gpt-5.3-codex");
     }
 }

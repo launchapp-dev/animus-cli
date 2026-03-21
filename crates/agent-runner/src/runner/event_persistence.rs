@@ -2,18 +2,21 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use protocol::{AgentRunEvent, OutputStreamType, RunId};
+use protocol::{AgentRunEvent, CompletionInfo, OutputStreamType, RunId};
 use serde_json::Value;
 
 pub(super) struct RunEventPersistence {
     run_dir: Option<PathBuf>,
+    total_input_tokens: u64,
+    total_output_tokens: u64,
+    total_cost_usd: f64,
 }
 
 impl RunEventPersistence {
     pub(super) fn new(context: &Value, run_id: &RunId) -> Self {
         let run_dir =
             context.get("project_root").and_then(Value::as_str).and_then(|root| build_run_dir(root, &run_id.0));
-        Self { run_dir }
+        Self { run_dir, total_input_tokens: 0, total_output_tokens: 0, total_cost_usd: 0.0 }
     }
 
     pub(super) fn persist(&mut self, event: &AgentRunEvent) -> Result<()> {
@@ -25,8 +28,34 @@ impl RunEventPersistence {
         let line = serde_json::to_string(event)?;
         append_line(&event_path, &line)?;
 
-        if let AgentRunEvent::OutputChunk { stream_type, text, .. } = event {
-            persist_json_output(run_dir, *stream_type, text)?;
+        match event {
+            AgentRunEvent::OutputChunk { stream_type, text, .. } => {
+                persist_json_output(run_dir, *stream_type, text)?;
+            }
+            AgentRunEvent::Metadata { tokens, cost, .. } => {
+                if let Some(t) = tokens {
+                    self.total_input_tokens += t.input as u64;
+                    self.total_output_tokens += t.output as u64;
+                }
+                if let Some(c) = cost {
+                    self.total_cost_usd += c;
+                }
+            }
+            AgentRunEvent::Finished { exit_code, duration_ms, .. } => {
+                let total_tokens = self.total_input_tokens + self.total_output_tokens;
+                let info = CompletionInfo {
+                    exit_code: *exit_code,
+                    duration_ms: *duration_ms,
+                    success: exit_code.unwrap_or(1) == 0,
+                    total_cost: if self.total_cost_usd > 0.0 { Some(self.total_cost_usd) } else { None },
+                    total_tokens: if total_tokens > 0 { Some(total_tokens) } else { None },
+                };
+                let completion_path = run_dir.join("completion_info.json");
+                if let Ok(json) = serde_json::to_string_pretty(&info) {
+                    let _ = std::fs::write(&completion_path, json);
+                }
+            }
+            _ => {}
         }
 
         Ok(())
