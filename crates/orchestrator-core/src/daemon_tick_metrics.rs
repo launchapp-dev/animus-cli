@@ -39,6 +39,14 @@ impl DaemonTickMetrics {
             workflows.iter().filter(|workflow| is_terminally_completed_workflow(workflow)).count();
         let workflows_failed = workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Failed).count();
 
+        metrics::gauge!("ao_tasks", "status" => "ready").set(tasks_ready as f64);
+        metrics::gauge!("ao_tasks", "status" => "in_progress").set(tasks_in_progress as f64);
+        metrics::gauge!("ao_tasks", "status" => "blocked").set(tasks_blocked as f64);
+        metrics::gauge!("ao_tasks", "status" => "done").set(tasks_done as f64);
+        metrics::gauge!("ao_workflows", "status" => "running").set(workflows_running as f64);
+        metrics::gauge!("ao_workflows", "status" => "completed").set(workflows_completed as f64);
+        metrics::gauge!("ao_workflows", "status" => "failed").set(workflows_failed as f64);
+
         Ok(Self {
             tasks_total,
             tasks_ready,

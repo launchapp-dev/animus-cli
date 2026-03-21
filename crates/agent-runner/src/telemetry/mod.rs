@@ -26,24 +26,31 @@ impl RunnerMetrics {
 
     pub fn record_start(&self) {
         self.runs_started.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!("ao_agent_runs_total", "outcome" => "started").increment(1);
     }
 
     pub fn record_completion(&self, duration_ms: u64) {
         self.runs_completed.fetch_add(1, Ordering::Relaxed);
         self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        metrics::counter!("ao_agent_runs_total", "outcome" => "completed").increment(1);
+        metrics::histogram!("ao_agent_run_duration_ms").record(duration_ms as f64);
     }
 
     pub fn record_failure(&self, duration_ms: u64) {
         self.runs_failed.fetch_add(1, Ordering::Relaxed);
         self.total_duration_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        metrics::counter!("ao_agent_runs_total", "outcome" => "failed").increment(1);
+        metrics::histogram!("ao_agent_run_duration_ms").record(duration_ms as f64);
     }
 
     pub fn record_timeout(&self) {
         self.runs_timed_out.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!("ao_agent_runs_total", "outcome" => "timed_out").increment(1);
     }
 
     pub fn record_cancellation(&self) {
         self.runs_cancelled.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!("ao_agent_runs_total", "outcome" => "cancelled").increment(1);
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {

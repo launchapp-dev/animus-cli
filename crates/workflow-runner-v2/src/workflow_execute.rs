@@ -288,6 +288,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                 }));
 
                 let total_duration = workflow_start.elapsed();
+                emit_workflow_completion_metrics(&workflow.id, &workflow.task_id, total_duration, workflow.status);
                 return Ok(WorkflowExecuteResult {
                     success: phase_status != "failed",
                     workflow_id: workflow.id.clone(),
@@ -315,6 +316,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                     "error": err.to_string(),
                 }));
                 let total_duration = workflow_start.elapsed();
+                emit_workflow_completion_metrics(&workflow.id, &workflow.task_id, total_duration, workflow.status);
                 return Ok(WorkflowExecuteResult {
                     success: false,
                     workflow_id: workflow.id.clone(),
@@ -513,6 +515,8 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
         }
     }
 
+    emit_workflow_completion_metrics(&workflow.id, &workflow.task_id, total_duration, reported_workflow_status);
+
     Ok(WorkflowExecuteResult {
         success: workflow_exit_success(reported_workflow_status),
         workflow_id: workflow.id.clone(),
@@ -635,6 +639,20 @@ fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn emit_workflow_completion_metrics(workflow_id: &str, task_id: &str, duration: Duration, status: WorkflowStatus) {
+    metrics::histogram!(
+        "ao_workflow_duration_seconds",
+        "workflow_id" => workflow_id.to_string(),
+        "task_id" => task_id.to_string(),
+    )
+    .record(duration.as_secs_f64());
+    metrics::counter!(
+        "ao_workflow_executions_total",
+        "status" => format!("{status:?}").to_ascii_lowercase(),
+    )
+    .increment(1);
 }
 
 fn is_terminal_workflow_status(status: WorkflowStatus) -> bool {

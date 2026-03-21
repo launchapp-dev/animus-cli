@@ -21,6 +21,7 @@ orchestrator-providers = { workspace = true }
 orchestrator-store = { workspace = true }
 orchestrator-config = { workspace = true }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
+metrics = { workspace = true }
 
 [features]
 jira = ["orchestrator-providers/jira"]

@@ -12,6 +12,10 @@ use tower::util::ServiceExt;
 
 use super::{build_router, AppState, HEADER_HAS_MORE, HEADER_NEXT_CURSOR, HEADER_PAGE_SIZE, HEADER_TOTAL_COUNT};
 
+fn test_metrics_handle() -> metrics_exporter_prometheus::PrometheusHandle {
+    metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder().handle()
+}
+
 fn build_test_app(hub: Arc<dyn ServiceHub>, api_only: bool, default_page_size: usize, max_page_size: usize) -> Router {
     let context = Arc::new(WebApiContext {
         hub,
@@ -19,7 +23,14 @@ fn build_test_app(hub: Arc<dyn ServiceHub>, api_only: bool, default_page_size: u
         app_version: "test-version".to_string(),
     });
     let api = orchestrator_web_api::WebApiService::new(context);
-    build_router(AppState { api, assets_dir: None, api_only, default_page_size, max_page_size })
+    build_router(AppState {
+        api,
+        assets_dir: None,
+        api_only,
+        default_page_size,
+        max_page_size,
+        metrics_handle: test_metrics_handle(),
+    })
 }
 
 async fn seed_tasks(hub: &Arc<dyn ServiceHub>, count: usize) {
@@ -714,7 +725,14 @@ async fn system_info_endpoint_returns_cli_envelope() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -740,7 +758,14 @@ async fn openapi_endpoint_returns_spec_json() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -770,7 +795,14 @@ async fn openapi_docs_endpoint_returns_html() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -799,7 +831,14 @@ async fn reviews_handoff_endpoint_returns_enveloped_response() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -840,7 +879,14 @@ async fn planning_mutation_endpoints_round_trip_successfully() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let vision_save_response = app
         .clone()
@@ -980,7 +1026,14 @@ async fn project_tasks_endpoint_returns_not_found_for_unknown_project() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -1006,7 +1059,14 @@ async fn project_workflows_endpoint_returns_not_found_for_unknown_project() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -1032,7 +1092,14 @@ async fn tasks_list_rejects_invalid_risk_filter() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(
@@ -1058,7 +1125,14 @@ async fn ui_deep_links_return_spa_html_when_ui_enabled() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: false, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: false,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let routes = [
         "/dashboard",
@@ -1105,7 +1179,14 @@ async fn api_only_mode_rejects_ui_deep_links() {
     });
     let api = orchestrator_web_api::WebApiService::new(context);
     let app =
-        build_router(AppState { api, assets_dir: None, api_only: true, default_page_size: 50, max_page_size: 200 });
+        build_router(AppState {
+            api,
+            assets_dir: None,
+            api_only: true,
+            default_page_size: 50,
+            max_page_size: 200,
+            metrics_handle: test_metrics_handle(),
+        });
 
     let response = app
         .oneshot(Request::builder().method("GET").uri("/events").body(Body::empty()).expect("request should be built"))

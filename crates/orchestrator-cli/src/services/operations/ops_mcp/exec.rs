@@ -11,6 +11,7 @@ impl AoMcpServer {
         requested_args: Vec<String>,
         project_root_override: Option<String>,
     ) -> Result<CallToolResult, McpError> {
+        metrics::counter!("ao_mcp_tool_calls_total", "tool" => tool_name.to_string()).increment(1);
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
                 if result.success {
@@ -21,13 +22,17 @@ impl AoMcpServer {
                         "result": data,
                     })))
                 } else {
+                    metrics::counter!("ao_mcp_tool_errors_total", "tool" => tool_name.to_string()).increment(1);
                     Ok(CallToolResult::structured_error(build_tool_error_payload(tool_name, &result)))
                 }
             }
-            Err(err) => Ok(CallToolResult::structured_error(json!({
-                "tool": tool_name,
-                "error": err.to_string(),
-            }))),
+            Err(err) => {
+                metrics::counter!("ao_mcp_tool_errors_total", "tool" => tool_name.to_string()).increment(1);
+                Ok(CallToolResult::structured_error(json!({
+                    "tool": tool_name,
+                    "error": err.to_string(),
+                })))
+            }
         }
     }
 

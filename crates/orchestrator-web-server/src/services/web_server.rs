@@ -41,6 +41,7 @@ struct AppState {
     api_only: bool,
     default_page_size: usize,
     max_page_size: usize,
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
 }
 
 pub struct WebServer {
@@ -54,12 +55,17 @@ impl WebServer {
     }
 
     pub async fn run(self) -> Result<()> {
+        let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .install_recorder()
+            .context("failed to install Prometheus metrics recorder")?;
+
         let state = AppState {
             api: self.api,
             assets_dir: self.config.assets_dir.map(PathBuf::from),
             api_only: self.config.api_only,
             default_page_size: self.config.default_page_size.max(1),
             max_page_size: self.config.max_page_size.max(self.config.default_page_size.max(1)),
+            metrics_handle,
         };
 
         let router = build_router(state);
@@ -141,7 +147,8 @@ fn build_router(state: AppState) -> Router {
         .route("/queue/stats", get(queue_stats_handler))
         .route("/queue/reorder", post(queue_reorder_handler))
         .route("/queue/hold/{id}", post(queue_hold_handler))
-        .route("/queue/release/{id}", post(queue_release_handler));
+        .route("/queue/release/{id}", post(queue_release_handler))
+        .route("/metrics", get(prometheus_metrics_handler));
 
     let gql_schema = graphql::build_schema(state.api.clone());
 
@@ -167,6 +174,16 @@ fn build_router(state: AppState) -> Router {
                 .max_age(Duration::from_secs(3600)),
         )
         .with_state(state)
+}
+
+async fn prometheus_metrics_handler(State(state): State<AppState>) -> Response {
+    let body = state.metrics_handle.render();
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn system_info_handler(State(state): State<AppState>) -> Response {
