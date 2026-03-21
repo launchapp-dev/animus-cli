@@ -10,6 +10,64 @@ use super::types::*;
 use super::yaml_scaffold::title_case_phase_id;
 use super::yaml_types::*;
 
+/// Resolve an agent's `models:` name list against the model registry,
+/// expanding named references into concrete `model` + `fallback_models` and
+/// `tool` + `fallback_tools` values.
+///
+/// When `models` is non-empty:
+/// - `models[0]` becomes the primary `model` (and optionally `tool`).
+/// - `models[1..]` become `fallback_models` (and optionally `fallback_tools`).
+///
+/// When `models` is empty, existing `model`/`fallback_models` are left intact.
+pub fn resolve_agent_model_references(
+    profile: &mut crate::agent_runtime_config::AgentProfile,
+    registry: &BTreeMap<String, super::yaml_types::ModelRegistryEntry>,
+) {
+    if profile.models.is_empty() {
+        return;
+    }
+
+    let mut resolved_models: Vec<String> = Vec::with_capacity(profile.models.len());
+    let mut resolved_tools: Vec<Option<String>> = Vec::with_capacity(profile.models.len());
+
+    for name in &profile.models {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(entry) = registry.get(trimmed) {
+            let model = entry.model.trim().to_string();
+            let tool = entry.tool.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(ToOwned::to_owned);
+            resolved_models.push(model);
+            resolved_tools.push(tool);
+        } else {
+            // Treat bare strings that aren't in the registry as literal model IDs
+            resolved_models.push(trimmed.to_string());
+            resolved_tools.push(None);
+        }
+    }
+
+    if resolved_models.is_empty() {
+        return;
+    }
+
+    // Set primary model (and optional tool) from the first resolved entry
+    profile.model = Some(resolved_models.remove(0));
+    if let Some(tool) = resolved_tools.remove(0) {
+        profile.tool = Some(tool);
+    }
+
+    // Remaining resolved entries become fallbacks
+    if !resolved_models.is_empty() {
+        profile.fallback_models = resolved_models;
+        // Build fallback_tools: use explicit tool if provided, else empty (auto-derived at runtime)
+        profile.fallback_tools = resolved_tools.into_iter().flatten().collect();
+    }
+
+    // Clear the name list after expansion to avoid double-expansion
+    profile.models.clear();
+}
+
 pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
     match value.to_ascii_lowercase().replace('-', "_").as_str() {
         "project_root" => Ok(CommandCwdMode::ProjectRoot),
@@ -207,6 +265,7 @@ pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
             .map(|(id, definition)| (id.clone(), phase_execution_definition_to_yaml(definition)))
             .collect(),
         agents: config.agent_profiles.clone(),
+        models: BTreeMap::new(),
         tools_allowlist: config.tools_allowlist.clone(),
         mcp_servers: config.mcp_servers.clone(),
         phase_mcp_bindings: config.phase_mcp_bindings.clone(),
@@ -311,6 +370,14 @@ pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfi
         phase_catalog.entry(id).or_insert(ui_def);
     }
 
+    // Resolve agent model references against the top-level models registry.
+    let mut agent_profiles = yaml_file.agents;
+    if !yaml_file.models.is_empty() {
+        for profile in agent_profiles.values_mut() {
+            resolve_agent_model_references(profile, &yaml_file.models);
+        }
+    }
+
     Ok(WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: WORKFLOW_CONFIG_VERSION,
@@ -319,7 +386,7 @@ pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfi
         workflows: if workflows.is_empty() { base.workflows.clone() } else { workflows },
         checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
         phase_definitions,
-        agent_profiles: yaml_file.agents,
+        agent_profiles,
         tools_allowlist: yaml_file.tools_allowlist,
         mcp_servers: yaml_file.mcp_servers,
         phase_mcp_bindings: yaml_file.phase_mcp_bindings,
@@ -337,4 +404,300 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
         config.default_workflow_ref = base.default_workflow_ref;
     }
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_runtime_config::AgentProfile;
+
+    fn make_test_registry() -> BTreeMap<String, super::super::yaml_types::ModelRegistryEntry> {
+        let mut registry = BTreeMap::new();
+        registry.insert(
+            "claude-opus".to_string(),
+            super::super::yaml_types::ModelRegistryEntry {
+                model: "claude-sonnet-4-20250514".to_string(),
+                tool: Some("claude".to_string()),
+            },
+        );
+        registry.insert(
+            "gpt4o".to_string(),
+            super::super::yaml_types::ModelRegistryEntry {
+                model: "gpt-4o".to_string(),
+                tool: Some("oai-runner".to_string()),
+            },
+        );
+        registry.insert(
+            "o4-mini".to_string(),
+            super::super::yaml_types::ModelRegistryEntry { model: "o4-mini".to_string(), tool: None },
+        );
+        registry
+    }
+
+    fn make_empty_profile() -> AgentProfile {
+        AgentProfile {
+            description: "test".to_string(),
+            system_prompt: "test prompt".to_string(),
+            role: None,
+            mcp_servers: vec![],
+            tool_policy: Default::default(),
+            skills: vec![],
+            capabilities: BTreeMap::new(),
+            mcp_server_configs: None,
+            structured_capabilities: None,
+            project_overrides: None,
+            models: vec![],
+            tool: None,
+            model: None,
+            fallback_models: vec![],
+            fallback_tools: vec![],
+            reasoning_effort: None,
+            web_search: None,
+            network_access: None,
+            timeout_secs: None,
+            max_attempts: None,
+            extra_args: vec![],
+            codex_config_overrides: vec![],
+            max_continuations: None,
+        }
+    }
+
+    #[test]
+    fn model_registry_resolves_primary_and_fallbacks() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.models = vec!["claude-opus".to_string(), "gpt4o".to_string()];
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(profile.tool.as_deref(), Some("claude"));
+        assert_eq!(profile.fallback_models, vec!["gpt-4o"]);
+        assert_eq!(profile.fallback_tools, vec!["oai-runner"]);
+        assert!(profile.models.is_empty(), "name list should be cleared after expansion");
+    }
+
+    #[test]
+    fn model_registry_resolves_single_entry_as_primary_only() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.models = vec!["o4-mini".to_string()];
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("o4-mini"));
+        assert!(profile.tool.is_none(), "no explicit tool in registry → no override");
+        assert!(profile.fallback_models.is_empty());
+        assert!(profile.fallback_tools.is_empty());
+    }
+
+    #[test]
+    fn model_registry_non_registry_name_treated_as_literal_model_id() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.models = vec!["claude-opus".to_string(), "deepseek-v3".to_string()];
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(profile.fallback_models, vec!["deepseek-v3"]);
+        // deepseek-v3 isn't in registry, so no explicit fallback_tool
+        assert!(profile.fallback_tools.is_empty());
+    }
+
+    #[test]
+    fn model_registry_empty_list_leaves_profile_unchanged() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.model = Some("existing-model".to_string());
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("existing-model"));
+        assert!(profile.fallback_models.is_empty());
+    }
+
+    #[test]
+    fn model_registry_preserves_existing_model_when_models_empty() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.model = Some("hardcoded-model".to_string());
+        profile.fallback_models = vec!["hardcoded-fallback".to_string()];
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("hardcoded-model"));
+        assert_eq!(profile.fallback_models, vec!["hardcoded-fallback"]);
+    }
+
+    #[test]
+    fn model_registry_skips_empty_name_entries() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.models = vec!["".to_string(), "claude-opus".to_string(), "  ".to_string()];
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert!(profile.fallback_models.is_empty());
+    }
+
+    #[test]
+    fn model_registry_tool_override_takes_precedence_over_profile_tool() {
+        let registry = make_test_registry();
+        let mut profile = make_empty_profile();
+        profile.models = vec!["claude-opus".to_string()];
+        profile.tool = Some("original-tool".to_string());
+
+        resolve_agent_model_references(&mut profile, &registry);
+
+        // Registry tool should override profile tool for primary model
+        assert_eq!(profile.tool.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn yaml_models_section_compiles_into_agent_profiles() {
+        let yaml = r#"
+models:
+  claude-opus:
+    model: claude-sonnet-4-20250514
+    tool: claude
+  gpt4o:
+    model: gpt-4o
+    tool: oai-runner
+
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+    models:
+      - claude-opus
+      - gpt4o
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(swe.tool.as_deref(), Some("claude"));
+        assert_eq!(swe.fallback_models, vec!["gpt-4o"]);
+        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn yaml_fallback_tools_field_parses_in_agent_profile() {
+        let yaml = r#"
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+    model: claude-sonnet-4-20250514
+    fallback_models:
+      - gpt-4o
+      - o4-mini
+    fallback_tools:
+      - oai-runner
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(swe.fallback_models, vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn yaml_fallback_tools_in_phase_runtime() {
+        let yaml = r#"
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+    runtime:
+      model: claude-sonnet-4-20250514
+      fallback_models:
+        - gpt-4o
+        - o4-mini
+      fallback_tools:
+        - oai-runner
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let impl_phase = config.phase_definitions.get("impl").expect("impl phase should exist");
+        let runtime = impl_phase.runtime.as_ref().expect("runtime should exist");
+        assert_eq!(runtime.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(runtime.fallback_models, vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(runtime.fallback_tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn yaml_models_and_fallback_tools_combined() {
+        let yaml = r#"
+models:
+  primary:
+    model: claude-sonnet-4-20250514
+    tool: claude
+  secondary:
+    model: gpt-4o
+    tool: oai-runner
+  tertiary:
+    model: o4-mini
+
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+    models:
+      - primary
+      - secondary
+      - tertiary
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(swe.tool.as_deref(), Some("claude"));
+        assert_eq!(swe.fallback_models, vec!["gpt-4o", "o4-mini"]);
+        // Only secondary has explicit tool; tertiary has none → only "oai-runner" in fallback_tools
+        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn yaml_without_models_section_parses_without_error() {
+        let yaml = r#"
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
+        assert!(swe.model.is_none());
+        assert!(swe.fallback_models.is_empty());
+    }
 }

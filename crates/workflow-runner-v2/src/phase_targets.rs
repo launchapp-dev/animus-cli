@@ -35,11 +35,18 @@ impl PhaseTargetPlanner {
         enforce_write_capable_phase_target(tool_id, model_id, caps.writes_files, routing)
     }
 
+    /// Build an ordered list of (tool, model) execution targets for a phase.
+    ///
+    /// The list starts with the primary target and appends fallback targets.
+    /// When `fallback_tools` provides explicit tool overrides for specific
+    /// fallback model indices, those are used instead of auto-deriving the
+    /// tool from the model ID.
     pub fn build_phase_execution_targets(
         phase_id: &str,
         model_override: Option<&str>,
         tool_override: Option<&str>,
         configured_fallback_models: &[String],
+        configured_fallback_tools: &[String],
         complexity: Option<ModelRoutingComplexity>,
         project_root: Option<&str>,
         caps: &PhaseCapabilities,
@@ -74,6 +81,7 @@ impl PhaseTargetPlanner {
 
         let mut targets = Vec::new();
         let mut seen_models = HashSet::new();
+        let mut configured_fallback_idx = 0usize;
         for candidate_model in candidate_models {
             let model_key = candidate_model.to_ascii_lowercase();
             if !seen_models.insert(model_key) {
@@ -89,12 +97,21 @@ impl PhaseTargetPlanner {
             let (tool_id, model_id) = if candidate_model.eq_ignore_ascii_case(&primary_model) {
                 (primary_tool.clone(), primary_model.clone())
             } else {
-                enforce_write_capable_phase_target(
-                    Self::tool_for_model_id(&candidate_model).to_string(),
-                    candidate_model,
-                    caps.writes_files,
-                    routing,
-                )
+                // Check if there's an explicit fallback_tool for this configured fallback model
+                let explicit_tool = if configured_fallback_idx < configured_fallback_tools.len() {
+                    let tool_str = configured_fallback_tools[configured_fallback_idx].trim();
+                    if !tool_str.is_empty() {
+                        Some(normalize_tool_id(tool_str).to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                configured_fallback_idx += 1;
+
+                let auto_tool = explicit_tool.unwrap_or_else(|| Self::tool_for_model_id(&candidate_model).to_string());
+                enforce_write_capable_phase_target(auto_tool, candidate_model, caps.writes_files, routing)
             };
             targets.push((tool_id, model_id));
         }

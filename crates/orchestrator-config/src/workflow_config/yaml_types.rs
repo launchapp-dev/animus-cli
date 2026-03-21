@@ -15,6 +15,18 @@ pub const STANDARD_WORKFLOW_TEMPLATE_FILE_NAME: &str = "standard-workflow.yaml";
 pub const HOTFIX_WORKFLOW_TEMPLATE_FILE_NAME: &str = "hotfix-workflow.yaml";
 pub const RESEARCH_WORKFLOW_TEMPLATE_FILE_NAME: &str = "research-workflow.yaml";
 
+/// A named model+tool entry in the top-level `models:` registry.
+/// Agents reference these by name in their `models:` list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelRegistryEntry {
+    /// The model identifier (e.g. "o4-mini", "claude-sonnet-4-20250514").
+    pub model: String,
+    /// Optional explicit tool override. When omitted, the tool is
+    /// auto-derived from the model ID via `tool_for_model_id()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct YamlPhaseRichConfig {
     #[serde(default = "default_max_rework_attempts")]
@@ -164,6 +176,10 @@ pub(super) struct YamlWorkflowFile {
     pub(super) phases: BTreeMap<String, YamlPhaseDefinition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) agents: BTreeMap<String, AgentProfile>,
+    /// Top-level model registry. Agents reference entries by name in their
+    /// `models:` list to build primary + fallback chains.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) models: BTreeMap<String, ModelRegistryEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) tools_allowlist: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

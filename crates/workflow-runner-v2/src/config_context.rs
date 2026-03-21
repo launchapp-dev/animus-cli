@@ -88,6 +88,10 @@ impl RuntimeConfigContext {
         self.agent_runtime_config.phase_fallback_models(phase_id)
     }
 
+    pub fn phase_fallback_tools(&self, phase_id: &str) -> Vec<String> {
+        self.agent_runtime_config.phase_fallback_tools(phase_id)
+    }
+
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
         self.phase_execution(phase_id).and_then(|def| def.command.as_ref())
     }

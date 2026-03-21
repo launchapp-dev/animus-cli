@@ -200,6 +200,11 @@ pub struct AgentRuntimeOverrides {
     pub model: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    /// Optional explicit tool overrides for each fallback model.
+    /// When non-empty, `fallback_tools[i]` is used for `fallback_models[i]`.
+    /// If shorter than `fallback_models`, missing entries are auto-derived.
+    #[serde(default)]
+    pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
     #[serde(default)]
@@ -316,12 +321,22 @@ pub struct AgentProfile {
     pub structured_capabilities: Option<AgentCapabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_overrides: Option<BTreeMap<String, AgentProjectOverrides>>,
+    /// Named model references from the top-level `models:` registry.
+    /// First entry is the primary model, remaining entries are fallbacks.
+    /// During compilation, these are expanded into `model` + `fallback_models`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    /// Optional explicit tool overrides for each fallback model.
+    /// When non-empty, `fallback_tools[i]` is used for `fallback_models[i]`.
+    /// If shorter than `fallback_models`, missing entries are auto-derived.
+    #[serde(default)]
+    pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
     #[serde(default)]
@@ -612,6 +627,30 @@ impl AgentRuntimeConfig {
             .unwrap_or_default()
     }
 
+    pub fn phase_fallback_tools(&self, phase_id: &str) -> Vec<String> {
+        if let Some(runtime_tools) = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| runtime.fallback_tools.clone())
+            .filter(|tools| !tools.is_empty())
+        {
+            return runtime_tools;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| {
+                profile
+                    .fallback_tools
+                    .iter()
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn phase_reasoning_effort(&self, phase_id: &str) -> Option<&str> {
         trim_nonempty(
             self.phase_execution(phase_id)
@@ -807,6 +846,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool: None,
                     model: None,
                     fallback_models: vec![],
+                    models: vec![],
+                    fallback_tools: vec![],
                     reasoning_effort: None,
                     web_search: None,
                     network_access: None,
@@ -838,6 +879,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool: None,
                     model: None,
                     fallback_models: vec![],
+                    models: vec![],
+                    fallback_tools: vec![],
                     reasoning_effort: None,
                     web_search: None,
                     network_access: None,
@@ -890,6 +933,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool: None,
                     model: None,
                     fallback_models: vec![],
+                    models: vec![],
+                    fallback_tools: vec![],
                     reasoning_effort: None,
                     web_search: None,
                     network_access: None,
@@ -944,6 +989,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool: None,
                     model: None,
                     fallback_models: vec![],
+                    models: vec![],
+                    fallback_tools: vec![],
                     reasoning_effort: None,
                     web_search: None,
                     network_access: None,
@@ -975,6 +1022,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     tool: None,
                     model: None,
                     fallback_models: vec![],
+                    models: vec![],
+                    fallback_tools: vec![],
                     reasoning_effort: None,
                     web_search: None,
                     network_access: None,
@@ -1364,6 +1413,12 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     }
     if !overlay.fallback_models.is_empty() {
         base.fallback_models = overlay.fallback_models.clone();
+    }
+    if !overlay.fallback_tools.is_empty() {
+        base.fallback_tools = overlay.fallback_tools.clone();
+    }
+    if !overlay.models.is_empty() {
+        base.models = overlay.models.clone();
     }
     if overlay.reasoning_effort.is_some() {
         base.reasoning_effort = overlay.reasoning_effort.clone();
@@ -3458,5 +3513,68 @@ phases:
         assert_eq!(tool.supports_long_context, Some(true));
         assert_eq!(tool.read_only_flag.as_deref(), Some("--read-only"));
         assert_eq!(tool.response_schema_flag.as_deref(), Some("--schema"));
+    }
+
+    #[test]
+    fn phase_fallback_tools_resolves_from_agent_profile() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.fallback_models = vec!["gpt-4o".to_string(), "o4-mini".to_string()];
+        profile.fallback_tools = vec!["oai-runner".to_string()];
+
+        let tools = config.phase_fallback_tools("implementation");
+        assert_eq!(tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn phase_fallback_tools_resolves_from_phase_runtime() {
+        let mut config = builtin_agent_runtime_config();
+        let phase = config.phases.get_mut("implementation").expect("implementation phase");
+        phase.runtime = Some(AgentRuntimeOverrides {
+            fallback_models: vec!["gpt-4o".to_string(), "o4-mini".to_string()],
+            fallback_tools: vec!["oai-runner".to_string(), "codex".to_string()],
+            ..AgentRuntimeOverrides::default()
+        });
+
+        let tools = config.phase_fallback_tools("implementation");
+        assert_eq!(tools, vec!["oai-runner", "codex"]);
+    }
+
+    #[test]
+    fn phase_fallback_tools_phase_runtime_takes_precedence_over_agent_profile() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.fallback_models = vec!["gpt-4o".to_string()];
+        profile.fallback_tools = vec!["claude".to_string()];
+        let phase = config.phases.get_mut("implementation").expect("implementation phase");
+        phase.runtime = Some(AgentRuntimeOverrides {
+            fallback_models: vec!["o4-mini".to_string()],
+            fallback_tools: vec!["codex".to_string()],
+            ..AgentRuntimeOverrides::default()
+        });
+
+        let tools = config.phase_fallback_tools("implementation");
+        assert_eq!(tools, vec!["codex"]);
+    }
+
+    #[test]
+    fn phase_fallback_tools_defaults_to_empty() {
+        let config = builtin_agent_runtime_config();
+        let tools = config.phase_fallback_tools("implementation");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn fallback_models_and_tools_roundtrip_through_json() {
+        let overrides = AgentRuntimeOverrides {
+            model: Some("claude-sonnet-4-20250514".to_string()),
+            fallback_models: vec!["gpt-4o".to_string(), "o4-mini".to_string()],
+            fallback_tools: vec!["oai-runner".to_string()],
+            ..AgentRuntimeOverrides::default()
+        };
+        let json = serde_json::to_string(&overrides).expect("serialize");
+        let restored: AgentRuntimeOverrides = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.fallback_models, vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(restored.fallback_tools, vec!["oai-runner"]);
     }
 }

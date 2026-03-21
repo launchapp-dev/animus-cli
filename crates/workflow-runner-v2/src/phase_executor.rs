@@ -823,16 +823,23 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
     let agent_model_override = ctx.phase_model_override(phase_id);
     let agent_tool_override = ctx.phase_tool_override(phase_id);
     let agent_fallback_models = ctx.phase_fallback_models(phase_id);
+    let agent_fallback_tools = ctx.phase_fallback_tools(phase_id);
     let configured_fallback_models = if agent_fallback_models.is_empty() {
         phase_runtime_settings.map(|settings| settings.fallback_models.clone()).unwrap_or_default()
     } else {
         agent_fallback_models
+    };
+    let configured_fallback_tools = if agent_fallback_tools.is_empty() {
+        phase_runtime_settings.map(|settings| settings.fallback_tools.clone()).unwrap_or_default()
+    } else {
+        agent_fallback_tools
     };
     let execution_targets = PhaseTargetPlanner::build_phase_execution_targets(
         phase_id,
         settings_model.or(agent_model_override.as_deref()),
         settings_tool.or(agent_tool_override.as_deref()),
         configured_fallback_models.as_slice(),
+        configured_fallback_tools.as_slice(),
         routing_complexity,
         Some(project_root),
         &planning_caps,
@@ -1348,6 +1355,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                     .or_else(|| merged_runtime.phase_model_override(phase_id))
                     .map(ToOwned::to_owned),
                 fallback_models: merged_runtime.phase_fallback_models(phase_id),
+                fallback_tools: merged_runtime.phase_fallback_tools(phase_id),
                 reasoning_effort: merged_runtime.phase_reasoning_effort(phase_id).map(ToOwned::to_owned),
                 web_search: merged_runtime.phase_web_search(phase_id),
                 network_access: merged_runtime.phase_network_access(phase_id),

@@ -9,6 +9,11 @@ pub struct WorkflowPhaseRuntimeSettings {
     pub model: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    /// Optional explicit tool overrides for each fallback model.
+    /// When non-empty, `fallback_tools[i]` is used for `fallback_models[i]`.
+    /// If shorter than `fallback_models`, missing entries are auto-derived.
+    #[serde(default)]
+    pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
     #[serde(default)]

@@ -366,9 +366,9 @@ fn discover_installed_pack_versions() -> Result<Vec<LoadedPackManifest>> {
     Ok(discovered)
 }
 
-fn group_installed_packs_by_id<'a>(
-    installed_versions: &'a [LoadedPackManifest],
-) -> Result<BTreeMap<String, Vec<&'a LoadedPackManifest>>> {
+fn group_installed_packs_by_id(
+    installed_versions: &[LoadedPackManifest],
+) -> Result<BTreeMap<String, Vec<&LoadedPackManifest>>> {
     let mut grouped = BTreeMap::<String, Vec<&LoadedPackManifest>>::new();
     for pack in installed_versions {
         grouped.entry(pack.manifest.id.to_ascii_lowercase()).or_default().push(pack);
@@ -389,9 +389,9 @@ fn group_installed_packs_by_id<'a>(
     Ok(grouped)
 }
 
-fn map_project_overrides_by_id<'a>(
-    project_overrides: &'a [LoadedPackManifest],
-) -> Result<BTreeMap<String, &'a LoadedPackManifest>> {
+fn map_project_overrides_by_id(
+    project_overrides: &[LoadedPackManifest],
+) -> Result<BTreeMap<String, &LoadedPackManifest>> {
     let mut mapped = BTreeMap::new();
     for pack in project_overrides {
         let key = pack.manifest.id.to_ascii_lowercase();
@@ -402,9 +402,9 @@ fn map_project_overrides_by_id<'a>(
     Ok(mapped)
 }
 
-fn map_bundled_packs_by_id<'a>(
-    bundled_packs: &'a [LoadedPackManifest],
-) -> Result<BTreeMap<String, &'a LoadedPackManifest>> {
+fn map_bundled_packs_by_id(
+    bundled_packs: &[LoadedPackManifest],
+) -> Result<BTreeMap<String, &LoadedPackManifest>> {
     let mut mapped = BTreeMap::new();
     for pack in bundled_packs {
         let key = pack.manifest.id.to_ascii_lowercase();
