@@ -16,6 +16,103 @@ pub struct ResolvedConfig {
     pub structured_output: StructuredOutputSupport,
 }
 
+struct ProviderEntry {
+    prefixes: &'static [&'static str],
+    keywords: &'static [&'static str],
+    all_keywords: bool,
+    api_base: &'static str,
+    structured_output: StructuredOutputSupport,
+}
+
+impl ProviderEntry {
+    fn matches(&self, normalized: &str) -> bool {
+        if self.prefixes.iter().any(|p| normalized.starts_with(p)) {
+            return true;
+        }
+        if self.keywords.is_empty() {
+            return false;
+        }
+        if self.all_keywords {
+            self.keywords.iter().all(|k| normalized.contains(k))
+        } else {
+            self.keywords.iter().any(|k| normalized.contains(k))
+        }
+    }
+}
+
+static PROVIDER_REGISTRY: &[ProviderEntry] = &[
+    ProviderEntry {
+        prefixes: &["minimax/"],
+        keywords: &["minimax"],
+        all_keywords: false,
+        api_base: "https://api.minimax.io/v1",
+        structured_output: StructuredOutputSupport::JsonObjectOnly,
+    },
+    ProviderEntry {
+        prefixes: &["zai", "glm"],
+        keywords: &["glm"],
+        all_keywords: false,
+        api_base: "https://api.z.ai/api/coding/paas/v4",
+        structured_output: StructuredOutputSupport::JsonObjectOnly,
+    },
+    ProviderEntry {
+        prefixes: &["deepseek/"],
+        keywords: &["deepseek"],
+        all_keywords: false,
+        api_base: "https://api.deepseek.com/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["openrouter/"],
+        keywords: &[],
+        all_keywords: false,
+        api_base: "https://openrouter.ai/api/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["kimi-code/"],
+        keywords: &["kimi", "code"],
+        all_keywords: true,
+        api_base: "https://api.kimi.com/coding/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["kimi/", "moonshot/"],
+        keywords: &["kimi"],
+        all_keywords: false,
+        api_base: "https://api.moonshot.ai/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["groq/"],
+        keywords: &["groq"],
+        all_keywords: false,
+        api_base: "https://api.groq.com/openai/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["together/"],
+        keywords: &["together"],
+        all_keywords: false,
+        api_base: "https://api.together.xyz/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["fireworks/"],
+        keywords: &["fireworks"],
+        all_keywords: false,
+        api_base: "https://api.fireworks.ai/inference/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+    ProviderEntry {
+        prefixes: &["mistral/"],
+        keywords: &["mistral"],
+        all_keywords: false,
+        api_base: "https://api.mistral.ai/v1",
+        structured_output: StructuredOutputSupport::JsonSchema,
+    },
+];
+
 pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<String>) -> Result<ResolvedConfig> {
     let normalized = model.to_ascii_lowercase();
 
@@ -36,50 +133,16 @@ pub fn resolve_config(model: &str, api_base: Option<String>, api_key: Option<Str
 }
 
 fn infer_structured_output_support(normalized_model: &str) -> StructuredOutputSupport {
-    if normalized_model.starts_with("zai") || normalized_model.starts_with("glm") || normalized_model.contains("glm") {
-        return StructuredOutputSupport::JsonObjectOnly;
-    }
-    if normalized_model.starts_with("minimax/") || normalized_model.contains("minimax") {
-        return StructuredOutputSupport::JsonObjectOnly;
-    }
-    StructuredOutputSupport::JsonSchema
+    PROVIDER_REGISTRY
+        .iter()
+        .find(|e| e.matches(normalized_model))
+        .map(|e| e.structured_output)
+        .unwrap_or(StructuredOutputSupport::JsonSchema)
 }
 
 fn infer_api_base(normalized_model: &str) -> Result<String> {
-    if normalized_model.starts_with("minimax/") || normalized_model.contains("minimax") {
-        return Ok("https://api.minimax.io/v1".to_string());
-    }
-    if normalized_model.starts_with("zai") || normalized_model.starts_with("glm") || normalized_model.contains("glm") {
-        return Ok("https://api.z.ai/api/coding/paas/v4".to_string());
-    }
-    if normalized_model.starts_with("deepseek/") || normalized_model.contains("deepseek") {
-        return Ok("https://api.deepseek.com/v1".to_string());
-    }
-    if normalized_model.starts_with("openrouter/") {
-        return Ok("https://openrouter.ai/api/v1".to_string());
-    }
-    if normalized_model.starts_with("kimi-code/")
-        || (normalized_model.contains("kimi") && normalized_model.contains("code"))
-    {
-        return Ok("https://api.kimi.com/coding/v1".to_string());
-    }
-    if normalized_model.starts_with("kimi/")
-        || normalized_model.starts_with("moonshot/")
-        || normalized_model.contains("kimi")
-    {
-        return Ok("https://api.moonshot.ai/v1".to_string());
-    }
-    if normalized_model.starts_with("groq/") || normalized_model.contains("groq") {
-        return Ok("https://api.groq.com/openai/v1".to_string());
-    }
-    if normalized_model.starts_with("together/") || normalized_model.contains("together") {
-        return Ok("https://api.together.xyz/v1".to_string());
-    }
-    if normalized_model.starts_with("fireworks/") || normalized_model.contains("fireworks") {
-        return Ok("https://api.fireworks.ai/inference/v1".to_string());
-    }
-    if normalized_model.starts_with("mistral/") || normalized_model.contains("mistral") {
-        return Ok("https://api.mistral.ai/v1".to_string());
+    if let Some(entry) = PROVIDER_REGISTRY.iter().find(|e| e.matches(normalized_model)) {
+        return Ok(entry.api_base.to_string());
     }
     if let Ok(base) = std::env::var("OPENAI_API_BASE") {
         return Ok(base);
@@ -246,5 +309,57 @@ mod tests {
         assert_eq!(config.api_base, "https://custom.api.com");
         assert_eq!(config.api_key, "sk-test-key");
         assert_eq!(config.model_id, "MiniMax-M2.1");
+    }
+
+    #[test]
+    fn structured_output_minimax_is_json_object_only() {
+        assert_eq!(
+            infer_structured_output_support("minimax/minimax-m2.1"),
+            StructuredOutputSupport::JsonObjectOnly
+        );
+    }
+
+    #[test]
+    fn structured_output_glm_is_json_object_only() {
+        assert_eq!(
+            infer_structured_output_support("zai-coding-plan/glm-5"),
+            StructuredOutputSupport::JsonObjectOnly
+        );
+        assert_eq!(
+            infer_structured_output_support("glm-4-flash"),
+            StructuredOutputSupport::JsonObjectOnly
+        );
+    }
+
+    #[test]
+    fn structured_output_openai_model_is_json_schema() {
+        assert_eq!(
+            infer_structured_output_support("gpt-4o"),
+            StructuredOutputSupport::JsonSchema
+        );
+    }
+
+    #[test]
+    fn structured_output_deepseek_is_json_schema() {
+        assert_eq!(
+            infer_structured_output_support("deepseek/deepseek-chat"),
+            StructuredOutputSupport::JsonSchema
+        );
+    }
+
+    #[test]
+    fn structured_output_kimi_code_is_json_schema() {
+        assert_eq!(
+            infer_structured_output_support("kimi-code/kimi-k2"),
+            StructuredOutputSupport::JsonSchema
+        );
+    }
+
+    #[test]
+    fn registry_api_base_matches_structured_output_for_same_provider() {
+        let api_base = infer_api_base("minimax/minimax-m2.1").unwrap();
+        let so = infer_structured_output_support("minimax/minimax-m2.1");
+        assert_eq!(api_base, "https://api.minimax.io/v1");
+        assert_eq!(so, StructuredOutputSupport::JsonObjectOnly);
     }
 }
