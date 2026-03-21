@@ -16,15 +16,9 @@ pub struct MarketplaceEntry {
     pub last_synced: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MarketplaceState {
     pub registries: Vec<MarketplaceEntry>,
-}
-
-impl Default for MarketplaceState {
-    fn default() -> Self {
-        Self { registries: Vec::new() }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,7 +124,7 @@ pub fn sync_registry(id: &str, url: &str) -> Result<()> {
 
     let mut state = load_marketplace_state()?;
     let now = chrono_timestamp();
-    for entry in state.registries.iter_mut() {
+    for entry in &mut state.registries {
         if entry.id == id {
             entry.last_synced = Some(now.clone());
         }

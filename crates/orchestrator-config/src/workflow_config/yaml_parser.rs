@@ -373,7 +373,7 @@ pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfi
     // Resolve agent model references against the top-level models registry.
     let mut agent_profiles = yaml_file.agents;
     if !yaml_file.models.is_empty() {
-        for (_agent_id, profile) in &mut agent_profiles {
+        for profile in agent_profiles.values_mut() {
             resolve_agent_model_references(profile, &yaml_file.models);
         }
     }
