@@ -19,7 +19,7 @@ use orchestrator_core::{
     register_workflow_runner_pid,
     services::ServiceHub,
     unregister_workflow_runner_pid, FileServiceHub, OrchestratorTask, OrchestratorWorkflow, PhaseDecisionVerdict,
-    SubjectRef, WorkflowEvent, WorkflowRunInput, WorkflowStatus, SUBJECT_KIND_CUSTOM,
+    SubjectRef, WorkflowDecisionAction, WorkflowEvent, WorkflowRunInput, WorkflowStatus, SUBJECT_KIND_CUSTOM,
 };
 
 use crate::ensure_execution_cwd::ensure_execution_cwd;
@@ -162,6 +162,8 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             })?
         }
     };
+    // Seed rework context from existing workflow's decision history for workflow continuation
+    let workflow_id = params.workflow_id.clone();
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(&params.project_root, &workflow.id)
         .context("failed to register active workflow execution")?;
     let mut subject_context = resolve_execution_subject_context(
@@ -217,7 +219,16 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
     ensure_workflow_pack_execution_requirements(&pack_registry, &workflow_config, &workflow_ref)?;
     let phase_inputs = workflow_phase_inputs(&workflow);
     let workflow_vars = workflow.vars.clone();
-    let mut rework_context: Option<String> = None;
+    // Initialize rework_context: seed from existing workflow's decision history for continuation,
+    // or start fresh for new workflows
+    let mut rework_context: Option<String> = workflow_id
+        .as_ref()
+        .and_then(|_| {
+            workflow
+                .current_phase
+                .as_deref()
+                .and_then(|phase_id| seed_rework_context_from_workflow(&workflow, phase_id))
+        });
     let mut results = Vec::new();
     let workflow_start = Instant::now();
 
@@ -624,6 +635,41 @@ async fn project_requirement_success_status(
     };
 
     project_requirement_workflow_status(hub, id, workflow_ref).await
+}
+
+/// Extracts rework context from an existing workflow's decision history for the current phase.
+/// This enables continuation attempts to receive rework guidance from previous attempts.
+fn seed_rework_context_from_workflow(workflow: &OrchestratorWorkflow, phase_id: &str) -> Option<String> {
+    // Find the most recent Rework decision for this phase in reverse order (most recent first)
+    let record = workflow.decision_history.iter().rev().find(|record| {
+        record.decision == WorkflowDecisionAction::Rework
+            && (record.target_phase.as_deref() == Some(phase_id)
+                || (record.target_phase.is_none() && record.phase_id == phase_id))
+    })?;
+
+    // Count total rework attempts for this phase to include in context
+    let rework_count = workflow
+        .decision_history
+        .iter()
+        .filter(|record| {
+            record.decision == WorkflowDecisionAction::Rework
+                && (record.target_phase.as_deref() == Some(phase_id)
+                    || (record.target_phase.is_none() && record.phase_id == phase_id))
+        })
+        .count();
+
+    // Include attempt number for stagnation detection
+    let attempt_context = if rework_count > 1 {
+        format!(" (rework attempt {} of this phase)", rework_count)
+    } else {
+        String::new()
+    };
+
+    // Build structured context including attempt number for agent guidance
+    Some(format!(
+        "{}{}\nConfidence: {:.2}\nRisk: {:?}",
+        record.reason, attempt_context, record.confidence, record.risk
+    ))
 }
 
 fn phase_rework_context(outcome: &PhaseExecutionOutcome) -> Option<String> {
@@ -1585,6 +1631,258 @@ mod tests {
 
         let updated = hub.planning().get_requirement("REQ-201").await.expect("requirement should exist");
         assert_eq!(updated.status, RequirementStatus::InProgress);
+    }
+
+    #[test]
+    fn seed_rework_context_from_workflow_extracts_reason_from_decision_history() {
+        use orchestrator_core::{SubjectRef, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowStatus};
+
+        let now = Utc::now();
+        let workflow = OrchestratorWorkflow {
+            id: "wf-test".to_string(),
+            task_id: "TASK-1".to_string(),
+            workflow_ref: None,
+            subject: SubjectRef::task("TASK-1".to_string()),
+            input: None,
+            vars: Default::default(),
+            status: WorkflowStatus::Running,
+            current_phase_index: 1,
+            phases: vec![
+                WorkflowPhaseExecution {
+                    phase_id: "requirements".to_string(),
+                    status: WorkflowPhaseStatus::Success,
+                    started_at: None,
+                    completed_at: None,
+                    attempt: 1,
+                    error_message: None,
+                },
+                WorkflowPhaseExecution {
+                    phase_id: "implementation".to_string(),
+                    status: WorkflowPhaseStatus::Running,
+                    started_at: None,
+                    completed_at: None,
+                    attempt: 2,
+                    error_message: None,
+                },
+            ],
+            machine_state: WorkflowMachineState::RunPhase,
+            current_phase: Some("implementation".to_string()),
+            started_at: now,
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+            rework_counts: Default::default(),
+            total_reworks: 1,
+            decision_history: vec![
+                WorkflowDecisionRecord {
+                    timestamp: now,
+                    phase_id: "implementation".to_string(),
+                    source: WorkflowDecisionSource::Llm,
+                    decision: orchestrator_core::WorkflowDecisionAction::Rework,
+                    target_phase: None,
+                    reason: "Fix the incomplete implementation".to_string(),
+                    confidence: 0.85,
+                    risk: WorkflowDecisionRisk::Medium,
+                    guardrail_violations: vec![],
+                    machine_version: None,
+                    machine_hash: None,
+                    machine_source: None,
+                },
+            ],
+        };
+
+        let context = seed_rework_context_from_workflow(&workflow, "implementation");
+        assert!(context.is_some());
+        let context = context.unwrap();
+        assert!(context.contains("Fix the incomplete implementation"));
+        assert!(context.contains("Confidence: 0.85"));
+        assert!(context.contains("Medium"));
+        // First rework attempt, so no attempt count suffix
+        assert!(!context.contains("rework attempt"));
+    }
+
+    #[test]
+    fn seed_rework_context_from_workflow_includes_attempt_count_for_stagnation() {
+        use orchestrator_core::{SubjectRef, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowStatus};
+
+        let now = Utc::now();
+        let workflow = OrchestratorWorkflow {
+            id: "wf-test".to_string(),
+            task_id: "TASK-1".to_string(),
+            workflow_ref: None,
+            subject: SubjectRef::task("TASK-1".to_string()),
+            input: None,
+            vars: Default::default(),
+            status: WorkflowStatus::Running,
+            current_phase_index: 1,
+            phases: vec![
+                WorkflowPhaseExecution {
+                    phase_id: "implementation".to_string(),
+                    status: WorkflowPhaseStatus::Running,
+                    started_at: None,
+                    completed_at: None,
+                    attempt: 3,
+                    error_message: None,
+                },
+            ],
+            machine_state: WorkflowMachineState::RunPhase,
+            current_phase: Some("implementation".to_string()),
+            started_at: now,
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+            rework_counts: Default::default(),
+            total_reworks: 2,
+            decision_history: vec![
+                WorkflowDecisionRecord {
+                    timestamp: now,
+                    phase_id: "implementation".to_string(),
+                    source: WorkflowDecisionSource::Llm,
+                    decision: orchestrator_core::WorkflowDecisionAction::Rework,
+                    target_phase: None,
+                    reason: "Previous rework: fix type errors".to_string(),
+                    confidence: 0.7,
+                    risk: WorkflowDecisionRisk::Medium,
+                    guardrail_violations: vec![],
+                    machine_version: None,
+                    machine_hash: None,
+                    machine_source: None,
+                },
+                WorkflowDecisionRecord {
+                    timestamp: now,
+                    phase_id: "implementation".to_string(),
+                    source: WorkflowDecisionSource::Llm,
+                    decision: orchestrator_core::WorkflowDecisionAction::Rework,
+                    target_phase: None,
+                    reason: "Fix the incomplete implementation".to_string(),
+                    confidence: 0.75,
+                    risk: WorkflowDecisionRisk::Medium,
+                    guardrail_violations: vec![],
+                    machine_version: None,
+                    machine_hash: None,
+                    machine_source: None,
+                },
+            ],
+        };
+
+        let context = seed_rework_context_from_workflow(&workflow, "implementation");
+        assert!(context.is_some());
+        let context = context.unwrap();
+        // Should use the most recent rework decision (first in reversed order)
+        assert!(context.contains("Fix the incomplete implementation"));
+        // Should include attempt count for stagnation detection (2 reworks total)
+        assert!(context.contains("rework attempt 2"));
+    }
+
+    #[test]
+    fn seed_rework_context_from_workflow_returns_none_when_no_rework_decision() {
+        use orchestrator_core::{SubjectRef, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowStatus};
+
+        let now = Utc::now();
+        let workflow = OrchestratorWorkflow {
+            id: "wf-test".to_string(),
+            task_id: "TASK-1".to_string(),
+            workflow_ref: None,
+            subject: SubjectRef::task("TASK-1".to_string()),
+            input: None,
+            vars: Default::default(),
+            status: WorkflowStatus::Running,
+            current_phase_index: 1,
+            phases: vec![
+                WorkflowPhaseExecution {
+                    phase_id: "implementation".to_string(),
+                    status: WorkflowPhaseStatus::Running,
+                    started_at: None,
+                    completed_at: None,
+                    attempt: 1,
+                    error_message: None,
+                },
+            ],
+            machine_state: WorkflowMachineState::RunPhase,
+            current_phase: Some("implementation".to_string()),
+            started_at: now,
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+            rework_counts: Default::default(),
+            total_reworks: 0,
+            // No rework decisions, only advance
+            decision_history: vec![
+                WorkflowDecisionRecord {
+                    timestamp: now,
+                    phase_id: "implementation".to_string(),
+                    source: WorkflowDecisionSource::Llm,
+                    decision: orchestrator_core::WorkflowDecisionAction::Advance,
+                    target_phase: None,
+                    reason: "Implementation complete".to_string(),
+                    confidence: 0.9,
+                    risk: WorkflowDecisionRisk::Low,
+                    guardrail_violations: vec![],
+                    machine_version: None,
+                    machine_hash: None,
+                    machine_source: None,
+                },
+            ],
+        };
+
+        let context = seed_rework_context_from_workflow(&workflow, "implementation");
+        assert!(context.is_none());
+    }
+
+    #[test]
+    fn seed_rework_context_from_workflow_respects_target_phase() {
+        use orchestrator_core::{SubjectRef, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowDecisionRisk, WorkflowDecisionSource, WorkflowMachineState, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowStatus};
+
+        let now = Utc::now();
+        let workflow = OrchestratorWorkflow {
+            id: "wf-test".to_string(),
+            task_id: "TASK-1".to_string(),
+            workflow_ref: None,
+            subject: SubjectRef::task("TASK-1".to_string()),
+            input: None,
+            vars: Default::default(),
+            status: WorkflowStatus::Running,
+            current_phase_index: 1,
+            phases: vec![
+                WorkflowPhaseExecution {
+                    phase_id: "testing".to_string(),
+                    status: WorkflowPhaseStatus::Running,
+                    started_at: None,
+                    completed_at: None,
+                    attempt: 1,
+                    error_message: None,
+                },
+            ],
+            machine_state: WorkflowMachineState::RunPhase,
+            current_phase: Some("testing".to_string()),
+            started_at: now,
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+            rework_counts: Default::default(),
+            total_reworks: 1,
+            decision_history: vec![
+                // Rework decision from a different phase with target_phase set
+                WorkflowDecisionRecord {
+                    timestamp: now,
+                    phase_id: "implementation".to_string(),
+                    source: WorkflowDecisionSource::Llm,
+                    decision: orchestrator_core::WorkflowDecisionAction::Rework,
+                    target_phase: Some("testing".to_string()),
+                    reason: "Need more tests for the feature".to_string(),
+                    confidence: 0.8,
+                    risk: WorkflowDecisionRisk::Low,
+                    guardrail_violations: vec![],
+                    machine_version: None,
+                    machine_hash: None,
+                    machine_source: None,
+                },
+            ],
+        };
+
+        let context = seed_rework_context_from_workflow(&workflow, "testing");
+        assert!(context.is_some());
+        assert!(context.unwrap().contains("Need more tests for the feature"));
     }
 }
 
