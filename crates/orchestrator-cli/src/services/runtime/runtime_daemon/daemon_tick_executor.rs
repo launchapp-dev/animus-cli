@@ -13,11 +13,13 @@ use orchestrator_daemon_runtime::{
 };
 use std::sync::Arc;
 
-pub(crate) struct CliProjectTickServices;
+pub(crate) struct CliProjectTickServices {
+    last_auto_rebalance: Option<std::time::Instant>,
+}
 
 impl CliProjectTickServices {
     fn new(_args: &DaemonRuntimeOptions) -> Self {
-        Self
+        Self { last_auto_rebalance: None }
     }
 }
 
@@ -88,6 +90,55 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             }
         }
         Ok(reconciled)
+    }
+
+    async fn auto_rebalance_priorities(&mut self, hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        const REBALANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_auto_rebalance {
+            if now.duration_since(last) < REBALANCE_INTERVAL {
+                return Ok(0);
+            }
+        }
+
+        let tasks = hub.tasks().list().await?;
+        let plan = orchestrator_core::plan_task_priority_rebalance(
+            &tasks,
+            orchestrator_core::TaskPriorityRebalanceOptions {
+                high_budget_percent: orchestrator_core::DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+                essential_task_ids: vec![],
+                nice_to_have_task_ids: vec![],
+            },
+        )?;
+
+        self.last_auto_rebalance = Some(now);
+
+        if plan.changes.is_empty() {
+            return Ok(0);
+        }
+
+        let tasks_by_id: std::collections::HashMap<String, orchestrator_core::OrchestratorTask> =
+            tasks.into_iter().map(|task| (task.id.clone(), task)).collect();
+
+        let mut changed = 0usize;
+        for change in &plan.changes {
+            if let Some(mut task) = tasks_by_id.get(change.task_id.as_str()).cloned() {
+                task.priority = change.to;
+                task.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
+                if hub.tasks().replace(task).await.is_ok() {
+                    changed += 1;
+                }
+            }
+        }
+
+        eprintln!(
+            "{}: auto-rebalanced priority for {} tasks (high budget: {}%, overflow was: {})",
+            protocol::ACTOR_DAEMON,
+            changed,
+            orchestrator_core::DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+            plan.before.high_budget_overflow,
+        );
+        Ok(changed)
     }
 
     async fn dispatch_ready_tasks(

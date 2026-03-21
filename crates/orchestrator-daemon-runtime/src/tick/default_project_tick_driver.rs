@@ -60,6 +60,10 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
+    async fn auto_rebalance_priorities(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -233,6 +237,11 @@ where
     async fn reconcile_stale_in_progress_tasks(&mut self, root: &str) -> Result<usize> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.reconcile_stale_in_progress_tasks(hub, root).await
+    }
+
+    async fn auto_rebalance_priorities(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.auto_rebalance_priorities(hub, root).await
     }
 
     async fn dispatch_ready_tasks(&mut self, root: &str, limit: usize) -> Result<DispatchWorkflowStartSummary> {

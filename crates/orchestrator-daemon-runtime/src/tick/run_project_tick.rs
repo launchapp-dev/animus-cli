@@ -53,6 +53,7 @@ where
     if args.reconcile_stale {
         hooks.reconcile_stale_in_progress_tasks(root).await?;
     }
+    hooks.auto_rebalance_priorities(root).await.unwrap_or(0);
     let mut execution_outcome = ProjectTickExecutionOutcome {
         reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
         reconciled_runner_blocked_tasks,
