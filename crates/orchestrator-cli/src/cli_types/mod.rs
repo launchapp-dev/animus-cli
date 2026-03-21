@@ -193,6 +193,27 @@ mod tests {
     }
 
     #[test]
+    fn queue_enqueue_help_includes_examples_for_all_dispatch_types() {
+        let error = Cli::try_parse_from(["ao", "queue", "enqueue", "--help"])
+            .expect_err("help output should short-circuit parsing");
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        assert!(help.contains("Enqueue a subject dispatch for a task, requirement, or custom title."));
+        assert!(help.contains("ao queue enqueue --task-id TASK-001"));
+        assert!(help.contains("ao queue enqueue --requirement-id REQ-042"));
+        assert!(help.contains("ao queue enqueue --title \"Investigate flaky test\""));
+    }
+
+    #[test]
+    fn queue_enqueue_help_shows_example_ids_in_flag_descriptions() {
+        let error = Cli::try_parse_from(["ao", "queue", "enqueue", "--help"])
+            .expect_err("help output should short-circuit parsing");
+        let help = error.to_string();
+        assert!(help.contains("TASK-001"));
+        assert!(help.contains("REQ-042"));
+    }
+
+    #[test]
     fn parses_queue_reorder_subject_ids() {
         let cli = Cli::try_parse_from(["ao", "queue", "reorder", "--subject-id", "TASK-2", "--subject-id", "TASK-1"])
             .expect("queue reorder command should parse");

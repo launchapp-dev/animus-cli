@@ -8,7 +8,12 @@ pub(crate) enum QueueCommand {
     List,
     /// Show queue statistics.
     Stats,
-    /// Enqueue a task-backed subject dispatch.
+    /// Enqueue a subject dispatch for a task, requirement, or custom title.
+    ///
+    /// Examples:
+    ///   ao queue enqueue --task-id TASK-001
+    ///   ao queue enqueue --requirement-id REQ-042 --workflow-ref ops
+    ///   ao queue enqueue --title "Investigate flaky test" --description "Suite fails intermittently on CI"
     Enqueue(QueueEnqueueArgs),
     /// Hold a queued subject.
     Hold(QueueSubjectArgs),
@@ -26,21 +31,21 @@ pub(crate) struct QueueEnqueueArgs {
         long,
         value_name = "TASK_ID",
         group = "subject",
-        help = "Task subject to enqueue (mutually exclusive with --requirement-id / --title)."
+        help = "Task subject to enqueue (e.g. TASK-001). Mutually exclusive with --requirement-id / --title."
     )]
     pub(crate) task_id: Option<String>,
     #[arg(
         long,
         value_name = "REQ_ID",
         group = "subject",
-        help = "Requirement subject to enqueue (mutually exclusive with --task-id / --title)."
+        help = "Requirement subject to enqueue (e.g. REQ-042). Mutually exclusive with --task-id / --title."
     )]
     pub(crate) requirement_id: Option<String>,
     #[arg(
         long,
         value_name = "TITLE",
         group = "subject",
-        help = "Custom subject title (mutually exclusive with --task-id / --requirement-id)."
+        help = "Custom subject title for ad-hoc dispatches. Mutually exclusive with --task-id / --requirement-id."
     )]
     pub(crate) title: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom subject description (used with --title).")]
