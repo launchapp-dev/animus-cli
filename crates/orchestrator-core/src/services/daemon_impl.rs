@@ -66,7 +66,9 @@ impl DaemonServiceApi for InMemoryServiceHub {
         let pool_size = config.pool_size;
         let mut lock = self.state.write().await;
         lock.daemon_status = DaemonStatus::Running;
-        lock.daemon_pool_size = pool_size;
+        if let Some(ps) = pool_size {
+            lock.daemon_pool_size = Some(ps);
+        }
         lock.logs.push(LogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
@@ -171,7 +173,9 @@ impl DaemonServiceApi for FileServiceHub {
 
         mutate_daemon_state(self, |state| {
             state.daemon_status = DaemonStatus::Running;
-            state.daemon_pool_size = pool_size;
+            if let Some(ps) = pool_size {
+                state.daemon_pool_size = Some(ps);
+            }
             state.runner_pid = runner_pid;
             state.logs.push(LogEntry {
                 timestamp: Utc::now(),
