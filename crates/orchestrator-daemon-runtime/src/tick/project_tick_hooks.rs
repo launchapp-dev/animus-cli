@@ -9,7 +9,17 @@ use crate::{
 
 #[async_trait::async_trait(?Send)]
 pub trait ProjectTickHooks {
-    fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>);
+    /// Process due cron schedules, dispatching up to `schedule_headroom`
+    /// additional workflow-runner processes.  When `schedule_headroom` is
+    /// `Some(0)` the implementation must skip all dispatches.
+    fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>, schedule_headroom: Option<usize>);
+
+    /// Return the current number of active workflow-runner child processes.
+    /// Used to recompute headroom after schedule dispatches.
+    fn active_process_count(&mut self) -> usize {
+        let _ = self;
+        0
+    }
 
     async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot>;
 

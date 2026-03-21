@@ -11,9 +11,9 @@ pub use daemon::{
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan, build_runner_command,
     build_runner_command_from_dispatch, execute_dispatch_plan_via_runner, is_terminally_completed_workflow,
-    ready_dispatch_limit, ready_dispatch_limit_for_options, workflow_current_phase_id, CompletedProcess,
-    CompletionReconciliationPlan, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource, DispatchWorkflowStart,
-    DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
+    ready_dispatch_limit, ready_dispatch_limit_for_options, schedule_headroom, workflow_current_phase_id,
+    CompletedProcess, CompletionReconciliationPlan, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource,
+    DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
 };
 pub use protocol::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
 pub use queue::{
