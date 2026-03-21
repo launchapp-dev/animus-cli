@@ -732,7 +732,6 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             "testing".to_string().into(),
             "qa-signoff".to_string().into(),
         ],
-        post_success: None,
         variables: Vec::new(),
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("workflow config should be written");
@@ -865,7 +864,6 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
             "testing".to_string().into(),
             "implementation".to_string().into(),
         ],
-        post_success: None,
         variables: Vec::new(),
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");

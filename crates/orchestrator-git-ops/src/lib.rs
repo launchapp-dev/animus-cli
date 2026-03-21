@@ -103,17 +103,8 @@ mod tests {
         assert!(status.success(), "git command failed for operation '{operation}': git {}", args.join(" "));
     }
 
-    fn prune_config(enabled: bool) -> PostSuccessGitConfig {
-        PostSuccessGitConfig {
-            auto_merge_enabled: false,
-            auto_pr_enabled: false,
-            auto_commit_before_merge: false,
-            auto_merge_target_branch: "main".to_string(),
-            auto_merge_no_ff: true,
-            auto_push_remote: "origin".to_string(),
-            auto_cleanup_worktree_enabled: true,
-            auto_prune_worktrees_after_merge: enabled,
-        }
+    fn prune_config(enabled: bool) -> WorktreePruneConfig {
+        WorktreePruneConfig { auto_prune_worktrees_after_merge: enabled }
     }
 
     async fn create_task_with_worktree(

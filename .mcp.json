@@ -2,16 +2,12 @@
   "mcpServers": {
     "ao": {
       "args": [
-        "run",
-        "--manifest-path",
-        "/Users/samishukri/ao-cli/crates/orchestrator-cli/Cargo.toml",
-        "--",
         "--project-root",
         "/Users/samishukri/ao-cli",
         "mcp",
         "serve"
       ],
-      "command": "cargo"
+      "command": "/Users/samishukri/ao-cli/target/release/ao"
     }
   }
 }

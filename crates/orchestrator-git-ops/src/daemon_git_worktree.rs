@@ -96,7 +96,7 @@ pub(crate) fn infer_task_id_from_worktree(branch: Option<&str>, worktree_name: &
 pub async fn auto_prune_completed_task_worktrees_after_merge(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
-    cfg: &PostSuccessGitConfig,
+    cfg: &WorktreePruneConfig,
 ) -> Result<()> {
     if !cfg.auto_prune_worktrees_after_merge {
         return Ok(());
@@ -206,41 +206,6 @@ pub async fn auto_prune_completed_task_worktrees_after_merge(
         updated_tasks.insert(task.id);
     }
 
-    Ok(())
-}
-
-pub async fn cleanup_task_worktree_if_enabled(
-    hub: Arc<dyn ServiceHub>,
-    project_root: &str,
-    task: &orchestrator_core::OrchestratorTask,
-    cfg: &PostSuccessGitConfig,
-) -> Result<()> {
-    if !cfg.auto_cleanup_worktree_enabled {
-        return Ok(());
-    }
-
-    let Some(worktree_path_raw) = task.worktree_path.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let worktree_path = PathBuf::from(worktree_path_raw);
-    let worktree_path_str = worktree_path.to_string_lossy().to_string();
-
-    let remove_status = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["worktree", "remove", "--force", worktree_path_str.as_str()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to remove task worktree")?;
-    if !remove_status.success() && worktree_path.exists() {
-        fs::remove_dir_all(&worktree_path)?;
-    }
-
-    let mut updated = task.clone();
-    updated.worktree_path = None;
-    updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
-    hub.tasks().replace(updated).await?;
     Ok(())
 }
 

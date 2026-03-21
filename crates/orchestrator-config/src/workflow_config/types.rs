@@ -340,10 +340,6 @@ pub struct TaskIntegrationConfig {
 pub struct GitIntegrationConfig {
     pub provider: String,
     #[serde(default)]
-    pub auto_pr: bool,
-    #[serde(default)]
-    pub auto_merge: bool,
-    #[serde(default)]
     pub base_branch: Option<String>,
     #[serde(default)]
     pub config: BTreeMap<String, Value>,
@@ -376,10 +372,6 @@ pub(crate) fn default_schedule_enabled() -> bool {
     true
 }
 
-pub(crate) fn default_target_branch() -> String {
-    "main".to_string()
-}
-
 pub(crate) fn default_visible() -> bool {
     true
 }
@@ -400,10 +392,6 @@ pub(crate) fn phase_ui_definition(label: &str, description: &str, category: &str
     }
 }
 
-pub(crate) fn merge_strategy_is_valid(strategy: &MergeStrategy) -> bool {
-    matches!(strategy, MergeStrategy::Squash | MergeStrategy::Merge | MergeStrategy::Rebase)
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     #[serde(default)]
@@ -418,10 +406,6 @@ pub struct DaemonConfig {
     pub max_task_retries: Option<u32>,
     #[serde(default)]
     pub retry_cooldown_secs: Option<u64>,
-    #[serde(default)]
-    pub auto_merge: Option<bool>,
-    #[serde(default)]
-    pub auto_pr: Option<bool>,
     #[serde(default)]
     pub auto_commit_before_merge: Option<bool>,
     #[serde(default)]

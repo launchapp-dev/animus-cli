@@ -191,21 +191,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             }
         }
 
-        if let Some(post_success) = &workflow.post_success {
-            if let Some(merge) = &post_success.merge {
-                if merge.target_branch.trim().is_empty() {
-                    errors.push(format!(
-                        "workflow '{}' post_success.merge.target_branch must not be empty",
-                        workflow_ref
-                    ));
-                }
-
-                if !merge_strategy_is_valid(&merge.strategy) {
-                    errors.push(format!("workflow '{}' post_success.merge.strategy is not supported", workflow_ref));
-                }
-            }
-        }
-
         match expand_workflow_phases(&config.workflows, workflow_ref) {
             Ok(expanded) => {
                 if expanded.is_empty() {

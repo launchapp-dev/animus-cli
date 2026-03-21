@@ -444,7 +444,6 @@ impl WebApiService {
             name,
             description: description.unwrap_or_default(),
             phases,
-            post_success: None,
             variables,
         };
 
@@ -603,7 +602,6 @@ mod tests {
             name: "Requirement Task Generation".to_string(),
             description: "test workflow".to_string(),
             phases: vec!["requirements".to_string().into()],
-            post_success: None,
             variables: Vec::new(),
         });
         write_workflow_config(temp.path(), &workflow_config).expect("write config");

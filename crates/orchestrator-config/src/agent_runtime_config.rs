@@ -2060,7 +2060,6 @@ cli_tools:
             name: "Project Override Check".to_string(),
             description: String::new(),
             phases: vec!["pack-review".to_string().into()],
-            post_success: None,
             variables: Vec::new(),
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
