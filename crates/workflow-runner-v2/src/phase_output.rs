@@ -1,5 +1,7 @@
+use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::phase_executor::PhaseExecutionOutcome;
@@ -24,6 +26,15 @@ pub struct PersistedPhaseOutput {
     pub guardrail_violations: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_schema_fingerprint: Option<String>,
+}
+
+fn compute_payload_fingerprint(payload: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(payload).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn scoped_state_base(project_root: &str) -> PathBuf {
@@ -63,6 +74,7 @@ pub fn persist_phase_output(
         }
     };
 
+    let payload_schema_fingerprint = payload.as_ref().map(compute_payload_fingerprint);
     let output = PersistedPhaseOutput {
         phase_id: phase_id.to_string(),
         completed_at: chrono::Utc::now().to_rfc3339(),
@@ -73,6 +85,7 @@ pub fn persist_phase_output(
         evidence,
         guardrail_violations,
         payload,
+        payload_schema_fingerprint,
     };
 
     let payload = serde_json::to_string_pretty(&output)?;
@@ -102,6 +115,19 @@ pub fn load_prior_phase_outputs(
         let file_path = dir.join(format!("{prior_phase_id}.json"));
         if let Ok(contents) = std::fs::read_to_string(&file_path) {
             if let Ok(output) = serde_json::from_str::<PersistedPhaseOutput>(&contents) {
+                if let (Some(payload), Some(stored_fingerprint)) =
+                    (&output.payload, &output.payload_schema_fingerprint)
+                {
+                    let actual_fingerprint = compute_payload_fingerprint(payload);
+                    if actual_fingerprint != *stored_fingerprint {
+                        warn!(
+                            phase_id = %output.phase_id,
+                            stored_fingerprint = %stored_fingerprint,
+                            actual_fingerprint = %actual_fingerprint,
+                            "prior phase payload fingerprint mismatch — payload may be corrupted"
+                        );
+                    }
+                }
                 outputs.push(output);
             }
         }
@@ -153,6 +179,11 @@ pub fn format_prior_phase_outputs(outputs: &[PersistedPhaseOutput]) -> String {
     result.push_str(&sections.join("\n\n"));
 
     if result.len() > MAX_PRIOR_CONTEXT_CHARS {
+        warn!(
+            char_count = result.len(),
+            budget = MAX_PRIOR_CONTEXT_CHARS,
+            "prior phase context exceeds budget and will be truncated"
+        );
         let mut truncated = "## Prior Phase Results\n".to_string();
         let mut budget = MAX_PRIOR_CONTEXT_CHARS - truncated.len() - 30;
         for section in sections.iter().rev() {
@@ -205,6 +236,9 @@ pub(crate) fn build_workflow_pipeline_context(
             if let Some(output) = output_map.get(&phase.phase_id) {
                 if let Some(ref payload) = output.payload {
                     entry["output"] = payload.clone();
+                }
+                if let Some(ref fingerprint) = output.payload_schema_fingerprint {
+                    entry["payload_fingerprint"] = serde_json::Value::String(fingerprint.clone());
                 }
             }
             entry
@@ -353,6 +387,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 payload: None,
+                payload_schema_fingerprint: None,
             },
             PersistedPhaseOutput {
                 phase_id: "implementation".to_string(),
@@ -364,6 +399,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 payload: None,
+                payload_schema_fingerprint: None,
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
@@ -482,6 +518,7 @@ mod tests {
         assert_eq!(pipeline[0]["status"], "success");
         assert_eq!(pipeline[0]["attempt"], 1);
         assert_eq!(pipeline[0]["output"], serde_json::json!({"findings": ["pattern A"]}));
+        assert!(pipeline[0]["payload_fingerprint"].as_str().map(|s| s.len() == 64).unwrap_or(false));
         assert_eq!(pipeline[2]["phase_id"], "code-review");
         assert_eq!(pipeline[2]["status"], "running");
         assert_eq!(pipeline[2]["attempt"], 3);
@@ -512,6 +549,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 payload: None,
+                payload_schema_fingerprint: None,
             },
             PersistedPhaseOutput {
                 phase_id: "recent".to_string(),
@@ -523,6 +561,7 @@ mod tests {
                 evidence: vec![],
                 guardrail_violations: vec![],
                 payload: None,
+                payload_schema_fingerprint: None,
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
