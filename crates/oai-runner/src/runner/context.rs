@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::api::types::ChatMessage;
 
 static TOKENIZER: std::sync::OnceLock<tiktoken_rs::CoreBPE> = std::sync::OnceLock::new();
@@ -155,6 +157,85 @@ pub fn truncate_to_fit(messages: &mut Vec<ChatMessage>, context_limit: usize, re
             );
         }
     }
+}
+
+pub fn sanitize_tool_call_pairs(messages: &mut Vec<ChatMessage>) -> usize {
+    let mut repaired = 0;
+
+    let mut expected_tool_ids: HashMap<String, usize> = HashMap::new();
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "assistant" {
+            if let Some(tcs) = &msg.tool_calls {
+                for tc in tcs {
+                    expected_tool_ids.insert(tc.id.clone(), i);
+                }
+            }
+        }
+    }
+
+    let mut present_tool_ids: HashSet<String> = HashSet::new();
+    let mut orphaned_indices: Vec<usize> = Vec::new();
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "tool" {
+            if let Some(tc_id) = &msg.tool_call_id {
+                if expected_tool_ids.contains_key(tc_id) {
+                    present_tool_ids.insert(tc_id.clone());
+                } else {
+                    orphaned_indices.push(i);
+                }
+            } else {
+                orphaned_indices.push(i);
+            }
+        }
+    }
+
+    if !orphaned_indices.is_empty() {
+        repaired += orphaned_indices.len();
+        eprintln!(
+            "[oai-runner] Sanitizer: removing {} orphaned tool messages (no matching assistant)",
+            orphaned_indices.len()
+        );
+        for idx in orphaned_indices.into_iter().rev() {
+            messages.remove(idx);
+        }
+    }
+
+    let mut synthetic: Vec<(usize, ChatMessage)> = Vec::new();
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "assistant" {
+            if let Some(tcs) = &msg.tool_calls {
+                for tc in tcs {
+                    if !present_tool_ids.contains(&tc.id) {
+                        let insert_pos = messages[i + 1..]
+                            .iter()
+                            .position(|m| m.role != "tool")
+                            .map_or(messages.len(), |p| i + 1 + p);
+                        synthetic.push((
+                            insert_pos,
+                            ChatMessage {
+                                reasoning_content: None,
+                                role: "tool".to_string(),
+                                content: Some("[result unavailable — session was interrupted]".to_string()),
+                                tool_calls: None,
+                                tool_call_id: Some(tc.id.clone()),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if !synthetic.is_empty() {
+        repaired += synthetic.len();
+        eprintln!("[oai-runner] Sanitizer: injecting {} synthetic tool results for interrupted calls", synthetic.len());
+        for (pos, msg) in synthetic.into_iter().rev() {
+            let clamped = pos.min(messages.len());
+            messages.insert(clamped, msg);
+        }
+    }
+
+    repaired
 }
 
 #[cfg(test)]
@@ -330,5 +411,70 @@ mod tests {
         assert_eq!(groups[0], vec![1]);
         assert_eq!(groups[1], vec![2, 3, 4]);
         assert_eq!(groups[2], vec![5]);
+    }
+
+    #[test]
+    fn sanitize_removes_orphaned_tool_messages() {
+        let mut messages = vec![
+            msg("system", "sys"),
+            tool_response("c_orphan", "dangling result"),
+            msg("user", "q1"),
+            assistant_with_tool_calls(&["c1"]),
+            tool_response("c1", "r1"),
+        ];
+        let repaired = sanitize_tool_call_pairs(&mut messages);
+        assert_eq!(repaired, 1);
+        assert_eq!(messages.len(), 4);
+        assert!(
+            !messages.iter().any(|m| m.tool_call_id.as_deref() == Some("c_orphan")),
+            "orphaned tool message should be removed"
+        );
+    }
+
+    #[test]
+    fn sanitize_injects_missing_tool_results() {
+        let mut messages = vec![
+            msg("system", "sys"),
+            msg("user", "q1"),
+            assistant_with_tool_calls(&["c1", "c2", "c3"]),
+            tool_response("c1", "r1"),
+        ];
+        let repaired = sanitize_tool_call_pairs(&mut messages);
+        assert_eq!(repaired, 2);
+        let tool_ids: Vec<_> =
+            messages.iter().filter(|m| m.role == "tool").filter_map(|m| m.tool_call_id.as_deref()).collect();
+        assert!(tool_ids.contains(&"c1"));
+        assert!(tool_ids.contains(&"c2"));
+        assert!(tool_ids.contains(&"c3"));
+    }
+
+    #[test]
+    fn sanitize_handles_both_orphans_and_missing() {
+        let mut messages = vec![
+            msg("system", "sys"),
+            tool_response("c_gone", "orphan"),
+            msg("user", "q1"),
+            assistant_with_tool_calls(&["c1", "c2"]),
+            tool_response("c1", "r1"),
+            msg("user", "q2"),
+        ];
+        let repaired = sanitize_tool_call_pairs(&mut messages);
+        assert_eq!(repaired, 2);
+        assert!(!messages.iter().any(|m| m.tool_call_id.as_deref() == Some("c_gone")),);
+        assert!(messages.iter().any(|m| m.tool_call_id.as_deref() == Some("c2")),);
+    }
+
+    #[test]
+    fn sanitize_noop_on_valid_messages() {
+        let mut messages = vec![
+            msg("system", "sys"),
+            msg("user", "q1"),
+            assistant_with_tool_calls(&["c1"]),
+            tool_response("c1", "r1"),
+            msg("user", "q2"),
+        ];
+        let repaired = sanitize_tool_call_pairs(&mut messages);
+        assert_eq!(repaired, 0);
+        assert_eq!(messages.len(), 5);
     }
 }

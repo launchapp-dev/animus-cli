@@ -52,18 +52,9 @@ fn load_session_messages_from(base: &Path, session_id: &str) -> Vec<ChatMessage>
 
         if trim_end > trim_start && trim_end < messages.len() {
             if messages[trim_end].role == "tool" {
-                while trim_end > trim_start && messages[trim_end].role == "tool" {
+                while trim_end < messages.len() && messages[trim_end].role == "tool" {
                     trim_end += 1;
                 }
-            } else if messages[trim_end].role == "assistant"
-                && messages[trim_end].tool_calls.is_some()
-                && trim_end > trim_start
-            {
-                let mut j = trim_end - 1;
-                while j >= trim_start && messages[j].role == "tool" {
-                    j = j.saturating_sub(1);
-                }
-                trim_end = j + 1;
             }
         }
 
@@ -154,6 +145,7 @@ pub async fn run_agent_loop(
         if !prior.is_empty() {
             eprintln!("[oai-runner] Resuming session {} ({} prior messages)", sid, prior.len());
             messages.extend(prior);
+            context::sanitize_tool_call_pairs(&mut messages);
         }
     }
 
@@ -243,6 +235,7 @@ pub async fn run_agent_loop(
         }
 
         context::truncate_to_fit(&mut messages, context_limit, max_tokens);
+        context::sanitize_tool_call_pairs(&mut messages);
 
         let format = if has_final_message_tool {
             None // Don't send response_format when using final_message_json tool
@@ -388,9 +381,21 @@ pub async fn run_agent_loop(
             }
         }
 
-        for tc in tool_calls {
+        for (tc_idx, tc) in tool_calls.iter().enumerate() {
             if cancel_token.is_cancelled() {
-                eprintln!("[oai-runner] Cancelled between tool calls");
+                eprintln!(
+                    "[oai-runner] Cancelled between tool calls, synthesizing {} remaining results",
+                    tool_calls.len() - tc_idx
+                );
+                for remaining_tc in &tool_calls[tc_idx..] {
+                    messages.push(ChatMessage {
+                        reasoning_content: None,
+                        role: "tool".to_string(),
+                        content: Some("[result unavailable — session was interrupted]".to_string()),
+                        tool_calls: None,
+                        tool_call_id: Some(remaining_tc.id.clone()),
+                    });
+                }
                 break;
             }
 
@@ -948,7 +953,6 @@ mod tests {
         let base = dir.path();
         let sid = "test-session-boundary";
 
-        // Build exactly MAX_RESUME_MESSAGES messages
         let mut messages = Vec::new();
         for i in 0..MAX_RESUME_MESSAGES {
             messages.push(ChatMessage {
@@ -962,7 +966,68 @@ mod tests {
 
         save_session_messages_to(base, sid, &messages).unwrap();
         let loaded = load_session_messages_from(base, sid);
-        // Exactly at the boundary — no capping needed
         assert_eq!(loaded.len(), MAX_RESUME_MESSAGES);
+    }
+
+    #[test]
+    fn load_session_does_not_orphan_tool_messages_at_trim_boundary() {
+        use crate::api::types::{FunctionCall, ToolCall};
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let sid = "test-session-tool-boundary";
+
+        let mut messages = vec![ChatMessage {
+            reasoning_content: None,
+            role: "system".to_string(),
+            content: Some("sys".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        for i in 0..40 {
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "user".to_string(),
+                content: Some(format!("q{}", i)),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: format!("call_{}", i),
+                    type_: "function".to_string(),
+                    function: FunctionCall { name: "test".to_string(), arguments: "{}".to_string() },
+                }]),
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                reasoning_content: None,
+                role: "tool".to_string(),
+                content: Some(format!("r{}", i)),
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{}", i)),
+            });
+        }
+
+        save_session_messages_to(base, sid, &messages).unwrap();
+        let loaded = load_session_messages_from(base, sid);
+
+        for (i, m) in loaded.iter().enumerate() {
+            if m.role == "tool" {
+                let tc_id = m.tool_call_id.as_deref().unwrap();
+                assert!(
+                    loaded[..i].iter().any(|prev| {
+                        prev.role == "assistant"
+                            && prev.tool_calls.as_ref().is_some_and(|tcs| tcs.iter().any(|tc| tc.id == tc_id))
+                    }),
+                    "tool message '{}' at index {} has no matching assistant",
+                    tc_id,
+                    i
+                );
+            }
+        }
     }
 }
