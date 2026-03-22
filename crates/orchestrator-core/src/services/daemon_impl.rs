@@ -293,7 +293,7 @@ impl DaemonServiceApi for FileServiceHub {
     }
 
     async fn health(&self) -> Result<DaemonHealth> {
-        let status = self.status().await?;
+        let mut status = self.status().await?;
         let config_dir = runner_config_dir(&self.project_root);
         let runner_connected = is_agent_runner_ready(&config_dir).await;
         let persisted_process_count = self.state.read().await.active_process_count;
@@ -303,20 +303,37 @@ impl DaemonServiceApi for FileServiceHub {
             None => 0,
         };
         let lock = self.state.read().await;
+
+        // Read pool_size from pm-config as fallback when core-state has stale/missing value
+        let pm_config_path = crate::daemon_project_config_path(&self.project_root);
+        let daemon_dir = pm_config_path.parent().map(|p| p.to_path_buf());
+        let pool_size = lock
+            .daemon_pool_size
+            .or_else(|| crate::load_daemon_project_config(&self.project_root).ok().and_then(|c| c.pool_size));
+
+        // If core-state says stopped but daemon process is alive, report as running
+        let daemon_pid = daemon_dir.as_ref().and_then(|dir| {
+            std::fs::read_to_string(dir.join("daemon.pid")).ok().and_then(|s| s.trim().parse::<u32>().ok())
+        });
+        let process_alive = daemon_pid.map(protocol::is_process_alive);
+        if matches!(status, DaemonStatus::Stopped) && process_alive == Some(true) {
+            status = DaemonStatus::Running;
+        }
+
         let pool_utilization_percent =
-            lock.daemon_pool_size.map(|ps| if ps == 0 { 0.0 } else { (active_agents as f64 / ps as f64) * 100.0 });
+            pool_size.map(|ps| if ps == 0 { 0.0 } else { (active_agents as f64 / ps as f64) * 100.0 });
         let queued_tasks = lock.tasks.values().filter(|t| t.status == TaskStatus::Ready).count() as u32;
 
         Ok(DaemonHealth {
-            healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused) && runner_connected,
+            healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
             status,
             runner_connected,
             runner_pid: lock.runner_pid,
             active_agents,
-            pool_size: lock.daemon_pool_size,
+            pool_size,
             project_root: Some(self.project_root.display().to_string()),
-            daemon_pid: None,
-            process_alive: None,
+            daemon_pid,
+            process_alive,
             pool_utilization_percent,
             queued_tasks: Some(queued_tasks),
             total_agents_spawned: None,
