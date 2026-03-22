@@ -94,11 +94,11 @@ describe("web gui release workflow gates", () => {
     ).toBe(4);
     expect(countMatches(workflow, /archive_ext:\s*(tar\.gz|zip)/g)).toBe(4);
 
-    expect(workflow).toContain("BINARIES=(ao agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)");
+    expect(workflow).toContain("BINARIES=(ao agent-runner llm-cli-wrapper)");
     expect(workflow).toContain('"files": binaries');
     expect(workflow).toContain('json.dumps(metadata, indent=2, sort_keys=True) + "\\n"');
     expect(workflow).toContain('$BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }');
-    expect(workflow).toContain('$Binaries = @("ao", "agent-runner", "llm-cli-wrapper", "ao-oai-runner", "ao-workflow-runner")');
+    expect(workflow).toContain('$Binaries = @("ao", "agent-runner", "llm-cli-wrapper")');
     expect(workflow).toContain("dry_run_note");
     expect(workflow).toContain("event_name");
     expect(workflow).toContain("files = $BinaryFiles");
