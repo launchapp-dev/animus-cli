@@ -143,7 +143,10 @@
       "Bash(git tag:*)",
       "Bash(for d:*)",
       "Bash(npm run:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(cargo generate-lockfile:*)",
+      "Bash(cargo ao-fmt:*)",
+      "Bash(bash /Users/samishukri/.local/bin/ao-fleet-monitor.sh 2>&1)"
     ]
   },
   "enableAllProjectMcpServers": true,
