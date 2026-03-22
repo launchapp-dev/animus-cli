@@ -688,11 +688,13 @@ fn phase_session_resume_plan(
     continuation: usize,
     attempt: usize,
 ) -> orchestrator_core::runtime_contract::CliSessionResumePlan {
-    let reuses_existing_session = continuation > 0 || attempt > 1;
+    let reuses_existing_session = continuation > 0;
+    let effective_session_id =
+        if attempt > 1 { format!("{}-a{}", session_id, attempt) } else { session_id.to_string() };
     orchestrator_core::runtime_contract::CliSessionResumePlan {
         mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
         session_key: format!("wf:{workflow_id}:{phase_id}"),
-        session_id: Some(session_id.to_string()),
+        session_id: Some(effective_session_id),
         summary_seed: None,
         reused: reuses_existing_session,
         phase_thread_isolated: true,
@@ -1617,10 +1619,11 @@ mod tests {
     }
 
     #[test]
-    fn retry_attempt_reuses_the_existing_native_session() {
+    fn retry_attempt_gets_fresh_session_id() {
         let plan = phase_session_resume_plan("wf-1", "requirements", "session-123", 0, 2);
 
-        assert!(plan.reused);
+        assert!(!plan.reused);
+        assert_eq!(plan.session_id.as_deref(), Some("session-123-a2"));
     }
 
     #[test]

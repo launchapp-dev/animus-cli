@@ -64,8 +64,8 @@ agents:
       \ and the chosen workflow_ref.\nThen emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
       \ before dispatching \u2014 do NOT enqueue duplicates.\n- Be thorough in validation \u2014 search the actual code, not\
       \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
-    model: kimi-code/kimi-for-coding
-    tool: oai-runner
+    model: claude-haiku-4-5
+    tool: claude
     mcp_servers:
     - ao
     skills:
