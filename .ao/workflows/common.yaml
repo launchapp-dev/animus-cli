@@ -64,10 +64,12 @@ agents:
       \ and the chosen workflow_ref.\nThen emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
       \ before dispatching \u2014 do NOT enqueue duplicates.\n- Be thorough in validation \u2014 search the actual code, not\
       \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
-    model: claude-sonnet-4-6
-    tool: claude
+    model: kimi-code/kimi-for-coding
+    tool: oai-runner
     mcp_servers:
     - ao
+    skills:
+    - queue-management
   reconciler:
     system_prompt: "You are the AO task reconciler. Your job is to unblock the pipeline and clean up stale state. RESPECT\
       \ DEPENDENCY ORDER.\n\nOn each run you MUST do ALL of these:\n\n1. DETECT SKIPPED/CANCELLED WORKFLOWS:\n   Call ao.workflow.list\
