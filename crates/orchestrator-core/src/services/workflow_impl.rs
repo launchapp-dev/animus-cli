@@ -391,14 +391,13 @@ impl WorkflowServiceApi for FileServiceHub {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
-                Some(self.project_root.as_path()),
-                workflow.workflow_ref.as_deref(),
-            )?,
-            state_machines,
+        let phase_plan = crate::resolve_phase_plan_for_workflow_ref(
+            Some(self.project_root.as_path()),
+            workflow.workflow_ref.as_deref(),
         )
-        .cancel(&mut workflow);
+        .unwrap_or_default();
+        WorkflowLifecycleExecutor::with_state_machines(phase_plan, state_machines)
+            .cancel(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Cancel)?;
 
