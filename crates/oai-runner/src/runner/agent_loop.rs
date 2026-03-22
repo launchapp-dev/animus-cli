@@ -141,8 +141,11 @@ pub async fn run_agent_loop(
         }
     }
 
-    let needs_schema_in_prompt =
-        structured_output == Some(StructuredOutputSupport::JsonObjectOnly) && response_schema.is_some();
+    let has_final_message_tool = response_schema.is_some();
+
+    let needs_schema_in_prompt = structured_output == Some(StructuredOutputSupport::JsonObjectOnly)
+        && response_schema.is_some()
+        && !has_final_message_tool;
 
     if messages.is_empty() {
         let mut sys = system_prompt.to_string();
@@ -168,9 +171,37 @@ pub async fn run_agent_loop(
         tool_call_id: None,
     });
 
+    let mut tools_with_final: Vec<ToolDefinition> = tools.to_vec();
+    if has_final_message_tool {
+        let schema_desc = response_schema.and_then(|s| serde_json::to_string(s).ok()).unwrap_or_default();
+        tools_with_final.push(ToolDefinition {
+            type_: "function".to_string(),
+            function: FunctionSchema {
+                name: "final_message_json".to_string(),
+                description: format!(
+                    "Call this tool to submit your final structured JSON result when your task is complete. \
+                     The message MUST be valid JSON matching this schema: {}",
+                    schema_desc
+                ),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "Your final result as a JSON string matching the required schema."
+                        }
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false
+                }),
+            },
+        });
+    }
+    let effective_tools = if has_final_message_tool { &tools_with_final } else { tools };
+
     let needs_tool_name_sanitization = model.contains("kimi");
     let sanitized_tools: Vec<ToolDefinition> = if needs_tool_name_sanitization {
-        tools
+        effective_tools
             .iter()
             .map(|t| {
                 let mut t = t.clone();
@@ -179,9 +210,9 @@ pub async fn run_agent_loop(
             })
             .collect()
     } else {
-        tools.to_vec()
+        effective_tools.to_vec()
     };
-    let api_tools = if needs_tool_name_sanitization { &sanitized_tools } else { tools };
+    let api_tools = if needs_tool_name_sanitization { &sanitized_tools } else { effective_tools };
 
     for turn in 0..max_turns {
         if cancel_token.is_cancelled() {
@@ -197,12 +228,16 @@ pub async fn run_agent_loop(
 
         context::truncate_to_fit(&mut messages, context_limit, max_tokens);
 
-        let format = match structured_output {
-            Some(StructuredOutputSupport::JsonSchema) => response_schema.map(build_json_schema_format),
-            Some(StructuredOutputSupport::JsonObjectOnly) if response_schema.is_some() => {
-                Some(build_json_object_format())
+        let format = if has_final_message_tool {
+            None // Don't send response_format when using final_message_json tool
+        } else {
+            match structured_output {
+                Some(StructuredOutputSupport::JsonSchema) => response_schema.map(build_json_schema_format),
+                Some(StructuredOutputSupport::JsonObjectOnly) if response_schema.is_some() => {
+                    Some(build_json_object_format())
+                }
+                _ => None,
             }
-            _ => None,
         };
 
         let request = ChatRequest {
@@ -234,6 +269,21 @@ pub async fn run_agent_loop(
         }
 
         if !has_tool_calls {
+            // If final_message_json tool is available but model didn't call it, prompt to call it
+            if has_final_message_tool && turn < max_turns - 1 {
+                messages.push(ChatMessage {
+                    reasoning_content: None,
+                    role: "user".to_string(),
+                    content: Some(
+                        "You must call the final_message_json tool to submit your result. \
+                         Do not respond with plain text — call the final_message_json tool now."
+                            .to_string(),
+                    ),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+                continue;
+            }
             output.flush_result();
             let content = assistant_msg.content.as_deref().unwrap_or("");
             let mut schema_ok = true;
@@ -278,6 +328,31 @@ pub async fn run_agent_loop(
         }
 
         let tool_calls = assistant_msg.tool_calls.as_ref().unwrap();
+
+        // Check if any tool call is final_message_json — if so, emit and stop
+        if has_final_message_tool {
+            let final_tc = tool_calls.iter().find(|tc| {
+                let name = if needs_tool_name_sanitization {
+                    tc.function.name.replace('_', ".")
+                } else {
+                    tc.function.name.clone()
+                };
+                name == "final_message_json" || name == "final.message.json"
+            });
+            if let Some(tc) = final_tc {
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+                let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                output.text_chunk(message);
+                output.flush_result();
+                if let Some(sid) = session_id {
+                    let _ = save_session_messages_to(&config_dir(), sid, &messages);
+                }
+                output.emit_session_summary();
+                output.newline();
+                return Ok(());
+            }
+        }
 
         for tc in tool_calls {
             if cancel_token.is_cancelled() {

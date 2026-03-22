@@ -73,7 +73,7 @@ fn extract_phase_decision(payload: &Value, phase_id: &str) -> Option<orchestrato
 }
 
 fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core::PhaseDecision> {
-    let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
+    let kind = value.get("kind").and_then(Value::as_str).unwrap_or("phase_decision");
     if !kind.eq_ignore_ascii_case("phase_decision") {
         return None;
     }
@@ -199,6 +199,22 @@ mod tests {
         let text = r#"{"kind":"phase_decision","phase_id":"triage","verdict":"skip","confidence":0.8,"risk":"low","reason":"already done","evidence":[]}"#;
         let decision = parse_phase_decision_from_text(text, "triage").unwrap();
         assert_eq!(decision.verdict, orchestrator_core::PhaseDecisionVerdict::Skip);
+    }
+
+    #[test]
+    fn parse_phase_decision_without_kind() {
+        let text = r#"{"verdict":"advance","reason":"All tests pass","confidence":0.95}"#;
+        let decision = parse_phase_decision_from_text(text, "implementation").unwrap();
+        assert_eq!(decision.verdict, orchestrator_core::PhaseDecisionVerdict::Advance);
+        assert_eq!(decision.reason, "All tests pass");
+        assert!((decision.confidence - 0.95).abs() < f32::EPSILON);
+        assert_eq!(decision.kind, "phase_decision");
+    }
+
+    #[test]
+    fn parse_phase_decision_rejects_wrong_kind() {
+        let text = r#"{"kind":"something_else","verdict":"advance","reason":"test"}"#;
+        assert!(parse_phase_decision_from_text(text, "implementation").is_none());
     }
 
     #[test]
