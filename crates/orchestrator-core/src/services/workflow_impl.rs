@@ -396,8 +396,7 @@ impl WorkflowServiceApi for FileServiceHub {
             workflow.workflow_ref.as_deref(),
         )
         .unwrap_or_default();
-        WorkflowLifecycleExecutor::with_state_machines(phase_plan, state_machines)
-            .cancel(&mut workflow);
+        WorkflowLifecycleExecutor::with_state_machines(phase_plan, state_machines).cancel(&mut workflow);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Cancel)?;
 

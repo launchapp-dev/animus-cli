@@ -3,11 +3,11 @@
     "ao": {
       "args": [
         "--project-root",
-        "/Users/samishukri/brain/repos/ao-cli",
+        "/Users/samishukri/ao-cli",
         "mcp",
         "serve"
       ],
-      "command": "/Users/samishukri/brain/repos/ao-cli/target/debug/ao"
+      "command": "/Users/samishukri/.local/bin/ao"
     }
   }
 }
