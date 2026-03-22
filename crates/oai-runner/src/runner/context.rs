@@ -54,6 +54,172 @@ fn build_message_groups(messages: &[ChatMessage], start: usize) -> Vec<Vec<usize
     groups
 }
 
+pub fn needs_compaction(messages: &[ChatMessage], context_limit: usize, reserve_for_output: usize) -> bool {
+    let target = context_limit.saturating_sub(reserve_for_output);
+    let total = estimate_total_tokens(messages);
+    total > target * 3 / 4
+}
+
+pub fn build_compaction_prompt(messages: &[ChatMessage]) -> Option<(Vec<ChatMessage>, usize)> {
+    let system_idx = messages.iter().position(|m| m.role == "system");
+    let start = system_idx.map_or(0, |s| s + 1);
+
+    let remaining_users = messages[start..].iter().filter(|m| m.role == "user").count();
+    if remaining_users <= 3 || messages.len() - start <= 6 {
+        return None;
+    }
+
+    let compact_end = messages.len().saturating_sub(4);
+    if compact_end <= start {
+        return None;
+    }
+
+    let mut transcript = String::new();
+    for msg in &messages[start..compact_end] {
+        match msg.role.as_str() {
+            "user" => {
+                let content = msg.content.as_deref().unwrap_or("");
+                let truncated = if content.len() > 500 {
+                    format!("{}...", &content.chars().take(500).collect::<String>())
+                } else {
+                    content.to_string()
+                };
+                transcript.push_str(&format!("USER: {}\n", truncated));
+            }
+            "assistant" => {
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        transcript.push_str(&format!(
+                            "ASSISTANT called tool: {}({})\n",
+                            tc.function.name,
+                            if tc.function.arguments.len() > 200 {
+                                format!("{}...", &tc.function.arguments[..200])
+                            } else {
+                                tc.function.arguments.clone()
+                            }
+                        ));
+                    }
+                } else if let Some(content) = &msg.content {
+                    let truncated = if content.len() > 500 {
+                        format!("{}...", &content.chars().take(500).collect::<String>())
+                    } else {
+                        content.to_string()
+                    };
+                    transcript.push_str(&format!("ASSISTANT: {}\n", truncated));
+                }
+            }
+            "tool" => {
+                let content = msg.content.as_deref().unwrap_or("");
+                let truncated = if content.len() > 300 {
+                    format!("{}...[truncated]", &content.chars().take(300).collect::<String>())
+                } else {
+                    content.to_string()
+                };
+                transcript.push_str(&format!("TOOL RESULT: {}\n", truncated));
+            }
+            _ => {}
+        }
+    }
+
+    if transcript.is_empty() {
+        return None;
+    }
+
+    let compaction_messages = vec![
+        ChatMessage {
+            reasoning_content: None,
+            role: "system".to_string(),
+            content: Some(
+                "You are a conversation compactor. Summarize the conversation transcript below into a concise \
+                 summary that preserves: (1) what task is being worked on, (2) what files were read or modified \
+                 and their key content, (3) what tools were called and their important results, (4) what decisions \
+                 were made, (5) what remains to be done. Be specific about file paths, function names, and code \
+                 changes. Output ONLY the summary, no preamble."
+                    .to_string(),
+            ),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatMessage {
+            reasoning_content: None,
+            role: "user".to_string(),
+            content: Some(format!("Summarize this conversation:\n\n{}", transcript)),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ];
+
+    Some((compaction_messages, compact_end))
+}
+
+pub fn build_pre_compaction_transcript(messages: &[ChatMessage], compact_end: usize) -> String {
+    let system_idx = messages.iter().position(|m| m.role == "system");
+    let start = system_idx.map_or(0, |s| s + 1);
+    let mut transcript = String::new();
+    for msg in &messages[start..compact_end] {
+        match msg.role.as_str() {
+            "user" => {
+                transcript.push_str(&format!("USER: {}\n\n", msg.content.as_deref().unwrap_or("")));
+            }
+            "assistant" => {
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        transcript.push_str(&format!(
+                            "ASSISTANT tool_call: {}({})\n",
+                            tc.function.name, tc.function.arguments
+                        ));
+                    }
+                }
+                if let Some(content) = &msg.content {
+                    transcript.push_str(&format!("ASSISTANT: {}\n\n", content));
+                }
+            }
+            "tool" => {
+                let id = msg.tool_call_id.as_deref().unwrap_or("?");
+                transcript.push_str(&format!("TOOL[{}]: {}\n\n", id, msg.content.as_deref().unwrap_or("")));
+            }
+            _ => {}
+        }
+    }
+    transcript
+}
+
+pub fn apply_compaction(messages: &mut Vec<ChatMessage>, compact_end: usize, summary: &str) {
+    let system_idx = messages.iter().position(|m| m.role == "system");
+    let start = system_idx.map_or(0, |s| s + 1);
+
+    if compact_end <= start {
+        return;
+    }
+
+    let before_tokens = estimate_total_tokens(messages);
+
+    messages.drain(start..compact_end);
+
+    messages.insert(
+        start,
+        ChatMessage {
+            reasoning_content: None,
+            role: "user".to_string(),
+            content: Some(format!(
+                "[Conversation compacted — summary of prior work]\n\n{}\n\n\
+                 [End of summary — use the search_compaction_history tool to find details from before compaction]",
+                summary
+            )),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    );
+
+    let after_tokens = estimate_total_tokens(messages);
+    eprintln!(
+        "[oai-runner] Context compaction: {} -> {} tokens ({} messages remain)",
+        before_tokens,
+        after_tokens,
+        messages.len()
+    );
+}
+
 pub fn truncate_to_fit(messages: &mut Vec<ChatMessage>, context_limit: usize, reserve_for_output: usize) {
     let target = context_limit.saturating_sub(reserve_for_output);
     let total = estimate_total_tokens(messages);

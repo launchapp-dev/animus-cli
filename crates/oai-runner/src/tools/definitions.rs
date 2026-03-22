@@ -144,6 +144,45 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
+pub fn context_management_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            type_: "function".to_string(),
+            function: FunctionSchema {
+                name: "conversation_stats".to_string(),
+                description: "Get statistics about the current conversation context: token count, message count, \
+                              and how close you are to the context limit. Use this to decide when to compact."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+        },
+        ToolDefinition {
+            type_: "function".to_string(),
+            function: FunctionSchema {
+                name: "search_compaction_history".to_string(),
+                description: "Search the full pre-compaction conversation transcript for a keyword or phrase. \
+                              Use this when you need to recall details from earlier in the conversation that \
+                              were lost during context compaction. Returns matching lines with surrounding context."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The keyword or phrase to search for in the pre-compaction history"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+    ]
+}
+
 const READ_ONLY_TOOLS: &[&str] = &["read_file", "list_files", "search_files"];
 
 pub fn read_only_tool_definitions() -> Vec<ToolDefinition> {
