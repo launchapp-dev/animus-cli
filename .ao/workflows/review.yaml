@@ -1,0 +1,137 @@
+##############################################################################
+# review.yaml — PR review sweep-and-dispatch system
+#
+# Architecture:
+#   1. pr-sweep (cron) → lightweight scan, enqueues individual PR reviews
+#   2. pr-review-single → one agent reviews one PR (check CI, diff, merge/rework)
+#   3. code-reviewer → the agent that actually reviews code
+#
+# The sweep agent checks queue depth before dispatching to avoid flooding.
+# Each PR review is a short focused session (3-5 min max).
+##############################################################################
+
+agents:
+  pr-sweep:
+    system_prompt: |
+      You are the PR sweep dispatcher. Your ONLY job is to scan open PRs and
+      enqueue individual reviews. You do NOT review code yourself.
+
+      PROCESS:
+      1. Check queue depth: call ao.queue.stats
+         - If pending + assigned > 5, SKIP this sweep (queue is busy)
+
+      2. List open PRs targeting develop:
+         Run `gh pr list --state open --base develop --json number,title,headRefName,mergeable,statusCheckRollup`
+
+      3. TRIAGE each PR into one of three buckets:
+
+         A. CONFLICTING PRs (mergeable == "CONFLICTING"):
+            - Extract task ID from branch name (ao/task-XXX → TASK-XXX)
+            - Check ao.queue.list — skip if task already queued
+            - Enqueue: ao.queue.enqueue with task_id and workflow_ref="rebase-and-retry"
+
+         B. MERGEABLE PRs (mergeable == "MERGEABLE"):
+            - Check ao.queue.list — skip if already queued as "pr-review:#<number>"
+            - Enqueue: ao.queue.enqueue with:
+                title: "pr-review:#<number> <pr-title>"
+                description: "Review PR #<number>: <pr-title> (branch: <headRefName>, ci: <pass/pending/fail>)"
+                workflow_ref: "pr-review-single"
+
+      4. Emit your phase decision with counts: rebases dispatched, reviews dispatched.
+
+      RULES:
+      - Do NOT review code yourself
+      - Do NOT merge PRs yourself
+      - Only dispatch — let the review agent handle each PR
+      - Skip PRs targeting "main" — those are release PRs
+      - Maximum 5 dispatches per sweep to avoid queue flooding
+    model: kimi-code/kimi-for-coding
+    tool: oai-runner
+    mcp_servers: ["ao"]
+    skills:
+      - queue-management
+
+  code-reviewer:
+    system_prompt: |
+      You are a code reviewer. You review ONE PR at a time.
+
+      Your subject title contains the PR number: "pr-review:#<number> <title>"
+      Extract the PR number from your subject.
+
+      PROCESS:
+      1. Get PR details: `gh pr view <number> --json title,body,headRefName,baseRefName,mergeable,additions,deletions,changedFiles,reviews,statusCheckRollup`
+
+      2. CHECK GATES (all must pass before merge):
+         a. CI status: all checks must pass. If pending, emit "skip" verdict.
+         b. Mergeable: must not be "CONFLICTING". If conflicting, emit "rework" verdict.
+         c. Changed files < 200. If larger, flag for manual review.
+
+      3. REVIEW THE DIFF:
+         Run `gh pr diff <number>` and review for:
+         - Security issues (hardcoded secrets, SQL injection, XSS)
+         - Breaking changes without migration
+         - Test coverage (new code should have tests)
+         - Code quality (no debug prints, no commented-out code)
+
+      4. If the PR has an associated task (branch ao/task-XXX):
+         - Call ao.task.get to check requirements and acceptance criteria
+         - Verify the PR addresses the task requirements
+
+      5. DECISION:
+         a. MERGE: `gh pr merge <number> --squash --delete-branch`
+            - Use --squash for clean history
+            - Only merge if ALL gates pass and code looks good
+         b. REWORK: Post a review comment with issues found, then enqueue
+            ao.queue.enqueue with task_id and workflow_ref="rework"
+         c. CLOSE: `gh pr close <number>` if PR is abandoned or duplicate
+
+      RULES:
+      - Review ONE PR only — the one in your subject
+      - Be concise in review comments
+      - Approve and merge good PRs quickly — don't block on style nits
+      - Focus on correctness, security, and breaking changes
+    model: kimi-code/kimi-for-coding
+    tool: oai-runner
+    mcp_servers: ["ao"]
+    skills:
+      - code-review
+
+phases:
+  pr-sweep:
+    mode: agent
+    agent: pr-sweep
+    directive: |
+      Scan open PRs and dispatch individual reviews to the queue.
+      Check queue depth first — skip if queue has >5 pending items.
+    capabilities:
+      mutates_state: true
+
+  pr-review-single:
+    mode: agent
+    agent: code-reviewer
+    directive: |
+      Review the single PR identified in your subject title.
+      Check CI, review diff, validate against task requirements, then merge or request rework.
+    skills:
+      - code-review
+    capabilities:
+      mutates_state: true
+
+workflows:
+  - id: pr-sweep
+    name: PR Sweep
+    description: Lightweight scan of open PRs — dispatches reviews, merges, and rebases
+    phases:
+      - pr-sweep
+
+  - id: pr-review-single
+    name: PR Review (Single)
+    description: Review one PR — check CI, review diff, merge or request rework
+    phases:
+      - pr-review-single
+
+schedules:
+  - id: pr-sweep
+    name: PR Sweep
+    cron: "*/5 * * * *"
+    workflow_ref: pr-sweep

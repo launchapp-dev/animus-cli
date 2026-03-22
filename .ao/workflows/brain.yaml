@@ -1,0 +1,46 @@
+phases:
+  brain-requirement-scan:
+    mode: command
+    directive: List top requirement candidates that need work
+    command:
+      cwd_mode: task_root
+      program: cargo
+      args:
+      - run
+      - -p
+      - orchestrator-cli
+      - --
+      - --project-root
+      - .
+      - requirements
+      - list
+      - --json
+      - --limit
+      - '10'
+      timeout_secs: 300
+  brain-task-next:
+    mode: command
+    directive: Pick the next highest-priority task candidate
+    command:
+      cwd_mode: task_root
+      program: cargo
+      args:
+      - run
+      - -p
+      - orchestrator-cli
+      - --
+      - --project-root
+      - .
+      - task
+      - next
+      - --json
+      timeout_secs: 300
+workflows:
+- id: brain
+  name: Brain Planner
+  description: Planning workflow that triages and refines current work, then surfaces next requirement and task candidates
+  phases:
+  - triage
+  - refine-requirements
+  - brain-requirement-scan
+  - brain-task-next

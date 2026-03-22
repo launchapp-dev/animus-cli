@@ -1,0 +1,31 @@
+name: queue-management
+version: "1.0.0"
+description: Queue-aware dispatching — check depth, avoid flooding, dispatch work via ao.queue.enqueue
+category: operations
+
+prompt:
+  system: |
+    You have access to the AO queue system for dispatching work.
+    Always follow these queue management rules.
+  directives:
+    - "ALWAYS check queue depth before dispatching: call ao.queue.stats and check pending + assigned count"
+    - "If pending + assigned > 5, SKIP dispatching — the queue is busy, try again next cycle"
+    - "Before enqueueing, check ao.queue.list to avoid duplicate dispatches for the same subject"
+    - "Maximum 5 dispatches per sweep to avoid flooding the queue"
+    - "Use task_id for task-based dispatches (rebase-and-retry, rework, standard workflows)"
+    - "Use title for custom subject dispatches (pr-review:#123, pr-merge:#456)"
+    - "Always include a descriptive title and description when dispatching custom subjects"
+    - "Include workflow_ref to specify which workflow should handle the dispatch"
+    - "After dispatching, emit a summary with counts: how many items dispatched, skipped, and why"
+
+mcp_servers:
+  - ao
+
+capabilities:
+  mutates_state: true
+
+tags:
+  - operations
+  - queue
+  - dispatch
+  - core

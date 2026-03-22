@@ -1,0 +1,107 @@
+agents:
+  architect-rust:
+    system_prompt: "You are the Rust Workspace Architect for AO CLI (16 crates).\nScan the workspace structure each run. Create\
+      \ requirements (ao.requirements.create) for:\n- Circular dependencies between crates\n- Crates with too many dependencies\
+      \ (over-coupling)\n- Public API surface issues (leaking internals)\n- Compile time bottlenecks\n- Unused dependencies\
+      \ in Cargo.toml\n- Trait boundary violations\nRead Cargo.toml in each crate to map the dependency graph.\nCheck ao.requirements.list\
+      \ before creating \u2014 NEVER duplicate.\nTag requirements with \"architect-rust\". Max 2 per run.\n"
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers:
+    - ao
+    - rust-docs
+  architect-infra:
+    system_prompt: "You are the Infrastructure Architect for AO CLI.\nScan CI/CD and release infrastructure each run. Create\
+      \ requirements (ao.requirements.create) for:\n- .github/workflows/ issues (missing checks, slow builds)\n- Cargo workspace\
+      \ configuration\n- Release pipeline improvements\n- Build performance (caching, incremental compilation)\n- Cross-platform\
+      \ support (macOS, Linux, Windows)\nCheck ao.requirements.list before creating \u2014 NEVER duplicate.\nTag requirements\
+      \ with \"architect-infra\". Max 2 per run.\n"
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers:
+    - ao
+  researcher-models:
+    system_prompt: "You are the LLM Model Researcher for AO CLI.\nResearch new models and providers each run. Create requirements\
+      \ (ao.requirements.create) for:\n- New OpenAI-compatible providers to add to oai-runner\n- Model pricing changes (cheaper\
+      \ alternatives)\n- New model capabilities (vision, tool use, structured output)\n- Provider API stability reports\n\
+      Use WebSearch to find latest model announcements and pricing.\nCheck ao.requirements.list before creating \u2014 NEVER\
+      \ duplicate.\nTag requirements with \"researcher-models\". Max 2 per run.\n"
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers:
+    - ao
+  researcher-ecosystem:
+    system_prompt: "You are the Rust Ecosystem Researcher for AO CLI.\nResearch useful crates and tools each run. Create requirements\
+      \ (ao.requirements.create) for:\n- New MCP servers worth integrating\n- Rust crates that could improve the workspace\n\
+      - Testing frameworks and patterns\n- Performance optimization tools\n- Security scanning tools\nUse context7 and rust-docs\
+      \ to check current crate APIs.\nCheck ao.requirements.list before creating \u2014 NEVER duplicate.\nTag requirements\
+      \ with \"researcher-ecosystem\". Max 2 per run.\n"
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers:
+    - ao
+    - context7
+    - rust-docs
+phases:
+  architect-rust-audit:
+    mode: agent
+    agent: architect-rust
+    directive: Audit workspace structure, dependency graph, and trait boundaries.
+    capabilities:
+      mutates_state: true
+  architect-infra-audit:
+    mode: agent
+    agent: architect-infra
+    directive: Audit CI/CD, release pipeline, and build infrastructure.
+    capabilities:
+      mutates_state: true
+  researcher-models-scan:
+    mode: agent
+    agent: researcher-models
+    directive: Research new LLM models, providers, and pricing changes.
+    capabilities:
+      mutates_state: true
+  researcher-ecosystem-scan:
+    mode: agent
+    agent: researcher-ecosystem
+    directive: Research useful Rust crates, MCP servers, and tools.
+    capabilities:
+      mutates_state: true
+workflows:
+- id: architect-rust
+  name: 'Architect: Rust Workspace'
+  description: Audit workspace structure, dependency graph, traits
+  phases:
+  - architect-rust-audit
+- id: architect-infra
+  name: 'Architect: Infrastructure'
+  description: Audit CI/CD, release pipeline, build infrastructure
+  phases:
+  - architect-infra-audit
+- id: researcher-models
+  name: 'Researcher: LLM Models'
+  description: Research new models, providers, and pricing
+  phases:
+  - researcher-models-scan
+- id: researcher-ecosystem
+  name: 'Researcher: Ecosystem'
+  description: Research useful Rust crates, MCP servers, tools
+  phases:
+  - researcher-ecosystem-scan
+schedules:
+- id: architect-rust
+  cron: 10 */4 * * *
+  workflow_ref: architect-rust
+  enabled: true
+- id: architect-infra
+  cron: 30 */6 * * *
+  workflow_ref: architect-infra
+  enabled: true
+- id: researcher-models
+  cron: 45 */4 * * *
+  workflow_ref: researcher-models
+  enabled: true
+- id: researcher-ecosystem
+  cron: 15 */4 * * *
+  workflow_ref: researcher-ecosystem
+  enabled: true
