@@ -402,9 +402,7 @@ fn map_project_overrides_by_id(
     Ok(mapped)
 }
 
-fn map_bundled_packs_by_id(
-    bundled_packs: &[LoadedPackManifest],
-) -> Result<BTreeMap<String, &LoadedPackManifest>> {
+fn map_bundled_packs_by_id(bundled_packs: &[LoadedPackManifest]) -> Result<BTreeMap<String, &LoadedPackManifest>> {
     let mut mapped = BTreeMap::new();
     for pack in bundled_packs {
         let key = pack.manifest.id.to_ascii_lowercase();

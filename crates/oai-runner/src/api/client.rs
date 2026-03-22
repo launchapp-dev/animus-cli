@@ -210,7 +210,7 @@ impl ApiClient {
                         || err_str.contains("connection closed")
                         || err_str.contains("broken pipe")
                         || err_str.contains("reset by peer");
-                    
+
                     if is_rate_limit || is_server_error || is_transient {
                         record_failure(&state, &self.api_base);
                         let reason = if is_rate_limit {

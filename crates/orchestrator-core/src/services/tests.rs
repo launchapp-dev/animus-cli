@@ -769,6 +769,8 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             extra_args: Vec::new(),
             codex_config_overrides: Vec::new(),
             max_continuations: None,
+            fallback_tools: Vec::new(),
+            models: Vec::new(),
         },
     );
     for (phase_id, directive) in [
