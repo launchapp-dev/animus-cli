@@ -180,6 +180,26 @@ pub fn context_management_tool_definitions() -> Vec<ToolDefinition> {
                 }),
             },
         },
+        ToolDefinition {
+            type_: "function".to_string(),
+            function: FunctionSchema {
+                name: "search_conversation".to_string(),
+                description: "Search the full conversation history — both the current in-context messages AND all \
+                              pre-compaction transcripts — for a keyword or phrase. Use this to find any detail \
+                              from any point in the conversation, even if it was compacted away."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The keyword or phrase to search for"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
     ]
 }
 

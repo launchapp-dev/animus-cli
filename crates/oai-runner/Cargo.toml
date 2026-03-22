@@ -20,6 +20,7 @@ jsonschema = "0.45"
 eventsource-stream = "0.2"
 tiktoken-rs = "0.9"
 tokio-util = "0.7"
+chrono = { version = "0.4", features = ["serde"] }
 rmcp = { version = "1.2", features = ["client", "transport-child-process"] }
 protocol = { path = "../protocol" }
 

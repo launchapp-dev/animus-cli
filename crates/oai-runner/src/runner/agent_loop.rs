@@ -24,6 +24,40 @@ fn session_file_path_in(base: &Path, session_id: &str) -> PathBuf {
     base.join("sessions").join(format!("{}.json", session_id))
 }
 
+fn compaction_history_path_in(base: &Path, session_id: &str) -> PathBuf {
+    base.join("sessions").join(format!("{}.compaction.jsonl", session_id))
+}
+
+fn append_compaction_history(base: &Path, session_id: &str, transcript: &str) {
+    let path = compaction_history_path_in(base, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let record = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "transcript": transcript,
+    });
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}", serde_json::to_string(&record).unwrap_or_default());
+    }
+}
+
+fn load_compaction_history(base: &Path, session_id: &str) -> Vec<String> {
+    let path = compaction_history_path_in(base, session_id);
+    match std::fs::read_to_string(&path) {
+        Ok(data) => data
+            .lines()
+            .filter_map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v.get("transcript").and_then(|t| t.as_str()).map(String::from))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Maximum number of prior session messages to load on resume.
 /// When sessions grow very large (e.g., 300+ messages), loading all prior
 /// messages can overwhelm the context window before truncation has a chance
@@ -210,7 +244,8 @@ pub async fn run_agent_loop(
     tools_with_context_mgmt.extend(crate::tools::definitions::context_management_tool_definitions());
     let effective_tools = &tools_with_context_mgmt;
 
-    let mut compaction_history: Vec<String> = Vec::new();
+    let mut compaction_history: Vec<String> =
+        if let Some(sid) = session_id { load_compaction_history(&config_dir(), sid) } else { Vec::new() };
 
     let needs_tool_name_sanitization = effective_tools.iter().any(|t| t.function.name.contains('.'));
     let mut tool_name_reverse_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -260,6 +295,9 @@ pub async fn run_agent_loop(
                     Ok((summary_msg, _)) => {
                         let summary = summary_msg.content.as_deref().unwrap_or("(compaction failed)");
                         let transcript = context::build_pre_compaction_transcript(&messages, compact_end);
+                        if let Some(sid) = session_id {
+                            append_compaction_history(&config_dir(), sid, &transcript);
+                        }
                         compaction_history.push(transcript);
                         context::apply_compaction(&mut messages, compact_end, summary);
                     }
@@ -485,6 +523,47 @@ pub async fn run_agent_loop(
                     output.tool_result(&tool_name, &r);
                     r
                 }
+            } else if tool_name == "search_conversation" {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let query_lower = query.to_lowercase();
+                let mut matches = Vec::new();
+
+                for msg in messages.iter() {
+                    if let Some(content) = &msg.content {
+                        for (line_num, line) in content.lines().enumerate() {
+                            if line.to_lowercase().contains(&query_lower) {
+                                let context_start = line_num.saturating_sub(1);
+                                let context_lines: Vec<&str> = content.lines().skip(context_start).take(3).collect();
+                                matches.push(format!("[{}]: {}", msg.role, context_lines.join("\n")));
+                            }
+                        }
+                    }
+                }
+
+                for (epoch, transcript) in compaction_history.iter().enumerate() {
+                    for (line_num, line) in transcript.lines().enumerate() {
+                        if line.to_lowercase().contains(&query_lower) {
+                            let context_start = line_num.saturating_sub(2);
+                            let context_lines: Vec<&str> = transcript.lines().skip(context_start).take(5).collect();
+                            matches.push(format!(
+                                "[compaction #{}] line {}:\n{}",
+                                epoch + 1,
+                                line_num + 1,
+                                context_lines.join("\n")
+                            ));
+                        }
+                    }
+                }
+
+                let r = if matches.is_empty() {
+                    format!("No matches for '{}' in conversation or compaction history.", query)
+                } else {
+                    let total = matches.len();
+                    let shown: Vec<String> = matches.into_iter().take(30).collect();
+                    format!("{} matches (showing up to 30):\n\n{}", total, shown.join("\n\n---\n\n"))
+                };
+                output.tool_result(&tool_name, &r);
+                r
             } else if let Some(mcp) = mcp_client::find_client_for_tool(mcp_clients, &tool_name) {
                 match mcp_client::call_tool(mcp, &tool_name, &tc.function.arguments).await {
                     Ok(r) => {
