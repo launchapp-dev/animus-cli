@@ -45,7 +45,9 @@ impl WorkflowStateManager {
         }
 
         let json = serde_json::to_string_pretty(workflow)?;
-        write_atomic(&path, json)
+        write_atomic(&path, json)?;
+        self.update_active_index(workflow);
+        Ok(())
     }
 
     pub fn load(&self, workflow_id: &str) -> Result<OrchestratorWorkflow> {
@@ -59,12 +61,35 @@ impl WorkflowStateManager {
     }
 
     pub fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        // Fast path: read only active workflow IDs from index
+        let index_path = self.active_index_path();
+        if index_path.exists() {
+            if let Ok(content) = fs::read_to_string(&index_path) {
+                if let Ok(ids) = serde_json::from_str::<BTreeSet<String>>(&content) {
+                    let mut workflows = Vec::new();
+                    for id in &ids {
+                        match self.load(id) {
+                            Ok(wf) => workflows.push(wf),
+                            Err(_) => {} // stale index entry, skip
+                        }
+                    }
+                    return Ok(workflows);
+                }
+            }
+        }
+
+        // Fallback: full directory scan (rebuilds index)
+        self.list_full_scan()
+    }
+
+    fn list_full_scan(&self) -> Result<Vec<OrchestratorWorkflow>> {
         let dir = self.workflows_dir();
         if !dir.exists() {
             return Ok(Vec::new());
         }
 
         let mut workflows = Vec::new();
+        let mut active_ids = BTreeSet::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -72,12 +97,17 @@ impl WorkflowStateManager {
                 continue;
             }
 
-            let content = fs::read_to_string(path)?;
+            let content = fs::read_to_string(&path)?;
             if let Ok(workflow) = serde_json::from_str::<OrchestratorWorkflow>(&content) {
+                if is_active_workflow(&workflow) {
+                    active_ids.insert(workflow.id.clone());
+                }
                 workflows.push(workflow);
             }
         }
 
+        // Rebuild the active index from full scan
+        let _ = self.write_active_index(&active_ids);
         Ok(workflows)
     }
 
@@ -321,6 +351,38 @@ impl WorkflowStateManager {
     fn checkpoint_path(&self, workflow_id: &str, checkpoint_num: usize) -> PathBuf {
         self.checkpoints_dir(workflow_id).join(format!("checkpoint-{checkpoint_num:04}.json"))
     }
+
+    fn active_index_path(&self) -> PathBuf {
+        self.workflows_dir().join("_active_index.json")
+    }
+
+    fn update_active_index(&self, workflow: &OrchestratorWorkflow) {
+        let index_path = self.active_index_path();
+        let mut ids: BTreeSet<String> =
+            fs::read_to_string(&index_path).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default();
+
+        if is_active_workflow(workflow) {
+            ids.insert(workflow.id.clone());
+        } else {
+            ids.remove(&workflow.id);
+        }
+
+        let _ = self.write_active_index(&ids);
+    }
+
+    fn write_active_index(&self, ids: &BTreeSet<String>) -> Result<()> {
+        let path = self.active_index_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(ids)?;
+        write_atomic(&path, json)
+    }
+}
+
+fn is_active_workflow(workflow: &OrchestratorWorkflow) -> bool {
+    use crate::types::WorkflowStatus;
+    matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused)
 }
 
 fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
