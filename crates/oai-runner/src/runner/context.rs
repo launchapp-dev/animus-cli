@@ -219,10 +219,7 @@ mod tests {
                     .map(|id| ToolCall {
                         id: id.to_string(),
                         type_: "function".to_string(),
-                        function: FunctionCall {
-                            name: "test_tool".to_string(),
-                            arguments: "{}".to_string(),
-                        },
+                        function: FunctionCall { name: "test_tool".to_string(), arguments: "{}".to_string() },
                     })
                     .collect(),
             ),
@@ -254,18 +251,12 @@ mod tests {
         truncate_to_fit(&mut messages, 100, 50);
         for (i, m) in messages.iter().enumerate() {
             if m.role == "assistant" && m.tool_calls.is_some() {
-                let tc_ids: Vec<&str> = m
-                    .tool_calls
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(|tc| tc.id.as_str())
-                    .collect();
+                let tc_ids: Vec<&str> = m.tool_calls.as_ref().unwrap().iter().map(|tc| tc.id.as_str()).collect();
                 for expected_id in &tc_ids {
                     assert!(
-                        messages[i + 1..].iter().any(|m2| {
-                            m2.role == "tool" && m2.tool_call_id.as_deref() == Some(expected_id)
-                        }),
+                        messages[i + 1..]
+                            .iter()
+                            .any(|m2| { m2.role == "tool" && m2.tool_call_id.as_deref() == Some(expected_id) }),
                         "assistant with tool_calls has orphaned tool call id '{}'",
                         expected_id
                     );
@@ -276,9 +267,7 @@ mod tests {
                     assert!(
                         messages[..i].iter().any(|m2| {
                             m2.role == "assistant"
-                                && m2.tool_calls.as_ref().is_some_and(|tcs| {
-                                    tcs.iter().any(|tc| tc.id == *tc_id)
-                                })
+                                && m2.tool_calls.as_ref().is_some_and(|tcs| tcs.iter().any(|tc| tc.id == *tc_id))
                         }),
                         "tool response '{}' has no parent assistant message",
                         tc_id
@@ -307,25 +296,18 @@ mod tests {
             assert!(
                 messages.iter().any(|m| {
                     m.role == "assistant"
-                        && m.tool_calls
-                            .as_ref()
-                            .is_some_and(|tcs| tcs.iter().any(|tc| tc.id == tc_id))
+                        && m.tool_calls.as_ref().is_some_and(|tcs| tcs.iter().any(|tc| tc.id == tc_id))
                 }),
                 "orphaned tool message with id '{}'",
                 tc_id
             );
         }
-        let assistant_tc_msgs: Vec<_> = messages
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| m.role == "assistant" && m.tool_calls.is_some())
-            .collect();
+        let assistant_tc_msgs: Vec<_> =
+            messages.iter().enumerate().filter(|(_, m)| m.role == "assistant" && m.tool_calls.is_some()).collect();
         for (i, atc) in &assistant_tc_msgs {
             for tc in atc.tool_calls.as_ref().unwrap() {
                 assert!(
-                    messages[i + 1..].iter().any(|m| {
-                        m.role == "tool" && m.tool_call_id.as_deref() == Some(&tc.id)
-                    }),
+                    messages[i + 1..].iter().any(|m| { m.role == "tool" && m.tool_call_id.as_deref() == Some(&tc.id) }),
                     "assistant tool_call '{}' missing tool response",
                     tc.id
                 );
