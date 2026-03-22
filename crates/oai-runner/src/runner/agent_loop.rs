@@ -205,15 +205,25 @@ pub async fn run_agent_loop(
             },
         });
     }
-    let effective_tools = if has_final_message_tool { &tools_with_final } else { tools };
+    let mut tools_with_context_mgmt: Vec<ToolDefinition> =
+        if has_final_message_tool { tools_with_final.clone() } else { tools.to_vec() };
+    tools_with_context_mgmt.extend(crate::tools::definitions::context_management_tool_definitions());
+    let effective_tools = &tools_with_context_mgmt;
 
-    let needs_tool_name_sanitization = model.contains("kimi");
+    let mut compaction_history: Vec<String> = Vec::new();
+
+    let needs_tool_name_sanitization = effective_tools.iter().any(|t| t.function.name.contains('.'));
+    let mut tool_name_reverse_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let sanitized_tools: Vec<ToolDefinition> = if needs_tool_name_sanitization {
         effective_tools
             .iter()
             .map(|t| {
                 let mut t = t.clone();
-                t.function.name = t.function.name.replace('.', "_");
+                let original = t.function.name.clone();
+                t.function.name = original.replace('.', "_");
+                if t.function.name != original {
+                    tool_name_reverse_map.insert(t.function.name.clone(), original);
+                }
                 t
             })
             .collect()
@@ -234,6 +244,31 @@ pub async fn run_agent_loop(
             anyhow::bail!("Cancelled by shutdown signal");
         }
 
+        if context::needs_compaction(&messages, context_limit, max_tokens) {
+            if let Some((compaction_msgs, compact_end)) = context::build_compaction_prompt(&messages) {
+                eprintln!("[oai-runner] Context at capacity, compacting conversation history via LLM");
+                let compaction_request = ChatRequest {
+                    model: model.to_string(),
+                    messages: compaction_msgs,
+                    stream: false,
+                    tools: None,
+                    max_tokens: Some(2048),
+                    response_format: None,
+                    stream_options: None,
+                };
+                match client.stream_chat(&compaction_request, &mut |_| {}).await {
+                    Ok((summary_msg, _)) => {
+                        let summary = summary_msg.content.as_deref().unwrap_or("(compaction failed)");
+                        let transcript = context::build_pre_compaction_transcript(&messages, compact_end);
+                        compaction_history.push(transcript);
+                        context::apply_compaction(&mut messages, compact_end, summary);
+                    }
+                    Err(e) => {
+                        eprintln!("[oai-runner] Compaction LLM call failed, falling back to truncation: {}", e);
+                    }
+                }
+            }
+        }
         context::truncate_to_fit(&mut messages, context_limit, max_tokens);
         context::sanitize_tool_call_pairs(&mut messages);
 
@@ -359,12 +394,9 @@ pub async fn run_agent_loop(
         // Check if any tool call is final_message_json — if so, emit and stop
         if has_final_message_tool {
             let final_tc = tool_calls.iter().find(|tc| {
-                let name = if needs_tool_name_sanitization {
-                    tc.function.name.replace('_', ".")
-                } else {
-                    tc.function.name.clone()
-                };
-                name == "final_message_json" || name == "final.message.json"
+                let name =
+                    tool_name_reverse_map.get(&tc.function.name).cloned().unwrap_or_else(|| tc.function.name.clone());
+                name == "final_message_json"
             });
             if let Some(tc) = final_tc {
                 let args: serde_json::Value =
@@ -399,18 +431,61 @@ pub async fn run_agent_loop(
                 break;
             }
 
-            let tool_name = if needs_tool_name_sanitization {
-                tc.function.name.replace('_', ".")
-            } else {
-                tc.function.name.clone()
-            };
+            let tool_name =
+                tool_name_reverse_map.get(&tc.function.name).cloned().unwrap_or_else(|| tc.function.name.clone());
 
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
 
             output.tool_call(&tool_name, &args);
 
-            let result = if let Some(mcp) = mcp_client::find_client_for_tool(mcp_clients, &tool_name) {
+            let result = if tool_name == "conversation_stats" {
+                let total_tokens = context::estimate_total_tokens(&messages);
+                let target = context_limit.saturating_sub(max_tokens);
+                let usage_pct = if target > 0 { total_tokens * 100 / target } else { 100 };
+                let r = format!(
+                    "Messages: {}, Estimated tokens: {}/{} ({}% of limit), Compaction history entries: {}",
+                    messages.len(),
+                    total_tokens,
+                    target,
+                    usage_pct,
+                    compaction_history.len()
+                );
+                output.tool_result(&tool_name, &r);
+                r
+            } else if tool_name == "search_compaction_history" {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                if compaction_history.is_empty() {
+                    let r = "No compaction history available — conversation has not been compacted yet.".to_string();
+                    output.tool_result(&tool_name, &r);
+                    r
+                } else {
+                    let mut matches = Vec::new();
+                    for (epoch, transcript) in compaction_history.iter().enumerate() {
+                        for (line_num, line) in transcript.lines().enumerate() {
+                            if line.to_lowercase().contains(&query.to_lowercase()) {
+                                let context_start = line_num.saturating_sub(2);
+                                let context_lines: Vec<&str> = transcript.lines().skip(context_start).take(5).collect();
+                                matches.push(format!(
+                                    "[compaction #{}] line {}:\n{}",
+                                    epoch + 1,
+                                    line_num + 1,
+                                    context_lines.join("\n")
+                                ));
+                            }
+                        }
+                    }
+                    let r = if matches.is_empty() {
+                        format!("No matches for '{}' in compaction history.", query)
+                    } else {
+                        let total = matches.len();
+                        let shown: Vec<String> = matches.into_iter().take(20).collect();
+                        format!("{} matches (showing up to 20):\n\n{}", total, shown.join("\n\n---\n\n"))
+                    };
+                    output.tool_result(&tool_name, &r);
+                    r
+                }
+            } else if let Some(mcp) = mcp_client::find_client_for_tool(mcp_clients, &tool_name) {
                 match mcp_client::call_tool(mcp, &tool_name, &tc.function.arguments).await {
                     Ok(r) => {
                         output.tool_result(&tool_name, &r);
