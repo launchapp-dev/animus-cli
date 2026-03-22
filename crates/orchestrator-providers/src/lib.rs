@@ -125,24 +125,12 @@ pub trait PlanningServiceApi: Send + Sync {
 
 pub mod builtin;
 pub mod git;
-#[cfg(feature = "gitlab")]
-pub mod gitlab;
-#[cfg(feature = "jira")]
-pub mod jira;
-#[cfg(feature = "linear")]
-pub mod linear;
 pub mod subject_adapter;
 
 pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
 pub use git::{
     BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo,
 };
-#[cfg(feature = "gitlab")]
-pub use gitlab::{GitLabConfig, GitLabGitProvider};
-#[cfg(feature = "jira")]
-pub use jira::{JiraConfig, JiraTaskProvider};
-#[cfg(feature = "linear")]
-pub use linear::{LinearConfig, LinearTaskProvider};
 pub use subject_adapter::{
     builtin_subject_adapter_registry, BuiltinCustomSubjectAdapter, BuiltinProjectAdapter,
     BuiltinRequirementSubjectAdapter, BuiltinSubjectResolver, BuiltinTaskSubjectAdapter, SubjectAdapter,

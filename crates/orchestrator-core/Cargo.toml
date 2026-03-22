@@ -22,11 +22,6 @@ orchestrator-store = { workspace = true }
 orchestrator-config = { workspace = true }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 
-[features]
-jira = ["orchestrator-providers/jira"]
-linear = ["orchestrator-providers/linear"]
-gitlab = ["orchestrator-providers/gitlab"]
-
 [dev-dependencies]
 tempfile = "3"
 

@@ -15,7 +15,7 @@ path = "src/lib.rs"
 # Core
 anyhow = "1.0"
 thiserror = "2.0"
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time"] }
 async-trait = "0.1"
 
 # Serialization
