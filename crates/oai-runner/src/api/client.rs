@@ -209,7 +209,8 @@ impl ApiClient {
                     let is_transient = err_str.contains("EOF")
                         || err_str.contains("connection closed")
                         || err_str.contains("broken pipe")
-                        || err_str.contains("reset by peer");
+                        || err_str.contains("reset by peer")
+                        || err_str.contains("SSE stream error");
 
                     if is_rate_limit || is_server_error || is_transient {
                         record_failure(&state, &self.api_base);
@@ -283,7 +284,17 @@ impl ApiClient {
             let event = match event_result {
                 Ok(event) => event,
                 Err(e) => {
-                    // If we fail mid-stream, we should probably return an error so stream_chat can decide to retry
+                    if !content.is_empty() || !tool_calls.is_empty() {
+                        eprintln!("[oai-runner] SSE stream dropped mid-response, returning partial result: {}", e);
+                        let msg = ChatMessage {
+                            role: "assistant".to_string(),
+                            content: if content.is_empty() { None } else { Some(content) },
+                            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning) },
+                            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                            tool_call_id: None,
+                        };
+                        return Ok((msg, usage));
+                    }
                     bail!("SSE stream error: {}", e);
                 }
             };
