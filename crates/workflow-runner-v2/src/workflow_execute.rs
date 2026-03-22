@@ -764,6 +764,34 @@ async fn execute_post_success_actions(
             return action_result;
         }
 
+        let has_commits = match run_git_output(
+            "git",
+            execution_cwd,
+            &["log", "--oneline", &format!("origin/{}..{}", target_branch, source_branch)],
+        )
+        .await
+        {
+            Ok(output) if output.status.success() => {
+                let log_output = String::from_utf8_lossy(&output.stdout);
+                !log_output.trim().is_empty()
+            }
+            _ => true,
+        };
+
+        if !has_commits {
+            action_result["status"] = serde_json::json!("completed");
+            action_result["actions"]["create_pr"] = serde_json::json!({
+                "status": "skipped",
+                "reason": format!("no commits between origin/{} and {}, skipping PR creation", target_branch, source_branch),
+            });
+            action_result["source_branch"] = serde_json::json!(source_branch);
+            if merge_cfg.cleanup_worktree {
+                action_result["actions"]["cleanup_worktree"] =
+                    cleanup_worktree_with_fallback(&*git_provider, project_root, task).await;
+            }
+            return action_result;
+        }
+
         let title = if task.title.trim().is_empty() {
             format!("[{}] Automated update", task.id)
         } else {
@@ -936,8 +964,10 @@ async fn create_pull_request_via_gh(
         }
         Ok(output) => {
             let message = command_summary(&output);
-            if message.to_ascii_lowercase().contains("already exists")
-                || message.to_ascii_lowercase().contains("already open")
+            let msg_lower = message.to_ascii_lowercase();
+            if msg_lower.contains("already exists")
+                || msg_lower.contains("already open")
+                || msg_lower.contains("no commits between")
             {
                 serde_json::json!({
                     "status": "completed",
