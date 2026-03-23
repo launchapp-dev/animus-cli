@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-border: hsl(var(--la-border));
+  --color-input: hsl(var(--la-input));
+  --color-ring: hsl(var(--la-ring));
+  --color-background: hsl(var(--la-background));
+  --color-foreground: hsl(var(--la-foreground));
+  --color-primary: hsl(var(--la-primary));
+  --color-primary-foreground: hsl(var(--la-primary-foreground));
+  --color-secondary: hsl(var(--la-secondary));
+  --color-secondary-foreground: hsl(var(--la-secondary-foreground));
+  --color-destructive: hsl(var(--la-destructive));
+  --color-destructive-foreground: hsl(var(--la-destructive-foreground));
+  --color-muted: hsl(var(--la-muted));
+  --color-muted-foreground: hsl(var(--la-muted-foreground));
+  --color-accent: hsl(var(--la-accent));
+  --color-accent-foreground: hsl(var(--la-accent-foreground));
+  --color-popover: hsl(var(--la-popover));
+  --color-popover-foreground: hsl(var(--la-popover-foreground));
+  --color-card: hsl(var(--la-card));
+  --color-card-foreground: hsl(var(--la-card-foreground));
+  --radius-lg: var(--la-radius);
+  --radius-md: calc(var(--la-radius) - 2px);
+  --radius-sm: calc(var(--la-radius) - 4px);
+  --font-sans: var(--la-font-sans), system-ui, sans-serif;
+  --font-mono: var(--la-font-mono), monospace;
+}
+
+@layer base {
+  :root {
+    --la-background: 0 0% 100%;
+    --la-foreground: 240 10% 3.9%;
+    --la-card: 0 0% 100%;
+    --la-card-foreground: 240 10% 3.9%;
+    --la-popover: 0 0% 100%;
+    --la-popover-foreground: 240 10% 3.9%;
+    --la-primary: 262 83% 58%;
+    --la-primary-foreground: 0 0% 98%;
+    --la-secondary: 240 4.8% 95.9%;
+    --la-secondary-foreground: 240 5.9% 10%;
+    --la-muted: 240 4.8% 95.9%;
+    --la-muted-foreground: 240 3.8% 46.1%;
+    --la-accent: 240 4.8% 95.9%;
+    --la-accent-foreground: 240 5.9% 10%;
+    --la-destructive: 0 84.2% 60.2%;
+    --la-destructive-foreground: 0 0% 98%;
+    --la-border: 240 5.9% 90%;
+    --la-input: 240 5.9% 90%;
+    --la-ring: 262 83% 58%;
+    --la-radius: 0.5rem;
+    --la-font-sans: "Inter";
+    --la-font-mono: "JetBrains Mono";
+  }
+
+  .dark {
+    --la-background: 240 10% 3.9%;
+    --la-foreground: 0 0% 98%;
+    --la-card: 240 10% 3.9%;
+    --la-card-foreground: 0 0% 98%;
+    --la-popover: 240 10% 3.9%;
+    --la-popover-foreground: 0 0% 98%;
+    --la-primary: 263 70% 50%;
+    --la-primary-foreground: 0 0% 98%;
+    --la-secondary: 240 3.7% 15.9%;
+    --la-secondary-foreground: 0 0% 98%;
+    --la-muted: 240 3.7% 15.9%;
+    --la-muted-foreground: 240 5% 64.9%;
+    --la-accent: 240 3.7% 15.9%;
+    --la-accent-foreground: 0 0% 98%;
+    --la-destructive: 0 62.8% 30.6%;
+    --la-destructive-foreground: 0 0% 98%;
+    --la-border: 240 3.7% 15.9%;
+    --la-input: 240 3.7% 15.9%;
+    --la-ring: 263 70% 50%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

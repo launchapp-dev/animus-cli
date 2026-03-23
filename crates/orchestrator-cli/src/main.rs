@@ -103,7 +103,6 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Sync { command } => {
                     services::sync::handle_sync(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Tui(args) => services::tui::handle_tui(args, hub.clone(), &project_root, cli.json).await,
                 Command::Version => {
                     unreachable!("version command handled before runtime initialization")
                 }

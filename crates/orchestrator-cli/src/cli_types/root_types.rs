@@ -134,8 +134,6 @@ pub(crate) enum Command {
     },
     /// Guided onboarding and configuration wizard.
     Setup(SetupArgs),
-    /// Launch the terminal UI.
-    Tui(TuiArgs),
     /// Sync tasks and requirements with a remote ao-sync server.
     Sync {
         #[command(subcommand)]
