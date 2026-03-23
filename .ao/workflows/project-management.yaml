@@ -445,41 +445,41 @@ schedules:
   workflow_ref: task-reconciler
   enabled: true
 - id: docs-drift-checker
-  cron: 50 */2 * * *
+  cron: 50 */4 * * *
   workflow_ref: docs-drift-checker
-  enabled: false
+  enabled: true
 - id: po-oai-runner
-  cron: 5 */2 * * *
+  cron: 5 */4 * * *
   workflow_ref: po-oai-runner
-  enabled: false
+  enabled: true
 - id: po-web
-  cron: 20 */6 * * *
+  cron: 20 */8 * * *
   workflow_ref: po-web
-  enabled: false
+  enabled: true
 - id: po-mcp
-  cron: 40 */6 * * *
+  cron: 40 */8 * * *
   workflow_ref: po-mcp
-  enabled: false
+  enabled: true
 - id: po-workflow
-  cron: 25 */6 * * *
+  cron: 25 */8 * * *
   workflow_ref: po-workflow
-  enabled: false
+  enabled: true
 - id: po-agent-runner
-  cron: 35 */8 * * *
+  cron: 35 */12 * * *
   workflow_ref: po-agent-runner
-  enabled: false
+  enabled: true
 - id: po-cli
-  cron: 55 */8 * * *
+  cron: 55 */12 * * *
   workflow_ref: po-cli
-  enabled: false
+  enabled: true
 - id: system-monitor
-  cron: 0 * * * *
+  cron: 0 */2 * * *
   workflow_ref: system-monitor
-  enabled: false
+  enabled: true
 - id: workflow-optimizer
-  cron: 30 */2 * * *
+  cron: 30 */4 * * *
   workflow_ref: workflow-optimizer
-  enabled: false
+  enabled: true
 - id: release-manager
   cron: 0 */6 * * *
   workflow_ref: release-manager
@@ -489,9 +489,9 @@ schedules:
   workflow_ref: release-gate
   enabled: true
 - id: branch-sync
-  cron: 45 */4 * * *
+  cron: 45 */6 * * *
   workflow_ref: branch-sync
-  enabled: false
+  enabled: true
 - id: minimax-smoke-test
   cron: 0 */3 * * *
   workflow_ref: minimax-smoke-test
