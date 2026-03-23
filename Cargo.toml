@@ -6,6 +6,7 @@ members = [
   "crates/orchestrator-daemon-runtime",
   "crates/orchestrator-notifications",
   "crates/orchestrator-git-ops",
+  "crates/orchestrator-logging",
   "crates/orchestrator-config",
   "crates/orchestrator-core",
   "crates/orchestrator-store",
@@ -31,6 +32,7 @@ llm-cli-wrapper = { path = "crates/llm-cli-wrapper" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-notifications = { path = "crates/orchestrator-notifications" }
 orchestrator-git-ops = { path = "crates/orchestrator-git-ops" }
+orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-config = { path = "crates/orchestrator-config" }
 orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-providers = { path = "crates/orchestrator-providers" }

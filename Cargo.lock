@@ -2494,6 +2494,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orchestrator-logging"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "orchestrator-notifications"
 version = "0.1.0"
 dependencies = [
