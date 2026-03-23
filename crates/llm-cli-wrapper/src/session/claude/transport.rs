@@ -101,12 +101,60 @@ pub(crate) fn claude_invocation_for_request(
 
     args.push(request.prompt.clone());
 
-    let mut invocation =
-        LaunchInvocation { command: "claude".to_string(), args, env: Default::default(), prompt_via_stdin: false };
+    let mut env: std::collections::BTreeMap<String, String> = Default::default();
+    // Inject env vars from session request (explicit overrides)
+    for (key, value) in &request.env_vars {
+        match key.as_str() {
+            "ANTHROPIC_BASE_URL" | "ANTHROPIC_API_KEY" | "ENABLE_TOOL_SEARCH" | "DISABLE_PROMPT_CACHING" => {
+                env.insert(key.clone(), value.clone());
+            }
+            _ => {}
+        }
+    }
+    // Auto-resolve credentials from model prefix for Anthropic-compatible providers
+    // This allows `tool: claude` to work with any provider in credentials.json
+    if !env.contains_key("ANTHROPIC_BASE_URL") {
+        if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model) {
+            env.insert("ANTHROPIC_BASE_URL".to_string(), base_url);
+            env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
+            env.insert("DISABLE_PROMPT_CACHING".to_string(), "true".to_string());
+        }
+    }
+    let mut invocation = LaunchInvocation { command: "claude".to_string(), args, env, prompt_via_stdin: false };
     ensure_flag(&mut invocation.args, "--verbose", 1);
     ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", 2);
 
     Ok(invocation)
+}
+
+/// Resolve Anthropic-compatible provider credentials from model prefix.
+/// Reads ~/.ao/credentials.json and returns (base_url, api_key) if the model's
+/// provider has both fields set.
+fn resolve_anthropic_compatible_provider(model: &str) -> Option<(String, String)> {
+    let normalized = model.to_ascii_lowercase();
+    // Extract provider prefix from model (e.g. "kimi-code/kimi-for-coding" → "kimi-code")
+    let provider = normalized.split('/').next().unwrap_or(&normalized);
+
+    // Skip if it looks like a native Anthropic model
+    if provider.starts_with("claude") || provider.is_empty() {
+        return None;
+    }
+
+    let home = std::env::var("HOME").ok()?;
+    let creds_path = std::path::PathBuf::from(home).join(".ao").join("credentials.json");
+    let content = std::fs::read_to_string(&creds_path).ok()?;
+    let creds: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let providers = creds.get("providers")?.as_object()?;
+
+    let entry = providers.get(provider)?;
+    let base_url = entry.get("base_url")?.as_str()?.to_string();
+    let api_key = entry.get("api_key")?.as_str()?.to_string();
+
+    if base_url.is_empty() || api_key.is_empty() {
+        return None;
+    }
+
+    Some((base_url, api_key))
 }
 
 async fn run_claude_session(
