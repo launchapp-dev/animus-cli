@@ -289,11 +289,20 @@ fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
 }
 
 fn configured_claude_session_id(request: &SessionRequest) -> Option<String> {
-    request
+    let raw = request
         .extras
         .pointer("/runtime_contract/cli/session/session_id")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())?;
+
+    // Claude CLI requires a valid UUID (36 chars with dashes).
+    // If the session ID is already a valid UUID, use it directly.
+    if Uuid::parse_str(raw).is_ok() {
+        return Some(raw.to_string());
+    }
+
+    // Otherwise, generate a fresh UUID for this session.
+    // Session resume won't work across restarts, but the session will start cleanly.
+    Some(Uuid::new_v4().to_string())
 }
