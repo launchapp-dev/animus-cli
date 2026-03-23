@@ -18,6 +18,7 @@ pub mod orchestrator;
 pub mod output;
 pub mod process;
 pub mod repository_scope;
+pub mod sync_config;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
@@ -40,6 +41,7 @@ pub use orchestrator::{
 pub use output::*;
 pub use process::*;
 pub use repository_scope::*;
+pub use sync_config::SyncConfig;
 pub const PROTOCOL_VERSION: &str = "1.0.0";
 
 pub const CLI_SCHEMA_ID: &str = "ao.cli.v1";

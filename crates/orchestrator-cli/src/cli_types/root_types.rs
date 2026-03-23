@@ -136,6 +136,11 @@ pub(crate) enum Command {
     Setup(SetupArgs),
     /// Launch the terminal UI.
     Tui(TuiArgs),
+    /// Sync tasks and requirements with a remote ao-sync server.
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommand,
+    },
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
 }
