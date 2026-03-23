@@ -492,11 +492,3 @@ schedules:
   cron: 45 */6 * * *
   workflow_ref: branch-sync
   enabled: true
-- id: minimax-smoke-test
-  cron: 0 */3 * * *
-  workflow_ref: minimax-smoke-test
-  enabled: true
-- id: glm-smoke-test
-  cron: 10 */3 * * *
-  workflow_ref: glm-smoke-test
-  enabled: true
