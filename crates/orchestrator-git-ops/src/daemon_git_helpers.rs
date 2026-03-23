@@ -12,44 +12,6 @@ pub struct PostSuccessGitConfig {
     pub auto_prune_worktrees_after_merge: bool,
 }
 
-pub fn resolve_task_source_branch(task: &orchestrator_core::OrchestratorTask) -> Option<String> {
-    if let Some(branch_name) = task.branch_name.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(branch_name.to_string());
-    }
-
-    let worktree_path = task.worktree_path.as_deref().map(str::trim).filter(|value| !value.is_empty())?;
-    if !Path::new(worktree_path).exists() {
-        return None;
-    }
-
-    let output =
-        ProcessCommand::new("git").arg("-C").arg(worktree_path).args(["branch", "--show-current"]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if branch.is_empty() {
-        None
-    } else {
-        Some(branch)
-    }
-}
-
-pub fn git_status(cwd: &str, args: &[&str], operation: &str) -> Result<()> {
-    let status = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to run git operation '{operation}' in {}", cwd))?;
-    if !status.success() {
-        anyhow::bail!("git operation '{}' failed in {}: git {}", operation, cwd, args.join(" "));
-    }
-    Ok(())
-}
-
 pub(crate) fn summarize_command_output(stdout: &[u8], stderr: &[u8]) -> String {
     let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
     let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();

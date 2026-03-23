@@ -129,7 +129,7 @@ pub mod subject_adapter;
 
 pub use builtin::{BuiltinRequirementsProvider, BuiltinTaskProvider};
 pub use git::{
-    BuiltinGitProvider, CreatePrInput, GitHubProvider, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo,
+    BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo,
 };
 pub use subject_adapter::{
     builtin_subject_adapter_registry, BuiltinCustomSubjectAdapter, BuiltinProjectAdapter,

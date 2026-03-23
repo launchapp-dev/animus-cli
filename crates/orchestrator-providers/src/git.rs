@@ -62,9 +62,6 @@ pub trait GitProvider: Send + Sync {
     async fn enable_auto_merge(&self, cwd: &str, head_branch: &str) -> Result<()>;
 }
 
-#[derive(Default)]
-pub struct GitHubProvider;
-
 #[derive(Debug, Clone)]
 pub struct BuiltinGitProvider {
     project_root: PathBuf,
@@ -95,49 +92,6 @@ impl BuiltinGitProvider {
             args.join(" "),
             output.status.code().map(|code| code.to_string()).unwrap_or_else(|| "unknown".to_string())
         )
-    }
-}
-
-#[async_trait]
-impl GitProvider for GitHubProvider {
-    async fn create_worktree(
-        &self,
-        _project_root: &str,
-        _worktree_path: &str,
-        _branch_name: &str,
-        _base_ref: Option<&str>,
-    ) -> Result<WorktreeInfo> {
-        todo!()
-    }
-
-    async fn remove_worktree(&self, _project_root: &str, _worktree_path: &str) -> Result<()> {
-        todo!()
-    }
-
-    async fn push_branch(&self, _cwd: &str, _remote: &str, _branch: &str) -> Result<()> {
-        todo!()
-    }
-
-    async fn is_branch_merged(&self, _project_root: &str, _branch_name: &str) -> Result<Option<bool>> {
-        todo!()
-    }
-
-    async fn merge_branch(
-        &self,
-        _cwd: &str,
-        _source_branch: &str,
-        _target_branch: &str,
-        _no_fast_forward: bool,
-    ) -> Result<MergeResult> {
-        todo!()
-    }
-
-    async fn create_pull_request(&self, _input: CreatePrInput) -> Result<PullRequestInfo> {
-        todo!()
-    }
-
-    async fn enable_auto_merge(&self, _cwd: &str, _head_branch: &str) -> Result<()> {
-        todo!()
     }
 }
 
