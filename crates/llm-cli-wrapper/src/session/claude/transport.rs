@@ -94,12 +94,7 @@ pub(crate) fn claude_invocation_for_request(
         args.push(session_id);
     }
 
-    if !request.model.trim().is_empty() {
-        args.push("--model".to_string());
-        args.push(request.model.clone());
-    }
-
-    args.push(request.prompt.clone());
+    let mut resolved_model = request.model.clone();
 
     let mut env: std::collections::BTreeMap<String, String> = Default::default();
     // Inject env vars from session request (explicit overrides)
@@ -118,8 +113,17 @@ pub(crate) fn claude_invocation_for_request(
             env.insert("ANTHROPIC_BASE_URL".to_string(), base_url);
             env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
             env.insert("DISABLE_PROMPT_CACHING".to_string(), "true".to_string());
+            // Strip provider prefix for non-Anthropic models (e.g. "minimax/MiniMax-M2.7" → "MiniMax-M2.7")
+            if let Some(bare) = resolved_model.split('/').nth(1) {
+                resolved_model = bare.to_string();
+            }
         }
     }
+    if !resolved_model.trim().is_empty() {
+        args.push("--model".to_string());
+        args.push(resolved_model);
+    }
+    args.push(request.prompt.clone());
     let mut invocation = LaunchInvocation { command: "claude".to_string(), args, env, prompt_via_stdin: false };
     ensure_flag(&mut invocation.args, "--verbose", 1);
     ensure_flag_value(&mut invocation.args, "--output-format", "stream-json", 2);
