@@ -62,19 +62,9 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Workflow { command } => {
                     services::operations::handle_workflow(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Vision { command } => {
-                    services::operations::handle_vision(command, hub.clone(), &project_root, cli.json).await
-                }
                 Command::Requirements { command } => {
                     services::operations::handle_requirements(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Architecture { command } => {
-                    services::operations::handle_architecture(command, &project_root, cli.json).await
-                }
-                Command::Review { command } => {
-                    services::operations::handle_review(command, hub.clone(), &project_root, cli.json).await
-                }
-                Command::Qa { command } => services::operations::handle_qa(command, &project_root, cli.json).await,
                 Command::History { command } => {
                     services::operations::handle_history(command, hub.clone(), &project_root, cli.json).await
                 }

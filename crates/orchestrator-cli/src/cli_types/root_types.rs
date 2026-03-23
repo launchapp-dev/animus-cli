@@ -53,32 +53,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
-    /// Draft and refine project vision artifacts.
-    Vision {
-        #[command(subcommand)]
-        command: VisionCommand,
-    },
     /// Draft and manage project requirements.
     Requirements {
         #[command(subcommand)]
         command: RequirementsCommand,
-    },
-    /// Manage architecture entities, edges, and graph metadata.
-    Architecture {
-        #[command(subcommand)]
-        command: ArchitectureCommand,
-    },
-    /// Record and inspect review decisions and handoffs.
-    #[command(hide = true)]
-    Review {
-        #[command(subcommand)]
-        command: ReviewCommand,
-    },
-    /// Run and inspect QA evaluations and approvals.
-    #[command(hide = true)]
-    Qa {
-        #[command(subcommand)]
-        command: QaCommand,
     },
     /// Inspect and search execution history.
     History {
