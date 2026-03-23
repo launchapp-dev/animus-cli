@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
 const ROTATED_SUFFIX: &str = ".1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,26 @@ pub struct LogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -70,6 +90,16 @@ impl LogEntry {
             phase_id: None,
             model: None,
             tool: None,
+            provider: None,
+            run_id: None,
+            session_id: None,
+            turn: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            tool_calls: None,
+            role: None,
+            content: None,
             exit_code: None,
             duration_ms: None,
             error: None,
@@ -97,7 +127,7 @@ impl Logger {
             Some(p) => p,
             None => project_root.join(".ao"),
         };
-        Self::open(&scope_root.join("logs"), "daemon.jsonl", Level::Info)
+        Self::open(&scope_root.join("logs"), "events.jsonl", Level::Info)
     }
 
     fn should_log(&self, level: Level) -> bool {
@@ -179,6 +209,10 @@ impl Logger {
         entries.reverse();
         entries
     }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 pub struct EntryBuilder<'a> {
@@ -208,6 +242,40 @@ impl<'a> EntryBuilder<'a> {
         self.entry.tool = Some(tool.into());
         self
     }
+    pub fn provider(mut self, provider: impl Into<String>) -> Self {
+        self.entry.provider = Some(provider.into());
+        self
+    }
+    pub fn run(mut self, id: impl Into<String>) -> Self {
+        self.entry.run_id = Some(id.into());
+        self
+    }
+    pub fn session(mut self, id: impl Into<String>) -> Self {
+        self.entry.session_id = Some(id.into());
+        self
+    }
+    pub fn turn(mut self, n: u32) -> Self {
+        self.entry.turn = Some(n);
+        self
+    }
+    pub fn tokens(mut self, input: u64, output: u64) -> Self {
+        self.entry.input_tokens = Some(input);
+        self.entry.output_tokens = Some(output);
+        self.entry.total_tokens = Some(input + output);
+        self
+    }
+    pub fn tool_calls(mut self, count: u32) -> Self {
+        self.entry.tool_calls = Some(count);
+        self
+    }
+    pub fn role(mut self, role: impl Into<String>) -> Self {
+        self.entry.role = Some(role.into());
+        self
+    }
+    pub fn content(mut self, text: impl Into<String>) -> Self {
+        self.entry.content = Some(text.into());
+        self
+    }
     pub fn exit(mut self, code: i32) -> Self {
         self.entry.exit_code = Some(code);
         self
@@ -231,9 +299,7 @@ impl<'a> EntryBuilder<'a> {
 
 fn protocol_scope_root(project_root: &Path) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let repo_scope = project_root
-        .file_name()?
-        .to_str()?;
+    let repo_scope = project_root.file_name()?.to_str()?;
     let ao_dir = Path::new(&home).join(".ao");
     for entry in fs::read_dir(&ao_dir).ok()? {
         let entry = entry.ok()?;
@@ -281,6 +347,67 @@ mod tests {
         assert_eq!(entries[1].cat, "workflow");
         assert_eq!(entries[1].level, Level::Error);
         assert_eq!(entries[1].exit_code, Some(1));
+    }
+
+    #[test]
+    fn llm_run_lifecycle_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::open(dir.path(), "test.jsonl", Level::Debug);
+
+        logger.info("llm.start", "starting agent session")
+            .run("run-abc")
+            .session("sess-123")
+            .model_tool("kimi-code/kimi-for-coding", "claude")
+            .provider("kimi-code")
+            .workflow("wf-001")
+            .phase("implementation")
+            .emit();
+
+        logger.debug("llm.turn", "turn completed")
+            .run("run-abc")
+            .turn(3)
+            .tokens(1500, 800)
+            .tool_calls(2)
+            .emit();
+
+        logger.info("llm.complete", "agent session finished")
+            .run("run-abc")
+            .session("sess-123")
+            .tokens(12000, 5000)
+            .tool_calls(15)
+            .duration(45000)
+            .exit(0)
+            .emit();
+
+        logger.error("llm.error", "API request failed")
+            .run("run-xyz")
+            .model_tool("minimax/MiniMax-M2.7", "claude")
+            .provider("minimax")
+            .turn(1)
+            .err("429 rate limit exceeded")
+            .emit();
+
+        let entries = logger.read_entries(10, None, None);
+        assert_eq!(entries.len(), 4);
+
+        assert_eq!(entries[0].cat, "llm.start");
+        assert_eq!(entries[0].provider.as_deref(), Some("kimi-code"));
+        assert_eq!(entries[0].session_id.as_deref(), Some("sess-123"));
+
+        assert_eq!(entries[1].cat, "llm.turn");
+        assert_eq!(entries[1].turn, Some(3));
+        assert_eq!(entries[1].input_tokens, Some(1500));
+        assert_eq!(entries[1].tool_calls, Some(2));
+
+        assert_eq!(entries[2].cat, "llm.complete");
+        assert_eq!(entries[2].total_tokens, Some(17000));
+        assert_eq!(entries[2].duration_ms, Some(45000));
+
+        assert_eq!(entries[3].cat, "llm.error");
+        assert_eq!(entries[3].error.as_deref(), Some("429 rate limit exceeded"));
+
+        let llm_only = logger.read_entries(10, Some("llm.error"), None);
+        assert_eq!(llm_only.len(), 1);
     }
 
     #[test]
