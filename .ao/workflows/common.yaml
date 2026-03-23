@@ -93,8 +93,8 @@ agents:
       \ tasks that have been re-enqueued > 5 times without producing a PR, cancel them.\n   Check by looking at the task's\
       \ consecutive_dispatch_failures field.\n\nDEPENDENCY RULES:\n- Never promote/unblock if blocked_by deps aren't done.\n\
       - Process leaf tasks first.\n"
-    model: gpt-5.4
-    tool: codex
+    model: claude-haiku-4-5
+    tool: claude
     mcp_servers:
     - ao
   work-planner:
@@ -110,7 +110,7 @@ agents:
       \ consecutive_dispatch_failures > 5.\n- Check ao.workflow.list \u2014 if last workflow had a \"skip\" decision, do NOT\
       \ re-enqueue.\n- Prefer tasks that have NEVER been dispatched over retries.\n- Do NOT enqueue duplicates \u2014 check\
       \ queue first.\n"
-    model: claude-sonnet-4-6
+    model: claude-haiku-4-5
     tool: claude
     mcp_servers:
     - ao
