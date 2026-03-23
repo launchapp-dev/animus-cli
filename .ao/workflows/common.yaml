@@ -37,7 +37,7 @@ mcp_servers:
     - /Users/samishukri/ao-cli
 agents:
   default:
-    model: claude-sonnet-4-6
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -64,7 +64,7 @@ agents:
       \ and the chosen workflow_ref.\nThen emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
       \ before dispatching \u2014 do NOT enqueue duplicates.\n- Be thorough in validation \u2014 search the actual code, not\
       \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -93,7 +93,7 @@ agents:
       \ tasks that have been re-enqueued > 5 times without producing a PR, cancel them.\n   Check by looking at the task's\
       \ consecutive_dispatch_failures field.\n\nDEPENDENCY RULES:\n- Never promote/unblock if blocked_by deps aren't done.\n\
       - Process leaf tasks first.\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -110,7 +110,7 @@ agents:
       \ consecutive_dispatch_failures > 5.\n- Check ao.workflow.list \u2014 if last workflow had a \"skip\" decision, do NOT\
       \ re-enqueue.\n- Prefer tasks that have NEVER been dispatched over retries.\n- Do NOT enqueue duplicates \u2014 check\
       \ queue first.\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -409,8 +409,8 @@ phases:
       args:
       - -c
       - 'BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/develop 2>/dev/null || echo HEAD~1);
-        COUNT=$(git rev-list --count "$BASE..HEAD" 2>/dev/null || echo 0); echo "Commits
-        since base: $COUNT"; [ "$COUNT" -gt 0 ]'
+        COUNT=$(git rev-list --count "$BASE..HEAD" 2>/dev/null || echo 0); echo "Commits since base: $COUNT"; [ "$COUNT" -gt
+        0 ]'
       cwd_mode: task_root
       timeout_secs: 30
       success_exit_codes:

@@ -14,7 +14,7 @@ agents:
       \ for human review\n\n4. Emit phase decision with counts dispatched.\n\nRULES:\n- Do NOT refine requirements yourself\
       \ \u2014 only dispatch\n- Do NOT create tasks yourself \u2014 only dispatch\n- Check queue before every dispatch\n-\
       \ Skip requirements with status \"done\" or \"planned\" (already processed)\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -34,7 +34,7 @@ agents:
       \ the same category\n   - If overlapping scope found, note the conflict in both requirements\n\nRULES:\n- Refine ONE\
       \ requirement only\n- Search the codebase to validate technical feasibility\n- Add concrete acceptance criteria (AC1,\
       \ AC2, ...)\n- Do NOT create tasks \u2014 that's a separate workflow\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -52,7 +52,7 @@ agents:
       \ Note the created task IDs in the requirement description\n\nRULES:\n- Convert ONE requirement only\n- Create focused,\
       \ implementable tasks (not meta-tasks)\n- Each task should be completable in a single PR\n- Max 3 tasks per requirement\n\
       - Set task status to \"ready\" so the work-planner can pick them up\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
