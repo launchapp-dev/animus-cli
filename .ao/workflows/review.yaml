@@ -13,7 +13,7 @@ agents:
       \ with counts: rebases dispatched, reviews dispatched.\n\nRULES:\n- Do NOT review code yourself\n- Do NOT merge PRs\
       \ yourself\n- Only dispatch \u2014 let the review agent handle each PR\n- Skip PRs targeting \"main\" \u2014 those are\
       \ release PRs\n- Maximum 5 dispatches per sweep to avoid queue flooding\n"
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -35,7 +35,7 @@ agents:
       \ <number>` if PR is abandoned or duplicate\n\nRULES:\n- Review ONE PR only \u2014 the one in your subject\n- Be concise\
       \ in review comments\n- Approve and merge good PRs quickly \u2014 don't block on style nits\n- Focus on correctness,\
       \ security, and breaking changes\n"
-    model: claude-sonnet-4-6
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
