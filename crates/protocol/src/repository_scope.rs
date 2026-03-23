@@ -3,7 +3,65 @@ use std::path::{Path, PathBuf};
 
 pub fn scoped_state_root(project_root: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    Some(home.join(".ao").join(repository_scope_for_path(project_root)))
+    let ao_root = home.join(".ao");
+
+    if let Some(existing) = find_existing_scope_by_origin(&ao_root, project_root) {
+        return Some(existing);
+    }
+
+    let scope_dir = ao_root.join(repository_scope_for_path(project_root));
+
+    if !scope_dir.exists() {
+        if let Err(_) = std::fs::create_dir_all(&scope_dir) {
+            return Some(scope_dir);
+        }
+        if let Some(origin) = git_remote_origin(project_root) {
+            let _ = std::fs::write(scope_dir.join(".git-origin"), origin);
+        }
+    }
+
+    Some(scope_dir)
+}
+
+fn git_remote_origin(project_root: &Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(project_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<PathBuf> {
+    let our_origin = git_remote_origin(project_root)?;
+    let canonical = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+
+    let entries = std::fs::read_dir(ao_root).ok()?;
+    for entry in entries.flatten() {
+        let scope_dir = entry.path();
+        if !scope_dir.is_dir() {
+            continue;
+        }
+
+        let origin_file = scope_dir.join(".git-origin");
+        if let Ok(existing_origin) = std::fs::read_to_string(&origin_file) {
+            if existing_origin.trim() == our_origin {
+                let project_root_file = scope_dir.join(".project-root");
+                if let Ok(existing_root) = std::fs::read_to_string(&project_root_file) {
+                    let existing_canonical = Path::new(existing_root.trim()).canonicalize().unwrap_or_default();
+                    if existing_canonical == canonical {
+                        continue;
+                    }
+                }
+                return Some(scope_dir);
+            }
+        }
+    }
+    None
 }
 
 pub fn sanitize_identifier(value: &str, fallback: &str) -> String {
