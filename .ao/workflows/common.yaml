@@ -401,6 +401,25 @@ phases:
       args:
       - clean
       timeout_secs: 60
+  check-commits:
+    mode: command
+    directive: Verify that the implementation branch has commits beyond its merge-base
+    command:
+      program: bash
+      args:
+      - -c
+      - 'BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD origin/develop 2>/dev/null || echo HEAD~1);
+        COUNT=$(git rev-list --count "$BASE..HEAD" 2>/dev/null || echo 0); echo "Commits
+        since base: $COUNT"; [ "$COUNT" -gt 0 ]'
+      cwd_mode: task_root
+      timeout_secs: 30
+      success_exit_codes:
+      - 0
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
   push-branch:
     mode: command
     directive: Push the current branch to origin
@@ -415,8 +434,6 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
-      - 1
-      - 128
     output_contract:
       kind: phase_result
       fields:
@@ -437,7 +454,6 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
-      - 1
     output_contract:
       kind: phase_result
       fields:
@@ -582,6 +598,7 @@ workflows:
   - implementation:
       skip_if:
       - task_type == docs
+  - check-commits
   - push-branch
   - create-pr
   - cleanup
@@ -590,6 +607,7 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast"
   phases:
   - implementation
+  - check-commits
   - push-branch
   - create-pr
   - cleanup
@@ -600,6 +618,7 @@ workflows:
   - triage
   - refine-requirements
   - implementation
+  - check-commits
   - push-branch
   - create-pr
   - cleanup
@@ -640,6 +659,7 @@ workflows:
   description: "Emergency fix \u2192 Push \u2192 PR targeting main"
   phases:
   - implementation
+  - check-commits
   - push-branch
   - create-pr
   post_success:
@@ -656,6 +676,7 @@ workflows:
   - triage
   - refine-requirements
   - implementation
+  - check-commits
   - push-branch
   - create-pr
   post_success:
@@ -671,6 +692,7 @@ workflows:
   phases:
   - requirements
   - implementation
+  - check-commits
   - push-branch
   - create-pr
   - cleanup
