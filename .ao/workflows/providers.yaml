@@ -9,6 +9,9 @@ agents:
       clean, tested code.
     model: minimax/MiniMax-M2.7
     tool: claude
+    mcp_servers:
+    - ao
+    - minimax
   glm-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.

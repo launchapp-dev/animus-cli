@@ -10,6 +10,7 @@ agents:
     mcp_servers:
     - ao
     - rust-docs
+    - minimax
     skills:
     - requirements-management
   architect-infra:
@@ -34,6 +35,7 @@ agents:
     tool: claude
     mcp_servers:
     - ao
+    - minimax
     skills:
     - requirements-management
   researcher-ecosystem:
@@ -48,6 +50,7 @@ agents:
     - ao
     - context7
     - rust-docs
+    - minimax
     skills:
     - requirements-management
 phases:

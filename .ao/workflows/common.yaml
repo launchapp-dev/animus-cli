@@ -35,6 +35,14 @@ mcp_servers:
     - -y
     - '@modelcontextprotocol/server-filesystem'
     - /Users/samishukri/ao-cli
+  minimax:
+    command: uvx
+    args:
+    - minimax-coding-plan-mcp
+    env:
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY}
+      MINIMAX_MCP_BASE_PATH: /Users/samishukri/.ao/minimax-mcp-output
+      MINIMAX_API_HOST: https://api.minimax.io
 agents:
   default:
     model: kimi-for-coding
@@ -44,6 +52,7 @@ agents:
     - context7
     - rust-docs
     - sequential-thinking
+    - minimax
   triager:
     system_prompt: "You are the AO task triager and dispatcher. You validate tasks and route them to implementation.\n\nSTEP\
       \ 1 \u2014 VALIDATE:\n- Read the task via ao.task.get\n- Check if code already exists: search the codebase for the described\
