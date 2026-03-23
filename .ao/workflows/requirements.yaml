@@ -105,5 +105,6 @@ workflows:
 schedules:
 - id: requirement-sweep
   name: Requirement Sweep
-  cron: '*/10 * * * *'
+  cron: '*/15 * * * *'
   workflow_ref: requirement-sweep
+  enabled: true
