@@ -3,8 +3,7 @@ use std::path::Path;
 
 use orchestrator_core;
 use protocol::{
-    canonical_model_id, default_fallback_models_for_phase, default_model_specs, default_primary_model_for_phase,
-    normalize_tool_id, tool_for_model_id, tool_supports_repository_writes, ModelRoutingComplexity, PhaseCapabilities,
+    canonical_model_id, normalize_tool_id, tool_for_model_id, ModelRoutingComplexity, PhaseCapabilities,
     PhaseRoutingConfig,
 };
 
@@ -72,12 +71,6 @@ impl PhaseTargetPlanner {
                 .filter(|value| !value.is_empty()),
         );
         candidate_models.extend(phase_fallback_models(phase_id, caps, routing));
-        candidate_models.extend(
-            default_fallback_models_for_phase(resolved_complexity, caps)
-                .into_iter()
-                .map(canonical_model_id)
-                .filter(|value| !value.is_empty()),
-        );
 
         let mut targets = Vec::new();
         let mut seen_models = HashSet::new();
@@ -126,7 +119,7 @@ impl PhaseTargetPlanner {
 
 fn phase_model_id(
     phase_id: &str,
-    complexity: Option<ModelRoutingComplexity>,
+    _complexity: Option<ModelRoutingComplexity>,
     caps: &PhaseCapabilities,
     routing: &PhaseRoutingConfig,
 ) -> String {
@@ -153,7 +146,7 @@ fn phase_model_id(
         return model;
     }
 
-    default_primary_model_for_phase(complexity, caps).to_string()
+    "claude-sonnet-4-6".to_string()
 }
 
 fn phase_tool_id(phase_id: &str, model_id: &str, caps: &PhaseCapabilities, routing: &PhaseRoutingConfig) -> String {
@@ -186,26 +179,10 @@ fn phase_tool_id(phase_id: &str, model_id: &str, caps: &PhaseCapabilities, routi
 fn enforce_write_capable_phase_target(
     tool_id: String,
     model_id: String,
-    phase_writes_files: bool,
-    routing: &PhaseRoutingConfig,
+    _phase_writes_files: bool,
+    _routing: &PhaseRoutingConfig,
 ) -> (String, String) {
     let normalized_tool_id = normalize_tool_id(&tool_id);
-    if !phase_writes_files {
-        return (normalized_tool_id, model_id);
-    }
-    if !protocol::parse_env_bool("AO_ALLOW_NON_EDITING_PHASE_TOOL")
-        && !tool_supports_repository_writes(&normalized_tool_id)
-    {
-        let fallback_model = routing.file_edit_model.as_deref().map(canonical_model_id).filter(|v| !v.is_empty());
-        let fallback_tool = routing.file_edit_tool.as_deref().map(normalize_tool_id).filter(|v| !v.is_empty());
-        if let (Some(m), Some(t)) = (&fallback_model, &fallback_tool) {
-            return (t.clone(), m.clone());
-        }
-        if let Some((m, t)) = default_model_specs().into_iter().find(|(_, t)| tool_supports_repository_writes(t)) {
-            return (fallback_tool.unwrap_or(t), fallback_model.unwrap_or(m));
-        }
-        return (normalized_tool_id, model_id);
-    }
     (normalized_tool_id, model_id)
 }
 
