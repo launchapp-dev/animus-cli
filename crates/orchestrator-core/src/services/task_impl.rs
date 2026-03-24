@@ -154,6 +154,11 @@ impl TaskServiceApi for FileServiceHub {
 
     async fn create(&self, input: TaskCreateInput) -> Result<OrchestratorTask> {
         let (task, _) = self.mutate_persistent_state(|state| create_task_in_state(state, input)).await?;
+        orchestrator_logging::Logger::for_project(&self.project_root)
+            .info("task.create", format!("{}: {}", task.id, task.title.chars().take(60).collect::<String>()))
+            .task(&task.id)
+            .status(task.status.to_string())
+            .emit();
         Ok(task)
     }
 
@@ -196,6 +201,11 @@ impl TaskServiceApi for FileServiceHub {
 
     async fn set_status(&self, id: &str, status: TaskStatus, validate: bool) -> Result<OrchestratorTask> {
         let (task, _) = self.mutate_persistent_state(|state| set_status_in_state(state, id, status, validate)).await?;
+        orchestrator_logging::Logger::for_project(&self.project_root)
+            .info("task.status", format!("{} → {}", id, task.status))
+            .task(id)
+            .status(task.status.to_string())
+            .emit();
         Ok(task)
     }
 

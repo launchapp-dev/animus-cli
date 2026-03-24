@@ -755,6 +755,15 @@ async fn execute_post_success_actions(
         if let Some(push_action) =
             perform_push_with_fallback(&*git_provider, execution_cwd, "origin", &source_branch).await
         {
+            let push_ok = push_action.get("status").and_then(|v| v.as_str()) == Some("completed");
+            let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
+            if push_ok {
+                logger.info("git.push", format!("pushed {}", source_branch))
+                    .branch(&source_branch).emit();
+            } else {
+                logger.error("git.push", format!("push failed {}", source_branch))
+                    .branch(&source_branch).err(push_action.to_string()).emit();
+            }
             action_result["actions"]["push"] = push_action;
         }
 
@@ -813,6 +822,20 @@ async fn execute_post_success_actions(
         };
         action_result["actions"]["create_pr"] =
             create_pull_request_via_gh(task, project_root, &target_branch, &source_branch, &title, &body).await;
+        {
+            let pr_result = &action_result["actions"]["create_pr"];
+            let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
+            if pr_result.get("status").and_then(|v| v.as_str()) == Some("completed") {
+                let pr_url = pr_result.get("pr_url").and_then(|v| v.as_str()).unwrap_or("");
+                logger.info("git.pr", format!("created PR {}", pr_url))
+                    .branch(&source_branch).task(&task.id)
+                    .meta(serde_json::json!({"pr_url": pr_url, "title": title})).emit();
+            } else {
+                let err = pr_result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
+                logger.error("git.pr", format!("PR creation failed for {}", source_branch))
+                    .branch(&source_branch).task(&task.id).err(err).emit();
+            }
+        }
         let pr_status = action_result["actions"]["create_pr"]["status"].clone();
         action_result["status"] = pr_status;
         action_result["source_branch"] = serde_json::json!(source_branch);

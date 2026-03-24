@@ -21,6 +21,7 @@ protocol = { path = "../protocol" }
 orchestrator-providers = { workspace = true }
 orchestrator-store = { workspace = true }
 orchestrator-config = { workspace = true }
+orchestrator-logging = { workspace = true }
 cli-wrapper = { path = "../llm-cli-wrapper", package = "llm-cli-wrapper" }
 
 [dev-dependencies]

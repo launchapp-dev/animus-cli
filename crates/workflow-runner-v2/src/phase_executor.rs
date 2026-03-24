@@ -1175,6 +1175,13 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
 
                         let has_fallback_target = target_index + 1 < execution_targets.len();
                         if has_fallback_target && PhaseFailureClassifier::should_failover_target(&message) {
+                            let next_target = &execution_targets[target_index + 1];
+                            let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
+                            logger.warn("llm.fallback", format!("{} → {}", effective_model_id, next_target.1))
+                                .phase(phase_id)
+                                .fallback(&effective_model_id, &next_target.1)
+                                .err(&message)
+                                .emit();
                             fallover_errors.push(format!(
                                 "target {}:{} failed: {}",
                                 effective_tool_id, effective_model_id, message
@@ -1550,6 +1557,23 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
             };
 
             let command_result = run_workflow_phase_with_command(&command_context, &merged_runtime, command).await?;
+            {
+                let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
+                let success = command_result.failure_summary.is_none();
+                let mut b = if success {
+                    logger.info("command.complete", format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code))
+                } else {
+                    logger.error("command.complete", format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code))
+                };
+                b = b.phase(phase_id).exit(command_result.exit_code).duration(command_result.duration_ms);
+                if !command_result.stdout.trim().is_empty() {
+                    b = b.content(command_result.stdout.chars().take(2000).collect::<String>());
+                }
+                if let Some(ref err) = command_result.failure_summary {
+                    b = b.err(err.chars().take(500).collect::<String>());
+                }
+                b.meta(serde_json::json!({"program": command_result.program, "args": command_result.args})).emit();
+            }
             signals.push(PhaseExecutionSignal {
                 event_type: "workflow-phase-command-executed".to_string(),
                 payload: serde_json::json!({
