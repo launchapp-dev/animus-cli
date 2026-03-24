@@ -72,7 +72,23 @@ pub(crate) fn claude_invocation_for_request(
     request: &SessionRequest,
     resume_session_id: Option<&str>,
 ) -> Result<LaunchInvocation> {
-    if let Some(invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
+    if let Some(mut invocation) = parse_launch_from_runtime_contract(request.extras.get("runtime_contract"))? {
+        // Apply provider credential routing even for pre-built launch invocations
+        if !invocation.env.contains_key("ANTHROPIC_BASE_URL") {
+            if let Some((base_url, api_key)) = resolve_anthropic_compatible_provider(&request.model) {
+                invocation.env.insert("ANTHROPIC_BASE_URL".to_string(), base_url);
+                invocation.env.insert("ANTHROPIC_API_KEY".to_string(), api_key);
+                invocation.env.insert("DISABLE_PROMPT_CACHING".to_string(), "true".to_string());
+                // Strip provider prefix from --model arg
+                if let Some(pos) = invocation.args.iter().position(|a| a == "--model") {
+                    if let Some(model_arg) = invocation.args.get_mut(pos + 1) {
+                        if let Some(bare) = model_arg.split('/').nth(1) {
+                            *model_arg = bare.to_string();
+                        }
+                    }
+                }
+            }
+        }
         return Ok(invocation);
     }
 

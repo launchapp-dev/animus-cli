@@ -267,6 +267,8 @@ pub(crate) struct DaemonStreamArgs {
     pub(crate) tail: usize,
     #[arg(long, action = ArgAction::SetTrue, help = "Print recent entries and exit without streaming.")]
     pub(crate) no_follow: bool,
+    #[arg(long, action = ArgAction::SetTrue, help = "Pretty-print with colors and formatting instead of raw JSON.")]
+    pub(crate) pretty: bool,
 }
 
 #[derive(Debug, Args)]

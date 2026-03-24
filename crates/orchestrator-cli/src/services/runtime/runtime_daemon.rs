@@ -628,10 +628,18 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
         _ => None,
     });
 
+    let pretty = args.pretty;
+    let print_entry = move |entry: &orchestrator_logging::LogEntry| {
+        if pretty {
+            println!("{}", format_log_entry_pretty(entry));
+        } else {
+            println!("{}", serde_json::to_string(entry).unwrap_or_default());
+        }
+    };
+
     let logs_dir = Logger::logs_dir(Path::new(project_root));
     let main_logger = Logger::for_project(Path::new(project_root));
 
-    // Print recent tail entries first
     let entries = main_logger.read_entries_since(
         args.tail,
         args.cat.as_deref(),
@@ -649,17 +657,15 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                 continue;
             }
         }
-        println!("{}", serde_json::to_string(entry).unwrap_or_default());
+        print_entry(entry);
     }
 
     if args.no_follow {
         return Ok(());
     }
 
-    // Follow mode: poll all log files for new content
     let mut file_positions: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
 
-    // Initialize positions to end of current files
     for path in discover_log_files(&logs_dir) {
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         file_positions.insert(path, size);
@@ -705,13 +711,81 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                                 continue;
                             }
                         }
-                        println!("{}", serde_json::to_string(&entry).unwrap_or_default());
+                        print_entry(&entry);
                     }
                 }
             }
             file_positions.insert(path, current_size);
         }
     }
+}
+
+fn format_log_entry_pretty(entry: &orchestrator_logging::LogEntry) -> String {
+    use colored::Colorize;
+    use orchestrator_logging::Level;
+
+    let ts = entry.ts.get(11..19).unwrap_or(&entry.ts);
+
+    let level_badge = match entry.level {
+        Level::Debug => "DBG".dimmed(),
+        Level::Info => "INF".cyan(),
+        Level::Warn => "WRN".yellow().bold(),
+        Level::Error => "ERR".red().bold(),
+    };
+
+    let cat = entry.cat.as_str().blue();
+
+    let mut line = format!("{} {} {:<12} {}", ts.dimmed(), level_badge, cat, entry.msg);
+
+    let mut tags = Vec::new();
+    if let Some(ref wf) = entry.workflow_id {
+        tags.push(format!("wf={}", short_id(wf)));
+    }
+    if let Some(ref task) = entry.task_id {
+        tags.push(format!("task={task}"));
+    }
+    if let Some(ref phase) = entry.phase_id {
+        tags.push(format!("phase={phase}"));
+    }
+    if let Some(ref model) = entry.model {
+        tags.push(format!("model={model}"));
+    }
+    if let Some(ref tool) = entry.tool {
+        tags.push(format!("tool={tool}"));
+    }
+    if let Some(ref schedule) = entry.schedule_id {
+        tags.push(format!("sched={schedule}"));
+    }
+    if let Some(ref run) = entry.run_id {
+        tags.push(format!("run={}", short_id(run)));
+    }
+    if let Some(exit) = entry.exit_code {
+        tags.push(format!("exit={exit}"));
+    }
+    if let Some(dur) = entry.duration_ms {
+        tags.push(format!("{dur}ms"));
+    }
+    if let Some(tokens) = entry.total_tokens {
+        tags.push(format!("{tokens}tok"));
+    } else if entry.input_tokens.is_some() || entry.output_tokens.is_some() {
+        let i = entry.input_tokens.unwrap_or(0);
+        let o = entry.output_tokens.unwrap_or(0);
+        tags.push(format!("{i}+{o}tok"));
+    }
+
+    if !tags.is_empty() {
+        line.push_str(&format!("  {}", tags.join(" ").dimmed()));
+    }
+
+    if let Some(ref err) = entry.error {
+        line.push_str(&format!("\n  {} {}", "err:".red(), err));
+    }
+
+    line
+}
+
+fn short_id(id: &str) -> &str {
+    if id.len() > 8 { &id[..8] } else { id }
 }
 
 fn discover_log_files(logs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {

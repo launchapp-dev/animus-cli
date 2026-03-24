@@ -37,6 +37,7 @@ axum = { workspace = true }
 libc = "0.2"
 fs2 = "0.4"
 reqwest = { version = "0.12", features = ["json"] }
+colored = "3.0"
 
 [dev-dependencies]
 assert_cmd = "2"
