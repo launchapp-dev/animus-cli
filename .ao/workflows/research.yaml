@@ -5,7 +5,7 @@ agents:
       \ (over-coupling)\n- Public API surface issues (leaking internals)\n- Compile time bottlenecks\n- Unused dependencies\
       \ in Cargo.toml\n- Trait boundary violations\nRead Cargo.toml in each crate to map the dependency graph.\nCheck ao.requirements.list\
       \ before creating \u2014 NEVER duplicate.\nTag requirements with \"architect-rust\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -16,7 +16,7 @@ agents:
       \ configuration\n- Release pipeline improvements\n- Build performance (caching, incremental compilation)\n- Cross-platform\
       \ support (macOS, Linux, Windows)\nCheck ao.requirements.list before creating \u2014 NEVER duplicate.\nTag requirements\
       \ with \"architect-infra\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -26,7 +26,7 @@ agents:
       \ alternatives)\n- New model capabilities (vision, tool use, structured output)\n- Provider API stability reports\n\
       Use WebSearch to find latest model announcements and pricing.\nCheck ao.requirements.list before creating \u2014 NEVER\
       \ duplicate.\nTag requirements with \"researcher-models\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -36,7 +36,7 @@ agents:
       - Testing frameworks and patterns\n- Performance optimization tools\n- Security scanning tools\nUse context7 and rust-docs\
       \ to check current crate APIs.\nCheck ao.requirements.list before creating \u2014 NEVER duplicate.\nTag requirements\
       \ with \"researcher-ecosystem\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao

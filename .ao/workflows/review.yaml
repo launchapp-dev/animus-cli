@@ -45,7 +45,7 @@ agents:
       - Only dispatch — let the review agent handle each PR
       - Skip PRs targeting "main" — those are release PRs
       - Maximum 5 dispatches per sweep to avoid queue flooding
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers: ["ao"]
     skills:
@@ -90,7 +90,7 @@ agents:
       - Be concise in review comments
       - Approve and merge good PRs quickly — don't block on style nits
       - Focus on correctness, security, and breaking changes
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers: ["ao"]
     skills:

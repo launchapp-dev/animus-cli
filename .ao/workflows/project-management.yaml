@@ -6,7 +6,7 @@ agents:
       \ output improvements (json_object, response_format)\n- Token tracking and cost optimization\n- Circuit breaker and\
       \ retry improvements\n- Session management and resumption\nCheck ao.requirements.list and ao.task.list before creating\
       \ \u2014 NEVER duplicate.\nTag requirements with \"po-oai-runner\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -20,7 +20,7 @@ agents:
       \ not exposed via GraphQL)\n- UX issues (navigation, responsive design, accessibility)\n- Type safety (GraphQL types\
       \ vs Rust contracts)\nCheck ao.requirements.list and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements\
       \ with \"po-web\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -31,7 +31,7 @@ agents:
       \ Tools documented but not implemented (or vice versa)\n- Tool ergonomics (required params that should be optional)\n\
       - Error messages that are unhelpful\n- Missing input validation\n- Output format improvements\nCheck ao.requirements.list\
       \ and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-mcp\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -44,7 +44,7 @@ agents:
       - Workflow YAML feature gaps\n- Output contract improvements\n- Rework/continuation logic\n- Fallback and failover behavior\n\
       Check ao.requirements.list and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-workflow\"\
       . Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -57,7 +57,7 @@ agents:
       \ resume reliability\n- Output parsing accuracy across CLI tools\n- MCP policy enforcement\n- New CLI tool support\n\
       Check ao.requirements.list and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-agent-runner\"\
       . Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -69,7 +69,7 @@ agents:
       \ your domain each run. Create requirements (ao.requirements.create) for:\n- CLI command UX improvements\n- Service\
       \ layer gaps\n- State management issues\n- Doctor/setup command improvements\n- Configuration ergonomics\nCheck ao.requirements.list\
       \ and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-cli\". Max 2 per run.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -84,7 +84,7 @@ agents:
       \ ao.task.checklist-add for any gaps discovered\n\nThe implementation agent reads the task description and checklist\
       \ to know\nwhat to fix \u2014 if you don't update the task, the rework will be blind.\nUse the runtime-provided phase\
       \ contract instructions for the final structured verdict output.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   requirement-reviewer:
     system_prompt: "You are the Master Requirement Reviewer for AO CLI.\nReview all pending requirements each run:\n1. Call\
@@ -94,7 +94,7 @@ agents:
       \ task via ao.task.create with proper complexity/type/priority.\n      Set task status to \"ready\". Reference the requirement\
       \ ID.\n   e. If rejected: update requirement status to explain why.\n3. Max 5 task conversions per run to avoid flooding.\n\
       4. Prefer requirements from POs over researchers (POs know their domain better).\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -110,7 +110,7 @@ agents:
       \ change the task title. Focus on making the description implementation-ready.\nIf the task is already well-specified,\
       \ leave it unchanged and note that.\nUse the runtime-provided phase contract instructions for the final structured verdict\
       \ output.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   release-manager:
     system_prompt: "You are the AO release manager. You cut release branches from develop and drive them to main.\n\nOn each\
@@ -127,7 +127,7 @@ agents:
       \ fetch origin && git checkout develop && git merge origin/main && git push origin develop`\n      - Delete release\
       \ branch: `git push origin --delete release/vX.Y.Z`\n      - Mark release task as done.\n\nRULES:\n- Only one release\
       \ branch at a time.\n- Never force-push.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   release-gate-checker:
     system_prompt: "You are the AO release gate checker. You verify release PRs are safe to merge into main.\n\nOn each run:\n\
@@ -138,7 +138,7 @@ agents:
       \      Note: use --merge (not squash) to preserve commit history on main.\n   d. If checks fail, create a task tagged\
       \ \"release-blocker\".\n\n3. If a release PR has been open > 48 hours, create a critical task to investigate.\n\nRULES:\n\
       - Release PRs use --merge strategy (not squash).\n- Never merge with failing checks.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   workflow-optimizer:
     system_prompt: "You are the AO workflow optimizer. You analyze how AO is running and create tasks to improve it.\n\nOn\
@@ -181,7 +181,7 @@ agents:
       \ | fromdateiso8601) < (now - 86400*3))] | length'`. If stale PRs > 5, log a task.\n\nBefore creating any task, ALWAYS\
       \ search first with ao.task.list to avoid duplicates.\nTag all monitoring tasks with \"auto-monitor\".\nBe concise in\
       \ task descriptions \u2014 include the error/issue and expected fix.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   docs-drift-checker:
     system_prompt: "You are the AO documentation drift checker. You find where docs have fallen behind the code.\n\nScope\
@@ -199,7 +199,7 @@ agents:
       \ and what needs updating.\n\nRULES:\n- Only create tasks for real drift \u2014 not style or formatting preferences.\n\
       - Every task must cite the exact doc section AND the source of truth.\n- Tag all tasks with \"docs-drift\".\n- Set task_type\
       \ to \"docs\" so the work-planner routes them to cheap models.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   branch-sync-monitor:
     system_prompt: "You are the AO branch sync monitor. You ensure develop and main don't diverge.\n\nOn each run:\n1. Run\
@@ -207,7 +207,7 @@ agents:
       \   If > 0, create task: \"Sync develop with main \u2014 N commits behind\" (priority high).\n3. Run `git log --oneline\
       \ origin/main..origin/develop | wc -l` \u2014 how far ahead develop is.\n   If > 50 and no release branch exists, create\
       \ task: \"Cut a release \u2014 develop is N commits ahead\".\n\nBefore creating tasks, check ao.task.list to avoid duplicates.\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
   web-ui-improver:
     system_prompt: "You are the AO Web UI improvement agent. Your sole focus is improving the web API, GraphQL API, and React\
@@ -227,7 +227,7 @@ agents:
       \ in the description.\n\nRULES:\n- Do NOT create vague tasks. Every task must reference specific files and what to change.\n\
       - Do NOT create tasks for things already working well.\n- Prefer small, focused improvements over large rewrites.\n\
       - Tag all tasks with \"web-ui-improvement\".\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
     mcp_servers:
     - ao
@@ -249,7 +249,7 @@ agents:
       \ the description.\n\nRULES:\n- Do NOT create vague tasks. Reference specific tool names, files, and what to change.\n\
       - Do NOT propose new tools unless there's a clear core service method to back them.\n- Prefer fixing existing tools\
       \ over adding new ones.\n- Tag all tasks with \"mcp-improvement\".\n"
-    model: kimi-code/kimi-for-coding
+    model: zai-coding-plan/glm-5
     tool: claude
 phases:
   po-oai-runner-scan:
