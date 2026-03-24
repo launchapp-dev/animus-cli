@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{Duration, Utc};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{CheckpointReason, OrchestratorWorkflow, WorkflowCheckpoint};
@@ -15,6 +14,7 @@ pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 3;
 pub struct CleanupResult {
     pub deleted: usize,
 }
+
 const UNKNOWN_CHECKPOINT_PHASE_BUCKET: &str = "unknown";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,147 +44,70 @@ impl WorkflowStateManager {
     }
 
     pub fn save(&self, workflow: &OrchestratorWorkflow) -> Result<()> {
-        let path = self.workflow_path(&workflow.id);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let json = serde_json::to_string_pretty(workflow)?;
-        write_atomic(&path, json)?;
-        self.update_active_index(workflow);
+        let conn = self.open_db()?;
+        let json = serde_json::to_string(workflow)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
+            params![workflow.id, status_str(workflow.status), json],
+        )?;
         Ok(())
     }
 
     pub fn load(&self, workflow_id: &str) -> Result<OrchestratorWorkflow> {
-        let path = self.workflow_path(workflow_id);
-        if !path.exists() {
-            return Err(anyhow!("workflow not found: {workflow_id}"));
-        }
-
-        let content = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&content)?)
+        let conn = self.open_db()?;
+        let json: String = conn
+            .query_row("SELECT json FROM workflows WHERE id = ?1", params![workflow_id], |row| row.get(0))
+            .map_err(|_| anyhow!("workflow not found: {workflow_id}"))?;
+        Ok(serde_json::from_str(&json)?)
     }
 
     pub fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        // Fast path: read only active workflow IDs from index
-        let index_path = self.active_index_path();
-        if index_path.exists() {
-            if let Ok(content) = fs::read_to_string(&index_path) {
-                if let Ok(ids) = serde_json::from_str::<BTreeSet<String>>(&content) {
-                    let mut workflows = Vec::new();
-                    let mut clean_ids = BTreeSet::new();
-                    for id in &ids {
-                        match self.load(id) {
-                            Ok(wf) => {
-                                if is_active_workflow(&wf) {
-                                    clean_ids.insert(wf.id.clone());
-                                }
-                                workflows.push(wf);
-                            }
-                            Err(_) => {} // stale index entry, skip
-                        }
-                    }
-                    // Prune stale entries from index
-                    if clean_ids.len() != ids.len() {
-                        let _ = self.write_active_index(&clean_ids);
-                    }
-                    return Ok(workflows);
-                }
-            }
-        }
-
-        // Fallback: full directory scan (rebuilds index)
-        self.list_full_scan()
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare("SELECT json FROM workflows WHERE status IN ('running', 'paused')")?;
+        let workflows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .filter_map(|json| serde_json::from_str::<OrchestratorWorkflow>(&json).ok())
+            .collect();
+        Ok(workflows)
     }
 
-    fn list_full_scan(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        let dir = self.workflows_dir();
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut workflows = Vec::new();
-        let mut active_ids = BTreeSet::new();
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-
-            let content = fs::read_to_string(&path)?;
-            if let Ok(workflow) = serde_json::from_str::<OrchestratorWorkflow>(&content) {
-                if is_active_workflow(&workflow) {
-                    active_ids.insert(workflow.id.clone());
-                }
-                workflows.push(workflow);
-            }
-        }
-
-        // Rebuild the active index from full scan
-        let _ = self.write_active_index(&active_ids);
+    pub fn list_all(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare("SELECT json FROM workflows")?;
+        let workflows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .filter_map(|json| serde_json::from_str::<OrchestratorWorkflow>(&json).ok())
+            .collect();
         Ok(workflows)
     }
 
     pub fn cleanup_terminal_workflows(&self, max_age_hours: u64) -> Result<CleanupResult> {
-        let dir = self.workflows_dir();
-        if !dir.exists() {
-            return Ok(CleanupResult::default());
-        }
-
         let cutoff = Utc::now() - Duration::hours(max_age_hours as i64);
-        let mut result = CleanupResult::default();
+        let cutoff_str = cutoff.to_rfc3339();
 
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            if path.file_name().and_then(|n| n.to_str()) == Some("_active_index.json") {
-                continue;
-            }
+        let conn = self.open_db()?;
+        let deleted = conn.execute(
+            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND json_extract(json, '$.completed_at') < ?1",
+            params![cutoff_str],
+        )? + conn.execute(
+            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND json_extract(json, '$.completed_at') IS NULL AND json_extract(json, '$.started_at') < ?1",
+            params![cutoff_str],
+        )?;
 
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let workflow: OrchestratorWorkflow = match serde_json::from_str(&content) {
-                Ok(w) => w,
-                Err(_) => continue,
-            };
+        conn.execute(
+            "DELETE FROM checkpoints WHERE workflow_id NOT IN (SELECT id FROM workflows)",
+            [],
+        )?;
 
-            if is_active_workflow(&workflow) {
-                continue;
-            }
-
-            if workflow.completed_at.map_or(true, |t| t > cutoff) {
-                if workflow.started_at > cutoff {
-                    continue;
-                }
-            }
-
-            if let Err(e) = self.delete(&workflow.id) {
-                eprintln!("cleanup: failed to delete workflow {}: {}", workflow.id, e);
-                continue;
-            }
-            result.deleted += 1;
-        }
-
-        Ok(result)
+        Ok(CleanupResult { deleted })
     }
 
     pub fn delete(&self, workflow_id: &str) -> Result<()> {
-        let path = self.workflow_path(workflow_id);
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-
-        let checkpoints_dir = self.checkpoints_dir(workflow_id);
-        if checkpoints_dir.exists() {
-            fs::remove_dir_all(checkpoints_dir)?;
-        }
-
+        let conn = self.open_db()?;
+        conn.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+        conn.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
         Ok(())
     }
 
@@ -206,17 +129,32 @@ impl WorkflowStateManager {
         };
         workflow.checkpoint_metadata.checkpoints.push(checkpoint.clone());
 
-        let checkpoint_path = self.checkpoint_path(&workflow.id, checkpoint.number);
-        if let Some(parent) = checkpoint_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let conn = self.open_db()?;
+        let snapshot_json = serde_json::to_string(&workflow)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO checkpoints (workflow_id, number, timestamp, reason, phase_id, machine_state, status, snapshot_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                workflow.id,
+                checkpoint.number as i64,
+                checkpoint.timestamp.to_rfc3339(),
+                format!("{:?}", checkpoint.reason).to_ascii_lowercase(),
+                checkpoint.phase_id,
+                format!("{:?}", checkpoint.machine_state).to_ascii_lowercase(),
+                status_str(checkpoint.status),
+                snapshot_json,
+            ],
+        )?;
+        drop(conn);
 
-        let json = serde_json::to_string_pretty(&workflow)?;
-        write_atomic(&checkpoint_path, json)?;
         self.save(&workflow)?;
 
         if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
-            let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
+            let _ = self.prune_checkpoints(
+                &workflow.id,
+                DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
+                None,
+                false,
+            );
         }
 
         Ok(workflow)
@@ -319,12 +257,12 @@ impl WorkflowStateManager {
             workflow.checkpoint_metadata.checkpoints = retained_checkpoints;
             self.save(&workflow)?;
 
+            let conn = self.open_db()?;
             for checkpoint_num in &pruned_checkpoint_numbers {
-                let path = self.checkpoint_path(workflow_id, *checkpoint_num);
-                if path.exists() {
-                    fs::remove_file(&path)
-                        .with_context(|| format!("failed to remove checkpoint file {}", path.display()))?;
-                }
+                conn.execute(
+                    "DELETE FROM checkpoints WHERE workflow_id = ?1 AND number = ?2",
+                    params![workflow_id, *checkpoint_num as i64],
+                )?;
             }
         }
 
@@ -365,87 +303,135 @@ impl WorkflowStateManager {
     }
 
     pub fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<usize>> {
-        let checkpoint_dir = self.checkpoints_dir(workflow_id);
-        if !checkpoint_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut checkpoints = Vec::new();
-        for entry in fs::read_dir(checkpoint_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                if let Some(num_str) = name.strip_prefix("checkpoint-") {
-                    if let Ok(num) = num_str.parse::<usize>() {
-                        checkpoints.push(num);
-                    }
-                }
-            }
-        }
-
-        checkpoints.sort();
-        Ok(checkpoints)
+        let conn = self.open_db()?;
+        let mut stmt =
+            conn.prepare("SELECT number FROM checkpoints WHERE workflow_id = ?1 ORDER BY number")?;
+        let numbers: Vec<usize> = stmt
+            .query_map(params![workflow_id], |row| row.get::<_, i64>(0))?
+            .filter_map(|r| r.ok())
+            .map(|n| n as usize)
+            .collect();
+        Ok(numbers)
     }
 
     pub fn load_checkpoint(&self, workflow_id: &str, checkpoint_num: usize) -> Result<OrchestratorWorkflow> {
-        let path = self.checkpoint_path(workflow_id, checkpoint_num);
-        if !path.exists() {
-            return Err(anyhow!("checkpoint not found: {} #{checkpoint_num}", workflow_id));
-        }
-
-        let content = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&content)?)
+        let conn = self.open_db()?;
+        let json: String = conn
+            .query_row(
+                "SELECT snapshot_json FROM checkpoints WHERE workflow_id = ?1 AND number = ?2",
+                params![workflow_id, checkpoint_num as i64],
+                |row| row.get(0),
+            )
+            .map_err(|_| anyhow!("checkpoint not found: {} #{checkpoint_num}", workflow_id))?;
+        Ok(serde_json::from_str(&json)?)
     }
 
-    fn workflows_dir(&self) -> PathBuf {
+    fn db_path(&self) -> PathBuf {
         protocol::scoped_state_root(&self.project_root)
             .expect("scoped_state_root requires a home directory")
-            .join("workflow-state")
+            .join("workflow.db")
     }
 
-    fn workflow_path(&self, workflow_id: &str) -> PathBuf {
-        self.workflows_dir().join(format!("{workflow_id}.json"))
-    }
-
-    fn checkpoints_dir(&self, workflow_id: &str) -> PathBuf {
-        self.workflows_dir().join("checkpoints").join(workflow_id)
-    }
-
-    fn checkpoint_path(&self, workflow_id: &str, checkpoint_num: usize) -> PathBuf {
-        self.checkpoints_dir(workflow_id).join(format!("checkpoint-{checkpoint_num:04}.json"))
-    }
-
-    fn active_index_path(&self) -> PathBuf {
-        self.workflows_dir().join("_active_index.json")
-    }
-
-    fn update_active_index(&self, workflow: &OrchestratorWorkflow) {
-        let index_path = self.active_index_path();
-        let mut ids: BTreeSet<String> =
-            fs::read_to_string(&index_path).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default();
-
-        if is_active_workflow(workflow) {
-            ids.insert(workflow.id.clone());
-        } else {
-            ids.remove(&workflow.id);
-        }
-
-        let _ = self.write_active_index(&ids);
-    }
-
-    fn write_active_index(&self, ids: &BTreeSet<String>) -> Result<()> {
-        let path = self.active_index_path();
+    fn open_db(&self) -> Result<Connection> {
+        let path = self.db_path();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(ids)?;
-        write_atomic(&path, json)
-    }
-}
 
-fn is_active_workflow(workflow: &OrchestratorWorkflow) -> bool {
-    use crate::types::WorkflowStatus;
-    matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused)
+        let conn = Connection::open(&path)
+            .with_context(|| format!("failed to open workflow db at {}", path.display()))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA busy_timeout=5000;",
+        ).with_context(|| "failed to set SQLite pragmas")?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS workflows (
+                id     TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                json   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                workflow_id   TEXT NOT NULL,
+                number        INTEGER NOT NULL,
+                timestamp     TEXT NOT NULL,
+                reason        TEXT NOT NULL,
+                phase_id      TEXT,
+                machine_state TEXT,
+                status        TEXT,
+                snapshot_json TEXT,
+                PRIMARY KEY (workflow_id, number)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cp_workflow ON checkpoints(workflow_id);",
+        ).with_context(|| "failed to create workflow tables")?;
+
+        self.maybe_migrate_json(&conn);
+
+        Ok(conn)
+    }
+
+    fn maybe_migrate_json(&self, conn: &Connection) {
+        let legacy_dir = protocol::scoped_state_root(&self.project_root)
+            .expect("scoped_state_root requires a home directory")
+            .join("workflow-state");
+        let marker = self.db_path().with_file_name("workflow-migrated.marker");
+
+        if marker.exists() {
+            return;
+        }
+        if !legacy_dir.exists() {
+            return;
+        }
+
+        let has_rows: bool = conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0))
+            .unwrap_or(false);
+        if has_rows {
+            let _ = std::fs::File::create(&marker);
+            return;
+        }
+
+        eprintln!("[ao] migrating workflow JSON to SQLite...");
+
+        tracing::info!(
+            target: "orchestrator_core::workflow",
+            dir = %legacy_dir.display(),
+            "migrating JSON workflow files to SQLite"
+        );
+
+        let mut migrated = 0usize;
+        let entries: Vec<_> = std::fs::read_dir(&legacy_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .collect();
+
+        for entry in &entries {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some("_active_index.json") {
+                continue;
+            }
+
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(workflow) = serde_json::from_str::<OrchestratorWorkflow>(&content) else { continue };
+
+            let compact = serde_json::to_string(&workflow).unwrap_or_else(|_| content.clone());
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
+                params![workflow.id, status_str(workflow.status), compact],
+            );
+            migrated += 1;
+        }
+
+        eprintln!("[ao] migrated {} workflows to SQLite", migrated);
+
+        let _ = std::fs::File::create(&marker);
+    }
 }
 
 fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
@@ -455,14 +441,15 @@ fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
         .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
 }
 
-fn write_atomic(path: &Path, contents: String) -> Result<()> {
-    let temp_path = path.with_extension("tmp");
-    {
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
+fn status_str(status: crate::types::WorkflowStatus) -> &'static str {
+    use crate::types::WorkflowStatus;
+    match status {
+        WorkflowStatus::Pending => "pending",
+        WorkflowStatus::Running => "running",
+        WorkflowStatus::Paused => "paused",
+        WorkflowStatus::Completed => "completed",
+        WorkflowStatus::Failed => "failed",
+        WorkflowStatus::Escalated => "escalated",
+        WorkflowStatus::Cancelled => "cancelled",
     }
-    fs::rename(&temp_path, path)
-        .with_context(|| format!("failed to rename {} to {}", temp_path.display(), path.display()))?;
-    Ok(())
 }
