@@ -126,6 +126,8 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let mcp_config = args.mcp_config_json.as_deref().and_then(|json| serde_json::from_str(json).ok());
     let log_project_root = args.project_root.clone();
     let log_workflow_ref = args.workflow_ref.clone().unwrap_or_default();
+    let wf_log_root = log_project_root.clone();
+    let wf_log_ref = log_workflow_ref.clone();
 
     let params = WorkflowExecuteParams {
         project_root: args.project_root,
@@ -184,7 +186,40 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         mcp_config,
     };
 
+    {
+        let wf_logger = orchestrator_logging::Logger::for_project(std::path::Path::new(&wf_log_root));
+        wf_logger.info("workflow.start", format!("started {}", wf_log_ref))
+            .subject(subject_id.as_str())
+            .meta(serde_json::json!({"workflow_ref": wf_log_ref}))
+            .emit();
+    }
+
+    let wf_start = std::time::Instant::now();
     let result = execute_workflow(params).await;
+    let wf_duration = wf_start.elapsed();
+
+    {
+        let wf_logger = orchestrator_logging::Logger::for_project(std::path::Path::new(&wf_log_root));
+        let success = matches!(&result, Ok(r) if r.success);
+        let mut b = if success {
+            wf_logger.info("workflow.complete", format!("{} completed", wf_log_ref))
+        } else {
+            wf_logger.error("workflow.complete", format!("{} failed", wf_log_ref))
+        };
+        b = b.subject(subject_id.as_str())
+            .duration(wf_duration.as_millis() as u64)
+            .meta(serde_json::json!({"workflow_ref": wf_log_ref}));
+        if let Err(ref e) = result {
+            b = b.err(e.to_string());
+        } else if let Ok(ref r) = result {
+            b = b.meta(serde_json::json!({
+                "workflow_ref": wf_log_ref,
+                "phases_completed": r.phases_completed,
+                "phases_total": r.phases_total,
+            }));
+        }
+        b.emit();
+    }
 
     let exit_code: i32 = match &result {
         Ok(r) if r.success => 0,

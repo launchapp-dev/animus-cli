@@ -133,7 +133,13 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                     .err(error)
                     .emit();
             }
-            DispatchNotice::Started { .. } => {}
+            DispatchNotice::Started { dispatch, .. } => {
+                self.logger
+                    .info("queue.dispatch", format!("dispatched {}", dispatch.subject_key()))
+                    .subject(dispatch.subject_id())
+                    .meta(serde_json::json!({"workflow_ref": dispatch.workflow_ref}))
+                    .emit();
+            }
         }
     }
 }

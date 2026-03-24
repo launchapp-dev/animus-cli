@@ -68,6 +68,28 @@ pub struct LogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -100,6 +122,17 @@ impl LogEntry {
             tool_calls: None,
             role: None,
             content: None,
+            subject_id: None,
+            status: None,
+            from_status: None,
+            to_status: None,
+            branch: None,
+            pr_number: None,
+            mcp_tool: None,
+            mcp_server: None,
+            fallback_from: None,
+            fallback_to: None,
+            cost: None,
             exit_code: None,
             duration_ms: None,
             error: None,
@@ -325,6 +358,41 @@ impl<'a> EntryBuilder<'a> {
     }
     pub fn content(mut self, text: impl Into<String>) -> Self {
         self.entry.content = Some(text.into());
+        self
+    }
+    pub fn subject(mut self, id: impl Into<String>) -> Self {
+        self.entry.subject_id = Some(id.into());
+        self
+    }
+    pub fn status(mut self, s: impl Into<String>) -> Self {
+        self.entry.status = Some(s.into());
+        self
+    }
+    pub fn transition(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
+        self.entry.from_status = Some(from.into());
+        self.entry.to_status = Some(to.into());
+        self
+    }
+    pub fn branch(mut self, b: impl Into<String>) -> Self {
+        self.entry.branch = Some(b.into());
+        self
+    }
+    pub fn pr(mut self, num: u32) -> Self {
+        self.entry.pr_number = Some(num);
+        self
+    }
+    pub fn mcp(mut self, tool: impl Into<String>, server: impl Into<String>) -> Self {
+        self.entry.mcp_tool = Some(tool.into());
+        self.entry.mcp_server = Some(server.into());
+        self
+    }
+    pub fn fallback(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
+        self.entry.fallback_from = Some(from.into());
+        self.entry.fallback_to = Some(to.into());
+        self
+    }
+    pub fn cost(mut self, c: f64) -> Self {
+        self.entry.cost = Some(c);
         self
     }
     pub fn exit(mut self, code: i32) -> Self {

@@ -480,10 +480,28 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                         .run(run_id.0.as_str()).phase(phase_id).emit();
                 }
                 AgentRunEvent::ToolCall { tool_info, .. } => {
-                    logger.info("llm.tool_call", &tool_info.tool_name)
+                    let is_mcp = tool_info.tool_name.starts_with("mcp_");
+                    let mut b = logger.info("llm.tool_call", &tool_info.tool_name)
                         .run(run_id.0.as_str()).phase(phase_id)
-                        .meta(serde_json::json!({"tool": &tool_info.tool_name, "params": &tool_info.parameters}))
-                        .emit();
+                        .meta(serde_json::json!({"tool": &tool_info.tool_name, "params": &tool_info.parameters}));
+                    if is_mcp {
+                        let parts: Vec<&str> = tool_info.tool_name.splitn(3, '_').collect();
+                        if parts.len() >= 3 {
+                            b = b.mcp(parts[2], parts[1]);
+                        }
+                    }
+                    b.emit();
+                }
+                AgentRunEvent::Metadata { cost, tokens, .. } => {
+                    let mut b = logger.info("llm.metadata", "usage update")
+                        .run(run_id.0.as_str()).phase(phase_id);
+                    if let Some(c) = cost {
+                        b = b.cost(*c);
+                    }
+                    if let Some(ref t) = tokens {
+                        b = b.tokens(t.input as u64, t.output as u64);
+                    }
+                    b.emit();
                 }
                 AgentRunEvent::Error { error, .. } => {
                     logger.error("llm.error", error)

@@ -144,12 +144,7 @@
       "Bash(for d:*)",
       "Bash(npm run:*)",
       "Bash(gh api:*)",
-      "Bash(cargo generate-lockfile:*)",
-      "Bash(cargo ao-fmt:*)",
-      "Bash(bash /Users/samishukri/.local/bin/ao-fleet-monitor.sh 2>&1)",
-      "Bash(for item:*)",
-      "Bash(while \"IFS=|\" read -r WF_ID WF_REF ELAPSED)",
-      "Bash(~/.local/bin/ao queue:*)"
+      "Bash(bash /Users/samishukri/.local/bin/ao-fleet-monitor.sh 2>&1)"
     ]
   },
   "enableAllProjectMcpServers": true,
