@@ -305,6 +305,10 @@ pub struct PhaseRunResult {
     pub metadata: PhaseExecutionMetadata,
     #[serde(default)]
     pub signals: Vec<PhaseExecutionSignal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1506,7 +1510,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 }
             }
 
-            Ok(PhaseRunResult { outcome, metadata, signals })
+            Ok(PhaseRunResult { model: metadata.selected_model.clone(), tool: metadata.selected_tool.clone(), outcome, metadata, signals })
         }
         orchestrator_core::PhaseExecutionMode::Command => {
             let command = definition
@@ -1571,7 +1575,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
                 persist_phase_output(project_root, workflow_id, phase_id, &outcome)?;
 
-                return Ok(PhaseRunResult { outcome, metadata, signals });
+                return Ok(PhaseRunResult { model: None, tool: None, outcome, metadata, signals });
             }
 
             if command.parse_json_output {
@@ -1605,6 +1609,8 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 },
                 metadata,
                 signals,
+                model: None,
+                tool: None,
             })
         }
         orchestrator_core::PhaseExecutionMode::Manual => {
@@ -1632,6 +1638,8 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 },
                 metadata,
                 signals,
+                model: None,
+                tool: None,
             })
         }
     }

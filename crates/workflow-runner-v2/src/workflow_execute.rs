@@ -285,7 +285,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                     phase_id: &phase_filter,
                     duration: phase_elapsed,
                     success: phase_status != "failed",
-                    error: None, model: None, tool: None,
+                    error: None, model: result.model.clone(), tool: result.tool.clone(),
                 });
                 results.push(serde_json::json!({
                     "phase_id": phase_filter,
@@ -417,7 +417,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                             phase_id: &phase_id,
                             duration: phase_elapsed,
                             success: next_success,
-                            error: None, model: None, tool: None,
+                            error: None, model: result.model.clone(), tool: result.tool.clone(),
                         });
                         let mut result_value = serde_json::json!({
                             "phase_id": phase_id,
