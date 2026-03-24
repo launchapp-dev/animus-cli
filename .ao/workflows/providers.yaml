@@ -1,8 +1,36 @@
 agents:
+  kimi-default:
+    system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
+      clean, tested code.
+    model: openrouter/moonshotai/kimi-k2.5
+    tool: oai-runner
+  minimax-default:
+    system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
+      clean, tested code.
+    model: minimax/MiniMax-M2.7
+    tool: oai-runner
+  glm-default:
+    system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
+      clean, tested code.
+    model: zai-coding-plan/glm-5-turbo
+    tool: oai-runner
+  gemini-default:
+    system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
+      clean, tested code.
+    model: gemini-3.1-pro-preview
+    tool: gemini
+  codex-default:
+    system_prompt: You are an expert Rust developer working on the AO CLI workspace. Strong at code understanding, refactoring,
+      and implementation. Write clean, tested code.
+    model: gpt-5.4
+    tool: codex
+    mcp_servers:
+    - ao
+    - context7
+    - rust-docs
   opus-default:
-    system_prompt: "You are an expert Rust developer working on the AO CLI workspace.\
-      \ You handle the hardest tasks \u2014 architecture, complex refactors, critical\
-      \ fixes. Write exceptional, production-ready code."
+    system_prompt: "You are an expert Rust developer working on the AO CLI workspace. You handle the hardest tasks \u2014\
+      \ architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
     mcp_servers:
@@ -11,43 +39,250 @@ agents:
     - rust-docs
     - sequential-thinking
     - memory
-  minimax-default:
-    system_prompt: You are an expert Rust developer working on the AO CLI workspace.
-      Follow existing code patterns. Write clean, tested code.
-    model: kimi-for-coding
-    tool: claude
-    mcp_servers:
-    - ao
+  minimax-smoke-test:
+    system_prompt: "You are a smoke test agent running on MiniMax via oai-runner.\nYour job is to verify the oai-runner \u2192\
+      \ MiniMax API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5` to\
+      \ verify file access works.\n2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.\n\
+      3. Confirm you have tool use: call at least one tool (read_file or list_files).\n4. Confirm AO MCP connectivity: call\
+      \ ao.task.stats to get task statistics.\n5. Confirm AO MCP read: call ao.queue.stats to get queue statistics.\n6. Report\
+      \ your model name, a timestamp, and \"PASS\" or \"FAIL\" for each check.\n7. If everything works, output a single JSON\
+      \ line:\n   {\"status\": \"pass\", \"model\": \"minimax\", \"checks\": [\"file_read\", \"dir_list\", \"tool_use\", \"\
+      mcp_task_stats\", \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
+    model: minimax/MiniMax-M2.5
+    tool: oai-runner
+  glm-smoke-test:
+    system_prompt: "You are a smoke test agent running on GLM (Z-AI) via oai-runner.\nYour job is to verify the oai-runner\
+      \ \u2192 Z-AI API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5`\
+      \ to verify file access works.\n2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.\n\
+      3. Confirm you have tool use: call at least one tool (read_file or list_files).\n4. Confirm AO MCP connectivity: call\
+      \ ao.task.stats to get task statistics.\n5. Confirm AO MCP read: call ao.queue.stats to get queue statistics.\n6. Report\
+      \ your model name, a timestamp, and \"PASS\" or \"FAIL\" for each check.\n7. If everything works, output a single JSON\
+      \ line:\n   {\"status\": \"pass\", \"model\": \"glm\", \"checks\": [\"file_read\", \"dir_list\", \"tool_use\", \"mcp_task_stats\"\
+      , \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
+    model: zai-coding-plan/glm-5-turbo
+    tool: oai-runner
 phases:
-  opus-implementation:
+  kimi-implementation:
     mode: agent
-    agent: opus-default
-    directive: "Implement the task. Read the task description, checklist, and any prior\
-      \ phase outputs. Write clean, tested code. You are the strongest model \u2014\
-      \ this task requires exceptional quality."
+    agent: kimi-default
+    directive: Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested
+      code.
+    runtime:
+      fallback_models:
+      - zai-coding-plan/glm-5-turbo
+      - minimax/MiniMax-M2.5
+      - claude-sonnet-4-6
+      timeout_secs: 900
     capabilities:
       mutates_state: true
   minimax-implementation:
     mode: agent
     agent: minimax-default
-    directive: Implement the task. Read the task description, checklist, and any prior
-      phase outputs. Write clean, tested code.
+    directive: Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested
+      code.
+    runtime:
+      fallback_models:
+      - zai-coding-plan/glm-5-turbo
+      - claude-sonnet-4-6
+    capabilities:
+      mutates_state: true
+  minimax-requirements:
+    mode: agent
+    agent: minimax-default
+    directive: Refine the task into implementation-ready requirements with clear acceptance criteria.
+    runtime:
+      fallback_models:
+      - zai-coding-plan/glm-5-turbo
+      - claude-sonnet-4-6
+    capabilities:
+      mutates_state: true
+  glm-implementation:
+    mode: agent
+    agent: glm-default
+    directive: Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested
+      code.
+    runtime:
+      fallback_models:
+      - minimax/MiniMax-M2.5
+      - claude-sonnet-4-6
+    capabilities:
+      mutates_state: true
+  glm-requirements:
+    mode: agent
+    agent: glm-default
+    directive: Refine the task into implementation-ready requirements with clear acceptance criteria.
+    runtime:
+      fallback_models:
+      - minimax/MiniMax-M2.5
+      - claude-sonnet-4-6
+    capabilities:
+      mutates_state: true
+  gemini-implementation:
+    mode: agent
+    agent: gemini-default
+    directive: Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested
+      code.
     runtime:
       fallback_models:
       - claude-sonnet-4-6
     capabilities:
       mutates_state: true
+  codex-implementation:
+    mode: agent
+    agent: codex-default
+    directive: Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested
+      code.
+    runtime:
+      fallback_models:
+      - claude-sonnet-4-6
+    capabilities:
+      mutates_state: true
+  codex-code-review:
+    mode: agent
+    agent: codex-default
+    directive: 'Review the implementation against the task requirements and acceptance criteria. Check for: requirement misalignment,
+      missing acceptance criteria, edge cases, logic errors, and code quality. Do NOT make changes. If issues found, set verdict
+      to rework with exact details of what must be fixed. Only advance if code fully satisfies the task spec.'
+    decision_contract:
+      required_evidence:
+      - code_review_clean
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        review_summary:
+          type: string
+          description: Short review summary explaining why the branch is approved or sent back.
+        blocking_issues:
+          type: array
+          description: Concrete blocking defects or requirement misalignments discovered.
+          items:
+            type: string
+        requirements_verified:
+          type: array
+          description: Acceptance criteria confirmed as satisfied.
+          items:
+            type: string
+    capabilities:
+      mutates_state: false
+  opus-implementation:
+    mode: agent
+    agent: opus-default
+    directive: "Implement the task. Read the task description, checklist, and any prior phase outputs. Write clean, tested\
+      \ code. You are the strongest model \u2014 this task requires exceptional quality."
+    capabilities:
+      mutates_state: true
+  glm-smoke:
+    mode: agent
+    agent: glm-smoke-test
+    directive: 'Run GLM/Z-AI API smoke test: verify file access, tool use, and AO MCP connectivity.'
+    capabilities:
+      mutates_state: false
+  minimax-smoke:
+    mode: agent
+    agent: minimax-smoke-test
+    directive: 'Run MiniMax API smoke test: verify file access, tool use, and AO MCP connectivity.'
+    capabilities:
+      mutates_state: false
 workflows:
+- id: standard-kimi
+  name: Standard (Kimi K2.5)
+  description: "Implement \u2192 Push \u2192 PR fast with Kimi"
+  phases:
+  - requirements
+  - kimi-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: standard-glm
+  name: Standard (GLM)
+  description: "Implement \u2192 Push \u2192 PR fast with GLM"
+  phases:
+  - glm-requirements
+  - glm-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: standard-minimax
+  name: Standard (MiniMax)
+  description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
+  phases:
+  - minimax-requirements
+  - minimax-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: standard-gemini
+  name: Standard (Gemini)
+  description: "Implement \u2192 Push \u2192 PR fast with Gemini"
+  phases:
+  - requirements
+  - gemini-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: standard-codex
+  name: Standard (Codex)
+  description: "Implement \u2192 Push \u2192 PR fast with Codex"
+  phases:
+  - requirements
+  - codex-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
 - id: standard-opus
   name: Standard (Opus)
-  description: "Opus implementation \u2192 Push \u2192 PR for critical/architecture\
-    \ tasks"
+  description: "Implement \u2192 Push \u2192 PR fast with Opus"
   phases:
   - requirements
   - opus-implementation:
       skip_if:
       - task_type == docs
-  - check-commits
   - push-branch
   - create-pr
   - cleanup
@@ -60,10 +295,70 @@ workflows:
       cleanup_worktree: true
 - id: quick-fix-minimax
   name: Quick Fix (MiniMax)
-  description: "MiniMax implementation \u2192 Push \u2192 PR for simple tasks"
+  description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
   phases:
   - minimax-implementation
-  - check-commits
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: quick-fix-glm
+  name: Quick Fix (GLM)
+  description: "Implement \u2192 Push \u2192 PR fast with GLM"
+  phases:
+  - glm-implementation
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: minimax-smoke-test
+  name: MiniMax Smoke Test
+  description: "Verify oai-runner \u2192 MiniMax API pipeline: file ops, tool use, AO MCP connectivity"
+  phases:
+  - minimax-smoke
+- id: glm-smoke-test
+  name: GLM Smoke Test
+  description: "Verify oai-runner \u2192 GLM/Z-AI API pipeline: file ops, tool use, AO MCP connectivity"
+  phases:
+  - glm-smoke
+- id: ao.task/ui-ux
+  name: UI/UX Task Workflow
+  description: "Implement \u2192 Push \u2192 PR fast with Gemini for UI/UX"
+  phases:
+  - requirements
+  - gemini-implementation:
+      skip_if:
+      - task_type == docs
+  - push-branch
+  - create-pr
+  - cleanup
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: ui-ux-standard
+  name: UI/UX Standard
+  description: "Implement \u2192 Push \u2192 PR fast with Gemini for UI/UX"
+  phases:
+  - requirements
+  - gemini-implementation:
+      skip_if:
+      - task_type == docs
   - push-branch
   - create-pr
   - cleanup

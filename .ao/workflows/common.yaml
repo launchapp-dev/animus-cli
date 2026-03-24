@@ -35,117 +35,93 @@ mcp_servers:
     - -y
     - '@modelcontextprotocol/server-filesystem'
     - /Users/samishukri/ao-cli
-  minimax:
-    command: uvx
-    args:
-    - minimax-coding-plan-mcp
-    env:
-      MINIMAX_API_KEY: ${MINIMAX_API_KEY}
-      MINIMAX_MCP_BASE_PATH: /Users/samishukri/.ao/minimax-mcp-output
-      MINIMAX_API_HOST: https://api.minimax.io
 agents:
   default:
-    model: kimi-for-coding
+    model: claude-sonnet-4-6
     tool: claude
     mcp_servers:
     - ao
     - context7
     - rust-docs
     - sequential-thinking
-    - minimax
   triager:
-    system_prompt: "You are the AO task triager. Validate tasks and dispatch to implementation.\n\
-      \nSTEP 1 \u2014 VALIDATE:\n- Read the task via ao.task.get\n- Check if code\
-      \ already exists: search the codebase for the described changes\n- Check for\
-      \ existing PRs: `gh pr list --state open --head ao/task-<ID>`\n- Check for merged\
-      \ PRs: `gh pr list --state merged --head ao/task-<ID>`\n- Check ao.task.list\
-      \ for duplicates with similar titles\n\nSTEP 2 \u2014 DECIDE:\n- SKIP (already\
-      \ done): call ao.task.status to set \"done\", emit skip verdict\n- SKIP (duplicate):\
-      \ call ao.task.status to set \"cancelled\", emit skip verdict\n- SKIP (obsolete):\
-      \ call ao.task.status to set \"cancelled\", emit skip verdict\n- IMPLEMENT:\
-      \ proceed to step 3\n\nSTEP 3 \u2014 DISPATCH (only if IMPLEMENT):\n\n| Condition\
-      \                          | workflow_ref    |\n|------------------------------------|-----------------|\n\
-      | critical OR architecture           | standard-opus   |\n| docs OR monitoring\
-      \ OR low          | quick-fix       |\n| everything else                    |\
-      \ standard        |\n\nCall ao.queue.enqueue with task_id and the chosen workflow_ref.\n\
-      Then emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
-      \ before dispatching \u2014 do NOT enqueue duplicates.\n- Be thorough in validation\
-      \ \u2014 search the actual code, not just task titles.\n- Use \"advance\" verdict\
-      \ after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
-    model: claude-haiku-4-5
-    tool: claude
-    mcp_servers:
-    - ao
-    skills:
-    - queue-management
-  work-planner:
-    system_prompt: "You are the AO work dispatcher. Feed ready tasks into the triage\
-      \ pipeline.\nYou do NOT route to implementation workflows \u2014 triage handles\
-      \ that.\nYou do NOT handle rework or rebase \u2014 pr-reviewer handles those.\n\
-      \nOn each run:\n1. Call ao.queue.list \u2014 check current queue depth.\n2. If\
-      \ total (pending + assigned) >= 10, STOP \u2014 do NOT enqueue more.\n3. Call\
-      \ ao.task.prioritized to get highest priority ready tasks.\n4. For each candidate,\
-      \ call ao.task.get to check dependencies.\n   - If blocked_by dependencies are\
-      \ NOT all \"done\"/\"cancelled\", SKIP.\n5. For eligible tasks NOT already in\
-      \ the queue:\n   - Call ao.queue.enqueue with task_id and workflow_ref=\"triage\"\
-      \n6. Enqueue up to 3 new tasks per run.\n7. Use ao.queue.reorder to keep queue\
-      \ sorted by priority (critical first).\n\nRULES:\n- ALWAYS use workflow_ref=\"\
-      triage\" \u2014 never route directly to implementation.\n- NEVER enqueue rework,\
-      \ rebase-and-retry, or release-manager workflows.\n- Skip paused, cancelled,\
-      \ done, or blocked tasks.\n- Skip tasks with consecutive_dispatch_failures >\
-      \ 5.\n- Check ao.workflow.list \u2014 if last workflow had a \"skip\" decision,\
-      \ do NOT re-enqueue.\n- Prefer tasks that have NEVER been dispatched over retries.\n\
-      - Do NOT enqueue duplicates \u2014 check queue first.\n"
-    model: claude-haiku-4-5
-    tool: claude
-    mcp_servers:
-    - ao
-    skills:
-    - queue-management
-  reconciler:
-    system_prompt: "You are the AO task reconciler. Unblock the pipeline and clean\
-      \ up stale state.\nRESPECT DEPENDENCY ORDER.\n\nOn each run you MUST do ALL\
-      \ of these:\n\n1. DETECT SKIPPED/CANCELLED WORKFLOWS:\n   Call ao.workflow.list\
-      \ with limit 20. For workflows with status \"cancelled\":\n   - If decision_history\
-      \ has a \"skip\" decision, set the task to \"done\".\n\n2. DETECT FAILED WORKFLOWS:\n\
-      \   For workflows with status \"failed\" OR \"escalated\":\n   - \"no changes\
-      \ were detected\" \u2192 task might already be done, set to \"blocked\".\n  \
-      \ - \"failed to connect runner\" \u2192 transient, set task back to \"ready\"\
-      \ for retry.\n   - If a task has failed > 5 times, cancel it.\n\n3. UNBLOCK\
-      \ TASKS (dependency-aware):\n   Call ao.task.list with status \"blocked\". For\
-      \ each:\n   - If ALL blocked_by dependencies are \"done\"/\"cancelled\", set\
-      \ to \"ready\".\n   - If blocked_reason is \"Blocked by status update\", set\
-      \ to \"ready\" for retry.\n   - If task has a merged PR, set to \"done\".\n\n\
-      4. CLEAN STALE QUEUE ENTRIES:\n   Call ao.queue.list. For \"assigned\" entries\
-      \ older than 30 minutes, call ao.queue.drop.\n\n5. MARK DONE:\n   For tasks\
-      \ with merged PRs (`gh pr list --state merged --head ao/task-XXX`), set to \"\
-      done\".\n\n6. PROMOTE BACKLOG (dependency-aware):\n   Call ao.task.list with\
-      \ status \"backlog\". Promote to \"ready\" if all blocked_by deps are done.\n\
-      \n7. CANCEL STALE TASKS:\n   For \"ready\" tasks re-enqueued > 5 times without\
-      \ producing a PR, cancel them.\n\nDEPENDENCY RULES:\n- Never promote/unblock\
-      \ if blocked_by deps aren't done.\n- Process leaf tasks first.\n"
-    model: claude-haiku-4-5
-    tool: claude
-    mcp_servers:
-    - ao
-  sonnet-reviewer:
-    system_prompt: "You are a code reviewer. Your primary job is to verify that the\
-      \ implementation meets ALL acceptance criteria and requirements from the task.\n\
-      \nPROCESS:\n1. Read the task via ao.task.get \u2014 understand requirements and\
-      \ acceptance criteria.\n2. Review code changes against EACH acceptance criterion.\n\
-      3. Check for: requirement gaps, defects, edge cases, security issues, code quality.\n\
-      4. ONLY advance if ALL acceptance criteria are satisfied and code is production-ready.\n\
-      5. If requirements are NOT met, set verdict to \"rework\" with:\n   - Which specific\
-      \ requirements are unmet\n   - Exact spec of what must be fixed\n   - Update\
-      \ task checklist via ao.task.checklist-update\n\nRULES:\n- Do NOT make code changes\
-      \ yourself.\n- Every review MUST verify acceptance criteria \u2014 not just code\
-      \ quality.\n- Be specific in rework feedback \u2014 the implementation agent\
-      \ reads your notes.\n"
+    system_prompt: "You are the AO task triager and dispatcher. You validate tasks and route them to implementation.\n\nSTEP\
+      \ 1 \u2014 VALIDATE:\n- Read the task via ao.task.get\n- Check if code already exists: search the codebase for the described\
+      \ changes\n- Check for existing PRs: `gh pr list --state open --head ao/task-<ID>`\n- Check for merged PRs: `gh pr list\
+      \ --state merged --head ao/task-<ID>`\n- Check ao.task.list for duplicates with similar titles\n\nSTEP 2 \u2014 DECIDE:\n\
+      - SKIP (already done): call ao.task.status to set \"done\", emit skip verdict\n- SKIP (duplicate): call ao.task.status\
+      \ to set \"cancelled\", emit skip verdict\n- SKIP (obsolete): call ao.task.status to set \"cancelled\", emit skip verdict\n\
+      - IMPLEMENT: proceed to step 3\n\nSTEP 3 \u2014 DISPATCH (only if IMPLEMENT):\nChoose workflow_ref based on task complexity\
+      \ and type:\n\n| Complexity | Type        | workflow_ref      | Model                  |\n|------------|-------------|-------------------|------------------------|\n\
+      | low        | any         | standard-minimax  | MiniMax M2.7 (cheapest)|\n| medium     | feature     | standard   \
+      \       | Claude Sonnet          |\n| medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |\n| medium\
+      \     | refactor    | standard-codex    | Codex GPT-5.4          |\n| medium     | ui-ux       | standard-gemini   |\
+      \ Gemini 3.1 Pro         |\n| high       | feature     | standard          | Claude Sonnet          |\n| high      \
+      \ | bugfix      | standard-codex    | Codex GPT-5.4          |\n| high       | refactor    | standard-codex    | Codex\
+      \ GPT-5.4          |\n| high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |\n| high       | architecture|\
+      \ standard-opus     | Claude Opus            |\n| critical   | any         | standard-opus     | Claude Opus       \
+      \     |\n| any        | monitoring  | quick-fix-minimax | MiniMax M2.7           |\n\nCall ao.queue.enqueue with task_id\
+      \ and the chosen workflow_ref.\nThen emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
+      \ before dispatching \u2014 do NOT enqueue duplicates.\n- Be thorough in validation \u2014 search the actual code, not\
+      \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
     model: claude-sonnet-4-6
     tool: claude
     mcp_servers:
     - ao
+  reconciler:
+    system_prompt: "You are the AO task reconciler. Your job is to unblock the pipeline and clean up stale state. RESPECT\
+      \ DEPENDENCY ORDER.\n\nOn each run you MUST do ALL of these:\n\n1. DETECT SKIPPED/CANCELLED WORKFLOWS:\n   Call ao.workflow.list\
+      \ with limit 20. For workflows with status \"cancelled\":\n   - Check if the decision_history has a \"skip\" decision\
+      \ (meaning the task was already done).\n   - If decision was \"skip\", extract the task_id and call ao.task.status to\
+      \ set it to \"done\".\n   - This prevents tasks from being re-enqueued indefinitely when the work is already complete.\n\
+      \n2. DETECT FAILED AND ESCALATED WORKFLOWS AND RE-ROUTE:\n   For workflows with status \"failed\" OR \"escalated\":\n\
+      \   - Check failure_reason and workflow_ref. Common failures:\n     - \"no changes were detected\" \u2192 task might\
+      \ already be done. Set to \"blocked\" with reason.\n     - \"missing required field 'commit_message'\" \u2192 contract\
+      \ violation, set to \"blocked\".\n     - \"failed to connect runner\" \u2192 transient error, set back to \"ready\"\
+      \ for retry.\n   - MODEL FAILURE RE-ROUTING:\n     If a task failed on an oai-runner workflow (standard-glm, standard-kimi,\
+      \ standard-minimax):\n     a. Set task back to \"ready\" so the work-planner can re-enqueue it.\n     b. Do NOT call\
+      \ ao.queue.enqueue \u2014 only the work-planner enqueues.\n   - If a task has failed > 5 times, cancel it.\n\n3. UNBLOCK\
+      \ TASKS (dependency-aware):\n   Call ao.task.list with status \"blocked\". For each:\n   - If blocked_reason mentions\
+      \ \"dependency gate\", check each blocked_by dependency.\n   - If ALL dependencies are \"done\"/\"cancelled\", set to\
+      \ \"ready\".\n   - If blocked_reason is \"Blocked by status update\" (from failed workflow), set to \"ready\" for retry.\n\
+      \   - If task has a merged PR, set to \"done\".\n\n4. CLEAN STALE QUEUE ENTRIES:\n   Call ao.queue.list. For \"assigned\"\
+      \ entries older than 30 minutes, call ao.queue.drop.\n\n5. MARK DONE:\n   For tasks with merged PRs (`gh pr list --state\
+      \ merged --head ao/task-XXX`), set to \"done\".\n\n6. PROMOTE BACKLOG (dependency-aware):\n   Call ao.task.list with\
+      \ status \"backlog\". Promote to \"ready\" if all blocked_by deps are done.\n\n7. CANCEL STALE TASKS:\n   For \"ready\"\
+      \ tasks that have been re-enqueued > 5 times without producing a PR, cancel them.\n   Check by looking at the task's\
+      \ consecutive_dispatch_failures field.\n\nDEPENDENCY RULES:\n- Never promote/unblock if blocked_by deps aren't done.\n\
+      - Process leaf tasks first.\n"
+    model: gpt-5.4
+    tool: codex
+    mcp_servers:
+    - ao
+  work-planner:
+    system_prompt: "You are the AO work dispatcher. Feed ready tasks into the triage pipeline.\nYou do NOT route to implementation\
+      \ workflows \u2014 triage handles that.\nYou do NOT handle rework or rebase \u2014 pr-reviewer handles those.\n\nOn\
+      \ each run:\n1. Call ao.queue.list \u2014 check current queue depth.\n2. If total (pending + assigned) >= 10, STOP \u2014\
+      \ do NOT enqueue more.\n3. Call ao.task.prioritized to get highest priority ready tasks.\n4. For each candidate, call\
+      \ ao.task.get to check dependencies.\n   - If blocked_by dependencies are NOT all \"done\"/\"cancelled\", SKIP.\n5.\
+      \ For eligible tasks NOT already in the queue:\n   - Call ao.queue.enqueue with task_id and workflow_ref=\"triage\"\n\
+      6. Enqueue up to 3 new tasks per run.\n7. Use ao.queue.reorder to keep queue sorted by priority (critical first).\n\n\
+      RULES:\n- ALWAYS use workflow_ref=\"triage\" \u2014 never route directly to implementation.\n- NEVER enqueue rework,\
+      \ rebase-and-retry, or release-manager workflows.\n- Skip paused, cancelled, done, or blocked tasks.\n- Skip tasks with\
+      \ consecutive_dispatch_failures > 5.\n- Check ao.workflow.list \u2014 if last workflow had a \"skip\" decision, do NOT\
+      \ re-enqueue.\n- Prefer tasks that have NEVER been dispatched over retries.\n- Do NOT enqueue duplicates \u2014 check\
+      \ queue first.\n"
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers:
+    - ao
+    skills:
+    - queue-management
 phase_catalog:
+  po-review:
+    label: PO Review
+    description: Product Owner sign-off on completed work
+    category: review
+    tags:
+    - review
+    - sign-off
   triage:
     label: Triage
     description: Evaluate whether a task is still valid, already done, or obsolete
@@ -169,19 +145,11 @@ phase_catalog:
     - implementation
   code-review:
     label: Code Review
-    description: Review implementation against requirements and for defects
+    description: Review implementation for defects and maintainability
     category: review
     tags:
     - review
     - quality
-    - requirements
-  po-review:
-    label: PO Review
-    description: Product Owner sign-off on completed work
-    category: review
-    tags:
-    - review
-    - sign-off
   testing:
     label: Testing
     description: "Manual testing gate \u2014 human verifies the implementation"
@@ -196,6 +164,22 @@ phase_catalog:
     tags:
     - requirements
     - planning
+  requirement-task-generation:
+    label: Requirement Task Generation
+    description: Create or refine linked tasks for a requirement through typed AO tools
+    category: planning
+    tags:
+    - requirements
+    - planning
+    - task-generation
+  requirement-workflow-bootstrap:
+    label: Requirement Workflow Bootstrap
+    description: Start task workflows for linked requirement tasks
+    category: planning
+    tags:
+    - requirements
+    - planning
+    - orchestration
   work-planning:
     label: Work Planning
     description: Scan tasks, check eligibility, and enqueue dispatches for the daemon
@@ -226,6 +210,14 @@ phase_catalog:
     tags:
     - cleanup
     - disk
+  system-health-check:
+    label: System Health Check
+    description: Check build, tests, daemon, disk, queue health and log tasks for issues
+    category: operations
+    tags:
+    - monitoring
+    - health
+    - automation
   pr-review:
     label: PR Review
     description: Scan open PRs and perform code reviews with follow-up queueing
@@ -234,28 +226,28 @@ phase_catalog:
     - review
     - quality
     - pr
-  requirement-task-generation:
-    label: Requirement Task Generation
-    description: Create or refine linked tasks for a requirement through typed AO tools
+  brain-requirement-scan:
+    label: Brain Requirement Scan
+    description: List requirement candidates that still need planning work
     category: planning
     tags:
-    - requirements
+    - brain
     - planning
-    - task-generation
-  requirement-workflow-bootstrap:
-    label: Requirement Workflow Bootstrap
-    description: Start task workflows for linked requirement tasks
+    - requirements
+  brain-task-next:
+    label: Brain Task Selection
+    description: Select the next task candidate to execute
     category: planning
     tags:
-    - requirements
+    - brain
     - planning
-    - orchestration
+    - tasks
 phases:
   triage:
     mode: agent
     agent: triager
-    directive: Validate the task (check if done/duplicate/obsolete) and if valid, dispatch
-      to the right implementation workflow via ao.queue.enqueue.
+    directive: Validate the task (check if done/duplicate/obsolete) and if valid, dispatch to the right implementation workflow
+      via ao.queue.enqueue.
     capabilities:
       mutates_state: true
     decision_contract:
@@ -265,8 +257,7 @@ phases:
       fields:
         skip_reason:
           type: string
-          description: When verdict is skip, explain whether the task is already_done,
-            duplicate, no_longer_valid, or out_of_scope.
+          description: When verdict is skip, explain whether the task is already_done, duplicate, no_longer_valid, or out_of_scope.
         recommended_task_status:
           type: string
           enum:
@@ -275,9 +266,9 @@ phases:
           description: When verdict is skip, use done for already_done, otherwise cancelled.
   refine-requirements:
     mode: agent
-    agent: requirement-refiner
-    directive: Refine the current task into implementation-ready scope with concrete
-      acceptance criteria, checklist items, relevant code references, and constraints.
+    agent: requirements-refiner
+    directive: Refine the current task into implementation-ready scope with concrete acceptance criteria, checklist items,
+      relevant code references, and constraints.
     capabilities:
       mutates_state: true
     decision_contract:
@@ -287,8 +278,7 @@ phases:
       fields:
         refined_scope:
           type: string
-          description: Concise summary of the refined task scope and implementation
-            boundaries.
+          description: Concise summary of the refined task scope and implementation boundaries.
         acceptance_criteria_added:
           type: array
           description: Acceptance criteria or checklist items that were added or clarified.
@@ -296,15 +286,13 @@ phases:
             type: string
         relevant_files:
           type: array
-          description: Repository files or modules the implementation phase should
-            inspect or edit.
+          description: Repository files or modules the implementation phase should inspect or edit.
           items:
             type: string
   implementation:
     mode: agent
     agent: default
-    directive: Implement production-quality code for this task. Keep changes focused
-      and executable.
+    directive: Implement production-quality code for this task. Keep changes focused and executable.
     output_contract:
       kind: implementation_result
       required_fields:
@@ -337,39 +325,30 @@ phases:
             type: string
   code-review:
     mode: agent
-    agent: sonnet-reviewer
-    directive: Review the implementation against the task's acceptance criteria and
-      requirements. Do NOT make changes yourself. If requirements are not fully met
-      or issues are found, set verdict to rework with exact details. Only advance if
-      ALL acceptance criteria are satisfied and code is production-ready.
+    agent: codex-default
+    directive: Review the implementation for defects, edge cases, and maintainability issues. Do NOT make changes yourself.
+      If issues are found, set verdict to rework and provide an exact spec of what must be fixed in the reason field. Only
+      advance if the code is production-ready as-is.
     decision_contract:
       required_evidence:
       - code_review_clean
-      - requirements_met
       min_confidence: 0.7
       max_risk: medium
       allow_missing_decision: false
       fields:
         review_summary:
           type: string
-          description: Short review summary explaining why the branch is approved or
-            sent back.
+          description: Short review summary explaining why the branch is approved or sent back.
         blocking_issues:
           type: array
-          description: Concrete blocking defects or unmet requirements discovered.
-          items:
-            type: string
-        requirements_verified:
-          type: array
-          description: Acceptance criteria confirmed as satisfied.
+          description: Concrete blocking defects or rework items discovered during review.
           items:
             type: string
   po-review:
     mode: agent
     agent: po-reviewer
-    directive: Review the delivered work against product intent and acceptance criteria.
-      Do not edit code. If gaps remain, set verdict to rework and update the task/checklist
-      through AO MCP with precise next actions.
+    directive: Review the delivered work against product intent and acceptance criteria. Do not edit code. If gaps remain,
+      set verdict to rework and update the task/checklist through AO MCP with precise next actions.
     capabilities:
       mutates_state: true
     decision_contract:
@@ -386,34 +365,29 @@ phases:
             type: string
         unmet_requirements:
           type: array
-          description: Acceptance criteria or product requirements still missing or
-            only partially satisfied.
+          description: Acceptance criteria or product requirements still missing or only partially satisfied.
           items:
             type: string
         product_summary:
           type: string
-          description: Short product-facing assessment of the delivered behavior and
-            remaining gaps.
+          description: Short product-facing assessment of the delivered behavior and remaining gaps.
   testing:
     mode: manual
-    directive: "Manual testing gate \u2014 human verifies the implementation meets\
-      \ requirements."
+    directive: "Manual testing gate \u2014 human verifies the implementation meets requirements."
     manual:
-      instructions: Review the implementation changes, run manual tests if needed,
-        and approve or reject.
+      instructions: Review the implementation changes, run manual tests if needed, and approve or reject.
       approval_note_required: false
   work-planning:
     mode: agent
     agent: work-planner
-    directive: Scan the task backlog, check eligibility and dependencies, and enqueue
-      ready work for the daemon via ao.queue.enqueue.
+    directive: Scan the task backlog, check eligibility and dependencies, and enqueue ready work for the daemon via ao.queue.enqueue.
     capabilities:
       mutates_state: true
   task-reconciliation:
     mode: agent
     agent: reconciler
-    directive: 'Detect and fix task state inconsistencies: stale in-progress tasks,
-      resolved dependency gates, and completed-but-unmarked tasks.'
+    directive: 'Detect and fix task state inconsistencies: stale in-progress tasks, resolved dependency gates, and completed-but-unmarked
+      tasks.'
     capabilities:
       mutates_state: true
   cleanup:
@@ -425,26 +399,6 @@ phases:
       args:
       - clean
       timeout_secs: 60
-  check-commits:
-    mode: command
-    directive: Verify that the implementation branch has commits beyond its merge-base
-    command:
-      program: bash
-      args:
-      - -c
-      - 'BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD
-        origin/develop 2>/dev/null || echo HEAD~1); COUNT=$(git rev-list --count "$BASE..HEAD"
-        2>/dev/null || echo 0); echo "Commits since base: $COUNT"; [ "$COUNT" -gt
-        0 ]'
-      cwd_mode: task_root
-      timeout_secs: 30
-      success_exit_codes:
-      - 0
-    output_contract:
-      kind: phase_result
-      fields:
-        exit_code:
-          type: integer
   push-branch:
     mode: command
     directive: Push the current branch to origin
@@ -459,6 +413,8 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
+      - 1
+      - 128
     output_contract:
       kind: phase_result
       fields:
@@ -479,6 +435,7 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
+      - 1
     output_contract:
       kind: phase_result
       fields:
@@ -528,26 +485,32 @@ phases:
   rebase-on-main:
     mode: agent
     agent: default
-    directive: "This branch has merge conflicts with its base branch. Rebase it.\n\
-      The base branch is provided in dispatch_input as \"base\" (e.g. \"develop\" or\
-      \ \"main\").\nIf no base is provided, default to \"develop\".\n1. Run: git fetch\
-      \ origin {{base}}\n2. Run: git rebase origin/{{base}}\n3. For each conflict,\
-      \ resolve by keeping BOTH sides of changes.\n   For Cargo.lock: accept theirs,\
-      \ run cargo build to regenerate.\n   For code files: integrate both changes.\n\
-      4. After resolving: git add <file>, then git rebase --continue\n5. Run cargo\
-      \ build to verify the project compiles.\n6. If fundamentally incompatible, abort\
-      \ with git rebase --abort.\n"
+    directive: "This branch has merge conflicts with its base branch. Rebase it.\nThe base branch is provided in dispatch_input\
+      \ as \"base\" (e.g. \"develop\" or \"main\").\nIf no base is provided, default to \"develop\".\n1. Run: git fetch origin\
+      \ {{base}}\n2. Run: git rebase origin/{{base}}\n3. For each conflict, resolve by keeping BOTH sides of changes.\n  \
+      \ For Cargo.lock: accept theirs, run cargo build to regenerate.\n   For code files: integrate both changes.\n4. After\
+      \ resolving: git add <file>, then git rebase --continue\n5. Run cargo build to verify the project compiles.\n6. If fundamentally\
+      \ incompatible, abort with git rebase --abort.\n"
     capabilities:
       mutates_state: true
   address-review:
     mode: agent
     agent: default
-    directive: "A PR reviewer has requested changes. Address the feedback.\n\n1. Get\
-      \ the task ID from context. Read task via ao.task.get.\n\n2. Find the PR: gh\
-      \ pr list --state open --head <branch> --json number\n\n3. Read review comments:\
-      \ gh pr view <number> --json reviews,comments\n\n4. For each requested change,\
-      \ make the code fix.\n\n5. After all changes: git add -A && git commit referencing\
-      \ the review.\n\n6. Verify cargo build passes.\n"
+    directive: 'A PR reviewer has requested changes. Address the feedback.
+
+      1. Get the task ID from context. Read task via ao.task.get.
+
+      2. Find the PR: gh pr list --state open --head <branch> --json number
+
+      3. Read review comments: gh pr view <number> --json reviews,comments
+
+      4. For each requested change, make the code fix.
+
+      5. After all changes: git add -A && git commit referencing the review.
+
+      6. Verify cargo build passes.
+
+      '
     capabilities:
       mutates_state: true
   unit-test:
@@ -600,52 +563,34 @@ phases:
       timeout_secs: 120
 workflows:
 - id: triage
-  name: Triage & Dispatch
-  description: Validate task, check if done/duplicate, dispatch to the right implementation
-    workflow
+  name: Task Triage
+  description: Single-phase workflow that evaluates whether a task is still valid
   phases:
   - triage
 - id: refine
   name: Refine Requirements
-  description: Single-phase workflow that refines task descriptions into implementation-ready
-    specs
+  description: Single-phase workflow that refines task descriptions into implementation-ready specs
   phases:
   - refine-requirements
 - id: standard
   name: Standard
-  description: "Kimi implementation \u2192 Push \u2192 PR. Review via pr-sweep cron."
+  description: "Implement \u2192 Push \u2192 PR fast. Review separately via pr-reviewer cron."
   phases:
   - requirements
   - implementation:
       skip_if:
       - task_type == docs
-  - check-commits
   - push-branch
   - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      auto_merge: true
-      cleanup_worktree: true
 - id: quick-fix
   name: Quick Fix
-  description: "Implement \u2192 Push \u2192 PR fast (no requirements phase)"
+  description: "Implement \u2192 Push \u2192 PR fast"
   phases:
   - implementation
-  - check-commits
   - push-branch
   - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      auto_merge: true
-      cleanup_worktree: true
 - id: full
   name: Full Lifecycle
   description: "Triage \u2192 Refine \u2192 Implement \u2192 Push \u2192 PR"
@@ -653,7 +598,6 @@ workflows:
   - triage
   - refine-requirements
   - implementation
-  - check-commits
   - push-branch
   - create-pr
   - cleanup
@@ -664,9 +608,17 @@ workflows:
       create_pr: true
       auto_merge: true
       cleanup_worktree: true
+- id: review-cycle
+  name: Review Cycle
+  description: 'Reusable review sequence: unit-test, lint, code-review, manual testing gate'
+  phases:
+  - unit-test
+  - lint
+  - code-review
+  - testing
 - id: rework
   name: Rework
-  description: Address reviewer feedback, push fixes
+  description: Address reviewer feedback, push fixes, re-review
   phases:
   - address-review
   - force-push
@@ -686,7 +638,6 @@ workflows:
   description: "Emergency fix \u2192 Push \u2192 PR targeting main"
   phases:
   - implementation
-  - check-commits
   - push-branch
   - create-pr
   post_success:
@@ -696,16 +647,44 @@ workflows:
       create_pr: true
       auto_merge: false
       cleanup_worktree: true
+- id: ao-task-complete
+  name: AO Task Complete
+  description: "Triage \u2192 Refine \u2192 Implement \u2192 Push \u2192 PR"
+  phases:
+  - triage
+  - refine-requirements
+  - implementation
+  - push-branch
+  - create-pr
+  post_success:
+    merge:
+      strategy: squash
+      target_branch: develop
+      create_pr: true
+      auto_merge: true
+      cleanup_worktree: true
+- id: gated
+  name: Gated
+  description: "Implement \u2192 Push \u2192 PR (same as standard)"
+  phases:
+  - requirements
+  - implementation
+  - push-branch
+  - create-pr
+  - cleanup
 - id: requirement-task-generation
   name: Requirement Task Generation
-  description: Create or refine requirement-linked AO tasks through typed mutation
-    tools
+  description: Create or refine requirement-linked AO tasks through typed mutation tools
   phases:
   - requirement-task-generation
 - id: requirement-task-generation-run
   name: Requirement Task Generation + Workflow Start
-  description: Create or refine requirement-linked tasks, then start workflows for
-    the eligible linked tasks
+  description: Create or refine requirement-linked tasks, then start workflows for the eligible linked tasks
   phases:
   - requirement-task-generation
   - requirement-workflow-bootstrap
+- id: triage
+  name: Triage & Dispatch
+  description: Validate task, check if done/duplicate, dispatch to the right implementation workflow
+  phases:
+  - triage
