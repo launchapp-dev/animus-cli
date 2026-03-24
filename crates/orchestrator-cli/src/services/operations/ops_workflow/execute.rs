@@ -37,7 +37,7 @@ pub(crate) async fn handle_workflow_execute(
         PhaseEvent::Decision { decision, .. } => {
             emit_phase_decision(decision, json_for_cb);
         }
-        PhaseEvent::Completed { phase_id, duration, success } => {
+        PhaseEvent::Completed { phase_id, duration, success, .. } => {
             emit_phase_footer(phase_id, duration, success, json_for_cb);
         }
     });

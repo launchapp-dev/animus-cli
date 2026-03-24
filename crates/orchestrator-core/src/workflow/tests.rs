@@ -333,6 +333,7 @@ fn state_manager_prune_dry_run_keeps_checkpoint_files_and_metadata() {
 
 #[test]
 fn resume_manager_detects_resumable_running_workflow() {
+    crate::test_env::stable_test_home();
     let temp = tempfile::tempdir().expect("tempdir");
     let manager = WorkflowStateManager::new(temp.path());
     let workflow = make_workflow(WorkflowStatus::Running);
