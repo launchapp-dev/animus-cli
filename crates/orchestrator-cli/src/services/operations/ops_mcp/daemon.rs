@@ -78,26 +78,17 @@ pub(super) fn build_daemon_events_poll_result(default_project_root: &str, input:
 }
 
 pub(super) fn build_daemon_logs_result(default_project_root: &str, input: DaemonLogsInput) -> Result<Value> {
+    use orchestrator_logging::Logger;
+
     let project_root = resolve_daemon_events_project_root(default_project_root, input.project_root);
     let limit = input.limit.unwrap_or(DEFAULT_DAEMON_LOGS_LIMIT).max(1);
-    let log_path = crate::services::runtime::autonomous_daemon_log_path(&project_root);
+    let logger = Logger::for_project(std::path::Path::new(&project_root));
 
-    let content = match std::fs::read_to_string(&log_path) {
-        Ok(c) => c,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(json!({
-                "log_path": log_path.display().to_string(),
-                "line_count": 0,
-                "lines": [],
-                "has_more": false,
-            }));
-        }
-        Err(err) => {
-            anyhow::bail!("failed to read daemon log at {}: {}", log_path.display(), err);
-        }
-    };
-
-    let mut lines: Vec<&str> = content.lines().collect();
+    let entries = logger.read_entries(limit * 2, None, None);
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap_or_default())
+        .collect();
 
     if let Some(ref needle) = input.search {
         lines.retain(|line| line.contains(needle.as_str()));
@@ -110,8 +101,8 @@ pub(super) fn build_daemon_logs_result(default_project_root: &str, input: Daemon
     }
 
     Ok(json!({
-        "log_path": log_path.display().to_string(),
-        "line_count": total,
+        "log_path": logger.path().display().to_string(),
+        "line_count": lines.len(),
         "lines": lines,
         "has_more": has_more,
     }))
