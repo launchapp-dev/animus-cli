@@ -45,7 +45,7 @@ agents:
       \ requirement only\n- Search the codebase to validate technical feasibility\n\
       - Add concrete acceptance criteria (AC1, AC2, ...)\n- Do NOT create tasks \u2014\
       \ that's a separate workflow\n"
-    model: kimi-for-coding
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
@@ -68,7 +68,7 @@ agents:
       \ requirement only\n- Create focused, implementable tasks (not meta-tasks)\n\
       - Each task should be completable in a single PR\n- Max 3 tasks per requirement\n\
       - Set task status to \"ready\" so the work-planner can pick them up\n"
-    model: kimi-for-coding
+    model: kimi-code/kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
