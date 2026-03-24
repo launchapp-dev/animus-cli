@@ -789,9 +789,49 @@ async fn handle_daemon_stop(
 const DEFAULT_DAEMON_LOG_LINES: usize = 100;
 
 fn handle_daemon_logs(limit: Option<usize>, search: Option<String>, project_root: &str, json: bool) -> Result<()> {
-    let log_path = autonomous_daemon_log_path(project_root);
+    use orchestrator_logging::Logger;
+
+    let structured_logger = Logger::for_project(std::path::Path::new(project_root));
     let limit = limit.unwrap_or(DEFAULT_DAEMON_LOG_LINES);
 
+    // Try structured log first
+    let entries = structured_logger.read_entries(limit * 2, None, None);
+    if !entries.is_empty() {
+        let mut lines: Vec<String> = entries
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap_or_default())
+            .collect();
+
+        if let Some(ref needle) = search {
+            lines.retain(|line| line.contains(needle.as_str()));
+        }
+
+        let total = lines.len();
+        let has_more = total > limit;
+        if total > limit {
+            lines = lines.split_off(total - limit);
+        }
+
+        if json {
+            return print_value(
+                serde_json::json!({
+                    "log_path": structured_logger.path().display().to_string(),
+                    "line_count": lines.len(),
+                    "lines": lines,
+                    "has_more": has_more,
+                }),
+                json,
+            );
+        }
+
+        for line in &lines {
+            println!("{line}");
+        }
+        return Ok(());
+    }
+
+    // Fallback to old daemon.log
+    let log_path = autonomous_daemon_log_path(project_root);
     let content = match fs::read_to_string(&log_path) {
         Ok(c) => c,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
