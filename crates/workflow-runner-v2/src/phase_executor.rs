@@ -428,6 +428,7 @@ pub async fn run_workflow_phase_attempt(
         parse_phase_decision,
         &expected_result_kind,
         Some(&event_run_dir),
+        Some(project_root),
     )
     .await
 }
@@ -441,7 +442,11 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
     parse_phase_decision: bool,
     expected_result_kind: &str,
     _event_run_dir: Option<&std::path::Path>,
+    project_root: Option<&str>,
 ) -> Result<PhaseExecutionOutcome> {
+    let run_logger = project_root.map(|root| {
+        orchestrator_logging::Logger::for_run(std::path::Path::new(root), &run_id.0)
+    });
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
     let mut pending_result_payload: Option<Value> = None;
@@ -458,6 +463,39 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
         };
         if !event_matches_run(&event, run_id) {
             continue;
+        }
+
+        if let Some(ref logger) = run_logger {
+            match &event {
+                AgentRunEvent::OutputChunk { text, .. } => {
+                    logger.debug("llm.output", text.chars().take(500).collect::<String>())
+                        .run(run_id.0.as_str()).phase(phase_id).role("assistant").content(text).emit();
+                }
+                AgentRunEvent::Thinking { content, .. } => {
+                    logger.debug("llm.thinking", content.chars().take(200).collect::<String>())
+                        .run(run_id.0.as_str()).phase(phase_id).emit();
+                }
+                AgentRunEvent::ToolCall { tool_info, .. } => {
+                    logger.info("llm.tool_call", &tool_info.tool_name)
+                        .run(run_id.0.as_str()).phase(phase_id)
+                        .meta(serde_json::json!({"tool": &tool_info.tool_name, "params": &tool_info.parameters}))
+                        .emit();
+                }
+                AgentRunEvent::Error { error, .. } => {
+                    logger.error("llm.error", error)
+                        .run(run_id.0.as_str()).phase(phase_id).err(error).emit();
+                }
+                AgentRunEvent::Finished { exit_code, duration_ms, .. } => {
+                    let code = exit_code.unwrap_or(-1);
+                    let b = if code == 0 {
+                        logger.info("llm.complete", format!("exit={code}"))
+                    } else {
+                        logger.error("llm.complete", format!("exit={code}"))
+                    };
+                    b.run(run_id.0.as_str()).phase(phase_id).exit(code).duration(*duration_ms).emit();
+                }
+                _ => {}
+            }
         }
 
         match event {
@@ -1683,7 +1721,7 @@ mod tests {
     ) -> anyhow::Result<PhaseExecutionOutcome> {
         let bytes = make_event_stream(events);
         let reader = tokio::io::BufReader::new(bytes.as_slice());
-        process_phase_event_stream(reader.lines(), run_id, "wf-test", "impl", false, false, "", run_dir).await
+        process_phase_event_stream(reader.lines(), run_id, "wf-test", "impl", false, false, "", run_dir, None).await
     }
 
     #[tokio::test]
@@ -1872,6 +1910,7 @@ mod tests {
             false,
             "",
             None::<&std::path::Path>,
+            None,
         )
         .await
         .expect("malformed lines should be skipped, not cause failure");

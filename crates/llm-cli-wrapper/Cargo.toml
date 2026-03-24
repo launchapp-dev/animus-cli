@@ -38,6 +38,7 @@ regex = "1.10"
 which = "8.0"
 
 [dev-dependencies]
+orchestrator-logging = { path = "../orchestrator-logging" }
 protocol = { path = "../protocol", features = ["test-utils"] }
 tempfile = "3.8"
 
