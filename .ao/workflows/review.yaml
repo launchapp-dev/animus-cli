@@ -46,7 +46,7 @@ agents:
       - Skip PRs targeting "main" — those are release PRs
       - Maximum 5 dispatches per sweep to avoid queue flooding
     model: kimi-code/kimi-for-coding
-    tool: oai-runner
+    tool: claude
     mcp_servers: ["ao"]
     skills:
       - queue-management
@@ -91,7 +91,7 @@ agents:
       - Approve and merge good PRs quickly — don't block on style nits
       - Focus on correctness, security, and breaking changes
     model: kimi-code/kimi-for-coding
-    tool: oai-runner
+    tool: claude
     mcp_servers: ["ao"]
     skills:
       - code-review

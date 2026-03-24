@@ -3,17 +3,17 @@ agents:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
     model: openrouter/moonshotai/kimi-k2.5
-    tool: oai-runner
+    tool: claude
   minimax-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
     model: minimax/MiniMax-M2.7
-    tool: oai-runner
+    tool: claude
   glm-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
     model: zai-coding-plan/glm-5-turbo
-    tool: oai-runner
+    tool: claude
   gemini-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
@@ -49,7 +49,7 @@ agents:
       \ line:\n   {\"status\": \"pass\", \"model\": \"minimax\", \"checks\": [\"file_read\", \"dir_list\", \"tool_use\", \"\
       mcp_task_stats\", \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
     model: minimax/MiniMax-M2.5
-    tool: oai-runner
+    tool: claude
   glm-smoke-test:
     system_prompt: "You are a smoke test agent running on GLM (Z-AI) via oai-runner.\nYour job is to verify the oai-runner\
       \ \u2192 Z-AI API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5`\
@@ -60,7 +60,7 @@ agents:
       \ line:\n   {\"status\": \"pass\", \"model\": \"glm\", \"checks\": [\"file_read\", \"dir_list\", \"tool_use\", \"mcp_task_stats\"\
       , \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
     model: zai-coding-plan/glm-5-turbo
-    tool: oai-runner
+    tool: claude
 phases:
   kimi-implementation:
     mode: agent
