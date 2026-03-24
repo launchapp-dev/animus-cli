@@ -6,6 +6,9 @@ use std::sync::Mutex;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+mod tracing_init;
+pub use tracing_init::{init_agent_tracing, init_daemon_tracing, init_tracing, init_workflow_tracing};
+
 const MAX_LOG_SIZE: u64 = 50 * 1024 * 1024; // 50MB — full LLM content, no truncation
 const ROTATED_SUFFIX: &str = ".1";
 

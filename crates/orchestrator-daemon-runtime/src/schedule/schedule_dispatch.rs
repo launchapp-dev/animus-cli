@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{Datelike, Timelike};
 use croner::parser::{CronParser, Seconds, Year};
+use tracing::warn;
 
 use super::ScheduleDispatchOutcome;
 use crate::SubjectDispatch;
@@ -63,21 +64,21 @@ where
         match spawn_pipeline(schedule_id, &dispatch) {
             Ok(()) => "dispatched".to_string(),
             Err(error) => {
-                eprintln!(
-                    "{}: schedule '{}' workflow '{}' dispatch failed: {}",
-                    protocol::ACTOR_DAEMON,
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
                     schedule_id,
                     workflow_ref,
-                    error
+                    error = %error,
+                    "schedule dispatch failed"
                 );
                 format!("failed: {error}")
             }
         }
     } else {
-        eprintln!(
-            "{}: schedule '{}' is missing workflow_ref and will not be dispatched",
-            protocol::ACTOR_DAEMON,
-            schedule_id
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
+            schedule_id,
+            "schedule is missing workflow_ref and will not be dispatched"
         );
         "failed: schedule is missing workflow_ref".to_string()
     };
@@ -100,12 +101,12 @@ fn evaluate_schedules(
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) => {
-                eprintln!(
-                    "{}: schedule '{}' has invalid cron '{}': {}",
-                    protocol::ACTOR_DAEMON,
-                    schedule.id,
-                    schedule.cron,
-                    error
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    schedule_id = %schedule.id,
+                    cron = %schedule.cron,
+                    error = %error,
+                    "schedule has invalid cron expression"
                 );
                 continue;
             }

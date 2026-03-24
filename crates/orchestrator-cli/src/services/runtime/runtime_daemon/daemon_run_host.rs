@@ -7,6 +7,7 @@ use orchestrator_daemon_runtime::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks
 use orchestrator_logging::Logger;
 use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use serde_json::json;
+use tracing::info;
 
 pub struct DefaultDaemonRunHost {
     seq: u64,
@@ -224,15 +225,11 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
         self.log_event(&event);
         match event {
             DaemonRunEvent::Startup { project_root, daemon_pid } => {
-                eprintln!(
-                    "{}",
-                    json!({
-                        "level": "info",
-                        "event": "daemon_startup",
-                        "timestamp": Utc::now().to_rfc3339(),
-                        "pid": daemon_pid,
-                        "project_root": project_root,
-                    })
+                info!(
+                    event = "daemon_startup",
+                    pid = daemon_pid,
+                    project_root = %project_root,
+                    "daemon starting"
                 );
                 if let Some(error) = self.startup_notification_error.clone() {
                     self.emit_notification_runtime_error(Some(project_root), "startup", error.as_str())?;
@@ -319,15 +316,11 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                 }),
             ),
             DaemonRunEvent::Shutdown { project_root, daemon_pid } => {
-                eprintln!(
-                    "{}",
-                    json!({
-                        "level": "info",
-                        "event": "daemon_shutdown",
-                        "timestamp": Utc::now().to_rfc3339(),
-                        "pid": daemon_pid,
-                        "project_root": project_root,
-                    })
+                info!(
+                    event = "daemon_shutdown",
+                    pid = daemon_pid,
+                    project_root = %project_root,
+                    "daemon stopping"
                 );
                 Ok(())
             }

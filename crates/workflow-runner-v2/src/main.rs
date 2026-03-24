@@ -2,10 +2,9 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use orchestrator_core::WorkflowStatus;
+use orchestrator_logging::{init_workflow_tracing, Logger};
 use serde::Serialize;
-use tracing_subscriber::EnvFilter;
 
-use orchestrator_logging::Logger;
 use workflow_runner_v2::workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams};
 
 #[derive(Parser)]
@@ -96,10 +95,7 @@ async fn main() -> ExitCode {
 }
 
 fn init_tracing() {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("workflow_runner_v2=info,orchestrator_providers=info,warn"));
-    let _ =
-        tracing_subscriber::fmt().with_env_filter(env_filter).with_ansi(false).with_target(true).compact().try_init();
+    init_workflow_tracing();
 }
 
 async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
@@ -147,7 +143,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
             let log_root = log_project_root;
             let log_wf_ref = log_workflow_ref;
             Some(Box::new(move |event| {
-                let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(&log_root));
+                let logger = Logger::for_project(std::path::Path::new(&log_root));
                 match event {
                     PhaseEvent::Started { phase_id, phase_index, total_phases } => {
                         logger.info("phase.start", format!("{phase_id} ({}/{total_phases})", phase_index + 1))
@@ -187,7 +183,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     };
 
     {
-        let wf_logger = orchestrator_logging::Logger::for_project(std::path::Path::new(&wf_log_root));
+        let wf_logger = Logger::for_project(std::path::Path::new(&wf_log_root));
         wf_logger.info("workflow.start", format!("started {}", wf_log_ref))
             .subject(subject_id.as_str())
             .meta(serde_json::json!({"workflow_ref": wf_log_ref}))
@@ -199,7 +195,7 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
     let wf_duration = wf_start.elapsed();
 
     {
-        let wf_logger = orchestrator_logging::Logger::for_project(std::path::Path::new(&wf_log_root));
+        let wf_logger = Logger::for_project(std::path::Path::new(&wf_log_root));
         let success = matches!(&result, Ok(r) if r.success);
         let mut b = if success {
             wf_logger.info("workflow.complete", format!("{} completed", wf_log_ref))

@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use fs2::FileExt;
 use protocol::SubjectDispatch;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{DispatchQueueEntry, DispatchQueueEntryStatus, DispatchQueueState};
@@ -159,11 +160,13 @@ pub fn remove_terminal_dispatch_queue_entry_non_fatal(
     workflow_id: Option<&str>,
 ) {
     if let Err(error) = remove_terminal_dispatch_queue_entry(project_root, subject_id, workflow_ref, workflow_id) {
-        eprintln!(
-            "{}: failed to remove terminal dispatch queue entry for subject {}: {}",
-            protocol::ACTOR_DAEMON,
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
             subject_id,
-            error
+            workflow_ref,
+            workflow_id,
+            error = %error,
+            "failed to remove terminal dispatch queue entry"
         );
     }
 }

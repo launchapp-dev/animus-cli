@@ -8,6 +8,7 @@ use orchestrator_core::{
 };
 use std::collections::HashSet;
 use std::path::Path;
+use tracing::{error, warn};
 
 pub async fn recover_orphaned_running_workflows(
     hub: Arc<dyn ServiceHub>,
@@ -17,14 +18,22 @@ pub async fn recover_orphaned_running_workflows(
     let workflows = match hub.workflows().list().await {
         Ok(workflows) => workflows,
         Err(error) => {
-            eprintln!("{}: failed to list workflows for orphan recovery: {}", protocol::ACTOR_DAEMON, error);
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                error = %error,
+                "failed to list workflows for orphan recovery"
+            );
             return 0;
         }
     };
     let externally_active_workflows = match active_workflow_runner_ids(Path::new(project_root)) {
         Ok(ids) => ids,
         Err(error) => {
-            eprintln!("{}: failed to read active workflow runner ids: {}", protocol::ACTOR_DAEMON, error);
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                error = %error,
+                "failed to read active workflow runner ids"
+            );
             HashSet::new()
         }
     };
@@ -47,18 +56,22 @@ pub async fn recover_orphaned_running_workflows(
             continue;
         }
 
-        eprintln!(
-            "{}: recovering orphaned running workflow {} subject={} task={}",
-            protocol::ACTOR_DAEMON,
-            workflow.id,
-            workflow.subject.id(),
-            workflow.task_id
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %workflow.id,
+            subject_id = %workflow.subject.id(),
+            task_id = %workflow.task_id,
+            "recovering orphaned running workflow"
         );
         let cancelled = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
         if cancelled {
             recovered = recovered.saturating_add(1);
         } else {
-            eprintln!("{}: failed to cancel orphaned workflow {}", protocol::ACTOR_DAEMON, workflow.id);
+            error!(
+                actor = protocol::ACTOR_DAEMON,
+                workflow_id = %workflow.id,
+                "failed to cancel orphaned workflow"
+            );
         }
     }
 
@@ -70,10 +83,10 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
     let workflows = match hub.workflows().list().await {
         Ok(workflows) => workflows,
         Err(error) => {
-            eprintln!(
-                "{}: failed to list workflows for manual phase timeout reconciliation: {}",
-                protocol::ACTOR_DAEMON,
-                error
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                error = %error,
+                "failed to list workflows for manual phase timeout reconciliation"
             );
             return Ok(0);
         }

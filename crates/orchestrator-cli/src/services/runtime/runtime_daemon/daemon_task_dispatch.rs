@@ -4,6 +4,7 @@ use orchestrator_daemon_runtime::{
     DispatchSelectionSource, PlannedDispatchStart,
 };
 pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
+use tracing::warn;
 
 pub fn dispatch_queued_entries_via_runner(
     root: &str,
@@ -14,7 +15,11 @@ pub fn dispatch_queued_entries_via_runner(
     let queue_state = match load_dispatch_queue_state(root) {
         Ok(state) => state,
         Err(error) => {
-            eprintln!("{}: failed to load dispatch queue state: {}", protocol::ACTOR_DAEMON, error);
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                error = %error,
+                "failed to load dispatch queue state"
+            );
             return Ok(DispatchWorkflowStartSummary::default());
         }
     };
@@ -54,19 +59,19 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
     fn notice(&mut self, notice: DispatchNotice) {
         match notice {
             DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                eprintln!(
-                    "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
-                    protocol::ACTOR_DAEMON,
-                    dispatch.subject_key(),
-                    error
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    subject_id = %dispatch.subject_key(),
+                    error = %error,
+                    "failed to mark dispatch queue entry assigned"
                 );
             }
             DispatchNotice::Failed { dispatch, error } => {
-                eprintln!(
-                    "{}: failed to start workflow runner for subject {}: {}",
-                    protocol::ACTOR_DAEMON,
-                    dispatch.subject_key(),
-                    error
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    subject_id = %dispatch.subject_key(),
+                    error = %error,
+                    "failed to start workflow runner"
                 );
             }
             _ => {}

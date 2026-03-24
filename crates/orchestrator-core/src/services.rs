@@ -255,6 +255,22 @@ impl FileServiceHub {
 
         let mut state = load_core_state(&state_file);
 
+        crate::workflow::migrate_tasks_and_requirements_from_core_state(
+            &project_root, &state.tasks, &state.requirements,
+        );
+
+        if let Ok(tasks) = crate::workflow::load_all_tasks(&project_root) {
+            if !tasks.is_empty() {
+                state.tasks = tasks;
+            }
+        }
+
+        if let Ok(reqs) = crate::workflow::load_all_requirements(&project_root) {
+            if !reqs.is_empty() {
+                state.requirements = reqs;
+            }
+        }
+
         let workflow_manager = WorkflowStateManager::new(&project_root);
         if let Ok(workflows) = workflow_manager.list() {
             state.workflows = workflows.into_iter().map(|workflow| (workflow.id.clone(), workflow)).collect();
@@ -305,9 +321,47 @@ impl FileServiceHub {
 
         let mut state = self.state.write().await;
         *state = load_core_state_for_mutation(&self.state_file)?;
+        if let Ok(tasks) = crate::workflow::load_all_tasks(&self.project_root) {
+            if !tasks.is_empty() {
+                state.tasks = tasks;
+            }
+        }
+        if let Ok(reqs) = crate::workflow::load_all_requirements(&self.project_root) {
+            if !reqs.is_empty() {
+                state.requirements = reqs;
+            }
+        }
         let output = mutator(&mut state)?;
+        let dirty_task_ids: Vec<String> = if state.all_tasks_dirty {
+            state.tasks.keys().cloned().collect()
+        } else {
+            state.dirty_tasks.iter().cloned().collect()
+        };
+        let dirty_req_ids: Vec<String> = if state.all_requirements_dirty {
+            state.requirements.keys().cloned().collect()
+        } else {
+            state.dirty_requirements.iter().cloned().collect()
+        };
         Self::persist_and_clear_dirty(&self.state_file, &mut state)?;
+        Self::persist_dirty_to_sqlite(&self.project_root, &state, &dirty_task_ids, &dirty_req_ids);
         Ok((output, state.clone()))
+    }
+
+    fn persist_dirty_to_sqlite(project_root: &Path, state: &CoreState, task_ids: &[String], req_ids: &[String]) {
+        for id in task_ids {
+            if let Some(task) = state.tasks.get(id) {
+                let _ = crate::workflow::save_task(project_root, task);
+            } else {
+                let _ = crate::workflow::delete_task(project_root, id);
+            }
+        }
+        for id in req_ids {
+            if let Some(req) = state.requirements.get(id) {
+                let _ = crate::workflow::save_requirement(project_root, req);
+            } else {
+                let _ = crate::workflow::delete_requirement(project_root, id);
+            }
+        }
     }
 
     fn sanitize_relative_json_path(raw: Option<&str>, fallback_file_name: &str) -> PathBuf {

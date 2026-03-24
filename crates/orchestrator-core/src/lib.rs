@@ -105,6 +105,9 @@ pub use workflow::{
     phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref, ResumabilityStatus, ResumeConfig,
     CleanupResult, WorkflowCheckpointPruneResult, WorkflowLifecycleExecutor, WorkflowResumeManager,
     WorkflowStateMachine, WorkflowStateManager, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
+    open_project_db, save_task, load_task, load_all_tasks, delete_task,
+    save_requirement, load_all_requirements, delete_requirement,
+    migrate_tasks_and_requirements_from_core_state,
     REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
     UI_UX_WORKFLOW_REF,
 };

@@ -327,111 +327,124 @@ impl WorkflowStateManager {
     }
 
     fn db_path(&self) -> PathBuf {
-        protocol::scoped_state_root(&self.project_root)
-            .expect("scoped_state_root requires a home directory")
-            .join("workflow.db")
+        db_path_for_project(&self.project_root)
     }
 
     fn open_db(&self) -> Result<Connection> {
-        let path = self.db_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        open_project_db(&self.project_root)
+    }
+}
 
-        let conn = Connection::open(&path)
-            .with_context(|| format!("failed to open workflow db at {}", path.display()))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA busy_timeout=5000;",
-        ).with_context(|| "failed to set SQLite pragmas")?;
+pub fn db_path_for_project(project_root: &std::path::Path) -> PathBuf {
+    protocol::scoped_state_root(project_root)
+        .expect("scoped_state_root requires a home directory")
+        .join("workflow.db")
+}
 
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS workflows (
-                id     TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                json   TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                workflow_id   TEXT NOT NULL,
-                number        INTEGER NOT NULL,
-                timestamp     TEXT NOT NULL,
-                reason        TEXT NOT NULL,
-                phase_id      TEXT,
-                machine_state TEXT,
-                status        TEXT,
-                snapshot_json TEXT,
-                PRIMARY KEY (workflow_id, number)
-            );
-            CREATE INDEX IF NOT EXISTS idx_cp_workflow ON checkpoints(workflow_id);",
-        ).with_context(|| "failed to create workflow tables")?;
-
-        self.maybe_migrate_json(&conn);
-
-        Ok(conn)
+pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
+    let path = db_path_for_project(project_root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
 
-    fn maybe_migrate_json(&self, conn: &Connection) {
-        let legacy_dir = protocol::scoped_state_root(&self.project_root)
-            .expect("scoped_state_root requires a home directory")
-            .join("workflow-state");
-        let marker = self.db_path().with_file_name("workflow-migrated.marker");
+    let conn = Connection::open(&path)
+        .with_context(|| format!("failed to open db at {}", path.display()))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;",
+    ).with_context(|| "failed to set SQLite pragmas")?;
 
-        if marker.exists() {
-            return;
-        }
-        if !legacy_dir.exists() {
-            return;
-        }
-
-        let has_rows: bool = conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0))
-            .unwrap_or(false);
-        if has_rows {
-            let _ = std::fs::File::create(&marker);
-            return;
-        }
-
-        eprintln!("[ao] migrating workflow JSON to SQLite...");
-
-        tracing::info!(
-            target: "orchestrator_core::workflow",
-            dir = %legacy_dir.display(),
-            "migrating JSON workflow files to SQLite"
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflows (
+            id     TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            json   TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            workflow_id   TEXT NOT NULL,
+            number        INTEGER NOT NULL,
+            timestamp     TEXT NOT NULL,
+            reason        TEXT NOT NULL,
+            phase_id      TEXT,
+            machine_state TEXT,
+            status        TEXT,
+            snapshot_json TEXT,
+            PRIMARY KEY (workflow_id, number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cp_workflow ON checkpoints(workflow_id);
+        CREATE TABLE IF NOT EXISTS tasks (
+            id     TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            json   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_status ON tasks(status);
+        CREATE TABLE IF NOT EXISTS requirements (
+            id     TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            json   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_req_status ON requirements(status);",
+    ).with_context(|| "failed to create tables")?;
 
-        let mut migrated = 0usize;
-        let entries: Vec<_> = std::fs::read_dir(&legacy_dir)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-            .collect();
+    maybe_migrate_workflow_json(project_root, &conn);
 
-        for entry in &entries {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            if path.file_name().and_then(|n| n.to_str()) == Some("_active_index.json") {
-                continue;
-            }
+    Ok(conn)
+}
 
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
-            let Ok(workflow) = serde_json::from_str::<OrchestratorWorkflow>(&content) else { continue };
+fn maybe_migrate_workflow_json(project_root: &std::path::Path, conn: &Connection) {
+    let legacy_dir = protocol::scoped_state_root(project_root)
+        .expect("scoped_state_root requires a home directory")
+        .join("workflow-state");
+    let marker = db_path_for_project(project_root).with_file_name("workflow-migrated.marker");
 
-            let compact = serde_json::to_string(&workflow).unwrap_or_else(|_| content.clone());
-            let _ = conn.execute(
-                "INSERT OR IGNORE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
-                params![workflow.id, status_str(workflow.status), compact],
-            );
-            migrated += 1;
+    if marker.exists() {
+        return;
+    }
+    if !legacy_dir.exists() {
+        return;
+    }
+
+    let has_rows: bool = conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0))
+        .unwrap_or(false);
+    if has_rows {
+        let _ = std::fs::File::create(&marker);
+        return;
+    }
+
+    eprintln!("[ao] migrating workflow JSON to SQLite...");
+
+    let mut migrated = 0usize;
+    let entries: Vec<_> = std::fs::read_dir(&legacy_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in &entries {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) == Some("_active_index.json") {
+            continue;
         }
 
-        eprintln!("[ao] migrated {} workflows to SQLite", migrated);
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(workflow) = serde_json::from_str::<OrchestratorWorkflow>(&content) else { continue };
 
-        let _ = std::fs::File::create(&marker);
+        let compact = serde_json::to_string(&workflow).unwrap_or_else(|_| content.clone());
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
+            params![workflow.id, status_str(workflow.status), compact],
+        );
+        migrated += 1;
     }
+
+    eprintln!("[ao] migrated {} workflows to SQLite", migrated);
+    let _ = std::fs::File::create(&marker);
 }
 
 fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
@@ -452,4 +465,124 @@ fn status_str(status: crate::types::WorkflowStatus) -> &'static str {
         WorkflowStatus::Escalated => "escalated",
         WorkflowStatus::Cancelled => "cancelled",
     }
+}
+
+pub fn save_task(project_root: &std::path::Path, task: &crate::types::OrchestratorTask) -> Result<()> {
+    let conn = open_project_db(project_root)?;
+    let json = serde_json::to_string(task)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO tasks (id, status, json) VALUES (?1, ?2, ?3)",
+        params![task.id, task.status.to_string(), json],
+    )?;
+    Ok(())
+}
+
+pub fn load_task(project_root: &std::path::Path, task_id: &str) -> Result<crate::types::OrchestratorTask> {
+    let conn = open_project_db(project_root)?;
+    let json: String = conn
+        .query_row("SELECT json FROM tasks WHERE id = ?1", params![task_id], |row| row.get(0))
+        .map_err(|_| anyhow!("task not found: {task_id}"))?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+pub fn load_all_tasks(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, crate::types::OrchestratorTask>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT json FROM tasks")?;
+    let tasks: std::collections::HashMap<String, crate::types::OrchestratorTask> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .filter_map(|json| serde_json::from_str::<crate::types::OrchestratorTask>(&json).ok())
+        .map(|t| (t.id.clone(), t))
+        .collect();
+    Ok(tasks)
+}
+
+pub fn delete_task(project_root: &std::path::Path, task_id: &str) -> Result<()> {
+    let conn = open_project_db(project_root)?;
+    conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
+    Ok(())
+}
+
+pub fn save_requirement(project_root: &std::path::Path, req: &crate::types::RequirementItem) -> Result<()> {
+    let conn = open_project_db(project_root)?;
+    let json = serde_json::to_string(req)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO requirements (id, status, json) VALUES (?1, ?2, ?3)",
+        params![req.id, req.status.to_string(), json],
+    )?;
+    Ok(())
+}
+
+pub fn load_all_requirements(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, crate::types::RequirementItem>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT json FROM requirements")?;
+    let reqs: std::collections::HashMap<String, crate::types::RequirementItem> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .filter_map(|json| serde_json::from_str::<crate::types::RequirementItem>(&json).ok())
+        .map(|r| (r.id.clone(), r))
+        .collect();
+    Ok(reqs)
+}
+
+pub fn delete_requirement(project_root: &std::path::Path, req_id: &str) -> Result<()> {
+    let conn = open_project_db(project_root)?;
+    conn.execute("DELETE FROM requirements WHERE id = ?1", params![req_id])?;
+    Ok(())
+}
+
+pub fn migrate_tasks_and_requirements_from_core_state(
+    project_root: &std::path::Path,
+    tasks: &std::collections::HashMap<String, crate::types::OrchestratorTask>,
+    requirements: &std::collections::HashMap<String, crate::types::RequirementItem>,
+) {
+    let marker = db_path_for_project(project_root).with_file_name("tasks-migrated.marker");
+    if marker.exists() {
+        return;
+    }
+
+    let conn = match open_project_db(project_root) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let has_tasks: bool = conn
+        .query_row("SELECT EXISTS(SELECT 1 FROM tasks LIMIT 1)", [], |row| row.get(0))
+        .unwrap_or(false);
+    if has_tasks {
+        let _ = std::fs::File::create(&marker);
+        return;
+    }
+
+    if tasks.is_empty() && requirements.is_empty() {
+        let _ = std::fs::File::create(&marker);
+        return;
+    }
+
+    eprintln!("[ao] migrating tasks and requirements to SQLite...");
+
+    let mut task_count = 0usize;
+    for task in tasks.values() {
+        if let Ok(json) = serde_json::to_string(task) {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO tasks (id, status, json) VALUES (?1, ?2, ?3)",
+                params![task.id, task.status.to_string(), json],
+            );
+            task_count += 1;
+        }
+    }
+
+    let mut req_count = 0usize;
+    for req in requirements.values() {
+        if let Ok(json) = serde_json::to_string(req) {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO requirements (id, status, json) VALUES (?1, ?2, ?3)",
+                params![req.id, req.status.to_string(), json],
+            );
+            req_count += 1;
+        }
+    }
+
+    eprintln!("[ao] migrated {} tasks, {} requirements to SQLite", task_count, req_count);
+    let _ = std::fs::File::create(&marker);
 }

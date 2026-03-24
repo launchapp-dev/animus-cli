@@ -11,6 +11,7 @@ use orchestrator_core::{
     TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
+use tracing::warn;
 
 use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 use crate::{
@@ -184,7 +185,7 @@ pub(crate) async fn handle_task(
                 })
             })?;
             if should_warn_missing_linked_requirements(&input) {
-                eprintln!("{UNLINKED_REQUIREMENTS_WARNING}");
+                warn!("{UNLINKED_REQUIREMENTS_WARNING}");
             }
             print_value(tasks.create(input).await?, json)
         }

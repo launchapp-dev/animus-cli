@@ -4,6 +4,7 @@ use orchestrator_core::{project_execution_fact, project_schedule_execution_fact,
 use orchestrator_daemon_runtime::{
     build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal, CompletedProcess,
 };
+use tracing::{debug, info};
 
 pub(crate) async fn reconcile_completed_processes(
     hub: Arc<dyn ServiceHub>,
@@ -14,13 +15,13 @@ pub(crate) async fn reconcile_completed_processes(
 
     for fact in plan.execution_facts {
         for event in &fact.runner_events {
-            eprintln!(
-                "{}: runner event: {} subject={} workflow_ref={:?} exit={:?}",
-                protocol::ACTOR_DAEMON,
-                event.event,
-                fact.subject_id,
-                event.workflow_ref,
-                event.exit_code,
+            debug!(
+                actor = protocol::ACTOR_DAEMON,
+                subject_id = %fact.subject_id,
+                event_type = %event.event,
+                workflow_ref = ?event.workflow_ref,
+                exit_code = ?event.exit_code,
+                "runner event"
             );
         }
 
@@ -32,12 +33,12 @@ pub(crate) async fn reconcile_completed_processes(
         );
 
         if !project_execution_fact(hub.clone(), root, &fact).await {
-            eprintln!(
-                "{}: workflow runner {} for subject '{}' (exit={:?})",
-                protocol::ACTOR_DAEMON,
-                fact.completion_status(),
-                fact.subject_id,
-                fact.exit_code,
+            info!(
+                actor = protocol::ACTOR_DAEMON,
+                subject_id = %fact.subject_id,
+                status = %fact.completion_status(),
+                exit_code = ?fact.exit_code,
+                "workflow runner completed"
             );
         }
 
