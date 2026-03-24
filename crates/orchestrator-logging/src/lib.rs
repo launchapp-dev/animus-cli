@@ -142,6 +142,13 @@ impl Logger {
         )
     }
 
+    pub fn logs_dir(project_root: &Path) -> PathBuf {
+        match protocol_scope_root(project_root) {
+            Some(p) => p.join("logs"),
+            None => project_root.join(".ao").join("logs"),
+        }
+    }
+
     fn should_log(&self, level: Level) -> bool {
         (level as u8) >= (self.min_level as u8)
     }
