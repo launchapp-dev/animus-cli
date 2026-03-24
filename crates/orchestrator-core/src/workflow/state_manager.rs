@@ -326,10 +326,6 @@ impl WorkflowStateManager {
         Ok(serde_json::from_str(&json)?)
     }
 
-    fn db_path(&self) -> PathBuf {
-        db_path_for_project(&self.project_root)
-    }
-
     fn open_db(&self) -> Result<Connection> {
         open_project_db(&self.project_root)
     }

@@ -144,7 +144,8 @@
       "Bash(for d:*)",
       "Bash(npm run:*)",
       "Bash(gh api:*)",
-      "Bash(bash /Users/samishukri/.local/bin/ao-fleet-monitor.sh 2>&1)"
+      "Bash(bash /Users/samishukri/.local/bin/ao-fleet-monitor.sh 2>&1)",
+      "Bash(sqlite3 ~/.ao/ao-cli-1222ef9c4f94/workflow.db \"SELECT COUNT\\(*\\) as tasks FROM tasks; SELECT COUNT\\(*\\) as reqs FROM requirements;\")"
     ]
   },
   "enableAllProjectMcpServers": true,

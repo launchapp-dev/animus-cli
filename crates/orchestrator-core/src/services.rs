@@ -342,8 +342,12 @@ impl FileServiceHub {
         } else {
             state.dirty_requirements.iter().cloned().collect()
         };
-        Self::persist_and_clear_dirty(&self.state_file, &mut state)?;
         Self::persist_dirty_to_sqlite(&self.project_root, &state, &dirty_task_ids, &dirty_req_ids);
+        state.dirty_tasks.clear();
+        state.dirty_requirements.clear();
+        state.all_tasks_dirty = false;
+        state.all_requirements_dirty = false;
+        Self::persist_and_clear_dirty(&self.state_file, &mut state)?;
         Ok((output, state.clone()))
     }
 
@@ -612,9 +616,6 @@ impl FileServiceHub {
         let architecture_json_path = docs_dir.join("architecture.json");
         std::fs::write(&architecture_json_path, serde_json::to_string_pretty(&snapshot.architecture)?)?;
 
-        Self::write_requirement_files(path, snapshot, None)?;
-        Self::write_task_files(path, snapshot, None)?;
-
         Ok(())
     }
 
@@ -640,21 +641,7 @@ impl FileServiceHub {
             let architecture_json_path = docs_dir.join("architecture.json");
             std::fs::write(&architecture_json_path, serde_json::to_string_pretty(&state.architecture)?)?;
 
-            if state.all_tasks_dirty || !state.dirty_tasks.is_empty() {
-                let only = if state.all_tasks_dirty { None } else { Some(&state.dirty_tasks) };
-                Self::write_task_files(path, state, only)?;
-            }
-
-            if state.all_requirements_dirty || !state.dirty_requirements.is_empty() {
-                let only = if state.all_requirements_dirty { None } else { Some(&state.dirty_requirements) };
-                Self::write_requirement_files(path, state, only)?;
-            }
         }
-
-        state.dirty_tasks.clear();
-        state.dirty_requirements.clear();
-        state.all_tasks_dirty = false;
-        state.all_requirements_dirty = false;
         Ok(())
     }
 

@@ -11,12 +11,13 @@ pub(super) struct CoreState {
     pub(super) logs: Vec<LogEntry>,
     pub(super) active_project_id: Option<String>,
     pub(super) projects: HashMap<String, OrchestratorProject>,
+    #[serde(default, skip_serializing)]
     pub(super) tasks: HashMap<String, OrchestratorTask>,
     #[serde(skip)]
     pub(super) workflows: HashMap<String, OrchestratorWorkflow>,
     #[serde(default)]
     pub(super) vision: Option<VisionDocument>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub(super) requirements: HashMap<String, RequirementItem>,
     #[serde(default)]
     pub(super) architecture: ArchitectureGraph,
