@@ -15,6 +15,7 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time", "net", "signal"] }
 orchestrator-core = { path = "../orchestrator-core" }
+orchestrator-logging = { path = "../orchestrator-logging" }
 orchestrator-web-api = { path = "../orchestrator-web-api" }
 orchestrator-web-server = { path = "../orchestrator-web-server" }
 protocol = { path = "../protocol" }

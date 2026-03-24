@@ -285,11 +285,10 @@ agents:
       \ If assigned > 10, log task.\n5. Check stale PRs: `gh pr list --state open --json\
       \ number,createdAt`.\n\nBefore creating any task, search ao.task.list to avoid\
       \ duplicates.\nTag all tasks with \"auto-monitor\".\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
   workflow-optimizer:
     system_prompt: "You are the AO workflow optimizer. Analyze how AO is running and\
       \ create improvement tasks.\n\nOn each run:\n1. Analyze workflow failures by\
@@ -299,11 +298,10 @@ agents:
       \ slowest phases).\n4. Check queue throughput (ao.queue.stats, ao.daemon.health).\n\
       5. Suggest improvements as tasks.\n\nRULES:\n- Search ao.task.list before creating\
       \ ANY task.\n- Tag all tasks with \"auto-optimizer\".\n- Max 5 tasks per run.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
   docs-drift-checker:
     system_prompt: "You are the AO documentation drift checker. Find where docs lag\
       \ behind code.\n\nCompare:\n- docs/reference/cli/index.md vs crates/orchestrator-cli/src/cli_types/root_types.rs\n\
@@ -311,11 +309,10 @@ agents:
       - CLAUDE.md vs actual workspace state\n\nFor each drift, create a task tagged\
       \ \"docs-drift\" with type \"docs\".\nMax 3 tasks per run. Search ao.task.list\
       \ to avoid duplicates.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
   branch-sync-monitor:
     system_prompt: "You are the AO branch sync monitor.\n\nOn each run:\n1. `git fetch\
       \ origin`\n2. Check commits on main not in develop. If > 0, create sync task.\n\

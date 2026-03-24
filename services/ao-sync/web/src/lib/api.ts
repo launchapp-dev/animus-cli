@@ -54,10 +54,25 @@ export interface MetricBucket {
   value: number;
 }
 
-export interface TimelineBucket {
+export interface WeeklyBucket {
   week: string;
   created: number;
   completed: number;
+  cancelled: number;
+}
+
+export interface MonthlyBucket {
+  month: string;
+  created: number;
+  completed: number;
+  cancelled: number;
+  blocked: number;
+}
+
+export interface WeeklyStatusBucket {
+  week: string;
+  status: string;
+  count: number;
 }
 
 export interface ProjectMetrics {
@@ -72,5 +87,9 @@ export interface ProjectMetrics {
     by_status: MetricBucket[];
     by_priority: MetricBucket[];
   };
-  timeline: TimelineBucket[];
+  timeline: {
+    weekly: WeeklyBucket[];
+    monthly: MonthlyBucket[];
+    weekly_by_status: WeeklyStatusBucket[];
+  };
 }

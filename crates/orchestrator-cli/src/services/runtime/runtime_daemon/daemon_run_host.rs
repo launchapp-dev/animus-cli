@@ -1,6 +1,10 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::Result;
 use chrono::Utc;
 use orchestrator_daemon_runtime::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary};
+use orchestrator_logging::Logger;
 use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use serde_json::json;
 
@@ -9,14 +13,78 @@ pub struct DefaultDaemonRunHost {
     json: bool,
     notification_runtime: Option<DaemonNotificationRuntime>,
     startup_notification_error: Option<String>,
+    pub logger: Arc<Logger>,
 }
 
 impl DefaultDaemonRunHost {
     pub fn new(project_root: &str, json: bool) -> Self {
+        let logger = Arc::new(Logger::for_project(Path::new(project_root)));
         match DaemonNotificationRuntime::new(project_root) {
-            Ok(runtime) => Self { seq: 0, json, notification_runtime: Some(runtime), startup_notification_error: None },
-            Err(error) => {
-                Self { seq: 0, json, notification_runtime: None, startup_notification_error: Some(error.to_string()) }
+            Ok(runtime) => Self {
+                seq: 0,
+                json,
+                notification_runtime: Some(runtime),
+                startup_notification_error: None,
+                logger,
+            },
+            Err(error) => Self {
+                seq: 0,
+                json,
+                notification_runtime: None,
+                startup_notification_error: Some(error.to_string()),
+                logger,
+            },
+        }
+    }
+
+    fn log_event(&self, event: &DaemonRunEvent) {
+        match event {
+            DaemonRunEvent::Startup { daemon_pid, .. } => {
+                self.logger.info("daemon", "daemon started")
+                    .meta(json!({ "pid": daemon_pid }))
+                    .emit();
+            }
+            DaemonRunEvent::Shutdown { daemon_pid, .. } => {
+                self.logger.info("daemon", "daemon stopped")
+                    .meta(json!({ "pid": daemon_pid }))
+                    .emit();
+            }
+            DaemonRunEvent::Status { status, .. } => {
+                self.logger.info("daemon", format!("status: {status}")).emit();
+            }
+            DaemonRunEvent::StartupCleanup { .. } => {
+                self.logger.info("reconciliation", "startup cleanup").emit();
+            }
+            DaemonRunEvent::OrphanDetection { orphaned_workflows_recovered, .. } => {
+                self.logger.warn("reconciliation", format!("recovered {orphaned_workflows_recovered} orphaned workflows")).emit();
+            }
+            DaemonRunEvent::YamlCompileSucceeded { source_files, phase_definitions, agent_profiles, .. } => {
+                self.logger.info("config", format!("compiled {source_files} YAML files: {phase_definitions} phases, {agent_profiles} agents")).emit();
+            }
+            DaemonRunEvent::YamlCompileFailed { error, .. } => {
+                self.logger.error("config", "YAML compilation failed")
+                    .err(error)
+                    .emit();
+            }
+            DaemonRunEvent::TickSummary { .. } => {}
+            DaemonRunEvent::TickError { message, .. } => {
+                self.logger.error("daemon", "tick error")
+                    .err(message)
+                    .emit();
+            }
+            DaemonRunEvent::GracefulShutdown { timeout_secs, .. } => {
+                self.logger.info("daemon", format!("graceful shutdown (timeout={timeout_secs:?}s)")).emit();
+            }
+            DaemonRunEvent::Draining { trigger, .. } => {
+                self.logger.info("daemon", format!("draining: {trigger}")).emit();
+            }
+            DaemonRunEvent::NotificationRuntimeError { stage, message, .. } => {
+                self.logger.error("notification", format!("notification error at {stage}"))
+                    .err(message)
+                    .emit();
+            }
+            DaemonRunEvent::ConfigReloaded { setting, .. } => {
+                self.logger.info("config", format!("hot-reloaded: {setting}")).emit();
             }
         }
     }
@@ -154,6 +222,7 @@ impl DefaultDaemonRunHost {
 #[async_trait::async_trait(?Send)]
 impl DaemonRunHooks for DefaultDaemonRunHost {
     fn handle_event(&mut self, event: DaemonRunEvent) -> Result<()> {
+        self.log_event(&event);
         match event {
             DaemonRunEvent::Startup { project_root, daemon_pid } => {
                 eprintln!(

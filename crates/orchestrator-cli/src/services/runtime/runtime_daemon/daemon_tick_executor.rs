@@ -8,16 +8,18 @@ use orchestrator_core::services::ServiceHub;
 use orchestrator_core::WorkflowStateManager;
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
-    DispatchNotice, DispatchWorkflowStartSummary, ProcessManager,
-    ProjectTickSnapshot,
+    DispatchNotice, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
 };
+use orchestrator_logging::Logger;
 use std::sync::Arc;
 
-pub(crate) struct CliProjectTickServices;
+pub(crate) struct CliProjectTickServices {
+    logger: Arc<Logger>,
+}
 
 impl CliProjectTickServices {
-    fn new(_args: &DaemonRuntimeOptions) -> Self {
-        Self
+    fn new(_args: &DaemonRuntimeOptions, logger: Arc<Logger>) -> Self {
+        Self { logger }
     }
 }
 
@@ -63,22 +65,24 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         Ok(0)
     }
 
-    async fn cleanup_stale_workflows(&mut self, _hub: Arc<dyn ServiceHub>, root: &str, max_age_hours: u64) -> Result<usize> {
+    async fn cleanup_stale_workflows(
+        &mut self,
+        _hub: Arc<dyn ServiceHub>,
+        root: &str,
+        max_age_hours: u64,
+    ) -> Result<usize> {
         let manager = WorkflowStateManager::new(root);
         let deleted = match manager.cleanup_terminal_workflows(max_age_hours) {
             Ok(result) => {
                 if result.deleted > 0 {
-                    eprintln!(
-                        "{}: cleaned up {} stale workflows (older than {}h)",
-                        protocol::ACTOR_DAEMON,
-                        result.deleted,
-                        max_age_hours
-                    );
+                    self.logger
+                        .info("cleanup", format!("cleaned up {} stale workflows (older than {}h)", result.deleted, max_age_hours))
+                        .emit();
                 }
                 result.deleted
             }
             Err(e) => {
-                eprintln!("{}: workflow cleanup failed: {}", protocol::ACTOR_DAEMON, e);
+                self.logger.error("cleanup", "workflow cleanup failed").err(e.to_string()).emit();
                 0
             }
         };
@@ -103,44 +107,35 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             Some(process_manager) => dispatch_queued_entries_via_runner(root, process_manager, limit)?,
             None => DispatchWorkflowStartSummary::default(),
         };
-
         Ok(summary)
     }
 
     fn dispatch_notice(&mut self, notice: DispatchNotice) {
         match notice {
             DispatchNotice::ScheduleDispatched { schedule_id, dispatch } => {
-                eprintln!(
-                    "{}: schedule '{}' fired workflow '{}'",
-                    protocol::ACTOR_DAEMON,
-                    schedule_id,
-                    dispatch.workflow_ref
-                );
+                self.logger
+                    .info("schedule", format!("fired '{}'", dispatch.workflow_ref))
+                    .schedule(schedule_id)
+                    .emit();
             }
             DispatchNotice::ScheduleDispatchFailed { schedule_id, dispatch, error } => {
-                eprintln!(
-                    "{}: schedule '{}' workflow '{}' dispatch failed: {}",
-                    protocol::ACTOR_DAEMON,
-                    schedule_id,
-                    dispatch.workflow_ref,
-                    error
-                );
+                self.logger
+                    .error("schedule", format!("dispatch failed for '{}'", dispatch.workflow_ref))
+                    .schedule(schedule_id)
+                    .err(error)
+                    .emit();
             }
             DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                eprintln!(
-                    "{}: failed to mark dispatch queue entry assigned for subject {}: {}",
-                    protocol::ACTOR_DAEMON,
-                    dispatch.subject_key(),
-                    error
-                );
+                self.logger
+                    .error("queue", format!("failed to assign {}", dispatch.subject_key()))
+                    .err(error)
+                    .emit();
             }
             DispatchNotice::Failed { dispatch, error } => {
-                eprintln!(
-                    "{}: failed to start workflow runner for subject {}: {}",
-                    protocol::ACTOR_DAEMON,
-                    dispatch.subject_key(),
-                    error
-                );
+                self.logger
+                    .error("process", format!("failed to start runner for {}", dispatch.subject_key()))
+                    .err(error)
+                    .emit();
             }
             DispatchNotice::Started { .. } => {}
         }
@@ -152,6 +147,7 @@ pub(crate) type SlimProjectTickDriver<'a> = DefaultSlimProjectTickDriver<'a, Cli
 pub(crate) fn slim_project_tick_driver<'a>(
     args: &DaemonRuntimeOptions,
     process_manager: &'a mut ProcessManager,
+    logger: Arc<Logger>,
 ) -> SlimProjectTickDriver<'a> {
-    default_slim_project_tick_driver(CliProjectTickServices::new(args), process_manager)
+    default_slim_project_tick_driver(CliProjectTickServices::new(args, logger), process_manager)
 }

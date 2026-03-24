@@ -8,11 +8,10 @@ agents:
       Read Cargo.toml in each crate to map the dependency graph.\nCheck ao.requirements.list\
       \ before creating \u2014 NEVER duplicate.\nTag requirements with \"architect-rust\"\
       . Max 2 per run.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
     skills:
     - requirements-management
   architect-infra:
@@ -23,11 +22,10 @@ agents:
       \ incremental compilation)\n- Cross-platform support (macOS, Linux, Windows)\n\
       Check ao.requirements.list before creating \u2014 NEVER duplicate.\nTag requirements\
       \ with \"architect-infra\". Max 2 per run.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
     skills:
     - requirements-management
   researcher-models:
@@ -38,11 +36,10 @@ agents:
       \ output)\n- Provider API stability reports\nCheck ao.requirements.list before\
       \ creating \u2014 NEVER duplicate.\nTag requirements with \"researcher-models\"\
       . Max 2 per run.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
     skills:
     - requirements-management
   researcher-ecosystem:
@@ -52,11 +49,10 @@ agents:
       - Testing frameworks and patterns\n- Performance optimization tools\n- Security\
       \ scanning tools\nCheck ao.requirements.list before creating \u2014 NEVER duplicate.\n\
       Tag requirements with \"researcher-ecosystem\". Max 2 per run.\n"
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
     skills:
     - requirements-management
 phases:

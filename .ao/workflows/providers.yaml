@@ -14,11 +14,10 @@ agents:
   minimax-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace.
       Follow existing code patterns. Write clean, tested code.
-    model: minimax/MiniMax-M2.7
+    model: kimi-for-coding
     tool: claude
     mcp_servers:
     - ao
-    - minimax
 phases:
   opus-implementation:
     mode: agent
