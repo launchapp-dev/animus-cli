@@ -30,7 +30,6 @@ workflows:
     name: AO Task Standard
     description: Canonical pack-qualified task workflow ref.
     phases:
-      - subject-activate
       - requirements
       - implementation
       - workflow_ref: ao.review/cycle
@@ -39,7 +38,6 @@ workflows:
     name: AO Task UI UX
     description: Canonical pack-qualified frontend task workflow ref.
     phases:
-      - subject-activate
       - requirements
       - ux-research
       - wireframe
@@ -51,7 +49,6 @@ workflows:
     name: AO Task Quick Fix
     description: Canonical pack-qualified quick-fix workflow ref.
     phases:
-      - subject-activate
       - implementation
       - testing
 
@@ -59,7 +56,6 @@ workflows:
     name: AO Task Gated
     description: Canonical pack-qualified gated workflow ref.
     phases:
-      - subject-activate
       - requirements
       - implementation
       - unit-test:
