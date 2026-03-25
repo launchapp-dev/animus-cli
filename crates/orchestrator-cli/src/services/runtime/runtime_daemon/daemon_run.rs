@@ -448,9 +448,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
 
-        let pm_config_path = PathBuf::from(&primary_root).join(".ao").join("pm-config.json");
+        let pm_config_path = orchestrator_core::daemon_project_config_path(std::path::Path::new(&primary_root));
         std::fs::create_dir_all(pm_config_path.parent().expect("pm-config path should have parent"))
-            .expect(".ao directory should be created");
+            .expect("scoped daemon config directory should be created");
         let pm_config = serde_json::json!({
             "notification_config": {
                 "schema": "ao.daemon-notification-config.v1",
