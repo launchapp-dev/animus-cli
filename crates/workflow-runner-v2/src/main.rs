@@ -146,7 +146,8 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
                 let logger = Logger::for_project(std::path::Path::new(&log_root));
                 match event {
                     PhaseEvent::Started { phase_id, phase_index, total_phases } => {
-                        logger.info("phase.start", format!("{phase_id} ({}/{total_phases})", phase_index + 1))
+                        logger
+                            .info("phase.start", format!("{phase_id} ({}/{total_phases})", phase_index + 1))
                             .phase(phase_id)
                             .meta(serde_json::json!({ "workflow_ref": log_wf_ref }))
                             .emit();
@@ -184,7 +185,8 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
 
     {
         let wf_logger = Logger::for_project(std::path::Path::new(&wf_log_root));
-        wf_logger.info("workflow.start", format!("started {}", wf_log_ref))
+        wf_logger
+            .info("workflow.start", format!("started {}", wf_log_ref))
             .subject(subject_id.as_str())
             .meta(serde_json::json!({"workflow_ref": wf_log_ref}))
             .emit();
@@ -202,7 +204,8 @@ async fn run_execute(args: WorkflowExecuteArgs) -> anyhow::Result<u8> {
         } else {
             wf_logger.error("workflow.complete", format!("{} failed", wf_log_ref))
         };
-        b = b.subject(subject_id.as_str())
+        b = b
+            .subject(subject_id.as_str())
             .duration(wf_duration.as_millis() as u64)
             .meta(serde_json::json!({"workflow_ref": wf_log_ref}));
         if let Err(ref e) = result {

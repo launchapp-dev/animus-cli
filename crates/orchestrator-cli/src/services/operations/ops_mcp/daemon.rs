@@ -85,10 +85,7 @@ pub(super) fn build_daemon_logs_result(default_project_root: &str, input: Daemon
     let logger = Logger::for_project(std::path::Path::new(&project_root));
 
     let entries = logger.read_entries(limit * 2, None, None);
-    let mut lines: Vec<String> = entries
-        .iter()
-        .map(|e| serde_json::to_string(e).unwrap_or_default())
-        .collect();
+    let mut lines: Vec<String> = entries.iter().map(|e| serde_json::to_string(e).unwrap_or_default()).collect();
 
     if let Some(ref needle) = input.search {
         lines.retain(|line| line.contains(needle.as_str()));

@@ -27,8 +27,15 @@ use crate::phase_executor::{run_workflow_phase, PhaseExecuteOverrides, PhaseExec
 use crate::phase_output::persist_phase_output;
 
 pub enum PhaseEvent<'a> {
-    Started { phase_id: &'a str, phase_index: usize, total_phases: usize },
-    Decision { phase_id: &'a str, decision: &'a orchestrator_core::PhaseDecision },
+    Started {
+        phase_id: &'a str,
+        phase_index: usize,
+        total_phases: usize,
+    },
+    Decision {
+        phase_id: &'a str,
+        decision: &'a orchestrator_core::PhaseDecision,
+    },
     Completed {
         phase_id: &'a str,
         duration: Duration,
@@ -285,7 +292,9 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                     phase_id: &phase_filter,
                     duration: phase_elapsed,
                     success: phase_status != "failed",
-                    error: None, model: result.model.clone(), tool: result.tool.clone(),
+                    error: None,
+                    model: result.model.clone(),
+                    tool: result.tool.clone(),
                 });
                 results.push(serde_json::json!({
                     "phase_id": phase_filter,
@@ -315,7 +324,14 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                 });
             }
             Err(err) => {
-                emit(PhaseEvent::Completed { phase_id: &phase_filter, duration: phase_elapsed, success: false, error: Some(err.to_string()), model: None, tool: None });
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_filter,
+                    duration: phase_elapsed,
+                    success: false,
+                    error: Some(err.to_string()),
+                    model: None,
+                    tool: None,
+                });
                 results.push(serde_json::json!({
                     "phase_id": phase_filter,
                     "status": "failed",
@@ -417,7 +433,9 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                             phase_id: &phase_id,
                             duration: phase_elapsed,
                             success: next_success,
-                            error: None, model: result.model.clone(), tool: result.tool.clone(),
+                            error: None,
+                            model: result.model.clone(),
+                            tool: result.tool.clone(),
                         });
                         let mut result_value = serde_json::json!({
                             "phase_id": phase_id,
@@ -460,7 +478,14 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
                             .workflow
                             .ok_or_else(|| anyhow!("workflow '{}' not found for manual pause", workflow.id))?;
                         reported_workflow_status = workflow.status;
-                        emit(PhaseEvent::Completed { phase_id: &phase_id, duration: phase_elapsed, success: true, error: None, model: None, tool: None });
+                        emit(PhaseEvent::Completed {
+                            phase_id: &phase_id,
+                            duration: phase_elapsed,
+                            success: true,
+                            error: None,
+                            model: None,
+                            tool: None,
+                        });
                         results.push(serde_json::json!({
                             "phase_id": phase_id,
                             "status": "manual_pending",
@@ -476,7 +501,14 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             Err(err) => {
                 workflow = hub.workflows().fail_current_phase(&workflow.id, err.to_string()).await?;
                 reported_workflow_status = workflow.status;
-                emit(PhaseEvent::Completed { phase_id: &phase_id, duration: phase_elapsed, success: false, error: Some(err.to_string()), model: None, tool: None });
+                emit(PhaseEvent::Completed {
+                    phase_id: &phase_id,
+                    duration: phase_elapsed,
+                    success: false,
+                    error: Some(err.to_string()),
+                    model: None,
+                    tool: None,
+                });
                 results.push(serde_json::json!({
                     "phase_id": phase_id,
                     "status": "failed",
@@ -758,11 +790,13 @@ async fn execute_post_success_actions(
             let push_ok = push_action.get("status").and_then(|v| v.as_str()) == Some("completed");
             let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
             if push_ok {
-                logger.info("git.push", format!("pushed {}", source_branch))
-                    .branch(&source_branch).emit();
+                logger.info("git.push", format!("pushed {}", source_branch)).branch(&source_branch).emit();
             } else {
-                logger.error("git.push", format!("push failed {}", source_branch))
-                    .branch(&source_branch).err(push_action.to_string()).emit();
+                logger
+                    .error("git.push", format!("push failed {}", source_branch))
+                    .branch(&source_branch)
+                    .err(push_action.to_string())
+                    .emit();
             }
             action_result["actions"]["push"] = push_action;
         }
@@ -827,13 +861,20 @@ async fn execute_post_success_actions(
             let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
             if pr_result.get("status").and_then(|v| v.as_str()) == Some("completed") {
                 let pr_url = pr_result.get("pr_url").and_then(|v| v.as_str()).unwrap_or("");
-                logger.info("git.pr", format!("created PR {}", pr_url))
-                    .branch(&source_branch).task(&task.id)
-                    .meta(serde_json::json!({"pr_url": pr_url, "title": title})).emit();
+                logger
+                    .info("git.pr", format!("created PR {}", pr_url))
+                    .branch(&source_branch)
+                    .task(&task.id)
+                    .meta(serde_json::json!({"pr_url": pr_url, "title": title}))
+                    .emit();
             } else {
                 let err = pr_result.get("error").and_then(|v| v.as_str()).unwrap_or("unknown");
-                logger.error("git.pr", format!("PR creation failed for {}", source_branch))
-                    .branch(&source_branch).task(&task.id).err(err).emit();
+                logger
+                    .error("git.pr", format!("PR creation failed for {}", source_branch))
+                    .branch(&source_branch)
+                    .task(&task.id)
+                    .err(err)
+                    .emit();
             }
         }
         let pr_status = action_result["actions"]["create_pr"]["status"].clone();

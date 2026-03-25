@@ -256,7 +256,9 @@ impl FileServiceHub {
         let mut state = load_core_state(&state_file);
 
         crate::workflow::migrate_tasks_and_requirements_from_core_state(
-            &project_root, &state.tasks, &state.requirements,
+            &project_root,
+            &state.tasks,
+            &state.requirements,
         );
 
         if let Ok(tasks) = crate::workflow::load_all_tasks(&project_root) {
@@ -640,7 +642,6 @@ impl FileServiceHub {
 
             let architecture_json_path = docs_dir.join("architecture.json");
             std::fs::write(&architecture_json_path, serde_json::to_string_pretty(&state.architecture)?)?;
-
         }
         Ok(())
     }

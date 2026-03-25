@@ -148,7 +148,8 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
     let mut host = CliDaemonRunHost::new(project_root, json, start_config);
     let logger = host.logger();
-    let mut driver: SlimProjectTickDriver<'_> = slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
+    let mut driver: SlimProjectTickDriver<'_> =
+        slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
 
     let run_result =
         run_daemon(project_root, &mut runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())

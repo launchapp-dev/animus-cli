@@ -72,7 +72,10 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             Ok(result) => {
                 if result.deleted > 0 {
                     self.logger
-                        .info("cleanup", format!("cleaned up {} stale workflows (older than {}h)", result.deleted, max_age_hours))
+                        .info(
+                            "cleanup",
+                            format!("cleaned up {} stale workflows (older than {}h)", result.deleted, max_age_hours),
+                        )
                         .emit();
                 }
                 result.deleted
@@ -109,10 +112,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     fn dispatch_notice(&mut self, notice: DispatchNotice) {
         match notice {
             DispatchNotice::ScheduleDispatched { schedule_id, dispatch } => {
-                self.logger
-                    .info("schedule", format!("fired '{}'", dispatch.workflow_ref))
-                    .schedule(schedule_id)
-                    .emit();
+                self.logger.info("schedule", format!("fired '{}'", dispatch.workflow_ref)).schedule(schedule_id).emit();
             }
             DispatchNotice::ScheduleDispatchFailed { schedule_id, dispatch, error } => {
                 self.logger
@@ -122,10 +122,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                     .emit();
             }
             DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                self.logger
-                    .error("queue", format!("failed to assign {}", dispatch.subject_key()))
-                    .err(error)
-                    .emit();
+                self.logger.error("queue", format!("failed to assign {}", dispatch.subject_key())).err(error).emit();
             }
             DispatchNotice::Failed { dispatch, error } => {
                 self.logger
