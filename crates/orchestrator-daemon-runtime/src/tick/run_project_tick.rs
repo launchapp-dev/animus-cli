@@ -70,8 +70,7 @@ where
         preparation.ready_dispatch_limit
     };
     if ready_dispatch_limit > 0 {
-        execution_outcome.ready_workflow_starts =
-            hooks.dispatch_ready_tasks(root, ready_dispatch_limit).await?;
+        execution_outcome.ready_workflow_starts = hooks.dispatch_ready_tasks(root, ready_dispatch_limit).await?;
     }
 
     let health = hooks.collect_health(root).await?;

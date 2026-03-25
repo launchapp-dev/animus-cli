@@ -171,11 +171,7 @@ impl Logger {
             Some(p) => p,
             None => project_root.join(".ao"),
         };
-        Self::open(
-            &scope_root.join("logs").join("runs"),
-            &format!("{run_id}.jsonl"),
-            Level::Debug,
-        )
+        Self::open(&scope_root.join("logs").join("runs"), &format!("{run_id}.jsonl"), Level::Debug)
     }
 
     pub fn logs_dir(project_root: &Path) -> PathBuf {
@@ -243,12 +239,7 @@ impl Logger {
         EntryBuilder { logger: self, entry: LogEntry::new(Level::Debug, cat, msg) }
     }
 
-    pub fn read_entries(
-        &self,
-        limit: usize,
-        category: Option<&str>,
-        level: Option<Level>,
-    ) -> Vec<LogEntry> {
+    pub fn read_entries(&self, limit: usize, category: Option<&str>, level: Option<Level>) -> Vec<LogEntry> {
         self.read_entries_since(limit, category, level, None)
     }
 
@@ -450,11 +441,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::open(dir.path(), "test.jsonl", Level::Debug);
 
-        logger.info("schedule", "fired work-planner")
-            .schedule("work-planner")
-            .emit();
+        logger.info("schedule", "fired work-planner").schedule("work-planner").emit();
 
-        logger.error("workflow", "runner exited with error")
+        logger
+            .error("workflow", "runner exited with error")
             .workflow("wf-123")
             .task("TASK-456")
             .exit(1)
@@ -476,7 +466,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logger = Logger::open(dir.path(), "test.jsonl", Level::Debug);
 
-        logger.info("llm.start", "starting agent session")
+        logger
+            .info("llm.start", "starting agent session")
             .run("run-abc")
             .session("sess-123")
             .model_tool("kimi-code/kimi-for-coding", "claude")
@@ -485,14 +476,10 @@ mod tests {
             .phase("implementation")
             .emit();
 
-        logger.debug("llm.turn", "turn completed")
-            .run("run-abc")
-            .turn(3)
-            .tokens(1500, 800)
-            .tool_calls(2)
-            .emit();
+        logger.debug("llm.turn", "turn completed").run("run-abc").turn(3).tokens(1500, 800).tool_calls(2).emit();
 
-        logger.info("llm.complete", "agent session finished")
+        logger
+            .info("llm.complete", "agent session finished")
             .run("run-abc")
             .session("sess-123")
             .tokens(12000, 5000)
@@ -501,7 +488,8 @@ mod tests {
             .exit(0)
             .emit();
 
-        logger.error("llm.error", "API request failed")
+        logger
+            .error("llm.error", "API request failed")
             .run("run-xyz")
             .model_tool("minimax/MiniMax-M2.7", "claude")
             .provider("minimax")

@@ -185,4 +185,3 @@ fn workflow_is_waiting_on_manual_phase(project_root: &str, workflow: &orchestrat
         .map(|definition| matches!(definition.mode, orchestrator_core::PhaseExecutionMode::Manual))
         .unwrap_or(false)
 }
-

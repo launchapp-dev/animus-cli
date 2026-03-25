@@ -642,7 +642,11 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
     // Read from all log files for initial tail
     let mut all_entries: Vec<orchestrator_logging::LogEntry> = Vec::new();
     for path in discover_log_files(&logs_dir) {
-        let logger = Logger::open(path.parent().unwrap_or(Path::new(".")), path.file_name().unwrap().to_str().unwrap_or(""), orchestrator_logging::Level::Debug);
+        let logger = Logger::open(
+            path.parent().unwrap_or(Path::new(".")),
+            path.file_name().unwrap().to_str().unwrap_or(""),
+            orchestrator_logging::Level::Debug,
+        );
         let entries = logger.read_entries_since(args.tail * 2, args.cat.as_deref(), level, None);
         all_entries.extend(entries);
     }
@@ -652,8 +656,16 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
     for entry in &all_entries {
         if let Some(ref wf) = args.workflow {
             let matches = entry.workflow_id.as_deref() == Some(wf.as_str())
-                || entry.meta.as_ref().and_then(|m| m.get("workflow_ref")).and_then(|v| v.as_str()).map(|r| r.contains(wf.as_str())).unwrap_or(false);
-            if !matches { continue; }
+                || entry
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.get("workflow_ref"))
+                    .and_then(|v| v.as_str())
+                    .map(|r| r.contains(wf.as_str()))
+                    .unwrap_or(false);
+            if !matches {
+                continue;
+            }
         }
         if let Some(ref run) = args.run {
             if entry.run_id.as_deref() != Some(run.as_str()) {
@@ -662,7 +674,9 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
         }
         print_entry(entry);
         shown += 1;
-        if shown >= args.tail { break; }
+        if shown >= args.tail {
+            break;
+        }
     }
 
     if args.no_follow {
@@ -790,7 +804,11 @@ fn format_log_entry_pretty(entry: &orchestrator_logging::LogEntry) -> String {
 }
 
 fn short_id(id: &str) -> &str {
-    if id.len() > 8 { &id[..8] } else { id }
+    if id.len() > 8 {
+        &id[..8]
+    } else {
+        id
+    }
 }
 
 fn discover_log_files(logs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -874,10 +892,7 @@ fn handle_daemon_logs(limit: Option<usize>, search: Option<String>, project_root
     let limit = limit.unwrap_or(DEFAULT_DAEMON_LOG_LINES);
 
     let entries = logger.read_entries(limit * 2, None, None);
-    let mut lines: Vec<String> = entries
-        .iter()
-        .map(|e| serde_json::to_string(e).unwrap_or_default())
-        .collect();
+    let mut lines: Vec<String> = entries.iter().map(|e| serde_json::to_string(e).unwrap_or_default()).collect();
 
     if let Some(ref needle) = search {
         lines.retain(|line| line.contains(needle.as_str()));

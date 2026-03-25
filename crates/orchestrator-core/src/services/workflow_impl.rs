@@ -284,7 +284,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl WorkflowServiceApi for FileServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        let workflows = self.workflow_manager().list()?;
+        let workflows = self.workflow_manager().list_all()?;
         self.state.write().await.workflows =
             workflows.iter().cloned().map(|workflow| (workflow.id.clone(), workflow)).collect();
         Ok(workflows)

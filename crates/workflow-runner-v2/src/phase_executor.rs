@@ -448,9 +448,8 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
     _event_run_dir: Option<&std::path::Path>,
     project_root: Option<&str>,
 ) -> Result<PhaseExecutionOutcome> {
-    let run_logger = project_root.map(|root| {
-        orchestrator_logging::Logger::for_run(std::path::Path::new(root), &run_id.0)
-    });
+    let run_logger =
+        project_root.map(|root| orchestrator_logging::Logger::for_run(std::path::Path::new(root), &run_id.0));
     let mut pending_commit_message: Option<String> = None;
     let mut pending_phase_decision: Option<orchestrator_core::PhaseDecision> = None;
     let mut pending_result_payload: Option<Value> = None;
@@ -472,17 +471,27 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
         if let Some(ref logger) = run_logger {
             match &event {
                 AgentRunEvent::OutputChunk { text, .. } => {
-                    logger.debug("llm.output", text.chars().take(500).collect::<String>())
-                        .run(run_id.0.as_str()).phase(phase_id).role("assistant").content(text).emit();
+                    logger
+                        .debug("llm.output", text.chars().take(500).collect::<String>())
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
+                        .role("assistant")
+                        .content(text)
+                        .emit();
                 }
                 AgentRunEvent::Thinking { content, .. } => {
-                    logger.debug("llm.thinking", content.chars().take(200).collect::<String>())
-                        .run(run_id.0.as_str()).phase(phase_id).emit();
+                    logger
+                        .debug("llm.thinking", content.chars().take(200).collect::<String>())
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
+                        .emit();
                 }
                 AgentRunEvent::ToolCall { tool_info, .. } => {
                     let is_mcp = tool_info.tool_name.starts_with("mcp_");
-                    let mut b = logger.info("llm.tool_call", &tool_info.tool_name)
-                        .run(run_id.0.as_str()).phase(phase_id)
+                    let mut b = logger
+                        .info("llm.tool_call", &tool_info.tool_name)
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
                         .meta(serde_json::json!({"tool": &tool_info.tool_name, "params": &tool_info.parameters}));
                     if is_mcp {
                         let parts: Vec<&str> = tool_info.tool_name.splitn(3, '_').collect();
@@ -493,8 +502,7 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     b.emit();
                 }
                 AgentRunEvent::Metadata { cost, tokens, .. } => {
-                    let mut b = logger.info("llm.metadata", "usage update")
-                        .run(run_id.0.as_str()).phase(phase_id);
+                    let mut b = logger.info("llm.metadata", "usage update").run(run_id.0.as_str()).phase(phase_id);
                     if let Some(c) = cost {
                         b = b.cost(*c);
                     }
@@ -504,8 +512,7 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     b.emit();
                 }
                 AgentRunEvent::Error { error, .. } => {
-                    logger.error("llm.error", error)
-                        .run(run_id.0.as_str()).phase(phase_id).err(error).emit();
+                    logger.error("llm.error", error).run(run_id.0.as_str()).phase(phase_id).err(error).emit();
                 }
                 AgentRunEvent::Finished { exit_code, duration_ms, .. } => {
                     let code = exit_code.unwrap_or(-1);
@@ -1177,7 +1184,8 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         if has_fallback_target && PhaseFailureClassifier::should_failover_target(&message) {
                             let next_target = &execution_targets[target_index + 1];
                             let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
-                            logger.warn("llm.fallback", format!("{} → {}", effective_model_id, next_target.1))
+                            logger
+                                .warn("llm.fallback", format!("{} → {}", effective_model_id, next_target.1))
                                 .phase(phase_id)
                                 .fallback(&effective_model_id, &next_target.1)
                                 .err(&message)
@@ -1535,7 +1543,13 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 }
             }
 
-            Ok(PhaseRunResult { model: metadata.selected_model.clone(), tool: metadata.selected_tool.clone(), outcome, metadata, signals })
+            Ok(PhaseRunResult {
+                model: metadata.selected_model.clone(),
+                tool: metadata.selected_tool.clone(),
+                outcome,
+                metadata,
+                signals,
+            })
         }
         orchestrator_core::PhaseExecutionMode::Command => {
             let command = definition
@@ -1561,9 +1575,15 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 let logger = orchestrator_logging::Logger::for_project(std::path::Path::new(project_root));
                 let success = command_result.failure_summary.is_none();
                 let mut b = if success {
-                    logger.info("command.complete", format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code))
+                    logger.info(
+                        "command.complete",
+                        format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code),
+                    )
                 } else {
-                    logger.error("command.complete", format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code))
+                    logger.error(
+                        "command.complete",
+                        format!("{} `{}` exit={}", phase_id, command_result.program, command_result.exit_code),
+                    )
                 };
                 b = b.phase(phase_id).exit(command_result.exit_code).duration(command_result.duration_ms);
                 if !command_result.stdout.trim().is_empty() {

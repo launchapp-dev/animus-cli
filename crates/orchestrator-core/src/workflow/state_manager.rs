@@ -111,10 +111,7 @@ impl WorkflowStateManager {
             params![cutoff_str],
         )?;
 
-        conn.execute(
-            "DELETE FROM checkpoints WHERE workflow_id NOT IN (SELECT id FROM workflows)",
-            [],
-        )?;
+        conn.execute("DELETE FROM checkpoints WHERE workflow_id NOT IN (SELECT id FROM workflows)", [])?;
 
         Ok(CleanupResult { deleted })
     }
@@ -164,12 +161,7 @@ impl WorkflowStateManager {
         self.save(&workflow)?;
 
         if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
-            let _ = self.prune_checkpoints(
-                &workflow.id,
-                DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
-                None,
-                false,
-            );
+            let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
         }
 
         Ok(workflow)
@@ -319,8 +311,7 @@ impl WorkflowStateManager {
 
     pub fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<usize>> {
         let conn = self.open_db()?;
-        let mut stmt =
-            conn.prepare("SELECT number FROM checkpoints WHERE workflow_id = ?1 ORDER BY number")?;
+        let mut stmt = conn.prepare("SELECT number FROM checkpoints WHERE workflow_id = ?1 ORDER BY number")?;
         let numbers: Vec<usize> = stmt
             .query_map(params![workflow_id], |row| row.get::<_, i64>(0))?
             .filter_map(|r| r.ok())
@@ -348,9 +339,7 @@ impl WorkflowStateManager {
 }
 
 pub fn db_path_for_project(project_root: &std::path::Path) -> PathBuf {
-    protocol::scoped_state_root(project_root)
-        .expect("scoped_state_root requires a home directory")
-        .join("workflow.db")
+    protocol::scoped_state_root(project_root).expect("scoped_state_root requires a home directory").join("workflow.db")
 }
 
 pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
@@ -359,13 +348,13 @@ pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open db at {}", path.display()))?;
+    let conn = Connection::open(&path).with_context(|| format!("failed to open db at {}", path.display()))?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
          PRAGMA synchronous=NORMAL;
          PRAGMA busy_timeout=5000;",
-    ).with_context(|| "failed to set SQLite pragmas")?;
+    )
+    .with_context(|| "failed to set SQLite pragmas")?;
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS workflows (
@@ -398,7 +387,8 @@ pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
             json   TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_req_status ON requirements(status);",
-    ).with_context(|| "failed to create tables")?;
+    )
+    .with_context(|| "failed to create tables")?;
 
     maybe_migrate_workflow_json(project_root, &conn);
 
@@ -418,9 +408,8 @@ fn maybe_migrate_workflow_json(project_root: &std::path::Path, conn: &Connection
         return;
     }
 
-    let has_rows: bool = conn
-        .query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0))
-        .unwrap_or(false);
+    let has_rows: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0)).unwrap_or(false);
     if has_rows {
         let _ = std::fs::File::create(&marker);
         return;
@@ -429,11 +418,7 @@ fn maybe_migrate_workflow_json(project_root: &std::path::Path, conn: &Connection
     eprintln!("[ao] migrating workflow JSON to SQLite...");
 
     let mut migrated = 0usize;
-    let entries: Vec<_> = std::fs::read_dir(&legacy_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .collect();
+    let entries: Vec<_> = std::fs::read_dir(&legacy_dir).into_iter().flatten().filter_map(|e| e.ok()).collect();
 
     for entry in &entries {
         let path = entry.path();
@@ -499,7 +484,9 @@ pub fn load_task(project_root: &std::path::Path, task_id: &str) -> Result<crate:
     Ok(serde_json::from_str(&json)?)
 }
 
-pub fn load_all_tasks(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, crate::types::OrchestratorTask>> {
+pub fn load_all_tasks(
+    project_root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, crate::types::OrchestratorTask>> {
     let conn = open_project_db(project_root)?;
     let mut stmt = conn.prepare("SELECT json FROM tasks")?;
     let tasks: std::collections::HashMap<String, crate::types::OrchestratorTask> = stmt
@@ -528,7 +515,9 @@ pub fn save_requirement(project_root: &std::path::Path, req: &crate::types::Requ
     Ok(())
 }
 
-pub fn load_all_requirements(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, crate::types::RequirementItem>> {
+pub fn load_all_requirements(
+    project_root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, crate::types::RequirementItem>> {
     let conn = open_project_db(project_root)?;
     let mut stmt = conn.prepare("SELECT json FROM requirements")?;
     let reqs: std::collections::HashMap<String, crate::types::RequirementItem> = stmt
@@ -562,9 +551,8 @@ pub fn migrate_tasks_and_requirements_from_core_state(
         Err(_) => return,
     };
 
-    let has_tasks: bool = conn
-        .query_row("SELECT EXISTS(SELECT 1 FROM tasks LIMIT 1)", [], |row| row.get(0))
-        .unwrap_or(false);
+    let has_tasks: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM tasks LIMIT 1)", [], |row| row.get(0)).unwrap_or(false);
     if has_tasks {
         let _ = std::fs::File::create(&marker);
         return;

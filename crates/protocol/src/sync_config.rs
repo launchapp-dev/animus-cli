@@ -70,10 +70,14 @@ impl SyncConfig {
     }
 
     pub fn server_url(&self) -> anyhow::Result<String> {
-        self.server.clone().ok_or_else(|| anyhow::anyhow!("Sync server not configured. Run: ao sync setup --server <url> --token <token>"))
+        self.server.clone().ok_or_else(|| {
+            anyhow::anyhow!("Sync server not configured. Run: ao sync setup --server <url> --token <token>")
+        })
     }
 
     pub fn bearer_token(&self) -> anyhow::Result<String> {
-        self.token.clone().ok_or_else(|| anyhow::anyhow!("Sync token not configured. Run: ao sync setup --server <url> --token <token>"))
+        self.token.clone().ok_or_else(|| {
+            anyhow::anyhow!("Sync token not configured. Run: ao sync setup --server <url> --token <token>")
+        })
     }
 }

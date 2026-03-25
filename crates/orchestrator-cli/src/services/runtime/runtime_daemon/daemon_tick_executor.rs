@@ -5,10 +5,11 @@ use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
 };
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
-use orchestrator_core::WorkflowStateManager;
+use orchestrator_core::{TaskStatus, WorkflowRunInput, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
-    DispatchNotice, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
+    DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager,
+    ProjectTickSnapshot,
 };
 use orchestrator_logging::Logger;
 use std::sync::Arc;
@@ -57,8 +58,39 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         reconcile_manual_phase_timeouts(hub, root).await
     }
 
-    async fn reconcile_stale_in_progress_tasks(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
-        Ok(0)
+    async fn reconcile_stale_in_progress_tasks(&mut self, hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        let tasks = hub.tasks().list().await?;
+        let in_progress_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).collect();
+        if in_progress_tasks.is_empty() {
+            return Ok(0);
+        }
+
+        let workflows = hub.workflows().list().await?;
+        let mut reconciled = 0usize;
+        for task in in_progress_tasks {
+            let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
+            if task_workflows.is_empty() {
+                continue;
+            }
+            let all_terminal = task_workflows.iter().all(|w| {
+                matches!(
+                    w.status,
+                    WorkflowStatus::Completed
+                        | WorkflowStatus::Failed
+                        | WorkflowStatus::Cancelled
+                        | WorkflowStatus::Escalated
+                )
+            });
+            if all_terminal {
+                let any_success = task_workflows
+                    .iter()
+                    .any(|w| matches!(w.status, WorkflowStatus::Completed | WorkflowStatus::Escalated));
+                let new_status = if any_success { TaskStatus::Done } else { TaskStatus::Blocked };
+                let _ = hub.tasks().set_status(&task.id, new_status, false).await;
+                reconciled += 1;
+            }
+        }
+        Ok(reconciled)
     }
 
     async fn cleanup_stale_workflows(
@@ -72,7 +104,10 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             Ok(result) => {
                 if result.deleted > 0 {
                     self.logger
-                        .info("cleanup", format!("cleaned up {} stale workflows (older than {}h)", result.deleted, max_age_hours))
+                        .info(
+                            "cleanup",
+                            format!("cleaned up {} stale workflows (older than {}h)", result.deleted, max_age_hours),
+                        )
                         .emit();
                 }
                 result.deleted
@@ -94,25 +129,61 @@ impl DefaultProjectTickServices for CliProjectTickServices {
 
     async fn dispatch_ready_tasks(
         &mut self,
-        _hub: Arc<dyn ServiceHub>,
+        hub: Arc<dyn ServiceHub>,
         root: &str,
         limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary> {
-        let summary = match process_manager {
+        let mut summary = match process_manager {
             Some(process_manager) => dispatch_queued_entries_via_runner(root, process_manager, limit)?,
             None => DispatchWorkflowStartSummary::default(),
         };
+
+        let remaining = limit.saturating_sub(summary.started);
+        if remaining > 0 {
+            let tasks = hub.tasks().list_prioritized().await?;
+            let workflows = hub.workflows().list().await?;
+            let active_task_ids: std::collections::HashSet<_> = workflows
+                .iter()
+                .filter(|w| {
+                    !matches!(
+                        w.status,
+                        WorkflowStatus::Completed
+                            | WorkflowStatus::Failed
+                            | WorkflowStatus::Cancelled
+                            | WorkflowStatus::Escalated
+                    )
+                })
+                .map(|w| w.task_id.clone())
+                .collect();
+            let ready_tasks: Vec<_> = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Ready && !active_task_ids.contains(&t.id))
+                .take(remaining)
+                .collect();
+            for task in ready_tasks {
+                if let Ok(workflow) = hub.workflows().run(WorkflowRunInput::for_task(task.id.clone(), None)).await {
+                    let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
+                    summary.started += 1;
+                    summary.started_workflows.push(DispatchWorkflowStart {
+                        dispatch: protocol::SubjectDispatch::for_task(
+                            task.id.clone(),
+                            workflow.workflow_ref.unwrap_or_default(),
+                        ),
+                        workflow_id: Some(workflow.id),
+                        selection_source: DispatchSelectionSource::ReadyQueue,
+                    });
+                }
+            }
+        }
+
         Ok(summary)
     }
 
     fn dispatch_notice(&mut self, notice: DispatchNotice) {
         match notice {
             DispatchNotice::ScheduleDispatched { schedule_id, dispatch } => {
-                self.logger
-                    .info("schedule", format!("fired '{}'", dispatch.workflow_ref))
-                    .schedule(schedule_id)
-                    .emit();
+                self.logger.info("schedule", format!("fired '{}'", dispatch.workflow_ref)).schedule(schedule_id).emit();
             }
             DispatchNotice::ScheduleDispatchFailed { schedule_id, dispatch, error } => {
                 self.logger
@@ -122,10 +193,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                     .emit();
             }
             DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                self.logger
-                    .error("queue", format!("failed to assign {}", dispatch.subject_key()))
-                    .err(error)
-                    .emit();
+                self.logger.error("queue", format!("failed to assign {}", dispatch.subject_key())).err(error).emit();
             }
             DispatchNotice::Failed { dispatch, error } => {
                 self.logger
