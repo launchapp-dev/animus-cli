@@ -82,7 +82,11 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                 )
             });
             if all_terminal {
-                let _ = hub.tasks().set_status(&task.id, TaskStatus::Done, false).await;
+                let any_success = task_workflows
+                    .iter()
+                    .any(|w| matches!(w.status, WorkflowStatus::Completed | WorkflowStatus::Escalated));
+                let new_status = if any_success { TaskStatus::Done } else { TaskStatus::Blocked };
+                let _ = hub.tasks().set_status(&task.id, new_status, false).await;
                 reconciled += 1;
             }
         }
@@ -138,7 +142,25 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         let remaining = limit.saturating_sub(summary.started);
         if remaining > 0 {
             let tasks = hub.tasks().list_prioritized().await?;
-            let ready_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::Ready).take(remaining).collect();
+            let workflows = hub.workflows().list().await?;
+            let active_task_ids: std::collections::HashSet<_> = workflows
+                .iter()
+                .filter(|w| {
+                    !matches!(
+                        w.status,
+                        WorkflowStatus::Completed
+                            | WorkflowStatus::Failed
+                            | WorkflowStatus::Cancelled
+                            | WorkflowStatus::Escalated
+                    )
+                })
+                .map(|w| w.task_id.clone())
+                .collect();
+            let ready_tasks: Vec<_> = tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Ready && !active_task_ids.contains(&t.id))
+                .take(remaining)
+                .collect();
             for task in ready_tasks {
                 if let Ok(workflow) = hub.workflows().run(WorkflowRunInput::for_task(task.id.clone(), None)).await {
                     let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
