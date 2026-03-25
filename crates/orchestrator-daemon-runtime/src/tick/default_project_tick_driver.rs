@@ -56,7 +56,12 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
-    async fn cleanup_stale_workflows(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str, _max_age_hours: u64) -> Result<usize> {
+    async fn cleanup_stale_workflows(
+        &mut self,
+        _hub: Arc<dyn ServiceHub>,
+        _root: &str,
+        _max_age_hours: u64,
+    ) -> Result<usize> {
         Ok(0)
     }
 

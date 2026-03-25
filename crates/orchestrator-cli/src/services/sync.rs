@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use orchestrator_core::{FileServiceHub, ServiceHub};
-use protocol::sync_config::SyncConfig;
 use protocol::orchestrator::{OrchestratorTask, RequirementItem};
+use protocol::sync_config::SyncConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::{SyncCommand, SyncSetupArgs, SyncLinkArgs, print_value};
+use crate::{print_value, SyncCommand, SyncLinkArgs, SyncSetupArgs};
 
 pub(crate) async fn handle_sync(
     command: SyncCommand,
@@ -34,10 +34,7 @@ async fn handle_setup(args: SyncSetupArgs, project_root: &str, json: bool) -> Re
     if let Some(ref url) = origin_url {
         let client = build_client(&args.token)?;
         let server = args.server.trim_end_matches('/');
-        let resp = client
-            .get(&format!("{server}/api/projects/by-repo?url={}", urlencoding(url)))
-            .send()
-            .await;
+        let resp = client.get(&format!("{server}/api/projects/by-repo?url={}", urlencoding(url))).send().await;
 
         if let Ok(resp) = resp {
             if resp.status().is_success() {
@@ -58,12 +55,7 @@ async fn handle_setup(args: SyncSetupArgs, project_root: &str, json: bool) -> Re
         }
     }
 
-    let result = SetupResult {
-        server: args.server,
-        project_id: None,
-        project_name: None,
-        auto_linked: false,
-    };
+    let result = SetupResult { server: args.server, project_id: None, project_name: None, auto_linked: false };
     if !json {
         eprintln!("Sync server configured. No matching remote project found for this repo.");
         eprintln!("Link manually with: ao sync link --project-id <id>");
@@ -84,7 +76,9 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
     let token = config.bearer_token()?;
-    let project_id = config.project_id.as_ref()
+    let project_id = config
+        .project_id
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao sync link --project-id <id>"))?;
 
     let tasks: Vec<OrchestratorTask> = hub.tasks().list().await?;
@@ -95,11 +89,7 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let client = build_client(&token)?;
     let resp = client
         .post(&format!("{}/api/projects/{}/sync", server.trim_end_matches('/'), project_id))
-        .json(&SyncRequest {
-            tasks,
-            requirements,
-            since: config.last_synced_at.clone(),
-        })
+        .json(&SyncRequest { tasks, requirements, since: config.last_synced_at.clone() })
         .send()
         .await
         .context("Failed to connect to sync server")?;
@@ -137,17 +127,15 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
     let token = config.bearer_token()?;
-    let project_id = config.project_id.as_ref()
+    let project_id = config
+        .project_id
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao sync link --project-id <id>"))?;
 
     let client = build_client(&token)?;
     let resp = client
         .post(&format!("{}/api/projects/{}/sync", server.trim_end_matches('/'), project_id))
-        .json(&SyncRequest {
-            tasks: vec![],
-            requirements: vec![],
-            since: config.last_synced_at.clone(),
-        })
+        .json(&SyncRequest { tasks: vec![], requirements: vec![], since: config.last_synced_at.clone() })
         .send()
         .await
         .context("Failed to connect to sync server")?;
@@ -174,11 +162,8 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     config.last_synced_at = Some(sync_resp.server_time.clone());
     config.save_for_project(project_root)?;
 
-    let result = PullResult {
-        tasks_received: task_count,
-        requirements_received: req_count,
-        server_time: sync_resp.server_time,
-    };
+    let result =
+        PullResult { tasks_received: task_count, requirements_received: req_count, server_time: sync_resp.server_time };
     print_value(result, json)
 }
 
@@ -195,14 +180,8 @@ async fn handle_status(project_root: &str, json: bool) -> Result<()> {
 
 fn build_client(token: &str) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-    );
-    reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .context("Failed to build HTTP client")
+    headers.insert(reqwest::header::AUTHORIZATION, reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?);
+    reqwest::Client::builder().default_headers(headers).build().context("Failed to build HTTP client")
 }
 
 fn get_git_origin(project_root: &str) -> Option<String> {
@@ -211,13 +190,15 @@ fn get_git_origin(project_root: &str) -> Option<String> {
         .current_dir(project_root)
         .output()
         .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
+        .and_then(
+            |o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            },
+        )
 }
 
 fn urlencoding(s: &str) -> String {

@@ -117,7 +117,10 @@ async fn run_gemini_session(
     command
         .args(&invocation.args)
         .current_dir(&request.cwd)
-        .env_remove("CLAUDECODE").env_remove("CLAUDE_CODE_ENTRYPOINT").env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN").env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .env_remove("CLAUDE_CODE_SESSION_ACCESS_TOKEN")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .envs(request.env_vars.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

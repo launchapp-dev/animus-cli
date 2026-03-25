@@ -46,7 +46,6 @@ pub async fn project_task_blocked_with_reason(
     Ok(())
 }
 
-
 pub async fn project_task_workflow_start(
     hub: Arc<dyn ServiceHub>,
     task_id: &str,
@@ -284,5 +283,4 @@ mod tests {
 
         assert!(!projected);
     }
-
 }

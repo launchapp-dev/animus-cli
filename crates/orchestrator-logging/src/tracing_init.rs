@@ -17,12 +17,9 @@ use tracing_subscriber::{EnvFilter, Layer};
 /// - DEBUG: Decision points, diagnostic context for troubleshooting
 /// - TRACE: Loop noise, high-frequency events (tick iterations, polls)
 pub fn init_tracing(default_filter: &str) {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
 
-    let json_format = std::env::var("AO_LOG_JSON")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let json_format = std::env::var("AO_LOG_JSON").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
 
     if json_format {
         let json_layer = tracing_subscriber::fmt::layer()

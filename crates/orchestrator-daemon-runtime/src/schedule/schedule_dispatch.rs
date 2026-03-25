@@ -77,8 +77,7 @@ where
     } else {
         warn!(
             actor = protocol::ACTOR_DAEMON,
-            schedule_id,
-            "schedule is missing workflow_ref and will not be dispatched"
+            schedule_id, "schedule is missing workflow_ref and will not be dispatched"
         );
         "failed: schedule is missing workflow_ref".to_string()
     };
