@@ -639,40 +639,30 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
 
     let logs_dir = Logger::logs_dir(Path::new(project_root));
 
-    // Read from ALL log files (events.jsonl + runs/*.jsonl) for initial tail
+    // Read from all log files for initial tail
     let mut all_entries: Vec<orchestrator_logging::LogEntry> = Vec::new();
     for path in discover_log_files(&logs_dir) {
-        if let Some(parent) = path.parent() {
-            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                let logger = Logger::open(parent, filename, orchestrator_logging::Level::Debug);
-                let file_entries = logger.read_entries_since(args.tail * 3, args.cat.as_deref(), level, None);
-                all_entries.extend(file_entries);
-            }
-        }
+        let logger = Logger::open(path.parent().unwrap_or(Path::new(".")), path.file_name().unwrap().to_str().unwrap_or(""), orchestrator_logging::Level::Debug);
+        let entries = logger.read_entries_since(args.tail * 2, args.cat.as_deref(), level, None);
+        all_entries.extend(entries);
     }
     all_entries.sort_by(|a, b| a.ts.cmp(&b.ts));
 
-    let matches_filter = |entry: &orchestrator_logging::LogEntry| -> bool {
+    let mut shown = 0usize;
+    for entry in &all_entries {
         if let Some(ref wf) = args.workflow {
-            let wf_match = entry.workflow_id.as_deref() == Some(wf.as_str())
-                || entry.run_id.as_deref().map(|r| r.contains(wf.as_str())).unwrap_or(false)
-                || entry.meta.as_ref()
-                    .and_then(|m| m.get("workflow_ref"))
-                    .and_then(|v| v.as_str())
-                    .map(|r| r == wf.as_str())
-                    .unwrap_or(false);
-            if !wf_match { return false; }
+            let matches = entry.workflow_id.as_deref() == Some(wf.as_str())
+                || entry.meta.as_ref().and_then(|m| m.get("workflow_ref")).and_then(|v| v.as_str()).map(|r| r.contains(wf.as_str())).unwrap_or(false);
+            if !matches { continue; }
         }
         if let Some(ref run) = args.run {
-            if entry.run_id.as_deref() != Some(run.as_str()) { return false; }
+            if entry.run_id.as_deref() != Some(run.as_str()) {
+                continue;
+            }
         }
-        true
-    };
-
-    let filtered: Vec<_> = all_entries.iter().filter(|e| matches_filter(e)).collect();
-    let skip = filtered.len().saturating_sub(args.tail);
-    for entry in filtered.into_iter().skip(skip) {
         print_entry(entry);
+        shown += 1;
+        if shown >= args.tail { break; }
     }
 
     if args.no_follow {
@@ -716,8 +706,15 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                                 continue;
                             }
                         }
-                        if !matches_filter(&entry) {
-                            continue;
+                        if let Some(ref wf) = args.workflow {
+                            if entry.workflow_id.as_deref() != Some(wf.as_str()) {
+                                continue;
+                            }
+                        }
+                        if let Some(ref run) = args.run {
+                            if entry.run_id.as_deref() != Some(run.as_str()) {
+                                continue;
+                            }
                         }
                         print_entry(&entry);
                     }

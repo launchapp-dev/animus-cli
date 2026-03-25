@@ -570,14 +570,16 @@ pub fn migrate_tasks_and_requirements_from_core_state(
         return;
     }
 
-    if tasks.is_empty() && requirements.is_empty() {
-        let _ = std::fs::File::create(&marker);
-        return;
-    }
-
-    eprintln!("[ao] migrating tasks and requirements to SQLite...");
+    let scoped_root = match protocol::scoped_state_root(project_root) {
+        Some(r) => r,
+        None => {
+            let _ = std::fs::File::create(&marker);
+            return;
+        }
+    };
 
     let mut task_count = 0usize;
+
     for task in tasks.values() {
         if let Ok(json) = serde_json::to_string(task) {
             let data = compress_json(&json);
@@ -589,7 +591,29 @@ pub fn migrate_tasks_and_requirements_from_core_state(
         }
     }
 
+    let tasks_dir = scoped_root.join("tasks");
+    if tasks_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                let Ok(task) = serde_json::from_str::<crate::types::OrchestratorTask>(&content) else { continue };
+                let compact = serde_json::to_string(&task).unwrap_or(content);
+                let data = compress_json(&compact);
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO tasks (id, status, json) VALUES (?1, ?2, ?3)",
+                    params![task.id, task.status.to_string(), data],
+                );
+                task_count += 1;
+            }
+        }
+    }
+
     let mut req_count = 0usize;
+
     for req in requirements.values() {
         if let Ok(json) = serde_json::to_string(req) {
             let data = compress_json(&json);
@@ -601,6 +625,40 @@ pub fn migrate_tasks_and_requirements_from_core_state(
         }
     }
 
-    eprintln!("[ao] migrated {} tasks, {} requirements to SQLite", task_count, req_count);
+    let reqs_dir = scoped_root.join("requirements");
+    if reqs_dir.exists() {
+        fn walk_json_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walk_json_files(&path, files);
+                    } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        let mut req_files = Vec::new();
+        walk_json_files(&reqs_dir, &mut req_files);
+        for path in req_files {
+            if path.file_name().and_then(|n| n.to_str()) == Some("index.json") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(req) = serde_json::from_str::<crate::types::RequirementItem>(&content) else { continue };
+            let compact = serde_json::to_string(&req).unwrap_or(content);
+            let data = compress_json(&compact);
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO requirements (id, status, json) VALUES (?1, ?2, ?3)",
+                params![req.id, req.status.to_string(), data],
+            );
+            req_count += 1;
+        }
+    }
+
+    if task_count > 0 || req_count > 0 {
+        eprintln!("[ao] migrated {} tasks, {} requirements to SQLite", task_count, req_count);
+    }
     let _ = std::fs::File::create(&marker);
 }
