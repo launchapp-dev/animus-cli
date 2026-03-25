@@ -148,7 +148,8 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
     let mut host = CliDaemonRunHost::new(project_root, json, start_config);
     let logger = host.logger();
-    let mut driver: SlimProjectTickDriver<'_> = slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
+    let mut driver: SlimProjectTickDriver<'_> =
+        slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
 
     let run_result =
         run_daemon(project_root, &mut runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
@@ -447,9 +448,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
 
-        let pm_config_path = PathBuf::from(&primary_root).join(".ao").join("pm-config.json");
+        let pm_config_path = orchestrator_core::daemon_project_config_path(std::path::Path::new(&primary_root));
         std::fs::create_dir_all(pm_config_path.parent().expect("pm-config path should have parent"))
-            .expect(".ao directory should be created");
+            .expect("scoped daemon config directory should be created");
         let pm_config = serde_json::json!({
             "notification_config": {
                 "schema": "ao.daemon-notification-config.v1",
