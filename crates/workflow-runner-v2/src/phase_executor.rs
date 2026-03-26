@@ -22,7 +22,8 @@ use crate::runtime_contract::{
     phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
 };
 use crate::runtime_support::{
-    inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts, WorkflowPhaseRuntimeSettings,
+    inject_cli_launch_env, inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts,
+    WorkflowPhaseRuntimeSettings,
 };
 use crate::skill_dispatch;
 
@@ -255,6 +256,43 @@ fn load_agent_runtime_config_strict(project_root: &str) -> Result<orchestrator_c
 
 fn load_workflow_config_strict(project_root: &str) -> Result<orchestrator_core::LoadedWorkflowConfig> {
     orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root))
+}
+
+fn configured_tool_profile(phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>) -> Option<&str> {
+    phase_runtime_settings
+        .and_then(|settings| settings.tool_profile.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_claude_profile_env(
+    tool_id: &str,
+    phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
+    global_config: Option<&protocol::Config>,
+) -> Result<BTreeMap<String, String>> {
+    let Some(profile_name) = configured_tool_profile(phase_runtime_settings) else {
+        return Ok(BTreeMap::new());
+    };
+
+    if !tool_id.eq_ignore_ascii_case("claude") {
+        return Err(anyhow!(
+            "tool_profile '{}' is only supported when the effective tool is claude (resolved '{}')",
+            profile_name,
+            tool_id
+        ));
+    }
+
+    let config = global_config
+        .ok_or_else(|| anyhow!("global AO config is required to resolve claude profile '{}'", profile_name))?;
+    let profile = config
+        .claude_profile(profile_name)
+        .ok_or_else(|| anyhow!("unknown global claude profile '{}'", profile_name))?;
+
+    if profile.env.keys().any(|key| key.trim().is_empty()) {
+        return Err(anyhow!("global claude profile '{}' contains an empty env key", profile_name));
+    }
+
+    Ok(profile.env.clone())
 }
 
 fn hash_serializable<T: Serialize>(value: &T) -> String {
@@ -932,6 +970,11 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
     let session_id = Uuid::new_v4().to_string();
     let mut fallover_errors: Vec<String> = Vec::new();
     let requires_structured_completion = phase_requires_structured_completion(ctx, phase_id);
+    let global_config = if configured_tool_profile(phase_runtime_settings).is_some() {
+        Some(protocol::Config::load_global().context("failed to load global AO config for claude profile resolution")?)
+    } else {
+        None
+    };
 
     for (target_index, (target_tool_id, target_model_id)) in execution_targets.iter().enumerate() {
         let (effective_tool_id, effective_model_id, effective_caps, applied_skills) = resolve_phase_skill_target(
@@ -1052,6 +1095,9 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         &effective_tool_id,
                         &applied_skills.application,
                     );
+                    let claude_profile_env =
+                        resolve_claude_profile_env(&effective_tool_id, phase_runtime_settings, global_config.as_ref())?;
+                    inject_cli_launch_env(&mut runtime_contract, &claude_profile_env);
                     let cli_supports_mcp = runtime_contract
                         .pointer("/cli/capabilities/supports_mcp")
                         .and_then(Value::as_bool)
@@ -1356,7 +1402,11 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
     let schedule_input = params.schedule_input;
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
-    orchestrator_core::validate_workflow_and_runtime_configs(&workflow_config.config, &runtime_loaded.config)?;
+    orchestrator_core::validate_workflow_and_runtime_configs_with_project_root(
+        &workflow_config.config,
+        &runtime_loaded.config,
+        Some(Path::new(project_root)),
+    )?;
 
     let mut merged_runtime = runtime_loaded.config.clone();
     for (id, profile) in &workflow_config.config.agent_profiles {
@@ -1424,6 +1474,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 
             let runtime_settings = Some(WorkflowPhaseRuntimeSettings {
                 tool: cli_tool_override.or_else(|| merged_runtime.phase_tool_override(phase_id)).map(ToOwned::to_owned),
+                tool_profile: merged_runtime.phase_tool_profile(phase_id).map(ToOwned::to_owned),
                 model: cli_model_override
                     .or_else(|| merged_runtime.phase_model_override(phase_id))
                     .map(ToOwned::to_owned),
@@ -1710,8 +1761,12 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
 #[cfg(test)]
 mod tests {
     use super::{
-        phase_outcome_is_complete, phase_session_resume_plan, process_phase_event_stream, PhaseExecutionOutcome,
+        phase_outcome_is_complete, phase_session_resume_plan, process_phase_event_stream, resolve_claude_profile_env,
+        PhaseExecutionOutcome,
     };
+    use crate::runtime_support::{inject_cli_launch_env, WorkflowPhaseRuntimeSettings};
+
+    use std::collections::BTreeMap;
 
     #[test]
     fn initial_attempt_starts_a_fresh_native_session() {
@@ -1784,6 +1839,19 @@ mod tests {
         dir
     }
 
+    fn write_global_claude_profile_config(config_dir: &std::path::Path, profile_name: &str, config_dir_value: &str) {
+        let mut config = protocol::Config::load_from_dir(config_dir).expect("global config should load");
+        config.claude_profiles.insert(
+            profile_name.to_string(),
+            protocol::ClaudeProfileEntry {
+                env: BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), config_dir_value.to_string())]),
+            },
+        );
+        let config_path = config_dir.join("config.json");
+        std::fs::write(config_path, serde_json::to_string_pretty(&config).expect("serialize config"))
+            .expect("write global config");
+    }
+
     async fn run_stream(
         events: &[protocol::AgentRunEvent],
         run_id: &RunId,
@@ -1823,6 +1891,36 @@ mod tests {
         ];
         let err = run_stream(&events, &run_id, None).await.expect_err("should be an error");
         assert!(err.to_string().contains("exited with code"), "got: {}", err);
+    }
+
+    #[test]
+    fn claude_tool_profile_resolves_launch_env() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_global_claude_profile_config(temp.path(), "overflow", "/Users/test/.claude-overflow");
+        let config = protocol::Config::load_from_dir(temp.path()).expect("global config should load");
+        let settings = WorkflowPhaseRuntimeSettings {
+            tool: Some("claude".to_string()),
+            tool_profile: Some("overflow".to_string()),
+            ..Default::default()
+        };
+
+        let env =
+            resolve_claude_profile_env("claude", Some(&settings), Some(&config)).expect("profile env should resolve");
+        let mut runtime_contract = serde_json::json!({
+            "cli": {
+                "launch": {
+                    "command": "claude",
+                    "args": ["--print", "hello"],
+                    "prompt_via_stdin": false
+                }
+            }
+        });
+        inject_cli_launch_env(&mut runtime_contract, &env);
+
+        assert_eq!(
+            runtime_contract.pointer("/cli/launch/env/CLAUDE_CONFIG_DIR").and_then(serde_json::Value::as_str),
+            Some("/Users/test/.claude-overflow")
+        );
     }
 
     #[tokio::test]

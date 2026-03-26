@@ -116,12 +116,13 @@ pub use workflow_config::{
     load_workflow_config_or_default, load_workflow_config_with_metadata, merge_yaml_into_config,
     parse_yaml_workflow_config, resolve_workflow_phase_plan, resolve_workflow_rework_attempts,
     resolve_workflow_skip_guards, resolve_workflow_variables, resolve_workflow_verdict_routing,
-    validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs, validate_workflow_config,
-    workflow_config_hash, workflow_config_path, write_workflow_config, yaml_workflows_dir, CompileYamlResult,
-    LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef,
-    WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
-    WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowVariable,
-    WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
+    validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs,
+    validate_workflow_and_runtime_configs_with_project_root, validate_workflow_config, workflow_config_hash,
+    workflow_config_path, write_workflow_config, yaml_workflows_dir, CompileYamlResult, LoadedWorkflowConfig,
+    PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef, WorkflowCheckpointRetentionConfig,
+    WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource, WorkflowDefinition, WorkflowPhaseConfig,
+    WorkflowPhaseEntry, WorkflowSchedule, WorkflowVariable, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
+    WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
 pub use workflow_events::{dispatch_workflow_event, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{

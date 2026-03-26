@@ -108,7 +108,11 @@ pub(crate) fn upsert_phase_definition(
     let mut runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
     runtime.phases.insert(phase_id.to_string(), definition.clone());
 
-    orchestrator_core::validate_workflow_and_runtime_configs(&workflow, &runtime)?;
+    orchestrator_core::validate_workflow_and_runtime_configs_with_project_root(
+        &workflow,
+        &runtime,
+        Some(Path::new(project_root)),
+    )?;
     orchestrator_core::write_agent_runtime_config(Path::new(project_root), &runtime)?;
     orchestrator_core::write_workflow_config(Path::new(project_root), &workflow)?;
 
@@ -178,7 +182,11 @@ pub(crate) fn upsert_pipeline(project_root: &str, pipeline: orchestrator_core::W
     }
 
     let runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
-    orchestrator_core::validate_workflow_and_runtime_configs(&workflow, &runtime)?;
+    orchestrator_core::validate_workflow_and_runtime_configs_with_project_root(
+        &workflow,
+        &runtime,
+        Some(Path::new(project_root)),
+    )?;
     orchestrator_core::write_workflow_config(Path::new(project_root), &workflow)?;
 
     Ok(serde_json::json!({

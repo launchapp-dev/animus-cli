@@ -28,6 +28,37 @@ Project pack selection and pinning state, managed by `ao pack ...`.
 
 Project configuration and registry-scoped metadata created during setup.
 
+## Global User Config
+
+### `~/.config/com.launchpad.agent-orchestrator/config.json` on macOS
+
+The global AO config stores machine-local user settings such as runner auth and
+optional Claude profile definitions. Use `AO_CONFIG_DIR` to override the global
+config root in tests or custom environments.
+
+Claude profiles are user-owned launch settings and should not be committed to a
+repository. Workflow YAML may reference a named profile only when the effective
+tool is `claude`.
+
+Example:
+
+```json
+{
+  "claude_profiles": {
+    "main": {
+      "env": {
+        "CLAUDE_CONFIG_DIR": "/Users/alice/.claude-main"
+      }
+    },
+    "overflow": {
+      "env": {
+        "CLAUDE_CONFIG_DIR": "/Users/alice/.claude-overflow"
+      }
+    }
+  }
+}
+```
+
 ## Bundled and Installed Sources
 
 ### Bundled kernel workflows

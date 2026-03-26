@@ -6,6 +6,8 @@ pub struct WorkflowPhaseRuntimeSettings {
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
+    pub tool_profile: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
@@ -213,6 +215,24 @@ fn inject_cli_extra_args(
     for extra_arg in extra_args {
         args.insert(insert_at, Value::String(extra_arg));
         insert_at += 1;
+    }
+}
+
+pub fn inject_cli_launch_env(runtime_contract: &mut Value, launch_env: &std::collections::BTreeMap<String, String>) {
+    if launch_env.is_empty() {
+        return;
+    }
+
+    if runtime_contract.pointer("/cli/launch/env").is_none() {
+        if let Some(launch) = runtime_contract.pointer_mut("/cli/launch").and_then(Value::as_object_mut) {
+            launch.insert("env".to_string(), Value::Object(serde_json::Map::new()));
+        }
+    }
+
+    if let Some(env) = runtime_contract.pointer_mut("/cli/launch/env").and_then(Value::as_object_mut) {
+        for (key, value) in launch_env {
+            env.entry(key.clone()).or_insert(Value::String(value.clone()));
+        }
     }
 }
 

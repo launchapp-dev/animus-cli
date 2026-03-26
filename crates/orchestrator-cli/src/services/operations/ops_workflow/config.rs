@@ -208,7 +208,11 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
 
     match (workflow_loaded, runtime_loaded) {
         (Ok(workflow), Ok(runtime)) => {
-            match orchestrator_core::validate_workflow_and_runtime_configs(&workflow.config, &runtime.config) {
+            match orchestrator_core::validate_workflow_and_runtime_configs_with_project_root(
+                &workflow.config,
+                &runtime.config,
+                Some(Path::new(project_root)),
+            ) {
                 Ok(()) => serde_json::json!({
                     "valid": true,
                     "errors": [],

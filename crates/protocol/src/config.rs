@@ -16,11 +16,19 @@ pub struct ProjectMcpServerEntry {
     pub assign_to: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClaudeProfileEntry {
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub agent_runner_token: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: BTreeMap<String, ProjectMcpServerEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claude_profiles: BTreeMap<String, ClaudeProfileEntry>,
 }
 
 impl Config {
@@ -87,7 +95,8 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
 
-        let default_config = Self { agent_runner_token: None, mcp_servers: BTreeMap::new() };
+        let default_config =
+            Self { agent_runner_token: None, mcp_servers: BTreeMap::new(), claude_profiles: BTreeMap::new() };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
         Ok(default_config)
@@ -107,6 +116,14 @@ impl Config {
 
     pub fn get_token(&self) -> Result<String> {
         normalize_token("agent_runner_token", self.agent_runner_token.clone().unwrap_or_default())
+    }
+
+    pub fn claude_profile(&self, name: &str) -> Option<&ClaudeProfileEntry> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        self.claude_profiles.get(trimmed)
     }
 }
 
@@ -192,6 +209,7 @@ mod tests {
         let json = r#"{"agent_runner_token": null}"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert!(config.mcp_servers.is_empty());
+        assert!(config.claude_profiles.is_empty());
     }
 
     #[test]
@@ -205,6 +223,11 @@ mod tests {
                     "env": {"DB_HOST": "localhost"},
                     "assign_to": ["swe"]
                 }
+            },
+            "claude_profiles": {
+                "work": {
+                    "env": {"CLAUDE_CONFIG_DIR": "/Users/test/.claude-work"}
+                }
             }
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
@@ -214,16 +237,23 @@ mod tests {
         assert_eq!(entry.args, vec!["--port", "5432"]);
         assert_eq!(entry.env.get("DB_HOST").map(String::as_str), Some("localhost"));
         assert_eq!(entry.assign_to, vec!["swe"]);
+        assert_eq!(
+            config.claude_profiles["work"].env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some("/Users/test/.claude-work")
+        );
 
         let serialized = serde_json::to_string(&config).unwrap();
         let roundtripped: Config = serde_json::from_str(&serialized).unwrap();
         assert_eq!(roundtripped.mcp_servers.len(), 1);
+        assert_eq!(roundtripped.claude_profiles.len(), 1);
     }
 
     #[test]
     fn config_serialization_omits_empty_mcp_servers() {
-        let config = Config { agent_runner_token: None, mcp_servers: BTreeMap::new() };
+        let config =
+            Config { agent_runner_token: None, mcp_servers: BTreeMap::new(), claude_profiles: BTreeMap::new() };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));
+        assert!(!json.contains("claude_profiles"));
     }
 }

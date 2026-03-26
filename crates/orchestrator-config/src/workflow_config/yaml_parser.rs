@@ -448,6 +448,7 @@ mod tests {
             project_overrides: None,
             models: vec![],
             tool: None,
+            tool_profile: None,
             model: None,
             fallback_models: vec![],
             fallback_tools: vec![],

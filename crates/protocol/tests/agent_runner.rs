@@ -1,13 +1,6 @@
-use protocol::test_utils::EnvVarGuard;
 use protocol::*;
 use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 fn temp_config_dir(label: &str) -> std::path::PathBuf {
     let nanos =
@@ -211,7 +204,11 @@ fn test_ipc_auth_result_failure_roundtrip() {
 
 #[test]
 fn test_config_get_token_returns_config_value() {
-    let config = Config { agent_runner_token: Some("config-token".to_string()), mcp_servers: BTreeMap::new() };
+    let config = Config {
+        agent_runner_token: Some("config-token".to_string()),
+        mcp_servers: BTreeMap::new(),
+        claude_profiles: BTreeMap::new(),
+    };
 
     let token = config.get_token().expect("config token should resolve");
     assert_eq!(token, "config-token");
@@ -219,7 +216,11 @@ fn test_config_get_token_returns_config_value() {
 
 #[test]
 fn test_config_get_token_rejects_blank_config_value() {
-    let config = Config { agent_runner_token: Some("   ".to_string()), mcp_servers: BTreeMap::new() };
+    let config = Config {
+        agent_runner_token: Some("   ".to_string()),
+        mcp_servers: BTreeMap::new(),
+        claude_profiles: BTreeMap::new(),
+    };
 
     let error = config.get_token().expect_err("blank config token should fail closed");
     assert!(error.to_string().contains("agent_runner_token"), "error should mention config token source");
@@ -227,7 +228,7 @@ fn test_config_get_token_rejects_blank_config_value() {
 
 #[test]
 fn test_config_get_token_rejects_missing_token() {
-    let config = Config { agent_runner_token: None, mcp_servers: BTreeMap::new() };
+    let config = Config { agent_runner_token: None, mcp_servers: BTreeMap::new(), claude_profiles: BTreeMap::new() };
 
     let error = config.get_token().expect_err("missing token should fail closed");
     assert!(error.to_string().contains("agent_runner_token"), "error should mention missing config token");

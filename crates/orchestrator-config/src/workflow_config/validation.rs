@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use crate::agent_runtime_config::{AgentRuntimeConfig, PhaseExecutionMode};
+use crate::agent_runtime_config::{AgentProfile, AgentRuntimeConfig, PhaseExecutionMode};
 use crate::skill_resolution::{resolve_skills, resolve_skills_for_project};
 use crate::skill_scoping::load_builtin_skills;
 
@@ -28,9 +28,29 @@ fn is_supported_shortcut_cron(expression: &str) -> bool {
 }
 
 pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime: &AgentRuntimeConfig) -> Result<()> {
+    validate_workflow_and_runtime_configs_with_project_root(workflow, runtime, None)
+}
+
+pub fn validate_workflow_and_runtime_configs_with_project_root(
+    workflow: &WorkflowConfig,
+    runtime: &AgentRuntimeConfig,
+    project_root: Option<&Path>,
+) -> Result<()> {
     validate_workflow_config(workflow)?;
 
     let mut errors = Vec::new();
+    let mut known_claude_profiles: Option<BTreeSet<String>> = None;
+    if project_root.is_some() {
+        match protocol::Config::load_global() {
+            Ok(config) => {
+                known_claude_profiles = Some(config.claude_profiles.keys().cloned().collect());
+            }
+            Err(error) => {
+                errors.push(format!("failed to load global AO config for claude profile validation: {error}"));
+            }
+        }
+    }
+
     for workflow_def in &workflow.workflows {
         let expanded = match expand_workflow_phases(&workflow.workflows, &workflow_def.id) {
             Ok(phases) => phases,
@@ -58,10 +78,103 @@ pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime:
         }
     }
 
+    for (agent_id, profile) in &workflow.agent_profiles {
+        if let Some(profile_name) = trim_nonempty(profile.tool_profile.as_deref()) {
+            validate_claude_profile_selection(
+                &format!("agent_profiles['{}'].tool_profile", agent_id),
+                profile_name,
+                resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()).as_deref(),
+                known_claude_profiles.as_ref(),
+                &mut errors,
+            );
+        }
+    }
+
+    for (phase_id, definition) in &workflow.phase_definitions {
+        let Some(runtime_overrides) = definition.runtime.as_ref() else {
+            continue;
+        };
+        let Some(profile_name) = trim_nonempty(runtime_overrides.tool_profile.as_deref()) else {
+            continue;
+        };
+        if definition.mode != PhaseExecutionMode::Agent {
+            errors.push(format!(
+                "phase_definitions['{}'].runtime.tool_profile is only supported for agent phases",
+                phase_id
+            ));
+            continue;
+        }
+
+        let resolved_tool = resolve_tool_id(runtime_overrides.tool.as_deref(), runtime_overrides.model.as_deref())
+            .or_else(|| {
+                definition.agent_id.as_deref().and_then(|agent_id| {
+                    lookup_workflow_agent_profile(workflow, agent_id)
+                        .or_else(|| runtime.agent_profile(agent_id))
+                        .and_then(|profile| resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()))
+                })
+            });
+        validate_claude_profile_selection(
+            &format!("phase_definitions['{}'].runtime.tool_profile", phase_id),
+            profile_name,
+            resolved_tool.as_deref(),
+            known_claude_profiles.as_ref(),
+            &mut errors,
+        );
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
         Err(anyhow!(errors.join("; ")))
+    }
+}
+
+fn trim_nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn resolve_tool_id(tool: Option<&str>, model: Option<&str>) -> Option<String> {
+    trim_nonempty(tool)
+        .map(|value| value.to_ascii_lowercase())
+        .or_else(|| trim_nonempty(model).map(|value| protocol::tool_for_model_id(value).to_string()))
+}
+
+fn lookup_workflow_agent_profile<'a>(workflow: &'a WorkflowConfig, agent_id: &str) -> Option<&'a AgentProfile> {
+    workflow
+        .agent_profiles
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(agent_id))
+        .map(|(_, profile)| profile)
+}
+
+fn validate_claude_profile_selection(
+    field_path: &str,
+    profile_name: &str,
+    resolved_tool: Option<&str>,
+    known_claude_profiles: Option<&BTreeSet<String>>,
+    errors: &mut Vec<String>,
+) {
+    match resolved_tool {
+        Some(tool_id) if tool_id.eq_ignore_ascii_case("claude") => {}
+        Some(tool_id) => {
+            errors.push(format!(
+                "{field_path} is only supported when the effective tool is claude (resolved '{}')",
+                tool_id
+            ));
+            return;
+        }
+        None => {
+            errors.push(format!(
+                "{field_path} requires an effective Claude tool to be resolvable from the phase or agent config",
+            ));
+            return;
+        }
+    }
+
+    if let Some(known_profiles) = known_claude_profiles {
+        if !known_profiles.contains(profile_name) {
+            errors.push(format!("{field_path} references unknown global claude profile '{}'", profile_name));
+        }
     }
 }
 

@@ -197,6 +197,8 @@ pub struct AgentRuntimeOverrides {
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
+    pub tool_profile: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
@@ -328,6 +330,8 @@ pub struct AgentProfile {
     pub models: Vec<String>,
     #[serde(default)]
     pub tool: Option<String>,
+    #[serde(default)]
+    pub tool_profile: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -603,6 +607,17 @@ impl AgentRuntimeConfig {
         .or_else(|| trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.model.as_deref())))
     }
 
+    pub fn phase_tool_profile(&self, phase_id: &str) -> Option<&str> {
+        trim_nonempty(
+            self.phase_execution(phase_id)
+                .and_then(|definition| definition.runtime.as_ref())
+                .and_then(|runtime| runtime.tool_profile.as_deref()),
+        )
+        .or_else(|| {
+            trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.tool_profile.as_deref()))
+        })
+    }
+
     pub fn phase_fallback_models(&self, phase_id: &str) -> Vec<String> {
         if let Some(runtime_models) = self
             .phase_execution(phase_id)
@@ -844,6 +859,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     skills: vec![],
                     capabilities: BTreeMap::new(),
                     tool: None,
+                    tool_profile: None,
                     model: None,
                     fallback_models: vec![],
                     models: vec![],
@@ -877,6 +893,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     ],
                     capabilities: swe_capabilities.clone(),
                     tool: None,
+                    tool_profile: None,
                     model: None,
                     fallback_models: vec![],
                     models: vec![],
@@ -931,6 +948,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         ("code_review".to_string(), true),
                     ]),
                     tool: None,
+                    tool_profile: None,
                     model: None,
                     fallback_models: vec![],
                     models: vec![],
@@ -987,6 +1005,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         ("code_review".to_string(), true),
                     ]),
                     tool: None,
+                    tool_profile: None,
                     model: None,
                     fallback_models: vec![],
                     models: vec![],
@@ -1020,6 +1039,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     ],
                     capabilities: swe_capabilities,
                     tool: None,
+                    tool_profile: None,
                     model: None,
                     fallback_models: vec![],
                     models: vec![],
@@ -1408,6 +1428,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if overlay.tool.is_some() {
         base.tool = overlay.tool.clone();
     }
+    if overlay.tool_profile.is_some() {
+        base.tool_profile = overlay.tool_profile.clone();
+    }
     if overlay.model.is_some() {
         base.model = overlay.model.clone();
     }
@@ -1684,6 +1707,10 @@ fn validate_phase_definition(
             return Err(anyhow!("phases['{}'].runtime.tool must not be empty", phase_id));
         }
 
+        if runtime.tool_profile.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.tool_profile must not be empty", phase_id));
+        }
+
         if runtime.model.as_deref().is_some_and(|value| value.trim().is_empty()) {
             return Err(anyhow!("phases['{}'].runtime.model must not be empty", phase_id));
         }
@@ -1760,6 +1787,10 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 
         if profile.tool.as_deref().is_some_and(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].tool must not be empty", agent_id));
+        }
+
+        if profile.tool_profile.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].tool_profile must not be empty", agent_id));
         }
 
         if profile.model.as_deref().is_some_and(|value| value.trim().is_empty()) {

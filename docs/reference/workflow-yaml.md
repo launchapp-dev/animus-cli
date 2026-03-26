@@ -81,6 +81,7 @@ agents:
     role: <string>               # Optional. Role identifier.
     model: <string>              # Optional. Model to use (e.g., claude-sonnet-4-6).
     tool: <string>               # Optional. CLI tool to use (e.g., claude, codex, gemini).
+    tool_profile: <string>       # Optional. Named global Claude profile; only valid with tool=claude.
     mcp_servers:                 # Optional. MCP server names this agent can access.
       - "ao"
       - "hubspot"
@@ -102,12 +103,17 @@ agents:
 | `role` | string | no | Role identifier for the agent |
 | `model` | string | no | LLM model identifier |
 | `tool` | string | no | CLI tool to invoke (claude, codex, gemini, etc.) |
+| `tool_profile` | string | no | Named global Claude profile to resolve into launch env; only valid for `claude` |
 | `mcp_servers` | string[] | no | Names of `mcp_servers` entries this agent can use |
 | `skills` | string[] | no | Skill identifiers to attach |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
 | `tool_policy` | object | no | Tool access control policy |
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.
+
+Claude profile references resolve against the user's global AO config, not the
+repository. This keeps account-specific paths such as `CLAUDE_CONFIG_DIR` out
+of project files.
 
 ---
 
@@ -125,8 +131,9 @@ phases:
       - implementation
       - code-review
     runtime:
-      tool: codex
-      model: gpt-5.3-codex
+      tool: claude
+      model: claude-sonnet-4-6
+      tool_profile: overflow
   code-review:
     mode: agent
     agent: po-reviewer
@@ -154,6 +161,10 @@ phases:
 | `default_tool` | string | no | Default tool hint for the phase |
 
 Phase `skills` are validated during config load. At runtime they can inject prompt fragments, model/tool policy overrides, MCP attachments, timeout overrides, launch args/env, and capability overrides. Installed registry skills work the same as local skills when a definition snapshot is present in AO state.
+
+When `runtime.tool_profile` is set, the effective tool must resolve to
+`claude`. AO looks up the named profile in the user's global config and injects
+its environment into the Claude launch contract.
 
 ---
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 
 use crate::agent_runtime_config::{CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode};
-use crate::test_support::env_lock;
+use crate::test_support::{env_lock, EnvVarGuard};
 use crate::PhaseExecutionDefinition;
 
 use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
@@ -10,7 +10,8 @@ use super::loading::load_workflow_config;
 use super::resolution::{resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards};
 use super::types::*;
 use super::validation::{
-    validate_workflow_and_runtime_configs, validate_workflow_config, validate_workflow_config_with_project_root,
+    validate_workflow_and_runtime_configs, validate_workflow_and_runtime_configs_with_project_root,
+    validate_workflow_config, validate_workflow_config_with_project_root,
 };
 use super::yaml_compiler::{compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows};
 use super::yaml_parser::parse_yaml_workflow_config;
@@ -1617,6 +1618,78 @@ workflows:
     let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
     let result = validate_workflow_and_runtime_configs(&config, &runtime);
     assert!(result.is_ok(), "cross-validation should pass for workflow-defined phase: {:?}", result.err());
+}
+
+fn write_global_claude_profile_config(config_dir: &std::path::Path, profile_name: &str, config_dir_value: &str) {
+    let mut config = protocol::Config::load_from_dir(config_dir).expect("global config should load");
+    config.claude_profiles.insert(
+        profile_name.to_string(),
+        protocol::ClaudeProfileEntry {
+            env: BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), config_dir_value.to_string())]),
+        },
+    );
+    let config_path = config_dir.join("config.json");
+    std::fs::write(config_path, serde_json::to_string_pretty(&config).expect("serialize config"))
+        .expect("write global config");
+}
+
+#[test]
+fn cross_validation_accepts_known_claude_tool_profile() {
+    let _lock = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", temp.path());
+    write_global_claude_profile_config(temp.path(), "overflow", "/Users/test/.claude-overflow");
+
+    let yaml = r#"
+agents:
+  default:
+    tool: claude
+    model: claude-sonnet-4-6
+    tool_profile: overflow
+
+default_workflow_ref: standard
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
+    let result = validate_workflow_and_runtime_configs_with_project_root(&config, &runtime, Some(temp.path()));
+    assert!(result.is_ok(), "known Claude profile should validate: {:?}", result.err());
+}
+
+#[test]
+fn cross_validation_rejects_non_claude_tool_profile_usage() {
+    let _lock = env_lock().lock().expect("env lock");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", temp.path());
+    write_global_claude_profile_config(temp.path(), "overflow", "/Users/test/.claude-overflow");
+
+    let yaml = r#"
+agents:
+  default:
+    tool: codex
+    model: gpt-5.4
+    tool_profile: overflow
+
+default_workflow_ref: standard
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
+    let err = validate_workflow_and_runtime_configs_with_project_root(&config, &runtime, Some(temp.path()))
+        .expect_err("non-Claude tool_profile usage should fail");
+    assert!(err.to_string().contains("only supported when the effective tool is claude"));
 }
 
 #[test]

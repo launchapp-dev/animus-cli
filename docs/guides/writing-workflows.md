@@ -51,6 +51,7 @@ agents:
   default:
     model: claude-sonnet-4-6
     tool: claude
+    tool_profile: main
 
   po-reviewer:
     system_prompt: |
@@ -66,6 +67,11 @@ agents:
 ```
 
 The `tool` field specifies which CLI tool runs the agent: `claude`, `codex`, `gemini`, `opencode`, or `oai-runner`.
+
+For Claude-only account routing, set `tool_profile` on a Claude agent or in a
+phase `runtime:` block. The profile name resolves against the user's global AO
+config and typically injects `CLAUDE_CONFIG_DIR`. Initial login for each
+profile still happens interactively in Claude Code.
 
 ## MCP Servers
 

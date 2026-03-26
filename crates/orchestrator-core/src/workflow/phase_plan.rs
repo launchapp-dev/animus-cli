@@ -110,7 +110,7 @@ pub fn resolve_phase_plan_for_workflow_ref(
     let loaded_workflow = crate::load_workflow_config_with_metadata(root)?;
     let workflow_config = loaded_workflow.config;
     let runtime_config = crate::load_agent_runtime_config_or_default(root);
-    crate::validate_workflow_and_runtime_configs(&workflow_config, &runtime_config)?;
+    crate::validate_workflow_and_runtime_configs_with_project_root(&workflow_config, &runtime_config, Some(root))?;
 
     if let Some(phases) = crate::resolve_workflow_phase_plan(&workflow_config, requested_workflow_ref.as_deref()) {
         return Ok(phases);
