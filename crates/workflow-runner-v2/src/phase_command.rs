@@ -207,6 +207,28 @@ fn summarize_output_excerpt(text: &str, max_len: usize) -> Option<String> {
     Some(excerpt)
 }
 
+fn build_timeout_failure_summary(
+    command: &orchestrator_core::PhaseCommandDefinition,
+    timeout_secs: u64,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    let excerpt_max = command.excerpt_max_chars.unwrap_or(800);
+    let mut failure_summary = format!("Command `{}` timed out after {} seconds.", command.program, timeout_secs);
+
+    if let Some(stdout_excerpt) = summarize_output_excerpt(stdout, excerpt_max) {
+        failure_summary.push_str("\n\nStdout excerpt:\n");
+        failure_summary.push_str(&stdout_excerpt);
+    }
+
+    if let Some(stderr_excerpt) = summarize_output_excerpt(stderr, excerpt_max) {
+        failure_summary.push_str("\n\nStderr excerpt:\n");
+        failure_summary.push_str(&stderr_excerpt);
+    }
+
+    failure_summary
+}
+
 pub(crate) fn build_command_phase_decision(
     command: &orchestrator_core::PhaseCommandDefinition,
     phase_id: &str,
@@ -393,19 +415,14 @@ pub(crate) async fn run_workflow_phase_with_command(
     let stdout_task = tokio::spawn(capture_command_stream(stdout_reader, Box::leak(phase_id.into_boxed_str())));
     let stderr_task = tokio::spawn(capture_command_stream(stderr_reader, Box::leak(phase_id2.into_boxed_str())));
 
+    let mut timed_out = false;
     let status = if let Some(timeout_secs) = command.timeout_secs {
         match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
             Ok(status) => status?,
             Err(_) => {
+                timed_out = true;
                 let _ = child.kill().await;
-                let _ = stdout_task.await;
-                let _ = stderr_task.await;
-                return Err(anyhow!(
-                    "phase '{}' command '{}' timed out after {} seconds",
-                    context.phase_id,
-                    command.program,
-                    timeout_secs
-                ));
+                child.wait().await?
             }
         }
     } else {
@@ -424,6 +441,23 @@ pub(crate) async fn run_workflow_phase_with_command(
         .or(stderr_capture.phase_decision)
         .or_else(|| parse_phase_decision_from_text(&stdout, context.phase_id))
         .or_else(|| parse_phase_decision_from_text(&stderr, context.phase_id));
+
+    if timed_out {
+        let timeout_secs = command.timeout_secs.expect("timed_out implies timeout_secs is set");
+        let failure_summary = build_timeout_failure_summary(command, timeout_secs, &stdout, &stderr);
+        return Ok(CommandExecutionResult {
+            exit_code,
+            program: command.program.clone(),
+            args,
+            stdout,
+            stderr,
+            cwd,
+            duration_ms,
+            parsed_payload: None,
+            phase_decision,
+            failure_summary: Some(failure_summary),
+        });
+    }
 
     if !command.success_exit_codes.contains(&exit_code) {
         let mut failure_summary = format!(
@@ -508,4 +542,75 @@ fn validate_command_contract(
         crate::phase_executor::validate_basic_json_schema(payload, schema)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(label: &str) -> PathBuf {
+        let suffix = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock should be valid").as_nanos();
+        std::env::temp_dir().join(format!("ao-phase-command-{label}-{suffix}"))
+    }
+
+    fn timeout_command_definition() -> orchestrator_core::PhaseCommandDefinition {
+        orchestrator_core::PhaseCommandDefinition {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "printf 'stdout line\\n'; printf 'stderr line\\n' >&2; sleep 5".to_string()],
+            env: BTreeMap::new(),
+            cwd_mode: orchestrator_core::CommandCwdMode::ProjectRoot,
+            cwd_path: None,
+            timeout_secs: Some(1),
+            success_exit_codes: vec![0],
+            parse_json_output: false,
+            expected_result_kind: None,
+            expected_schema: None,
+            category: None,
+            failure_pattern: None,
+            excerpt_max_chars: Some(64),
+            on_success_verdict: None,
+            on_failure_verdict: None,
+            confidence: None,
+            failure_risk: None,
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn timeout_preserves_stdout_and_stderr() {
+        let project_root = unique_test_dir("stdout-stderr");
+        fs::create_dir_all(&project_root).expect("project root should exist");
+
+        let runtime_config =
+            orchestrator_core::AgentRuntimeConfig { tools_allowlist: vec!["sh".to_string()], ..Default::default() };
+        let command = timeout_command_definition();
+        let root = project_root.to_string_lossy().into_owned();
+        let context = CommandExecutionContext {
+            project_root: &root,
+            execution_cwd: &root,
+            workflow_id: "wf-timeout-test",
+            phase_id: "phase-timeout-test",
+            workflow_ref: "default",
+            subject_id: "task-timeout-test",
+            subject_title: "timeout test",
+            subject_description: "timeout test",
+            pipeline_vars: None,
+            dispatch_input: None,
+            schedule_input: None,
+        };
+
+        let result = run_workflow_phase_with_command(&context, &runtime_config, &command)
+            .await
+            .expect("timeout should return a result");
+
+        assert!(result.failure_summary.as_deref().unwrap_or_default().contains("timed out after 1 seconds"));
+        assert!(result.failure_summary.as_deref().unwrap_or_default().contains("Stdout excerpt:"));
+        assert!(result.failure_summary.as_deref().unwrap_or_default().contains("Stderr excerpt:"));
+        assert!(result.stdout.contains("stdout line"));
+        assert!(result.stderr.contains("stderr line"));
+    }
 }

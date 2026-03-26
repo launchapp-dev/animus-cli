@@ -1,9 +1,10 @@
 use crate::cli_types::OutputCommand;
 use crate::{ensure_safe_run_id, not_found_error, print_value, run_dir};
 use anyhow::{Context, Result};
-use protocol::RunId;
+use protocol::{AgentRunEvent, RunId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use workflow_runner_v2::phase_output::{phase_output_dir, PersistedPhaseOutput};
@@ -54,6 +55,7 @@ pub(crate) fn get_run_jsonl_entries(project_root: &str, run_id: &str) -> Result<
     let Some(run_dir) = resolve_run_dir_for_lookup(project_root, run_id)? else {
         return Ok(rows);
     };
+    let canonical_output_payload_keys = collect_canonical_output_payload_keys(&run_dir.join("events.jsonl"))?;
     for file_name in
         ["json-output.jsonl", "stdout.jsonl", "stderr.jsonl", "system.jsonl", "signals.jsonl", "events.jsonl"]
     {
@@ -67,6 +69,9 @@ pub(crate) fn get_run_jsonl_entries(project_root: &str, run_id: &str) -> Result<
             if line.is_empty() {
                 continue;
             }
+            if file_name == "json-output.jsonl" && should_skip_json_output_line(line, &canonical_output_payload_keys) {
+                continue;
+            }
             rows.push(RunJsonlEntryCli {
                 source_file: file_name.to_string(),
                 line: line.to_string(),
@@ -77,6 +82,50 @@ pub(crate) fn get_run_jsonl_entries(project_root: &str, run_id: &str) -> Result<
 
     rows.sort_by(|a, b| a.timestamp_hint.cmp(&b.timestamp_hint));
     Ok(rows)
+}
+
+fn collect_canonical_output_payload_keys(events_path: &Path) -> Result<HashSet<String>> {
+    let mut keys = HashSet::new();
+    if !events_path.exists() {
+        return Ok(keys);
+    }
+
+    let content = fs::read_to_string(events_path)?;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
+            continue;
+        };
+        if let AgentRunEvent::OutputChunk { text, .. } = event {
+            if let Some(key) = canonical_json_value_key_from_text(&text) {
+                keys.insert(key);
+            }
+        }
+    }
+
+    Ok(keys)
+}
+
+fn should_skip_json_output_line(line: &str, canonical_output_payload_keys: &HashSet<String>) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let Some(payload) = value.get("payload") else {
+        return false;
+    };
+    canonical_json_value_key(payload).is_some_and(|key| canonical_output_payload_keys.contains(&key))
+}
+
+fn canonical_json_value_key(value: &Value) -> Option<String> {
+    serde_json::to_string(value).ok()
+}
+
+fn canonical_json_value_key_from_text(text: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(text.trim()).ok()?;
+    canonical_json_value_key(&value)
 }
 
 fn infer_cli_from_jsonl(entries: &[RunJsonlEntryCli]) -> Option<String> {
@@ -403,6 +452,54 @@ mod tests {
         assert_eq!(entries[0].timestamp_hint.as_deref(), Some("2024-01-01T00:00:00Z"));
         assert_eq!(entries[1].source_file, "events.jsonl");
         assert_eq!(entries[1].timestamp_hint.as_deref(), Some("2024-01-02T00:00:00Z"));
+    }
+
+    #[test]
+    fn get_run_jsonl_entries_deduplicates_json_output_payloads_already_in_events() {
+        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let run_id = "trace-jsonl-dedup";
+        let run_dir = run_dir(project_root.to_string_lossy().as_ref(), &RunId(run_id.to_string()), None);
+        std::fs::create_dir_all(&run_dir).expect("canonical run dir should be created");
+
+        let output_payload = serde_json::json!({
+            "kind": "result",
+            "value": 42
+        });
+        let output_text = output_payload.to_string();
+        let event = protocol::AgentRunEvent::OutputChunk {
+            run_id: RunId(run_id.to_string()),
+            stream_type: protocol::OutputStreamType::Stdout,
+            text: output_text.clone(),
+        };
+        std::fs::write(
+            run_dir.join("events.jsonl"),
+            format!("{}\n", serde_json::to_string(&event).expect("serialize event")),
+        )
+        .expect("events should be written");
+        std::fs::write(
+            run_dir.join("json-output.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "timestamp_ms": 1,
+                    "stream_type": "stdout",
+                    "raw": output_text,
+                    "payload": output_payload,
+                })
+            ),
+        )
+        .expect("json output should be written");
+
+        let entries =
+            get_run_jsonl_entries(project_root.to_string_lossy().as_ref(), run_id).expect("jsonl entries should load");
+        assert_eq!(entries.len(), 1, "duplicate derived payload should be skipped");
+        assert_eq!(entries[0].source_file, "events.jsonl");
+        assert!(entries[0].line.contains("\"kind\":\"output_chunk\""));
+        assert!(entries[0].line.contains("\\\"kind\\\":\\\"result\\\""));
     }
 
     #[test]
