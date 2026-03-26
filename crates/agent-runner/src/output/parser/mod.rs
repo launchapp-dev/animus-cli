@@ -48,6 +48,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_json_tool_result_event() {
+        let mut parser = OutputParser::new("oai-runner");
+        let events = parser.parse_line(r#"{"type":"tool_result","tool_name":"search_query","output":{"hits":3}}"#);
+
+        let tool_result = events
+            .into_iter()
+            .find_map(|event| match event {
+                ParsedEvent::ToolResult { tool_name, result, success } => Some((tool_name, result, success)),
+                _ => None,
+            })
+            .expect("tool result event");
+
+        assert_eq!(tool_result.0, "search_query");
+        assert_eq!(tool_result.1.get("hits").and_then(serde_json::Value::as_u64), Some(3));
+        assert!(tool_result.2);
+    }
+
+    #[test]
     fn parses_item_wrapped_mcp_tool_call_event() {
         let mut parser = OutputParser::new("claude");
         let events = parser.parse_line(

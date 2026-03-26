@@ -57,6 +57,7 @@ fn metadata_tokens_shape_is_stable() {
         run_id: RunId("run-123".to_string()),
         cost: Some(0.12),
         tokens: Some(TokenUsage { input: 120, output: 48, reasoning: Some(5), cache_read: Some(2), cache_write: None }),
+        data: Some(json!({"provider":"oai-runner"})),
     };
 
     let value = serde_json::to_value(event).expect("serialize metadata event");
@@ -67,6 +68,7 @@ fn metadata_tokens_shape_is_stable() {
     assert_eq!(value["tokens"]["reasoning"], 5);
     assert_eq!(value["tokens"]["cache_read"], 2);
     assert!(value["tokens"]["cache_write"].is_null());
+    assert_eq!(value["data"]["provider"], "oai-runner");
 }
 
 #[test]

@@ -34,10 +34,10 @@ impl SessionBackend for OaiRunnerSessionBackend {
             supports_terminate: true,
             supports_permissions: true,
             supports_mcp: true,
-            supports_tool_events: false,
+            supports_tool_events: true,
             supports_thinking_events: false,
             supports_artifact_events: false,
-            supports_usage_metadata: false,
+            supports_usage_metadata: true,
         }
     }
 

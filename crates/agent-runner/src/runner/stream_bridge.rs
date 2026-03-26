@@ -1,4 +1,4 @@
-use protocol::{AgentRunEvent, OutputStreamType, RunId, Timestamp, ToolCallInfo};
+use protocol::{AgentRunEvent, OutputStreamType, RunId, Timestamp, ToolCallInfo, ToolResultInfo};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout};
 use tokio::sync::mpsc;
@@ -43,6 +43,13 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
                                     tool_info: ToolCallInfo { tool_name, parameters, timestamp: Timestamp::now() },
                                 })
                             }
+                            ParsedEvent::ToolResult { tool_name, result, success } => {
+                                last_tool_call_name = None;
+                                Some(AgentRunEvent::ToolResult {
+                                    run_id: run_id.clone(),
+                                    result_info: ToolResultInfo { tool_name, result, duration_ms: 0, success },
+                                })
+                            }
                             ParsedEvent::Artifact(artifact_info) => {
                                 Some(AgentRunEvent::Artifact { run_id: run_id.clone(), artifact_info })
                             }
@@ -62,14 +69,8 @@ fn spawn_stdout_forwarder(stdout: ChildStdout, run_id: RunId, tool: String, outp
                         warn!(
                             run_id = %run_id.0.as_str(),
                             tool_name = %tool_name,
-                            "CLI stdout closed with tool call in-flight; process likely crashed"
+                            "CLI stdout closed after tool activity; final tool-result event was not observed"
                         );
-                        let _ = output_tx
-                            .send(AgentRunEvent::Error {
-                                run_id: run_id.clone(),
-                                error: format!("CLI process stdout closed while '{tool_name}' tool call was in-flight"),
-                            })
-                            .await;
                     } else {
                         warn!(run_id = %run_id.0.as_str(), "CLI stdout stream closed");
                     }

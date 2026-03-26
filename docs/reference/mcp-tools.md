@@ -135,7 +135,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `ao.output.run` | Get stdout/stderr from an agent execution | `run_id` |
-| `ao.output.tail` | Get most recent output/error/thinking events | `run_id`, `task_id`, `event_types[]`, `limit` |
+| `ao.output.tail` | Get recent output, thinking, tool, artifact, metadata, or finished events | `run_id`, `task_id`, `event_types[]`, `limit` |
 | `ao.output.monitor` | Stream real-time output from a running agent | `run_id`, `task_id`, `phase_id` |
 | `ao.output.jsonl` | Get structured JSONL event log | `run_id`, `entries` |
 | `ao.output.artifacts` | Get files generated during execution | `execution_id` |

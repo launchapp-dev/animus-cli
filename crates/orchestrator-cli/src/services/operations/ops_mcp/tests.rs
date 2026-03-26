@@ -59,6 +59,70 @@ fn error_event(run_id: &str, error: &str) -> String {
         .expect("error event should serialize")
 }
 
+fn tool_call_event(run_id: &str, tool_name: &str) -> String {
+    serde_json::to_string(&AgentRunEvent::ToolCall {
+        run_id: RunId(run_id.to_string()),
+        tool_info: protocol::ToolCallInfo {
+            tool_name: tool_name.to_string(),
+            parameters: json!({"q":"rust"}),
+            timestamp: protocol::Timestamp::now(),
+        },
+    })
+    .expect("tool call event should serialize")
+}
+
+fn tool_result_event(run_id: &str, tool_name: &str, success: bool) -> String {
+    serde_json::to_string(&AgentRunEvent::ToolResult {
+        run_id: RunId(run_id.to_string()),
+        result_info: protocol::ToolResultInfo {
+            tool_name: tool_name.to_string(),
+            result: json!({"success": success}),
+            duration_ms: 12,
+            success,
+        },
+    })
+    .expect("tool result event should serialize")
+}
+
+fn artifact_event(run_id: &str, artifact_id: &str) -> String {
+    serde_json::to_string(&AgentRunEvent::Artifact {
+        run_id: RunId(run_id.to_string()),
+        artifact_info: protocol::ArtifactInfo {
+            artifact_id: artifact_id.to_string(),
+            artifact_type: protocol::ArtifactType::Code,
+            file_path: Some("src/lib.rs".to_string()),
+            size_bytes: Some(42),
+            mime_type: None,
+        },
+    })
+    .expect("artifact event should serialize")
+}
+
+fn metadata_event(run_id: &str) -> String {
+    serde_json::to_string(&AgentRunEvent::Metadata {
+        run_id: RunId(run_id.to_string()),
+        cost: Some(0.12),
+        tokens: Some(protocol::TokenUsage {
+            input: 120,
+            output: 48,
+            reasoning: None,
+            cache_read: None,
+            cache_write: None,
+        }),
+        data: Some(json!({"type":"metadata","provider":"oai-runner"})),
+    })
+    .expect("metadata event should serialize")
+}
+
+fn finished_event(run_id: &str, exit_code: i32) -> String {
+    serde_json::to_string(&AgentRunEvent::Finished {
+        run_id: RunId(run_id.to_string()),
+        exit_code: Some(exit_code),
+        duration_ms: 1234,
+    })
+    .expect("finished event should serialize")
+}
+
 fn save_workflow(
     project_root: &str,
     workflow_id: &str,
@@ -1550,6 +1614,58 @@ fn build_output_tail_result_normalizes_output_stream_types() {
     assert_eq!(events[0].get("stream_type").and_then(Value::as_str), Some("stdout"));
     assert_eq!(events[1].get("stream_type").and_then(Value::as_str), Some("stderr"));
     assert_eq!(events[2].get("stream_type").and_then(Value::as_str), Some("system"));
+}
+
+#[test]
+fn build_output_tail_result_includes_structured_tool_and_metadata_events_when_requested() {
+    let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+    let temp = TempDir::new().expect("tempdir should be created");
+    let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("project dir should exist");
+    let root = project_root.to_string_lossy().to_string();
+    let run_id = "wf-structured-events-phase-0-z1";
+    write_run_events(
+        root.as_str(),
+        run_id,
+        &[
+            tool_call_event(run_id, "search_query"),
+            tool_result_event(run_id, "search_query", true),
+            artifact_event(run_id, "artifact-1"),
+            metadata_event(run_id),
+            finished_event(run_id, 0),
+        ],
+    );
+
+    let result = build_output_tail_result(
+        root.as_str(),
+        OutputTailInput {
+            run_id: Some(run_id.to_string()),
+            task_id: None,
+            limit: Some(10),
+            event_types: Some(vec![
+                "tool_call".to_string(),
+                "tool_result".to_string(),
+                "artifact".to_string(),
+                "metadata".to_string(),
+                "finished".to_string(),
+            ]),
+            project_root: None,
+        },
+    )
+    .expect("tail result should build");
+
+    assert_eq!(result.get("count").and_then(Value::as_u64), Some(5));
+    let events = result.get("events").and_then(Value::as_array).expect("events should be an array");
+    assert_eq!(events[0].get("event_type").and_then(Value::as_str), Some("tool_call"));
+    assert_eq!(events[1].get("event_type").and_then(Value::as_str), Some("tool_result"));
+    assert_eq!(events[2].get("event_type").and_then(Value::as_str), Some("artifact"));
+    assert_eq!(events[3].get("event_type").and_then(Value::as_str), Some("metadata"));
+    assert_eq!(events[4].get("event_type").and_then(Value::as_str), Some("finished"));
+    assert_eq!(events[1].pointer("/data/tool_name").and_then(Value::as_str), Some("search_query"));
+    assert_eq!(events[2].pointer("/data/artifact_id").and_then(Value::as_str), Some("artifact-1"));
+    assert_eq!(events[3].pointer("/data/data/provider").and_then(Value::as_str), Some("oai-runner"));
+    assert_eq!(events[4].pointer("/data/exit_code").and_then(Value::as_i64), Some(0));
 }
 
 #[test]

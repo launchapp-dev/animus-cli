@@ -5,6 +5,7 @@ use serde_json::Value;
 pub enum ParsedEvent {
     Output(#[allow(dead_code)] String),
     ToolCall { tool_name: String, parameters: Value },
+    ToolResult { tool_name: String, result: Value, success: bool },
     Artifact(ArtifactInfo),
     Thinking(String),
 }

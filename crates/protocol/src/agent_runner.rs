@@ -16,15 +16,47 @@ pub struct AgentRunRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentRunEvent {
-    Started { run_id: RunId, timestamp: Timestamp },
-    OutputChunk { run_id: RunId, stream_type: OutputStreamType, text: String },
-    Metadata { run_id: RunId, cost: Option<f64>, tokens: Option<TokenUsage> },
-    Error { run_id: RunId, error: String },
-    Finished { run_id: RunId, exit_code: Option<i32>, duration_ms: u64 },
-    ToolCall { run_id: RunId, tool_info: ToolCallInfo },
-    ToolResult { run_id: RunId, result_info: ToolResultInfo },
-    Artifact { run_id: RunId, artifact_info: ArtifactInfo },
-    Thinking { run_id: RunId, content: String },
+    Started {
+        run_id: RunId,
+        timestamp: Timestamp,
+    },
+    OutputChunk {
+        run_id: RunId,
+        stream_type: OutputStreamType,
+        text: String,
+    },
+    Metadata {
+        run_id: RunId,
+        cost: Option<f64>,
+        tokens: Option<TokenUsage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Value>,
+    },
+    Error {
+        run_id: RunId,
+        error: String,
+    },
+    Finished {
+        run_id: RunId,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+    },
+    ToolCall {
+        run_id: RunId,
+        tool_info: ToolCallInfo,
+    },
+    ToolResult {
+        run_id: RunId,
+        result_info: ToolResultInfo,
+    },
+    Artifact {
+        run_id: RunId,
+        artifact_info: ArtifactInfo,
+    },
+    Thinking {
+        run_id: RunId,
+        content: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

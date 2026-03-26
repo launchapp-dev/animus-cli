@@ -93,6 +93,11 @@ pub(super) fn parse_json_tool_call(line: &str) -> Option<(String, Value)> {
     None
 }
 
+pub(super) fn parse_json_tool_result(line: &str) -> Option<(String, Value, bool)> {
+    let value = extract_json_object(line)?;
+    parse_json_tool_result_value(&value)
+}
+
 fn parse_phase_transition_signal(value: &Value) -> Option<(String, Value)> {
     let event_type = value
         .get("type")
@@ -208,6 +213,46 @@ fn parse_json_tool_call_value(value: &Value) -> Option<(String, Value)> {
     }
 
     Some((tool_name, parameters))
+}
+
+fn parse_json_tool_result_value(value: &Value) -> Option<(String, Value, bool)> {
+    let event_type = value
+        .get("type")
+        .or_else(|| value.get("event"))
+        .or_else(|| value.get("kind"))
+        .and_then(Value::as_str)
+        .map(normalize_token);
+
+    let tool_name = value
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("tool").and_then(Value::as_str))
+        .or_else(|| value.get("name").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?
+        .to_string();
+
+    let normalized_event = event_type.as_deref().unwrap_or_default();
+    let success = match normalized_event {
+        "tool_result" | "function_result" | "mcp_tool_result" | "tool-result" | "function-result" => true,
+        "tool_error" | "mcp_tool_error" | "tool-error" => false,
+        _ => return None,
+    };
+
+    let result =
+        value.get("output").or_else(|| value.get("result")).or_else(|| value.get("content")).cloned().unwrap_or_else(
+            || {
+                if success {
+                    Value::Null
+                } else {
+                    serde_json::json!({
+                        "error": value.get("error").cloned().unwrap_or(Value::Null),
+                    })
+                }
+            },
+        );
+
+    Some((tool_name, result, success))
 }
 
 fn is_placeholder_phase_transition_token(value: &str) -> bool {

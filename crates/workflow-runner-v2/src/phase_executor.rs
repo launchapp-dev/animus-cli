@@ -484,6 +484,7 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                         .debug("llm.thinking", content.chars().take(200).collect::<String>())
                         .run(run_id.0.as_str())
                         .phase(phase_id)
+                        .content(content)
                         .emit();
                 }
                 AgentRunEvent::ToolCall { tool_info, .. } => {
@@ -501,13 +502,37 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     }
                     b.emit();
                 }
-                AgentRunEvent::Metadata { cost, tokens, .. } => {
+                AgentRunEvent::ToolResult { result_info, .. } => {
+                    logger
+                        .info("llm.tool_result", &result_info.tool_name)
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
+                        .meta(serde_json::json!({
+                            "tool": &result_info.tool_name,
+                            "success": result_info.success,
+                            "duration_ms": result_info.duration_ms,
+                            "result": &result_info.result,
+                        }))
+                        .emit();
+                }
+                AgentRunEvent::Artifact { artifact_info, .. } => {
+                    logger
+                        .info("llm.artifact", &artifact_info.artifact_id)
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
+                        .meta(serde_json::json!(artifact_info))
+                        .emit();
+                }
+                AgentRunEvent::Metadata { cost, tokens, data, .. } => {
                     let mut b = logger.info("llm.metadata", "usage update").run(run_id.0.as_str()).phase(phase_id);
                     if let Some(c) = cost {
                         b = b.cost(*c);
                     }
                     if let Some(ref t) = tokens {
                         b = b.tokens(t.input as u64, t.output as u64);
+                    }
+                    if let Some(raw) = data.clone() {
+                        b = b.meta(raw);
                     }
                     b.emit();
                 }
@@ -620,7 +645,18 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     &format!("tool_call: {}", tool_info.tool_name),
                 );
             }
-            AgentRunEvent::Artifact { .. } => {}
+            AgentRunEvent::ToolResult { result_info, .. } => {
+                PhaseFailureClassifier::push_phase_diagnostic_line(
+                    &mut diagnostics,
+                    &format!("tool_result: {} success={}", result_info.tool_name, result_info.success),
+                );
+            }
+            AgentRunEvent::Artifact { artifact_info, .. } => {
+                PhaseFailureClassifier::push_phase_diagnostic_line(
+                    &mut diagnostics,
+                    &format!("artifact: {}", artifact_info.artifact_id),
+                );
+            }
             _ => {}
         }
     }

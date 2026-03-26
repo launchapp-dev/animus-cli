@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::artifacts::extract_artifact;
 use super::events::ParsedEvent;
-use super::tool_calls::{extract_tool_name, parse_json_tool_call, parse_xml_tool_parameters};
+use super::tool_calls::{extract_tool_name, parse_json_tool_call, parse_json_tool_result, parse_xml_tool_parameters};
 
 pub struct OutputParser {
     tool: String,
@@ -37,6 +37,9 @@ impl OutputParser {
 
         if let Some((tool_name, parameters)) = parse_json_tool_call(line) {
             events.push(ParsedEvent::ToolCall { tool_name, parameters });
+        }
+        if let Some((tool_name, result, success)) = parse_json_tool_result(line) {
+            events.push(ParsedEvent::ToolResult { tool_name, result, success });
         }
 
         if line.contains("<thinking>") {

@@ -45,7 +45,9 @@ fn output_tail_limit(limit: Option<usize>) -> usize {
 fn parse_output_tail_event_types(raw: Option<Vec<String>>) -> Result<Vec<OutputTailEventType>> {
     let values = match raw {
         Some(values) if values.is_empty() => {
-            return Err(invalid_input_error("event_types must include at least one of: output|error|thinking"));
+            return Err(invalid_input_error(
+                "event_types must include at least one of: output|error|thinking|tool_call|tool_result|artifact|metadata|finished",
+            ));
         }
         Some(values) => values,
         None => {

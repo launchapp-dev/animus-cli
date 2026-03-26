@@ -44,7 +44,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "ao.output.tail",
-        description = "Get the most recent output, error, or thinking events. Purpose: Quick view of recent agent output without streaming. Prerequisites: Run or task must exist. Example: {\"run_id\": \"abc123\", \"limit\": 100} or {\"task_id\": \"TASK-001\", \"event_types\": [\"stdout\", \"stderr\"]}. Sequencing: Use after ao.agent.run to check progress, or ao.output.run for full output.",
+        description = "Get the most recent output, thinking, tool, artifact, metadata, or finished events. Purpose: Quick view of recent structured agent activity without streaming. Prerequisites: Run or task must exist. Example: {\"run_id\": \"abc123\", \"limit\": 100} or {\"task_id\": \"TASK-001\", \"event_types\": [\"tool_result\", \"artifact\"]}. Sequencing: Use after ao.agent.run to check progress, or ao.output.run for full output.",
         input_schema = ao_schema_for_type::<OutputTailInput>()
     )]
     async fn ao_output_tail(&self, params: Parameters<OutputTailInput>) -> Result<CallToolResult, McpError> {

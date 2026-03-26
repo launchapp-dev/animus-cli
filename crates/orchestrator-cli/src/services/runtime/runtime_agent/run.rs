@@ -46,7 +46,11 @@ pub(super) async fn handle_agent_run(
     }
 
     let mut lines = BufReader::new(read_half).lines();
-    let run_dir = if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
+    let run_dir = if args.save_jsonl {
+        args.jsonl_dir.as_deref().map(|dir| run_dir(project_root, &run_id, Some(dir)))
+    } else {
+        None
+    };
 
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();

@@ -333,9 +333,16 @@ async fn forward_session_event(
             None
         }
         SessionEvent::Metadata { metadata } => {
-            let tokens = tokens_from_metadata(metadata);
-            if tokens.is_some() {
-                let _ = event_tx.send(AgentRunEvent::Metadata { run_id: run_id.clone(), cost: None, tokens }).await;
+            let (tokens, cost) = summarize_metadata(metadata);
+            if tokens.is_some() || cost.is_some() {
+                let _ = event_tx
+                    .send(AgentRunEvent::Metadata {
+                        run_id: run_id.clone(),
+                        cost,
+                        tokens,
+                        data: Some(metadata.clone()),
+                    })
+                    .await;
             }
             None
         }
@@ -366,48 +373,99 @@ async fn forward_session_event(
     }
 }
 
-fn tokens_from_metadata(metadata: &Value) -> Option<TokenUsage> {
+fn summarize_metadata(metadata: &Value) -> (Option<TokenUsage>, Option<f64>) {
     match metadata.get("type").and_then(Value::as_str) {
         Some("claude_usage") => {
-            let usage = metadata.get("usage")?;
-            Some(TokenUsage {
-                input: usage.get("input_tokens")?.as_u64()? as u32,
-                output: usage.get("output_tokens")?.as_u64()? as u32,
-                reasoning: None,
-                cache_read: usage
-                    .get("cache_read_input_tokens")
-                    .or_else(|| usage.get("cached_input_tokens"))
-                    .and_then(Value::as_u64)
-                    .map(|value| value as u32),
-                cache_write: usage.get("cache_creation_input_tokens").and_then(Value::as_u64).map(|value| value as u32),
-            })
+            let Some(usage) = metadata.get("usage") else {
+                return (None, None);
+            };
+            (
+                Some(TokenUsage {
+                    input: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or_default() as u32,
+                    output: usage.get("output_tokens").and_then(Value::as_u64).unwrap_or_default() as u32,
+                    reasoning: None,
+                    cache_read: usage
+                        .get("cache_read_input_tokens")
+                        .or_else(|| usage.get("cached_input_tokens"))
+                        .and_then(Value::as_u64)
+                        .map(|value| value as u32),
+                    cache_write: usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as u32),
+                }),
+                None,
+            )
         }
         Some("codex_usage") => {
-            let usage = metadata.get("usage")?;
-            Some(TokenUsage {
-                input: usage.get("input_tokens")?.as_u64()? as u32,
-                output: usage.get("output_tokens")?.as_u64()? as u32,
-                reasoning: None,
-                cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).map(|value| value as u32),
-                cache_write: None,
-            })
+            let Some(usage) = metadata.get("usage") else {
+                return (None, None);
+            };
+            (
+                Some(TokenUsage {
+                    input: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or_default() as u32,
+                    output: usage.get("output_tokens").and_then(Value::as_u64).unwrap_or_default() as u32,
+                    reasoning: None,
+                    cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).map(|value| value as u32),
+                    cache_write: None,
+                }),
+                None,
+            )
         }
         Some("gemini_stats") => {
-            let tokens = metadata
+            let Some(tokens) = metadata
                 .pointer("/stats/models")
                 .and_then(Value::as_object)
                 .and_then(|models| models.values().next())
-                .and_then(|model| model.pointer("/tokens"))?;
-            Some(TokenUsage {
-                input: tokens.get("input")?.as_u64()? as u32,
-                output: tokens.get("candidates").or_else(|| tokens.get("output")).and_then(Value::as_u64)? as u32,
-                reasoning: tokens.get("thoughts").and_then(Value::as_u64).map(|value| value as u32),
-                cache_read: tokens.get("cached").and_then(Value::as_u64).map(|value| value as u32),
-                cache_write: None,
-            })
+                .and_then(|model| model.pointer("/tokens"))
+            else {
+                return (None, None);
+            };
+            (
+                Some(TokenUsage {
+                    input: tokens.get("input").and_then(Value::as_u64).unwrap_or_default() as u32,
+                    output: tokens
+                        .get("candidates")
+                        .or_else(|| tokens.get("output"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default() as u32,
+                    reasoning: tokens.get("thoughts").and_then(Value::as_u64).map(|value| value as u32),
+                    cache_read: tokens.get("cached").and_then(Value::as_u64).map(|value| value as u32),
+                    cache_write: None,
+                }),
+                None,
+            )
         }
-        _ => None,
+        Some("metadata") => {
+            let tokens = metadata.get("tokens");
+            (tokens.and_then(parse_oai_runner_tokens), metadata.get("cost_usd").and_then(Value::as_f64))
+        }
+        Some("cost") | Some("session_summary") => {
+            let tokens = metadata.get("tokens");
+            (tokens.and_then(parse_oai_runner_totals), metadata.get("cost_usd").and_then(Value::as_f64))
+        }
+        _ => (None, None),
     }
+}
+
+fn parse_oai_runner_tokens(tokens: &Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        input: tokens.get("input")?.as_u64()? as u32,
+        output: tokens.get("output")?.as_u64()? as u32,
+        reasoning: None,
+        cache_read: None,
+        cache_write: None,
+    })
+}
+
+fn parse_oai_runner_totals(tokens: &Value) -> Option<TokenUsage> {
+    Some(TokenUsage {
+        input: tokens.get("total_input")?.as_u64()? as u32,
+        output: tokens.get("total_output")?.as_u64()? as u32,
+        reasoning: None,
+        cache_read: None,
+        cache_write: None,
+    })
 }
 
 #[cfg(test)]

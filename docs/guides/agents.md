@@ -316,7 +316,7 @@ View what agents have produced during execution.
 { "run_id": "abc123", "limit": 50 }
 
 // ao.output.tail — filter by event type
-{ "task_id": "TASK-001", "event_types": ["stdout", "stderr"] }
+{ "task_id": "TASK-001", "event_types": ["tool_result", "artifact", "metadata"] }
 
 // ao.output.monitor — stream live output
 { "run_id": "abc123" }

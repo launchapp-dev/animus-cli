@@ -163,8 +163,8 @@ pub(crate) fn print_agent_event(event: &AgentRunEvent, json: bool, tool: &str) -
                 }
             }
         },
-        AgentRunEvent::Metadata { run_id, cost, tokens } => {
-            println!("run {} metadata: cost={cost:?} tokens={tokens:?}", run_id.0);
+        AgentRunEvent::Metadata { run_id, cost, tokens, data } => {
+            println!("run {} metadata: cost={cost:?} tokens={tokens:?} raw={}", run_id.0, data.is_some());
         }
         AgentRunEvent::Error { run_id, error } => {
             eprintln!("run {} error: {error}", run_id.0);
