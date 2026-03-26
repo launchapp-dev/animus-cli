@@ -21,6 +21,7 @@ agents:
       planned\"\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     skills:
@@ -47,6 +48,7 @@ agents:
       \ that's a separate workflow\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     skills:
@@ -70,6 +72,7 @@ agents:
       - Set task status to \"ready\" so the work-planner can pick them up\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     skills:

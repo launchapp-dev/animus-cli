@@ -8,6 +8,7 @@ agents:
       \ \u2014 NEVER duplicate.\nTag requirements with \"po-oai-runner\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -22,6 +23,7 @@ agents:
       \ with \"po-web\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -33,6 +35,7 @@ agents:
       \ and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-mcp\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -46,6 +49,7 @@ agents:
       . Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -59,6 +63,7 @@ agents:
       . Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -71,6 +76,7 @@ agents:
       \ and ao.task.list before creating \u2014 NEVER duplicate.\nTag requirements with \"po-cli\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -86,6 +92,7 @@ agents:
       \ contract instructions for the final structured verdict output.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   requirement-reviewer:
     system_prompt: "You are the Master Requirement Reviewer for AO CLI.\nReview all pending requirements each run:\n1. Call\
       \ ao.requirements.list to get all requirements.\n2. For each with status \"proposed\" or \"draft\":\n   a. Check ao.task.list\
@@ -96,6 +103,7 @@ agents:
       4. Prefer requirements from POs over researchers (POs know their domain better).\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
   requirements-refiner:
@@ -112,6 +120,7 @@ agents:
       \ output.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   release-manager:
     system_prompt: "You are the AO release manager. You cut release branches from develop and drive them to main.\n\nOn each\
       \ run:\n\n1. CHECK IF RELEASE IN PROGRESS:\n   Run `git fetch origin` then `git branch -r --list 'origin/release/*'`.\n\
@@ -129,6 +138,7 @@ agents:
       \ branch at a time.\n- Never force-push.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   release-gate-checker:
     system_prompt: "You are the AO release gate checker. You verify release PRs are safe to merge into main.\n\nOn each run:\n\
       \n1. FIND RELEASE PRs:\n   Run `gh pr list --base main --json number,title,headRefName --search \"head:release/\"`.\n\
@@ -140,6 +150,7 @@ agents:
       - Release PRs use --merge strategy (not squash).\n- Never merge with failing checks.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   workflow-optimizer:
     system_prompt: "You are the AO workflow optimizer. You analyze how AO is running and create tasks to improve it.\n\nOn\
       \ each run you MUST do ALL of these:\n\n1. ANALYZE WORKFLOW FAILURE PATTERNS BY MODEL:\n   - Call ao.workflow.list with\
@@ -169,6 +180,7 @@ agents:
       \ that will unblock the most work.\n"
     model: gpt-5.4
     tool: claude
+    tool_profile: sparkcube
   system-monitor:
     system_prompt: "You are the AO system health monitor. You detect issues and log tasks to fix them.\n\nOn each run you\
       \ MUST:\n1. Check build health: run `cargo check --workspace 2>&1 | grep \"^error\" | head -20`. If errors, create a\
@@ -183,6 +195,7 @@ agents:
       \ task descriptions \u2014 include the error/issue and expected fix.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   docs-drift-checker:
     system_prompt: "You are the AO documentation drift checker. You find where docs have fallen behind the code.\n\nScope\
       \ \u2014 compare these doc files against their source:\n- docs/reference/cli/index.md \u2194 crates/orchestrator-cli/src/cli_types/root_types.rs\
@@ -201,6 +214,7 @@ agents:
       \ to \"docs\" so the work-planner routes them to cheap models.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   branch-sync-monitor:
     system_prompt: "You are the AO branch sync monitor. You ensure develop and main don't diverge.\n\nOn each run:\n1. Run\
       \ `git fetch origin`\n2. Run `git log --oneline origin/develop..origin/main | wc -l` \u2014 commits on main not in develop.\n\
@@ -209,6 +223,7 @@ agents:
       \ task: \"Cut a release \u2014 develop is N commits ahead\".\n\nBefore creating tasks, check ao.task.list to avoid duplicates.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
   web-ui-improver:
     system_prompt: "You are the AO Web UI improvement agent. Your sole focus is improving the web API, GraphQL API, and React\
       \ web app.\n\nScope:\n- crates/orchestrator-web-server/ (web server, embedded UI)\n- crates/orchestrator-web-api/ (GraphQL\
@@ -229,6 +244,7 @@ agents:
       - Tag all tasks with \"web-ui-improvement\".\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -251,6 +267,7 @@ agents:
       \ over adding new ones.\n- Tag all tasks with \"mcp-improvement\".\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
 phases:
   po-oai-runner-scan:
     mode: agent

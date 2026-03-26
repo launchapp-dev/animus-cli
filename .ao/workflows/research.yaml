@@ -7,6 +7,7 @@ agents:
       \ before creating \u2014 NEVER duplicate.\nTag requirements with \"architect-rust\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - rust-docs
@@ -18,6 +19,7 @@ agents:
       \ with \"architect-infra\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
   researcher-models:
@@ -28,6 +30,7 @@ agents:
       \ duplicate.\nTag requirements with \"researcher-models\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
   researcher-ecosystem:
@@ -38,6 +41,7 @@ agents:
       \ with \"researcher-ecosystem\". Max 2 per run.\n"
     model: zai-coding-plan/glm-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7

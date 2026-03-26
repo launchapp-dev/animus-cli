@@ -39,6 +39,7 @@ agents:
   default:
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     - context7
@@ -66,6 +67,7 @@ agents:
       \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
   reconciler:
@@ -93,6 +95,7 @@ agents:
       - Process leaf tasks first.\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
   work-planner:
@@ -110,6 +113,7 @@ agents:
       \ queue first.\n"
     model: claude-haiku-4-5
     tool: claude
+    tool_profile: sparkcube
     mcp_servers:
     - ao
     skills:
