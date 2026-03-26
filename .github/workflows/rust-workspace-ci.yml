@@ -16,7 +16,6 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     env:
       CARGO_TERM_COLOR: always
     steps:
