@@ -7,6 +7,7 @@ pub struct OutputFormatter {
     text_buffer: String,
     total_input_tokens: u64,
     total_output_tokens: u64,
+    total_cache_read_tokens: u64,
     total_tokens: u64,
     request_count: u32,
     model: String,
@@ -20,6 +21,7 @@ impl OutputFormatter {
             text_buffer: String::new(),
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_cache_read_tokens: 0,
             total_tokens: 0,
             request_count: 0,
             model: model.to_string(),
@@ -91,12 +93,14 @@ impl OutputFormatter {
     pub fn metadata(&mut self, usage: &crate::api::types::UsageInfo) {
         self.total_input_tokens += usage.prompt_tokens;
         self.total_output_tokens += usage.completion_tokens;
+        self.total_cache_read_tokens += usage.cache_read_input_tokens;
         self.request_count += 1;
 
         let req_total = usage.effective_total();
         self.total_tokens += req_total;
 
-        let req_cost = pricing::lookup(&self.model).map(|p| p.cost(usage.prompt_tokens, usage.completion_tokens));
+        let req_cost = pricing::lookup(&self.model)
+            .map(|p| p.cost(usage.prompt_tokens, usage.completion_tokens, usage.cache_read_input_tokens));
         if let Some(cost) = req_cost {
             self.total_cost_usd += cost;
         }
@@ -112,6 +116,9 @@ impl OutputFormatter {
                 "model": self.model,
                 "request": self.request_count
             });
+            if usage.cache_read_input_tokens > 0 {
+                event["tokens"]["cache_read"] = json!(usage.cache_read_input_tokens);
+            }
             if let Some(cost) = req_cost {
                 event["cost_usd"] = json!(cost);
             }
@@ -136,12 +143,19 @@ impl OutputFormatter {
                 "requests": self.request_count
             }
         });
+        if self.total_cache_read_tokens > 0 {
+            event["tokens"]["total_cache_read"] = json!(self.total_cache_read_tokens);
+        }
         if let Some(pricing) = pricing::lookup(&self.model) {
             event["cost_usd"] = json!(self.total_cost_usd);
-            event["pricing"] = json!({
+            let mut pricing_obj = json!({
                 "input_per_million": pricing.input_per_million,
                 "output_per_million": pricing.output_per_million
             });
+            if let Some(cache_price) = pricing.cache_read_input_per_million {
+                pricing_obj["cache_read_input_per_million"] = json!(cache_price);
+            }
+            event["pricing"] = pricing_obj;
         } else {
             event["cost_usd"] = json!(null);
             event["pricing"] = json!(null);
@@ -169,18 +183,30 @@ impl OutputFormatter {
                 },
                 "model": self.model
             });
+            if self.total_cache_read_tokens > 0 {
+                event["tokens"]["total_cache_read"] = json!(self.total_cache_read_tokens);
+            }
             if let Some(pricing) = pricing::lookup(&self.model) {
                 event["cost_usd"] = json!(self.total_cost_usd);
-                event["pricing"] = json!({
+                let mut pricing_obj = json!({
                     "input_per_million": pricing.input_per_million,
                     "output_per_million": pricing.output_per_million
                 });
+                if let Some(cache_price) = pricing.cache_read_input_per_million {
+                    pricing_obj["cache_read_input_per_million"] = json!(cache_price);
+                }
+                event["pricing"] = pricing_obj;
             }
             println!("{}", event);
         } else {
             // Emit cost event in text mode too (JSON line, parseable by CI)
             self.emit_cost_event();
 
+            let cache_info = if self.total_cache_read_tokens > 0 {
+                format!(" + {} cache read", self.total_cache_read_tokens)
+            } else {
+                String::new()
+            };
             let pricing_info = match pricing::lookup(&self.model) {
                 Some(p) => format!(
                     ", cost: ${:.6} (${:.2}/${:.2} per 1M tokens in/out)",
@@ -189,10 +215,11 @@ impl OutputFormatter {
                 None => String::new(),
             };
             eprintln!(
-                "[oai-runner] Session: {} requests, {} input + {} output = {} total tokens (model: {}){}",
+                "[oai-runner] Session: {} requests, {} input + {} output{} = {} total tokens (model: {}){}",
                 self.request_count,
                 self.total_input_tokens,
                 self.total_output_tokens,
+                cache_info,
                 self.total_tokens,
                 self.model,
                 pricing_info
@@ -245,7 +272,12 @@ mod tests {
     fn metadata_accumulates_tokens_and_cost() {
         let mut formatter = OutputFormatter::new(true, "gpt-4o");
         // gpt-4o: $2.50/1M input, $10.00/1M output
-        let usage = crate::api::types::UsageInfo { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 };
+        let usage = crate::api::types::UsageInfo {
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            total_tokens: 1500,
+            cache_read_input_tokens: 0,
+        };
         formatter.metadata(&usage);
         assert_eq!(formatter.total_input_tokens, 1000);
         assert_eq!(formatter.total_output_tokens, 500);
@@ -262,11 +294,13 @@ mod tests {
             prompt_tokens: 1000,
             completion_tokens: 500,
             total_tokens: 0,
+            cache_read_input_tokens: 0,
         });
         formatter.metadata(&crate::api::types::UsageInfo {
             prompt_tokens: 2000,
             completion_tokens: 1000,
             total_tokens: 0,
+            cache_read_input_tokens: 0,
         });
         assert_eq!(formatter.total_input_tokens, 3000);
         assert_eq!(formatter.total_output_tokens, 1500);
@@ -277,12 +311,28 @@ mod tests {
     }
 
     #[test]
+    fn metadata_accumulates_cache_read_tokens() {
+        let mut formatter = OutputFormatter::new(true, "claude-sonnet-4");
+        // claude-sonnet-4: $3.00/1M input, $15.00/1M output, $0.30/1M cache read
+        formatter.metadata(&crate::api::types::UsageInfo {
+            prompt_tokens: 100_000,
+            completion_tokens: 50_000,
+            total_tokens: 150_000,
+            cache_read_input_tokens: 25_000,
+        });
+        assert_eq!(formatter.total_cache_read_tokens, 25_000);
+        // Cost: (100k/1M)*3.0 + (50k/1M)*15.0 + (25k/1M)*0.30 = 0.3 + 0.75 + 0.0075 = 1.0575
+        assert!((formatter.total_cost_usd - 1.0575).abs() < 1e-9);
+    }
+
+    #[test]
     fn metadata_unknown_model_has_zero_cost() {
         let mut formatter = OutputFormatter::new(true, "unknown-model-xyz");
         formatter.metadata(&crate::api::types::UsageInfo {
             prompt_tokens: 1000,
             completion_tokens: 500,
             total_tokens: 0,
+            cache_read_input_tokens: 0,
         });
         assert_eq!(formatter.total_input_tokens, 1000);
         assert!((formatter.total_cost_usd - 0.0).abs() < 1e-9);
@@ -296,6 +346,7 @@ mod tests {
             prompt_tokens: 500_000,
             completion_tokens: 100_000,
             total_tokens: 600_000,
+            cache_read_input_tokens: 0,
         });
         // Cost: (500000/1e6)*3.0 + (100000/1e6)*15.0 = 1.5 + 1.5 = 3.0
         assert!((formatter.total_cost_usd - 3.0).abs() < 1e-9);
@@ -309,6 +360,7 @@ mod tests {
             prompt_tokens: 1_000_000,
             completion_tokens: 1_000_000,
             total_tokens: 0,
+            cache_read_input_tokens: 0,
         });
         // Cost: 0.14 + 0.28 = 0.42
         assert!((formatter.total_cost_usd - 0.42).abs() < 1e-9);
@@ -322,6 +374,7 @@ mod tests {
             prompt_tokens: 1000,
             completion_tokens: 500,
             total_tokens: 999,
+            cache_read_input_tokens: 0,
         });
         assert_eq!(formatter.total_tokens, 999);
     }
@@ -334,6 +387,7 @@ mod tests {
             prompt_tokens: 1000,
             completion_tokens: 500,
             total_tokens: 0,
+            cache_read_input_tokens: 0,
         });
         assert_eq!(formatter.total_tokens, 1500);
     }

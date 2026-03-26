@@ -15,19 +15,36 @@ pub struct ModelPricing {
     pub input_per_million: f64,
     /// USD per 1M output (completion) tokens.
     pub output_per_million: f64,
+    /// USD per 1M cached read input tokens (typically 10% of input price).
+    /// If None, no cache-read pricing is applied (cached tokens are free).
+    pub cache_read_input_per_million: Option<f64>,
 }
 
 impl ModelPricing {
     pub const fn new(input_per_million: f64, output_per_million: f64) -> Self {
-        Self { input_per_million, output_per_million }
+        Self { input_per_million, output_per_million, cache_read_input_per_million: None }
+    }
+
+    pub const fn with_cache(
+        input_per_million: f64,
+        output_per_million: f64,
+        cache_read_input_per_million: f64,
+    ) -> Self {
+        Self { input_per_million, output_per_million, cache_read_input_per_million: Some(cache_read_input_per_million) }
     }
 
     /// Compute the USD cost for the given token counts.
+    /// Cached read tokens are charged at cache_read_input_per_million rate if available.
     #[inline]
-    pub fn cost(&self, prompt_tokens: u64, completion_tokens: u64) -> f64 {
+    pub fn cost(&self, prompt_tokens: u64, completion_tokens: u64, cache_read_tokens: u64) -> f64 {
         let input_cost = (prompt_tokens as f64 / 1_000_000.0) * self.input_per_million;
         let output_cost = (completion_tokens as f64 / 1_000_000.0) * self.output_per_million;
-        input_cost + output_cost
+        let cache_cost = if let Some(cache_price) = self.cache_read_input_per_million {
+            (cache_read_tokens as f64 / 1_000_000.0) * cache_price
+        } else {
+            0.0
+        };
+        input_cost + output_cost + cache_cost
     }
 }
 
@@ -61,15 +78,25 @@ static PRICING_TABLE: LazyLock<Vec<PricingEntry>> = LazyLock::new(|| {
         PricingEntry { prefixes: &["gpt-4-turbo"], pricing: ModelPricing::new(10.00, 30.00) },
         PricingEntry { prefixes: &["gpt-4"], pricing: ModelPricing::new(30.00, 60.00) },
         // ── Anthropic ─────────────────────────────────────────────
-        PricingEntry { prefixes: &["claude-opus-4"], pricing: ModelPricing::new(15.00, 75.00) },
-        PricingEntry { prefixes: &["claude-sonnet-4"], pricing: ModelPricing::new(3.00, 15.00) },
-        PricingEntry { prefixes: &["claude-3.7-sonnet", "claude-3-7-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
-        PricingEntry { prefixes: &["claude-3.5-haiku", "claude-3-5-haiku"], pricing: ModelPricing::new(0.80, 4.00) },
-        PricingEntry { prefixes: &["claude-3.5-sonnet", "claude-3-5-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
-        PricingEntry { prefixes: &["claude-3-opus"], pricing: ModelPricing::new(15.00, 75.00) },
-        PricingEntry { prefixes: &["claude-3-sonnet"], pricing: ModelPricing::new(3.00, 15.00) },
-        PricingEntry { prefixes: &["claude-3-haiku"], pricing: ModelPricing::new(0.25, 1.25) },
-        PricingEntry { prefixes: &["claude"], pricing: ModelPricing::new(3.00, 15.00) },
+        // Anthropic models support prompt caching at 90% discount (10% of input price).
+        PricingEntry { prefixes: &["claude-opus-4"], pricing: ModelPricing::with_cache(15.00, 75.00, 1.50) },
+        PricingEntry { prefixes: &["claude-sonnet-4"], pricing: ModelPricing::with_cache(3.00, 15.00, 0.30) },
+        PricingEntry {
+            prefixes: &["claude-3.7-sonnet", "claude-3-7-sonnet"],
+            pricing: ModelPricing::with_cache(3.00, 15.00, 0.30),
+        },
+        PricingEntry {
+            prefixes: &["claude-3.5-haiku", "claude-3-5-haiku"],
+            pricing: ModelPricing::with_cache(0.80, 4.00, 0.08),
+        },
+        PricingEntry {
+            prefixes: &["claude-3.5-sonnet", "claude-3-5-sonnet"],
+            pricing: ModelPricing::with_cache(3.00, 15.00, 0.30),
+        },
+        PricingEntry { prefixes: &["claude-3-opus"], pricing: ModelPricing::with_cache(15.00, 75.00, 1.50) },
+        PricingEntry { prefixes: &["claude-3-sonnet"], pricing: ModelPricing::with_cache(3.00, 15.00, 0.30) },
+        PricingEntry { prefixes: &["claude-3-haiku"], pricing: ModelPricing::with_cache(0.25, 1.25, 0.025) },
+        PricingEntry { prefixes: &["claude"], pricing: ModelPricing::with_cache(3.00, 15.00, 0.30) },
         // ── Google / Gemini ───────────────────────────────────────
         PricingEntry { prefixes: &["gemini-2.5-pro"], pricing: ModelPricing::new(1.25, 10.00) },
         PricingEntry { prefixes: &["gemini-2.5-flash"], pricing: ModelPricing::new(0.15, 0.60) },
@@ -135,18 +162,36 @@ mod tests {
     fn model_pricing_cost_calculation() {
         let pricing = ModelPricing::new(2.50, 10.00);
         // 1M input tokens → $2.50
-        assert!((pricing.cost(1_000_000, 0) - 2.50).abs() < 1e-9);
+        assert!((pricing.cost(1_000_000, 0, 0) - 2.50).abs() < 1e-9);
         // 1M output tokens → $10.00
-        assert!((pricing.cost(0, 1_000_000) - 10.00).abs() < 1e-9);
-        // 100k input + 50k output
-        let cost = pricing.cost(100_000, 50_000);
+        assert!((pricing.cost(0, 1_000_000, 0) - 10.00).abs() < 1e-9);
+        // 100k input + 50k output + no cache
+        let cost = pricing.cost(100_000, 50_000, 0);
         assert!((cost - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn model_pricing_with_cache_read_tokens() {
+        let pricing = ModelPricing::with_cache(3.00, 15.00, 0.30);
+        // 100k input + 50k output + 25k cache read
+        // Cost: (100k/1M)*3.0 + (50k/1M)*15.0 + (25k/1M)*0.30 = 0.3 + 0.75 + 0.0075 = 1.0575
+        let cost = pricing.cost(100_000, 50_000, 25_000);
+        assert!((cost - 1.0575).abs() < 1e-9);
+    }
+
+    #[test]
+    fn model_pricing_without_cache_pricing_ignores_cache_tokens() {
+        let pricing = ModelPricing::new(2.50, 10.00);
+        // Even with cache tokens, cost should not include them
+        let cost = pricing.cost(100_000, 50_000, 25_000);
+        let cost_without_cache = pricing.cost(100_000, 50_000, 0);
+        assert!((cost - cost_without_cache).abs() < 1e-9);
     }
 
     #[test]
     fn model_pricing_zero_tokens() {
         let pricing = ModelPricing::new(2.50, 10.00);
-        assert!((pricing.cost(0, 0) - 0.0).abs() < 1e-9);
+        assert!((pricing.cost(0, 0, 0) - 0.0).abs() < 1e-9);
     }
 
     #[test]
@@ -154,6 +199,7 @@ mod tests {
         let pricing = lookup("gpt-4o").unwrap();
         assert!((pricing.input_per_million - 2.50).abs() < 1e-9);
         assert!((pricing.output_per_million - 10.00).abs() < 1e-9);
+        assert!(pricing.cache_read_input_per_million.is_none());
     }
 
     #[test]
@@ -167,12 +213,14 @@ mod tests {
         let pricing = lookup("claude-sonnet-4-20250514").unwrap();
         assert!((pricing.input_per_million - 3.00).abs() < 1e-9);
         assert!((pricing.output_per_million - 15.00).abs() < 1e-9);
+        assert_eq!(pricing.cache_read_input_per_million, Some(0.30));
     }
 
     #[test]
     fn lookup_anthropic_claude_35_sonnet() {
         let pricing = lookup("claude-3-5-sonnet-20241022").unwrap();
         assert!((pricing.input_per_million - 3.00).abs() < 1e-9);
+        assert_eq!(pricing.cache_read_input_per_million, Some(0.30));
     }
 
     #[test]
@@ -194,6 +242,7 @@ mod tests {
         // Provider prefixes (openrouter/, etc.) should be stripped implicitly by contains()
         let pricing = lookup("openrouter/anthropic/claude-sonnet-4").unwrap();
         assert!((pricing.input_per_million - 3.00).abs() < 1e-9);
+        assert_eq!(pricing.cache_read_input_per_million, Some(0.30));
     }
 
     #[test]
@@ -229,5 +278,12 @@ mod tests {
     fn lookup_qwen_coder() {
         let pricing = lookup("qwen2.5-coder-32b-instruct").unwrap();
         assert!((pricing.input_per_million - 0.14).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookup_anthropic_claude_opus_4_has_cache_pricing() {
+        let pricing = lookup("claude-opus-4").unwrap();
+        assert!((pricing.input_per_million - 15.00).abs() < 1e-9);
+        assert_eq!(pricing.cache_read_input_per_million, Some(1.50));
     }
 }
