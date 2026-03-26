@@ -22,7 +22,7 @@ pub(super) fn build_task_list_args(input: &TaskListInput) -> Vec<String> {
 }
 
 pub(super) fn build_task_prioritized_args(input: &TaskPrioritizedInput) -> Vec<String> {
-    let mut args = vec!["task".to_string(), "prioritized".to_string()];
+    let mut args = vec!["task".to_string(), "list".to_string(), "--sort".to_string(), "priority".to_string()];
     push_opt(&mut args, "--status", input.status.clone());
     push_opt(&mut args, "--priority", input.priority.clone());
     push_opt(&mut args, "--assignee-type", input.assignee_type.clone());

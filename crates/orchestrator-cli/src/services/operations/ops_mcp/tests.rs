@@ -534,6 +534,37 @@ fn build_bulk_workflow_run_item_args_basic() {
 }
 
 #[test]
+fn build_task_prioritized_args_maps_to_task_list_priority_sort() {
+    let args = build_task_prioritized_args(&TaskPrioritizedInput {
+        project_root: None,
+        status: Some("ready".to_string()),
+        priority: Some("high".to_string()),
+        assignee_type: Some("agent".to_string()),
+        search: Some("frontend".to_string()),
+        limit: Some(10),
+        offset: Some(0),
+        max_tokens: Some(4000),
+    });
+    assert_eq!(
+        args,
+        vec![
+            "task".to_string(),
+            "list".to_string(),
+            "--sort".to_string(),
+            "priority".to_string(),
+            "--status".to_string(),
+            "ready".to_string(),
+            "--priority".to_string(),
+            "high".to_string(),
+            "--assignee-type".to_string(),
+            "agent".to_string(),
+            "--search".to_string(),
+            "frontend".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
     let item = BulkWorkflowRunItem {
         task_id: "TASK-5".to_string(),
@@ -546,10 +577,9 @@ fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
         vec![
             "workflow".to_string(),
             "run".to_string(),
+            "my-pipeline".to_string(),
             "--task-id".to_string(),
             "TASK-5".to_string(),
-            "--workflow-ref".to_string(),
-            "my-pipeline".to_string(),
             "--input-json".to_string(),
             r#"{"key":"val"}"#.to_string(),
         ]

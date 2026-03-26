@@ -35,7 +35,7 @@ a workflow surface, with compatibility aliases for the older `builtin/*` refs.
 ## 4. Materialize Tasks
 
 ```bash
-ao requirements execute
+ao requirements execute --id REQ-001
 ```
 
 This resolves `ao.requirement/execute`. The workflow creates or updates tasks

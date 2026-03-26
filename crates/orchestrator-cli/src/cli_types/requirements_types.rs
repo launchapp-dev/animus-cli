@@ -7,7 +7,7 @@ use super::{
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RequirementsCommand {
-    /// Execute requirements into implementation tasks and optional workflows.
+    /// Execute a requirement into implementation tasks and optional workflows.
     Execute(RequirementsExecuteArgs),
     /// List requirements.
     List(RequirementsListArgs),
@@ -76,15 +76,8 @@ pub(crate) struct RequirementsListArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct RequirementsExecuteArgs {
-    #[arg(
-        long = "id",
-        visible_alias = "requirement-id",
-        visible_alias = "requirement-ids",
-        value_name = "REQ_ID",
-        num_args = 1..,
-        help = "Requirement identifiers. Repeat or pass multiple values."
-    )]
-    pub(crate) requirement_ids: Vec<String>,
+    #[arg(long = "id", visible_alias = "requirement-id", value_name = "REQ_ID", help = "Requirement identifier.")]
+    pub(crate) requirement_id: String,
     #[arg(long)]
     pub(crate) workflow_ref: Option<String>,
     #[arg(long, action = ArgAction::Set, default_value_t = true)]

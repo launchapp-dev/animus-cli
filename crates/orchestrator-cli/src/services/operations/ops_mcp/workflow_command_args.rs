@@ -12,8 +12,12 @@ pub(super) fn build_workflow_list_args(input: &super::WorkflowListInput) -> Vec<
 }
 
 pub(super) fn build_bulk_workflow_run_item_args(item: &BulkWorkflowRunItem) -> Vec<String> {
-    let mut args = vec!["workflow".to_string(), "run".to_string(), "--task-id".to_string(), item.task_id.clone()];
-    push_opt(&mut args, "--workflow-ref", item.workflow_ref.clone());
+    let mut args = vec!["workflow".to_string(), "run".to_string()];
+    if let Some(workflow_ref) = item.workflow_ref.clone() {
+        args.push(workflow_ref);
+    }
+    args.push("--task-id".to_string());
+    args.push(item.task_id.clone());
     push_opt(&mut args, "--input-json", item.input_json.clone());
     args
 }

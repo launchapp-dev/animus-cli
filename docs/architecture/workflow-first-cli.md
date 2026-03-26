@@ -44,8 +44,8 @@ This keeps the runtime aligned with the plugin-pack kernel design:
 |---|---|
 | `ao vision draft` | `ao.vision/draft` |
 | `ao requirements draft` | `ao.requirement/draft` |
-| `ao requirements execute` | `ao.requirement/execute` |
-| `ao workflow run --ref ao.task/standard` | `ao.task/standard` |
+| `ao requirements execute --id REQ-001` | `ao.requirement/execute` |
+| `ao workflow run ao.task/standard` | `ao.task/standard` |
 
 ## Related Docs
 

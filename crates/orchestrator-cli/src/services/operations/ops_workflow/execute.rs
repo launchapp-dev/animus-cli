@@ -4,9 +4,25 @@ use std::time::Duration;
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 
+use crate::print_value;
 use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
-use crate::{print_value, WorkflowExecuteArgs};
 use ::workflow_runner_v2::workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams};
+
+#[derive(Debug)]
+pub(crate) struct WorkflowExecuteArgs {
+    pub(crate) workflow_id: Option<String>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) requirement_id: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) workflow_ref: Option<String>,
+    pub(crate) phase: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) tool: Option<String>,
+    pub(crate) phase_timeout_secs: Option<u64>,
+    pub(crate) input_json: Option<String>,
+    pub(crate) vars: Vec<String>,
+}
 
 pub(crate) async fn handle_workflow_execute(
     mut args: WorkflowExecuteArgs,

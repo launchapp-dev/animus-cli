@@ -60,8 +60,6 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowPromptCommand,
     },
-    /// Update a workflow definition by id.
-    UpdateDefinition(WorkflowDefinitionUpdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -203,7 +201,7 @@ pub(crate) struct WorkflowCheckpointPruneArgs {
 pub(crate) struct WorkflowRunArgs {
     #[arg(
         value_name = "PIPELINE",
-        help = "Workflow definition name (e.g. ao.task/standard, ao.task/ui-ux, ao.vision/draft). Legacy builtin refs remain supported during migration."
+        help = "Workflow definition name (e.g. ao.task/standard, ao.task/ui-ux, ao.vision/draft)."
     )]
     pub(crate) pipeline: Option<String>,
     #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to run the workflow for.")]
@@ -214,12 +212,6 @@ pub(crate) struct WorkflowRunArgs {
     pub(crate) title: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
     pub(crate) description: Option<String>,
-    #[arg(
-        long,
-        value_name = "WORKFLOW_REF",
-        help = "Alias for pipeline positional arg. Overrides positional if both provided."
-    )]
-    pub(crate) workflow_ref: Option<String>,
     #[arg(
         long,
         default_value_t = false,
@@ -241,53 +233,6 @@ pub(crate) struct WorkflowRunArgs {
     #[arg(long, value_name = "SECS", help = "Override phase timeout in seconds.")]
     pub(crate) phase_timeout_secs: Option<u64>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
-    pub(crate) input_json: Option<String>,
-    #[arg(
-        long = "var",
-        value_name = "KEY=VALUE",
-        help = "Workflow variable in KEY=VALUE format. Repeat for multiple variables."
-    )]
-    pub(crate) vars: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct WorkflowExecuteArgs {
-    #[arg(
-        long,
-        value_name = "WORKFLOW_ID",
-        group = "subject",
-        help = "Existing workflow id to execute from its current phase."
-    )]
-    pub(crate) workflow_id: Option<String>,
-    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to execute the workflow for.")]
-    pub(crate) task_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "REQ_ID",
-        group = "subject",
-        help = "Requirement id to execute the workflow for (alternative to --task-id)."
-    )]
-    pub(crate) requirement_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "TITLE",
-        group = "subject",
-        help = "Custom workflow title (alternative to --task-id / --requirement-id)."
-    )]
-    pub(crate) title: Option<String>,
-    #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
-    pub(crate) description: Option<String>,
-    #[arg(long, value_name = "WORKFLOW_REF", help = "Optional YAML workflow reference override.")]
-    pub(crate) workflow_ref: Option<String>,
-    #[arg(long, value_name = "PHASE_ID", help = "Run only this specific phase instead of the full workflow.")]
-    pub(crate) phase: Option<String>,
-    #[arg(long, value_name = "MODEL_ID", help = "Override the model for phase execution.")]
-    pub(crate) model: Option<String>,
-    #[arg(long, value_name = "TOOL_ID", help = "Override the tool/CLI for phase execution (claude, codex, gemini).")]
-    pub(crate) tool: Option<String>,
-    #[arg(long, value_name = "SECS", help = "Override phase timeout in seconds.")]
-    pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(long, value_name = "JSON", help = "JSON payload for additional config overrides.")]
     pub(crate) input_json: Option<String>,
     #[arg(
         long = "var",
@@ -409,24 +354,6 @@ pub(crate) struct WorkflowPhaseRemoveArgs {
 pub(crate) struct WorkflowDefinitionUpsertArgs {
     #[arg(long, value_name = "JSON", help = "Workflow definition JSON payload.")]
     pub(crate) input_json: String,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct WorkflowDefinitionUpdateArgs {
-    #[arg(long, value_name = "WORKFLOW_REF", help = "Workflow reference.")]
-    pub(crate) id: String,
-    #[arg(long, value_name = "NAME", help = "Workflow display name.")]
-    pub(crate) name: String,
-    #[arg(long, value_name = "TEXT", help = "Optional workflow description.")]
-    pub(crate) description: Option<String>,
-    #[arg(
-        long = "phase",
-        value_name = "PHASE_ID",
-        help = "Ordered phase ids for the workflow. Repeat to add multiple phases."
-    )]
-    pub(crate) phases: Vec<String>,
-    #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
-    pub(crate) input_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

@@ -10,7 +10,7 @@ flowchart TB
     IDEA["Your Idea"]
     --> VISION["ao vision draft<br/>workflow_ref: ao.vision/draft"]
     --> REQS["ao requirements draft<br/>workflow_ref: ao.requirement/draft"]
-    --> EXECUTE["ao requirements execute<br/>workflow_ref: ao.requirement/execute"]
+    --> EXECUTE["ao requirements execute --id REQ-001<br/>workflow_ref: ao.requirement/execute"]
     --> DAEMON["ao daemon start --autonomous"]
 
     DAEMON --> LOOP{"Daemon Tick"}
@@ -41,7 +41,7 @@ Canonical refs for those commands are:
 ### 2. Turn requirements into work
 
 ```bash
-ao requirements execute
+ao requirements execute --id REQ-001
 ```
 
 This runs `ao.requirement/execute`, which plans and materializes task work

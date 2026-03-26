@@ -26,11 +26,11 @@ impl AoMcpServer {
     async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec!["workflow".to_string(), "run".to_string()];
+        push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
         push_opt(&mut args, "--task-id", input.task_id);
         push_opt(&mut args, "--requirement-id", input.requirement_id);
         push_opt(&mut args, "--title", input.title);
         push_opt(&mut args, "--description", input.description);
-        push_opt(&mut args, "--workflow-ref", input.workflow_ref);
         push_opt(&mut args, "--input-json", input.input_json);
         self.run_tool("ao.workflow.run", args, input.project_root).await
     }
@@ -163,14 +163,11 @@ impl AoMcpServer {
     )]
     async fn ao_workflow_execute(&self, params: Parameters<WorkflowExecuteInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec![
-            "workflow".to_string(),
-            "run".to_string(),
-            "--sync".to_string(),
-            "--task-id".to_string(),
-            input.task_id,
-        ];
-        push_opt(&mut args, "--workflow-ref", input.workflow_ref);
+        let mut args = vec!["workflow".to_string(), "run".to_string()];
+        push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
+        args.push("--sync".to_string());
+        args.push("--task-id".to_string());
+        args.push(input.task_id);
         push_opt(&mut args, "--phase", input.phase);
         push_opt(&mut args, "--model", input.model);
         push_opt(&mut args, "--tool", input.tool);
@@ -191,6 +188,12 @@ impl AoMcpServer {
         let input = params.0;
         let args = build_workflow_phase_approve_args(&input);
         self.run_tool("ao.workflow.phase.approve", args, input.project_root).await
+    }
+}
+
+fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {
+    if let Some(workflow_ref) = workflow_ref {
+        args.push(workflow_ref);
     }
 }
 

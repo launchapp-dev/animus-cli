@@ -90,10 +90,12 @@ Refinement uses AI to analyze the codebase and produce concrete, testable accept
 
 ## Step 4: Execute Requirements into Tasks
 
-Decompose requirements into actionable tasks:
+Decompose requirements into actionable tasks one requirement at a time:
 
 ```bash
-ao requirements execute --requirement-ids REQ-001 REQ-002 REQ-003 REQ-004 REQ-005
+ao requirements execute --id REQ-001
+ao requirements execute --id REQ-002
+ao requirements execute --id REQ-003
 ```
 
 This creates tasks linked to each requirement, with:
@@ -163,7 +165,7 @@ You can also use the planning facade for a streamlined experience:
 ao planning vision draft
 ao planning requirements draft
 ao planning requirements refine --requirement-ids REQ-001
-ao planning requirements execute --requirement-ids REQ-001
+ao planning requirements execute --id REQ-001
 ```
 
 The `planning` commands mirror the top-level `vision` and `requirements` commands but are grouped for discoverability.

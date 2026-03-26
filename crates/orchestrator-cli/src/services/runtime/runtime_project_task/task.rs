@@ -7,8 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
     evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub, ListPageRequest,
-    TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskQuery, TaskQuerySort,
-    TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskQuery, TaskStatus,
+    TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 use tracing::warn;
@@ -125,23 +125,6 @@ fn build_task_query_from_list_args(args: crate::TaskListArgs) -> Result<TaskQuer
     })
 }
 
-fn build_task_query_from_prioritized_args(args: crate::TaskPrioritizedArgs) -> Result<TaskQuery> {
-    Ok(TaskQuery {
-        filter: TaskFilter {
-            status: match args.status {
-                Some(status) => Some(parse_task_status(&status)?),
-                None => None,
-            },
-            priority: parse_priority_opt(args.priority.as_deref())?,
-            assignee_type: args.assignee_type,
-            search_text: args.search,
-            ..Default::default()
-        },
-        page: ListPageRequest { limit: args.limit, offset: args.offset },
-        sort: TaskQuerySort::Priority,
-    })
-}
-
 pub(crate) async fn handle_task(
     command: TaskCommand,
     hub: Arc<dyn ServiceHub>,
@@ -153,10 +136,6 @@ pub(crate) async fn handle_task(
     match command {
         TaskCommand::List(args) => {
             let page = tasks.query(build_task_query_from_list_args(args)?).await?;
-            print_value(page.items, json)
-        }
-        TaskCommand::Prioritized(args) => {
-            let page = tasks.query(build_task_query_from_prioritized_args(args)?).await?;
             print_value(page.items, json)
         }
         TaskCommand::Next => print_value(tasks.next_task().await?, json),

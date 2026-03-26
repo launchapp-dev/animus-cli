@@ -137,4 +137,44 @@ mod tests {
             _ => panic!("expected queue enqueue command"),
         }
     }
+
+    #[test]
+    fn parses_requirements_execute_with_single_id() {
+        let cli = Cli::try_parse_from(["ao", "requirements", "execute", "--id", "REQ-123"])
+            .expect("requirements execute should parse");
+
+        match cli.command {
+            Command::Requirements { command: RequirementsCommand::Execute(args) } => {
+                assert_eq!(args.requirement_id, "REQ-123");
+            }
+            _ => panic!("expected requirements execute command"),
+        }
+    }
+
+    #[test]
+    fn parses_workflow_run_with_positional_pipeline() {
+        let cli = Cli::try_parse_from(["ao", "workflow", "run", "ao.task/standard", "--task-id", "TASK-123"])
+            .expect("workflow run should parse");
+
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => {
+                assert_eq!(args.pipeline.as_deref(), Some("ao.task/standard"));
+                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+            }
+            _ => panic!("expected workflow run command"),
+        }
+    }
+
+    #[test]
+    fn rejects_removed_task_prioritized_command() {
+        let error = Cli::try_parse_from(["ao", "task", "prioritized"]).expect_err("removed command should fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn rejects_removed_workflow_update_definition_command() {
+        let error =
+            Cli::try_parse_from(["ao", "workflow", "update-definition"]).expect_err("removed command should fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+    }
 }

@@ -7,7 +7,7 @@ AO is built using AO. The project's own requirements and tasks are tracked throu
 The development cycle follows this pattern:
 
 1. Requirements are drafted and refined using `ao requirements`
-2. Tasks are created from requirements using `ao requirements execute`
+2. Tasks are created from requirements using `ao requirements execute --id REQ-001`
 3. The daemon picks up tasks and dispatches workflows
 4. Agents implement, test, and review changes
 5. Completed work is merged back into the codebase
@@ -23,7 +23,7 @@ ao requirements list
 View prioritized tasks:
 
 ```bash
-ao task prioritized
+ao task list --sort priority
 ```
 
 Check task statistics for overall progress:

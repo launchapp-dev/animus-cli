@@ -17,11 +17,12 @@ use orchestrator_core::{
 use serde_json::Value;
 use uuid::Uuid;
 
+use self::execute::WorkflowExecuteArgs;
 use crate::{
-    dry_run_envelope, ensure_destructive_confirmation, parse_input_json_or, parse_workflow_query_sort_opt,
-    parse_workflow_status_opt, print_value, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand,
-    WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowExecuteArgs, WorkflowPhaseCommand,
-    WorkflowPhasesCommand, WorkflowPromptCommand, WorkflowStateMachineCommand,
+    dry_run_envelope, ensure_destructive_confirmation, parse_workflow_query_sort_opt, parse_workflow_status_opt,
+    print_value, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand,
+    WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPromptCommand,
+    WorkflowStateMachineCommand,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -312,7 +313,7 @@ pub(crate) async fn handle_workflow(
             }
         },
         WorkflowCommand::Run(args) => {
-            let effective_workflow_ref = args.workflow_ref.or(args.pipeline);
+            let workflow_ref = args.pipeline.clone();
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {
                     workflow_id: args.workflow_id,
@@ -320,7 +321,7 @@ pub(crate) async fn handle_workflow(
                     requirement_id: args.requirement_id,
                     title: args.title,
                     description: args.description,
-                    workflow_ref: effective_workflow_ref,
+                    workflow_ref: workflow_ref.clone(),
                     phase: args.phase,
                     model: args.model,
                     tool: args.tool,
@@ -342,7 +343,7 @@ pub(crate) async fn handle_workflow(
                             args.requirement_id,
                             args.title,
                             args.description,
-                            effective_workflow_ref,
+                            workflow_ref,
                             vars,
                         )
                         .await?
@@ -501,19 +502,6 @@ pub(crate) async fn handle_workflow(
                 print_value(config::set_agent_runtime_payload(project_root, &args.input_json)?, json)
             }
         },
-        WorkflowCommand::UpdateDefinition(args) => {
-            let workflow = parse_input_json_or(args.input_json, || {
-                Ok(orchestrator_core::WorkflowDefinition {
-                    id: args.id,
-                    name: args.name,
-                    description: args.description.unwrap_or_default(),
-                    phases: args.phases.into_iter().map(orchestrator_core::WorkflowPhaseEntry::Simple).collect(),
-                    post_success: None,
-                    variables: Vec::new(),
-                })
-            })?;
-            print_value(phases::upsert_pipeline(project_root, workflow)?, json)
-        }
     }
 }
 

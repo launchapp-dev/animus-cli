@@ -43,7 +43,7 @@ Pack-qualified refs are now the canonical surface:
 | `ao vision refine` | `ao.vision/refine` | Legacy alias `builtin/vision-refine` still works |
 | `ao requirements draft` | `ao.requirement/draft` | Legacy alias `builtin/requirements-draft` still works |
 | `ao requirements refine` | `ao.requirement/refine` | Legacy alias `builtin/requirements-refine` still works |
-| `ao requirements execute` | `ao.requirement/execute` | Legacy alias `builtin/requirements-execute` still works |
+| `ao requirements execute --id REQ-001` | `ao.requirement/execute` | Legacy alias `builtin/requirements-execute` still works |
 | Default task workflow | `ao.task/standard` | Project-local refs such as `standard-workflow` can wrap it |
 
 The first-party pack boundary is currently most visible in task, requirement,

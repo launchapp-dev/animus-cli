@@ -140,7 +140,7 @@ ao task list --priority high             # Only high-priority
 View tasks sorted by priority:
 
 ```bash
-ao task prioritized
+ao task list --sort priority
 ```
 
 Get the next task the daemon would pick:

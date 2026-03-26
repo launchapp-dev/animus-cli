@@ -70,8 +70,8 @@ encode domain behavior.
 
 Examples:
 
-- `ao requirements execute`
-- `ao workflow run --ref ao.task/standard`
+- `ao requirements execute --id REQ-001`
+- `ao workflow run ao.task/standard`
 - `ao mcp serve`
 - ready-queue and schedule dispatches
 

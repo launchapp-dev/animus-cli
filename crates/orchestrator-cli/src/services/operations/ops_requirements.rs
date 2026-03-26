@@ -6,6 +6,7 @@ use orchestrator_core::{
     REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF,
 };
 
+use super::ops_workflow::execute::WorkflowExecuteArgs;
 mod graph;
 mod mockups;
 mod recommendations;
@@ -14,7 +15,7 @@ mod state;
 use crate::{
     parse_requirement_category_opt, parse_requirement_priority_opt, parse_requirement_query_sort_opt,
     parse_requirement_status_opt, parse_requirement_type_opt, print_ok, print_value, RequirementGraphCommand,
-    RequirementsCommand, RequirementsExecuteArgs, WorkflowExecuteArgs,
+    RequirementsCommand, RequirementsExecuteArgs,
 };
 use graph::{load_requirements_graph, save_requirements_graph, RequirementsGraphState};
 use mockups::handle_requirement_mockups;
@@ -87,21 +88,13 @@ pub(crate) async fn handle_requirements(
 }
 
 fn build_requirements_execute_args(args: RequirementsExecuteArgs) -> Result<WorkflowExecuteArgs> {
-    let mut requirement_ids = args.requirement_ids.into_iter().filter(|id| !id.trim().is_empty()).collect::<Vec<_>>();
+    let requirement_id = args.requirement_id.trim().to_owned();
 
-    if requirement_ids.is_empty() {
+    if requirement_id.is_empty() {
         return Err(anyhow!(
-            "missing --id value for `requirements execute`; pass a requirement id to delegate to `workflow execute --requirement-id`"
+            "missing --id value for `requirements execute`; pass a requirement id to execute the requirement"
         ));
     }
-
-    if requirement_ids.len() > 1 {
-        return Err(anyhow!(
-            "`requirements execute` currently supports a single --id because it delegates to `workflow execute --requirement-id`"
-        ));
-    }
-
-    let requirement_id = requirement_ids.remove(0);
     let input_json = match args.input_json {
         Some(raw) => Some(raw),
         None => Some(serde_json::to_string(&RequirementsExecutionInput {
