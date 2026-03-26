@@ -89,6 +89,8 @@ pub struct UsageInfo {
     pub completion_tokens: u64,
     #[serde(default)]
     pub total_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
 }
 
 impl UsageInfo {
@@ -277,13 +279,15 @@ mod tests {
 
     #[test]
     fn usage_info_effective_total_prefers_provider_value() {
-        let usage = UsageInfo { prompt_tokens: 100, completion_tokens: 50, total_tokens: 200 };
+        let usage =
+            UsageInfo { prompt_tokens: 100, completion_tokens: 50, total_tokens: 200, cache_read_input_tokens: 0 };
         assert_eq!(usage.effective_total(), 200);
     }
 
     #[test]
     fn usage_info_effective_total_falls_back_to_sum() {
-        let usage = UsageInfo { prompt_tokens: 100, completion_tokens: 50, total_tokens: 0 };
+        let usage =
+            UsageInfo { prompt_tokens: 100, completion_tokens: 50, total_tokens: 0, cache_read_input_tokens: 0 };
         assert_eq!(usage.effective_total(), 150);
     }
 
@@ -298,5 +302,22 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 5);
         assert_eq!(usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn usage_info_deserializes_with_cache_read_tokens() {
+        let raw =
+            r#"{"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cache_read_input_tokens": 25}"#;
+        let usage: UsageInfo = serde_json::from_str(raw).unwrap();
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.cache_read_input_tokens, 25);
+    }
+
+    #[test]
+    fn usage_info_defaults_cache_read_tokens_to_zero() {
+        let raw = r#"{"prompt_tokens": 100}"#;
+        let usage: UsageInfo = serde_json::from_str(raw).unwrap();
+        assert_eq!(usage.cache_read_input_tokens, 0);
     }
 }
