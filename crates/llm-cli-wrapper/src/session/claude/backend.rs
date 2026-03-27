@@ -117,6 +117,36 @@ mod tests {
         assert_eq!(result_events, vec![SessionEvent::FinalText { text: "done".to_string() }]);
     }
 
+    #[test]
+    fn claude_parser_emits_tool_result_from_user_event_with_structured_content() {
+        let user_event = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_014","type":"tool_result","content":"{\"result\":{\"items\":[]}}"}]},"tool_use_result":{"content":"{\"result\":{\"items\":[]},\"tool\":\"ao.task.list\"}","structuredContent":{"result":{"items":[]},"tool":"ao.task.list"}}}"#;
+
+        let events = parse_claude_stdout_line(user_event);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], SessionEvent::ToolResult { tool_name, success, .. }
+            if tool_name == "ao.task.list" && *success));
+    }
+
+    #[test]
+    fn claude_parser_emits_tool_result_with_tool_reference() {
+        let user_event = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_018q","content":[{"type":"tool_reference","tool_name":"mcp__ao__ao_task_list"}]}]}}"#;
+
+        let events = parse_claude_stdout_line(user_event);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], SessionEvent::ToolResult { tool_name, success, .. }
+            if tool_name == "mcp__ao__ao_task_list" && *success));
+    }
+
+    #[test]
+    fn claude_parser_falls_back_to_tool_use_id_when_no_name_available() {
+        let user_event = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_abc123","type":"tool_result","content":"some text"}]}}"#;
+
+        let events = parse_claude_stdout_line(user_event);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], SessionEvent::ToolResult { tool_name, .. }
+            if tool_name == "toolu_abc123"));
+    }
+
     #[tokio::test]
     #[cfg(unix)]
     async fn claude_backend_uses_claude_native_label() {

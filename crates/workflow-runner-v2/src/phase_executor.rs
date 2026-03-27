@@ -549,6 +549,20 @@ async fn process_phase_event_stream<R: AsyncBufRead + Unpin>(
                     }
                     b.emit();
                 }
+                AgentRunEvent::ToolResult { result_info, .. } => {
+                    let status = if result_info.success { "ok" } else { "err" };
+                    logger
+                        .info("llm.tool_result", format!("{} {}", &result_info.tool_name, status))
+                        .run(run_id.0.as_str())
+                        .phase(phase_id)
+                        .meta(serde_json::json!({
+                            "tool": &result_info.tool_name,
+                            "success": result_info.success,
+                            "duration_ms": result_info.duration_ms,
+                            "result": truncate_json_value(&result_info.result, 1000),
+                        }))
+                        .emit();
+                }
                 AgentRunEvent::Error { error, .. } => {
                     logger.error("llm.error", error).run(run_id.0.as_str()).phase(phase_id).err(error).emit();
                 }
@@ -709,6 +723,27 @@ fn parse_result_payload_from_payload(payload: &Value, expected_kind: &str) -> Op
         }
         Value::String(text) => parse_result_payload_from_text(text, expected_kind),
         _ => None,
+    }
+}
+
+fn truncate_json_value(value: &Value, max_chars: usize) -> Value {
+    match value {
+        Value::String(s) => {
+            if s.len() <= max_chars {
+                Value::String(s.clone())
+            } else {
+                Value::String(s.chars().take(max_chars).collect())
+            }
+        }
+        Value::Null => Value::Null,
+        other => {
+            let serialized = other.to_string();
+            if serialized.len() <= max_chars {
+                other.clone()
+            } else {
+                Value::String(serialized.chars().take(max_chars).collect())
+            }
+        }
     }
 }
 
