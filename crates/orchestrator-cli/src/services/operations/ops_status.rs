@@ -13,6 +13,8 @@ use orchestrator_core::{
 use serde::{Deserialize, Serialize};
 
 use crate::print_value;
+use crate::services::runtime::stale_in_progress_summary;
+use orchestrator_core::workflow::load_requirement;
 
 const STATUS_SCHEMA: &str = "ao.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
@@ -29,6 +31,7 @@ struct StatusDashboard {
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
+    now: NowSlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
@@ -71,6 +74,46 @@ struct TaskSummarySlice {
     in_progress: usize,
     ready: usize,
     blocked: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskEntry {
+    id: String,
+    title: String,
+    priority: String,
+    linked_requirements: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    linked_requirement_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_workflow_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTaskEntry {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    linked_requirement_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTaskEntry {
+    id: String,
+    title: String,
+    age_hours: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NowSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_task: Option<NextTaskEntry>,
+    blocked_tasks: Vec<BlockedTaskEntry>,
+    stale_tasks: Vec<StaleTaskEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -206,6 +249,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
+    let now_error = tasks_error.clone();
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
@@ -221,6 +265,12 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             task_stats.as_ref(),
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
+        ),
+        now: build_now_slice(
+            tasks.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+            project_root,
+            now_error,
         ),
         recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
         recent_failures: build_recent_failures_slice(
@@ -381,6 +431,88 @@ fn build_task_summary_slice(
     TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
 }
 
+fn build_now_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+    project_root: &str,
+    error: Option<String>,
+) -> NowSlice {
+    if let Some(tasks) = tasks {
+        let now = Utc::now();
+
+        let next_task = find_next_ready_task(tasks, workflows, project_root);
+        let blocked_tasks = find_blocked_tasks(tasks);
+        let stale_summary = stale_in_progress_summary(tasks, 4, now);
+        let stale_tasks = stale_summary
+            .tasks
+            .into_iter()
+            .map(|entry| StaleTaskEntry { id: entry.task_id, title: entry.title, age_hours: entry.age_hours })
+            .collect();
+
+        return NowSlice { available: true, next_task, blocked_tasks, stale_tasks, error };
+    }
+
+    NowSlice { available: false, next_task: None, blocked_tasks: Vec::new(), stale_tasks: Vec::new(), error }
+}
+
+fn find_next_ready_task(
+    tasks: &[OrchestratorTask],
+    workflows: Option<&[OrchestratorWorkflow]>,
+    project_root: &str,
+) -> Option<NextTaskEntry> {
+    let mut ready_tasks: Vec<&OrchestratorTask> =
+        tasks.iter().filter(|task| task.status == TaskStatus::Ready).collect();
+
+    ready_tasks.sort_by(|a, b| {
+        let priority_order = |p: &orchestrator_core::Priority| match p {
+            orchestrator_core::Priority::Critical => 0,
+            orchestrator_core::Priority::High => 1,
+            orchestrator_core::Priority::Medium => 2,
+            orchestrator_core::Priority::Low => 3,
+        };
+        priority_order(&a.priority).cmp(&priority_order(&b.priority)).then_with(|| a.id.cmp(&b.id))
+    });
+
+    ready_tasks.first().map(|task| {
+        let linked_requirement_title = task.linked_requirements.first().and_then(|req_id| {
+            load_requirement(std::path::Path::new(project_root), req_id)
+                .ok()
+                .map(|req| req.title)
+        });
+
+        let active_workflow_id = workflows
+            .and_then(|wfs| {
+                wfs.iter()
+                    .find(|wf| wf.task_id == task.id && wf.status == WorkflowStatus::Running)
+                    .map(|wf| wf.id.clone())
+            });
+
+        NextTaskEntry {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            priority: task.priority.as_str().to_string(),
+            linked_requirements: task.linked_requirements.clone(),
+            linked_requirement_title,
+            active_workflow_id,
+        }
+    })
+}
+
+fn find_blocked_tasks(tasks: &[OrchestratorTask]) -> Vec<BlockedTaskEntry> {
+    let mut blocked: Vec<&OrchestratorTask> = tasks.iter().filter(|task| task.status.is_blocked()).collect();
+    blocked.sort_by(|a, b| a.id.cmp(&b.id));
+
+    blocked
+        .into_iter()
+        .map(|task| BlockedTaskEntry {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            blocked_reason: task.blocked_reason.clone(),
+            linked_requirement_id: task.linked_requirements.first().cloned(),
+        })
+        .collect()
+}
+
 fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
     RecentCompletionsSlice {
         available: tasks.is_some(),
@@ -451,6 +583,28 @@ fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSna
         active_workflows: manager.list()?,
         recent_failures: load_recent_failures(project_root, RECENT_FAILURES_LIMIT)?,
     })
+}
+
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries = Vec::new();
+    for workflow in workflows {
+        if workflow.status != WorkflowStatus::Failed {
+            continue;
+        }
+        let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+        entries.push(RecentFailureEntry {
+            workflow_id: workflow.id.clone(),
+            task_id: workflow.task_id.clone(),
+            phase_id,
+            failed_at,
+            failure_reason: workflow.failure_reason.clone().or(phase_error),
+        });
+    }
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(RECENT_FAILURES_LIMIT);
+    entries
 }
 
 fn load_recent_failures(project_root: &str, limit: usize) -> Result<Vec<RecentFailureEntry>> {
@@ -649,6 +803,33 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
     let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
     if let Some(error) = dashboard.task_summary.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Now");
+    if let Some(next_task) = dashboard.now.next_task.as_ref() {
+        let _ = writeln!(&mut output, "  next_task: {} ({})", next_task.id, next_task.title);
+        if let Some(req_title) = next_task.linked_requirement_title.as_deref() {
+            let _ = writeln!(&mut output, "    linked_requirement: {}", req_title);
+        }
+        if let Some(wf_id) = next_task.active_workflow_id.as_deref() {
+            let _ = writeln!(&mut output, "    active_workflow: {}", wf_id);
+        }
+    } else {
+        let _ = writeln!(&mut output, "  next_task: none");
+    }
+    let _ = writeln!(&mut output, "  blocked_tasks: {}", dashboard.now.blocked_tasks.len());
+    for blocked in &dashboard.now.blocked_tasks {
+        let reason = blocked.blocked_reason.as_deref().unwrap_or("no reason");
+        let req_id = blocked.linked_requirement_id.as_deref().unwrap_or("");
+        let _ = writeln!(&mut output, "    - {} ({}): {} [{}]", blocked.id, blocked.title, reason, req_id);
+    }
+    let _ = writeln!(&mut output, "  stale_tasks: {}", dashboard.now.stale_tasks.len());
+    for stale in &dashboard.now.stale_tasks {
+        let _ = writeln!(&mut output, "    - {} ({}) [{}h]", stale.id, stale.title, stale.age_hours);
+    }
+    if let Some(error) = dashboard.now.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
