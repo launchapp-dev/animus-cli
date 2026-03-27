@@ -134,7 +134,7 @@ shims, but they are no longer the preferred operator-facing surface.
 
 There is no dedicated `ao vision ...` command in the current CLI. Planning
 workflows still exist as canonical refs, but they are consumed through
-`ao workflow run` or project-local workflow YAML.
+`ao workflow run <workflow_ref>` or project-local workflow YAML.
 
 ## MCP and External Runtimes
 

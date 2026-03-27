@@ -1,44 +1,51 @@
 # Configuration Reference
 
-AO resolves behavior from project YAML, pack layers, bundled defaults, and
-environment overrides.
+AO resolves behavior from project YAML, pack layers, scoped runtime state, and environment overrides.
 
 ## Project-Local Sources
+
+### `.ao/config.json`
+
+Repository-local AO configuration created during setup.
 
 ### `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
 
 These YAML files are the editable workflow source of truth for a project.
+
 Typical uses:
 
 - define repo-specific workflow ids such as `standard-workflow`
-- override bundled workflow metadata
-- compose pack-owned workflow refs such as `ao.task/standard`
-- add project MCP servers, tools, and phase definitions
+- wrap canonical bundled refs such as `ao.task/standard`
+- declare project MCP servers, agents, variables, phases, and workflow definitions
 
 ### `.ao/plugins/<pack-id>/`
 
-Project-local pack overrides. Use this directory when a repository needs to
-override an installed or bundled pack without changing AO globally.
+Project-local pack overrides. Use this when a repository needs to override installed or bundled pack content without changing AO globally.
 
-### `.ao/state/pack-selection.v1.json`
+## Repo-Scoped Runtime Config
 
-Project pack selection and pinning state, managed by `ao pack ...`.
+AO stores mutable project runtime config under `~/.ao/<repo-scope>/`.
 
-### `.ao/config.json`
+Key files:
 
-Project configuration and registry-scoped metadata created during setup.
+- `config/state-machines.v1.json`
+- `state/pack-selection.v1.json`
+- `daemon/pm-config.json`
+- `resume-config.json`
+
+These files are AO-managed state. Treat them as runtime data, not hand-authored config.
 
 ## Global User Config
 
 ### `~/.ao/config.json`
 
-The global AO config stores machine-local user settings such as runner auth and
-optional Claude profile definitions. Use `AO_CONFIG_DIR` to override the global
-config root in tests or custom environments.
+The global AO config stores machine-local user settings such as:
 
-Claude profiles are user-owned launch settings and should not be committed to a
-repository. Workflow YAML may reference a named profile only when the effective
-tool is `claude`.
+- agent runner auth token
+- user-defined MCP server entries
+- Claude profile launch environments
+
+Use `AO_CONFIG_DIR` to override the global config root in tests or custom environments.
 
 Example:
 
@@ -49,11 +56,6 @@ Example:
       "env": {
         "CLAUDE_CONFIG_DIR": "/Users/alice/.claude-main"
       }
-    },
-    "overflow": {
-      "env": {
-        "CLAUDE_CONFIG_DIR": "/Users/alice/.claude-overflow"
-      }
     }
   }
 }
@@ -61,26 +63,21 @@ Example:
 
 ## Bundled and Installed Sources
 
-### Bundled kernel workflows
+### Bundled workflow refs
 
-Canonical bundled kernel refs currently include:
+Canonical bundled refs include:
 
+- `ao.task/standard`
+- `ao.task/quick-fix`
+- `ao.task/triage`
+- `ao.requirement/draft`
+- `ao.requirement/refine`
+- `ao.requirement/plan`
+- `ao.requirement/execute`
 - `ao.vision/draft`
 - `ao.vision/refine`
 
-Legacy `builtin/*` aliases remain supported for compatibility.
-
-### Bundled first-party packs
-
-Bundled pack manifests live under:
-
-- `crates/orchestrator-config/config/bundled-packs/`
-
-Current first-party packs include:
-
-- `ao.task`
-- `ao.requirement`
-- `ao.review`
+Legacy `builtin/*` aliases remain supported where the loader still provides them.
 
 ### Machine-installed packs
 
@@ -104,25 +101,23 @@ ao pack pin --pack-id vendor.pack --version =1.2.3
 Behavior resolves in this order:
 
 1. CLI flags
-2. environment variables
+2. supported environment variables
 3. project pack overrides in `.ao/plugins/`
 4. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
-5. machine-installed packs in `~/.ao/packs/`
-6. bundled kernel workflows and bundled first-party packs
+5. installed packs in `~/.ao/packs/`
+6. bundled workflow and pack content embedded in AO
 
 ## Environment Variables
 
 | Variable | Description |
 |---|---|
-| `PROJECT_ROOT` | Override project root directory |
 | `AO_CONFIG_DIR` | Override the global AO config directory |
 | `AO_RUNNER_CONFIG_DIR` | Override the runner config directory |
-| `AO_ALLOW_NON_EDITING_PHASE_TOOL` | Allow non-write-capable tools to execute any phase without fallback |
 | `AO_MCP_SCHEMA_DRAFT` | Select Draft-07 MCP tool input schemas |
-| `CLAUDECODE` | Signals an embedded Claude Code environment; unset before daemon start if needed |
+| `CLAUDECODE` | Signals an embedded Claude Code environment |
 
 ## Notes
 
 - Project YAML is the authored workflow surface.
-- Packs own reusable domain behavior.
-- The daemon never becomes the place where pack or subject policy is encoded.
+- Mutable runtime state lives under `~/.ao/<repo-scope>/`.
+- The daemon schedules and supervises work; workflow and pack content still define behavior.

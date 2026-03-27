@@ -31,10 +31,6 @@ ao doctor --fix
    ```bash
    ao daemon logs
    ```
-   Or read the log file directly:
-   ```bash
-   cat .ao/daemon.log
-   ```
 
 3. Try running in foreground for immediate error output:
    ```bash
@@ -66,15 +62,15 @@ env -u CLAUDECODE ao daemon start --autonomous
 
 **Symptoms**: The daemon uses unexpected models. For example, all phases use the same model instead of routing research to gemini.
 
-**Cause**: The agent runtime config at `.ao/state/agent-runtime-config.v2.json` has explicit `model` and `tool` fields that override the compiled routing table.
+**Cause**: The resolved agent runtime has explicit `model` and `tool` fields that override the compiled routing table. Those values can come from authored workflow YAML or from `ao workflow agent-runtime set`.
 
-**Fix**: Set the fields to `null` to let compiled defaults take over:
+**Fix**: Inspect the resolved runtime first:
 
 ```bash
 ao workflow agent-runtime get    # Inspect current config
 ```
 
-Then update:
+Then either remove the YAML override from `.ao/workflows.yaml` / `.ao/workflows/*.yaml`, or replace the compiled runtime with explicit `null` values:
 
 ```bash
 ao workflow agent-runtime set --input-json '{"agents":{"default":{"model":null,"tool":null}}}'
@@ -94,7 +90,7 @@ Or read the config cascade documentation in the [Model Routing Guide](model-rout
 ao task status --id TASK-XXX --status ready
 ```
 
-This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never hand-edit `.ao/*.json` files.
+This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never hand-edit AO-managed runtime JSON or SQLite state.
 
 ## Runner Connection Issues
 
@@ -142,25 +138,14 @@ cargo build -p orchestrator-cli
 
 ## Daemon Log Location
 
-The daemon writes logs to `.ao/daemon.log` relative to the project root. Log rotation occurs at 10MB, with the rotated file at `.ao/daemon.log.1`.
-
-Read logs:
+Use AO to inspect or clear daemon logs:
 
 ```bash
 ao daemon logs
-```
-
-Clear logs:
-
-```bash
 ao daemon clear-logs
 ```
 
-Tail in real time:
-
-```bash
-tail -f .ao/daemon.log
-```
+AO stores runtime state under `~/.ao/<repo-scope>/`, and log plumbing is managed by the runtime binaries rather than a project-local `.ao/daemon.log` contract.
 
 ## Workflow Stuck or Failed
 
@@ -217,8 +202,6 @@ Required keys by tool:
 
 **Cause**: `enforce_write_capable_phase_target` redirects non-write-capable tools by default.
 
-**Fix**:
-
-```bash
-export AO_ALLOW_NON_EDITING_PHASE_TOOL=true
-```
+**Fix**: route read-only phases to Gemini in workflow YAML, and use a
+write-capable tool such as `claude`, `codex`, or `oai-runner` for
+implementation phases that modify the repository.

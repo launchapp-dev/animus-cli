@@ -2,90 +2,99 @@
 
 ## What `ao setup` Does
 
-`ao setup` initializes the repository-scoped AO workspace. It:
+`ao setup` initializes both the project-local AO config and the repo-scoped runtime state that AO uses while the repository is active.
+
+On first run it:
 
 1. resolves the project root
-2. creates the `.ao/` directory tree
-3. scaffolds project-local workflow YAML
-4. prepares AO-managed state in the machine-scoped runtime directory
-5. leaves bundled workflows and bundled first-party packs available by default
+2. creates `.ao/` if it does not exist
+3. provisions repo-scoped state under `~/.ao/<repo-scope>/`
+4. writes project config and default workflow YAML scaffolding
+5. creates the default state-machine config if it is missing
 
-`ao setup` does not copy bundled task or requirement logic into your repo. That
-behavior is resolved from bundled sources and pack overlays unless you override
-it locally.
+## Project-Local Files
 
-## What Gets Created
-
-Typical project-local files after setup:
+These files live in the repository and are the authored configuration surface:
 
 ```text
 .ao/
 ├── config.json
-├── pm-config.json
-├── workflows/
-│   ├── custom.yaml
-│   ├── standard-workflow.yaml
-│   ├── hotfix-workflow.yaml
-│   └── research-workflow.yaml
-└── state/
-    └── state-machines.v1.json
+└── workflows/
+    ├── custom.yaml
+    ├── standard-workflow.yaml
+    ├── hotfix-workflow.yaml
+    └── research-workflow.yaml
 ```
 
-### `workflows/`
+Supported but not created by default:
 
-These are project-local YAML entry points. The default scaffold wraps bundled
-pack workflows such as `ao.task/standard` rather than duplicating task logic in
-the repository.
+```text
+.ao/workflows.yaml
+.ao/plugins/<pack-id>/
+```
 
-If you prefer a single-file layout, AO also understands `.ao/workflows.yaml`.
+Use the YAML files in `.ao/workflows/` or `.ao/workflows.yaml` to add repository-specific workflows, override metadata, or wrap bundled pack refs such as `ao.task/standard`.
 
-### `state/`
+## Repo-Scoped Runtime State
 
-Project-local state currently includes workflow state-machine configuration and
-other AO-managed metadata that can be resolved from the project. Manage it with
-`ao` commands rather than editing it by hand.
-
-## Machine-Scoped Runtime State
-
-AO stores runtime state outside the repository under the repo scope for the
-current checkout:
+AO keeps mutable runtime data outside the repository under:
 
 ```text
 ~/.ao/<repo-scope>/
 ├── core-state.json
 ├── resume-config.json
-├── state/
+├── workflow.db
+├── config/
+│   └── state-machines.v1.json
+├── daemon/
+│   └── pm-config.json
 ├── docs/
-├── tasks/
-├── requirements/
-├── runs/
-├── artifacts/
+│   ├── architecture.json
+│   ├── vision.json
+│   └── product-vision.md
+├── state/
+│   ├── pack-selection.v1.json
+│   ├── schedule-state.json
+│   ├── reviews.json
+│   ├── handoffs.json
+│   ├── history.json
+│   ├── errors.json
+│   ├── qa-results.json
+│   └── qa-review-approvals.json
 └── worktrees/
 ```
 
-That split keeps project-authored workflow YAML in the repository while the
-mutable execution history stays machine-scoped.
+Some of these files appear lazily, only after the corresponding subsystem runs.
 
-## Bundled vs Installed Packs
+## What Lives Where
 
-AO resolves workflows from multiple layers:
+`workflow.db`
+: Stores workflow state plus the persisted task and requirement records.
 
-1. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
-2. installed packs in `~/.ao/packs/<pack-id>/<version>/`
-3. bundled kernel workflows and bundled first-party packs
+`core-state.json`
+: Stores the shared in-memory snapshot AO loads at startup.
 
-Bundled first-party packs currently own task, requirement, review, and QA
-behavior. Canonical refs include:
+`config/state-machines.v1.json`
+: Stores the effective workflow and requirement lifecycle state machines.
 
-- `ao.task/standard`
-- `ao.task/quick-fix`
-- `ao.task/triage`
+`daemon/pm-config.json`
+: Stores persisted daemon configuration such as auto-merge and scheduling overrides.
 
-Legacy `builtin/*` refs still resolve, but they are compatibility aliases.
+`worktrees/`
+: Stores managed task worktrees under the repository scope.
+
+## Workflow Sources
+
+AO resolves workflows from these layers:
+
+1. project overrides in `.ao/plugins/<pack-id>/`
+2. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
+3. installed packs in `~/.ao/packs/<pack-id>/<version>/`
+4. bundled workflow and pack content embedded in AO
 
 ## Mutation Policy
 
-Do not hand-edit `.ao` state files. Use:
+Do not hand-edit AO-managed JSON state. Use:
 
 - `ao task ...`
 - `ao requirements ...`
@@ -97,4 +106,4 @@ Do not hand-edit `.ao` state files. Use:
 
 - [Quick Start](quick-start.md)
 - [A Typical Day](typical-day.md)
-- [Workflows](../concepts/workflows.md)
+- [Data Layout](../reference/data-layout.md)

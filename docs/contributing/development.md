@@ -2,28 +2,25 @@
 
 ## Prerequisites
 
-- **Rust** -- 2021 edition (install via [rustup](https://rustup.rs/))
-- **Cargo** -- Comes with Rust; the workspace uses resolver v2
-- **Tokio** -- Async runtime (full features); no additional system install needed
-- **Git** -- For version control and the git-ops integration
+- **Rust** -- install via [rustup](https://rustup.rs/)
+- **Cargo** -- comes with Rust; the workspace uses resolver v2
+- **Git** -- required for repo root resolution and worktree operations
 
 ## Build Commands
 
-The workspace defines custom cargo aliases for building all runtime binaries:
-
 ```bash
-cargo ao-bin-check            # Type-check all runtime binaries
-cargo ao-bin-build            # Debug build of all runtime binaries
-cargo ao-bin-build-release    # Release (optimized) build
+cargo ao-bin-check
+cargo ao-bin-build
+cargo ao-bin-build-release
 ```
 
-To build and run the main CLI directly:
+Run the CLI directly:
 
 ```bash
 cargo run -p orchestrator-cli -- --help
 ```
 
-To build a specific crate:
+Build a specific crate:
 
 ```bash
 cargo build -p protocol
@@ -33,67 +30,66 @@ cargo build -p agent-runner
 
 ## Workspace Structure
 
-The workspace contains 17 crates organized under `crates/`:
+The workspace currently contains 17 crates:
 
-```
+```text
 crates/
-├── agent-runner/                # LLM CLI process manager
-├── llm-cli-wrapper/             # CLI tool abstraction layer
-├── oai-runner/                  # OpenAI API streaming client
-├── orchestrator-cli/            # Main `ao` binary
-├── orchestrator-config/         # Workflow/runtime config parsing
-├── orchestrator-core/           # Domain logic, ServiceHub, state machines
-├── orchestrator-daemon-runtime/ # Daemon tick loop, dispatch queue
-├── orchestrator-git-ops/        # Git branch/merge operations
-├── orchestrator-logging/        # Shared tracing and structured logging
-├── orchestrator-notifications/  # Webhook notifications
-├── orchestrator-providers/      # External integrations (Jira, Linear, GitLab)
-├── orchestrator-store/          # Atomic JSON persistence primitives
-├── orchestrator-web-api/        # Web API business logic
-├── orchestrator-web-contracts/  # Shared web types
-├── orchestrator-web-server/     # Axum HTTP server
-├── protocol/                    # Wire types, IPC contracts, config schemas
-└── workflow-runner-v2/          # Phase execution binary
+├── agent-runner/
+├── llm-cli-wrapper/
+├── oai-runner/
+├── orchestrator-cli/
+├── orchestrator-config/
+├── orchestrator-core/
+├── orchestrator-daemon-runtime/
+├── orchestrator-git-ops/
+├── orchestrator-logging/
+├── orchestrator-notifications/
+├── orchestrator-providers/
+├── orchestrator-store/
+├── orchestrator-web-api/
+├── orchestrator-web-contracts/
+├── orchestrator-web-server/
+├── protocol/
+└── workflow-runner-v2/
 ```
 
-The `default-members` in `Cargo.toml` includes `orchestrator-cli`, `agent-runner`, `llm-cli-wrapper`, and `oai-runner` -- these are the four runtime binaries that get built by default.
+`default-members` in `Cargo.toml` include:
 
-See the [Crate Map](../architecture/crate-map.md) for detailed descriptions of each crate.
+- `orchestrator-cli`
+- `agent-runner`
+- `llm-cli-wrapper`
+- `oai-runner`
 
 ## Key Dependencies
 
 | Dependency | Usage |
 |-----------|-------|
-| `anyhow` | Error propagation in CLI/application code |
-| `clap` | CLI argument parsing via derive macros |
-| `tokio` | Async runtime (full features) |
-| `serde` / `serde_json` | Serialization for all state and IPC |
-| `serde_yaml` | YAML workflow config parsing |
-| `chrono` | Timestamps with serde support |
-| `uuid` | Unique identifiers for tasks, workflows, runs |
+| `anyhow` | Error propagation |
+| `clap` | CLI argument parsing |
+| `tokio` | Async runtime |
+| `serde` / `serde_json` | State and IPC serialization |
+| `serde_yaml` | Workflow config parsing |
+| `uuid` | IDs for tasks, workflows, and runs |
 | `fs2` | File locking for concurrent state access |
-| `rmcp` | MCP (Model Context Protocol) server/client |
-| `axum` | HTTP server for web UI |
-| `async-graphql` | GraphQL API (optional feature) |
-| `croner` | Cron expression parsing for schedules |
+| `rusqlite` | Repo-scoped workflow/task/requirement persistence |
+| `rmcp` | MCP server and client support |
+| `axum` | Web server |
+| `croner` | Schedule parsing |
 
 ## Documentation Site
 
-The docs are powered by [VitePress](https://vitepress.dev/) with Mermaid diagram support.
+The docs are powered by [VitePress](https://vitepress.dev/).
 
 ```bash
-npm install                  # Install docs dependencies
-npm run docs:dev             # Start dev server (http://localhost:5173)
-npm run docs:build           # Build static site to docs/.vitepress/dist/
-npm run docs:preview         # Preview production build locally
+npm install
+npm run docs:dev
+npm run docs:build
+npm run docs:preview
 ```
-
-All documentation lives in `docs/` as plain Markdown. The VitePress config is at `docs/.vitepress/config.mts`. Mermaid diagrams in fenced code blocks render automatically.
 
 ## Project Conventions
 
-- All CLI `--json` output follows the `ao.cli.v1` envelope: `{ schema, ok, data/error }`
-- Exit codes: 1=internal, 2=invalid_input, 3=not_found, 4=conflict, 5=unavailable
-- No hardcoded absolute paths in committed code
+- All CLI `--json` output follows the `ao.cli.v1` envelope
 - Always use `--project-root "$(pwd)"` in scripts and automation
-- The `.ao/` directory is CLI-managed state -- never edit JSON files by hand
+- Treat `.ao/` project config and `~/.ao/<repo-scope>/` runtime state as AO-managed data
+- Prefer source files over prose when documenting command counts, crate counts, and runtime paths

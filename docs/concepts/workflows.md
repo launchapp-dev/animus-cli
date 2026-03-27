@@ -35,7 +35,7 @@ teaching the daemon any new behavior.
 
 ## Canonical Workflow Refs
 
-Pack-qualified refs are the canonical surface. Current operator entrypoints
+Pack-qualified refs are the canonical surface. Current public CLI entrypoints
 dispatch them through the workflow engine:
 
 | Operator Entry Point | Canonical Ref | Notes |
@@ -84,8 +84,8 @@ ao pack pin --pack-id ao.task --version =0.1.0
 ```
 
 Project-specific pack selections are stored in
-`.ao/state/pack-selection.v1.json`. Pack override content lives in
-`.ao/plugins/`.
+`~/.ao/<repo-scope>/state/pack-selection.v1.json`. Pack override content lives
+in `.ao/plugins/`.
 
 ## Project-Local Workflow Composition
 

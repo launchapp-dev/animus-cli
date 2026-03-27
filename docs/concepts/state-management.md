@@ -1,132 +1,83 @@
 # State Management
 
-## The `.ao/` Directory
+AO separates authored repository config from mutable runtime state.
 
-`.ao/` is AO-managed project state. Treat it as application state, not as a
-hand-edited config folder. Use `ao` commands or AO MCP tools for mutations.
+## Project-Local `.ao/`
 
-Typical layout:
+The repository keeps only the configuration you are expected to author:
 
 ```text
 .ao/
 ├── config.json
-├── pm-config.json
-├── plugins/
 ├── workflows.yaml
 ├── workflows/
+└── plugins/
 ```
 
+These files define workflow behavior, overrides, and local pack customizations.
+
 ## Repo-Scoped Runtime State
+
+Runtime state lives under `~/.ao/<repo-scope>/`, not in the repository:
 
 ```text
 ~/.ao/<repo-scope>/
 ├── core-state.json
 ├── resume-config.json
+├── workflow.db
+├── config/
+├── daemon/
 ├── docs/
-├── requirements/
-├── tasks/
-├── index/
 ├── state/
-│   ├── pack-selection.v1.json
-│   ├── state-machines.v1.json
-│   ├── reviews.json
-│   ├── handoffs.json
-│   ├── history.json
-│   ├── errors.json
-│   ├── qa-results.json
-│   └── qa-review-approvals.json
-├── runs/
-├── artifacts/
-├── logs/
 └── worktrees/
 ```
 
-## What Lives Where
+Important runtime stores:
 
-### Project YAML
+- `workflow.db` for workflows, checkpoints, tasks, and requirements
+- `state/` for review, history, error, schedule, QA, and pack-selection state
+- `worktrees/` for managed task worktrees
+- `docs/` for generated planning artifacts such as `product-vision.md`
 
-Project-authored workflow configuration lives in:
+## Why the Split Exists
 
-- `.ao/workflows.yaml`
-- `.ao/workflows/*.yaml`
+Keeping mutable state outside the repository gives AO a few important properties:
 
-These files are the editable source of truth for project-local workflows and
-overrides.
+- linked worktrees resolve back to one shared repo scope
+- runtime files do not pollute source control
+- large and frequently updated state can evolve without rewriting repo-local config
+- legacy `.ao/`-local state can be migrated forward without changing the authored YAML surface
 
-### Project Pack Overrides
+## Pack and Workflow Resolution
 
-Per-project pack overrides live in:
+AO still resolves workflows from layered sources:
 
-- `.ao/plugins/<pack-id>/`
+1. project pack overrides in `.ao/plugins/`
+2. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
+3. installed packs in `~/.ao/packs/`
+4. bundled workflow and pack content
 
-These directories can override installed or bundled pack workflows and runtime
-assets without changing the daemon or core code.
+State location and workflow resolution are related but different concerns:
 
-### Repo-Scoped State
-
-Repo-scoped runtime state lives in:
-
-- `~/.ao/<repo-scope>/core-state.json`
-- `~/.ao/<repo-scope>/resume-config.json`
-- `~/.ao/<repo-scope>/state/`
-- `~/.ao/<repo-scope>/requirements/`
-- `~/.ao/<repo-scope>/tasks/`
-- `~/.ao/<repo-scope>/docs/`
-
-This is managed by `ao pack pin`, `ao pack install --activate`, and related AO
-commands.
-
-### Execution Data
-
-Transient and historical execution data lives in:
-
-- `~/.ao/<repo-scope>/runs/<run_id>/events.jsonl`
-- `~/.ao/<repo-scope>/artifacts/<execution_id>/...`
-- `~/.ao/<repo-scope>/state/history.json`
-- `~/.ao/<repo-scope>/state/errors.json`
-
-## Machine-Level Pack Storage
-
-Machine-installed packs live outside the project:
-
-```text
-~/.ao/packs/<pack-id>/<version>/
-```
-
-AO also uses a repo-scoped machine directory for worktrees and related runtime
-state:
-
-```text
-~/.ao/<repo-scope>/worktrees/
-```
-
-These are distinct concerns:
-
-- `~/.ao/packs/` stores reusable installed packs
-- `~/.ao/config.json` stores machine-local user config
-- `~/.ao/<repo-scope>/...` stores repository-scoped runtime data
+- workflow definitions come from YAML and pack content
+- execution state and operational records live under `~/.ao/<repo-scope>/`
 
 ## Mutation Policy
 
-Never hand-edit `.ao/*.json` files unless you are explicitly working on AO's
-own persistence layer as part of a migration.
+Do not hand-edit AO-managed runtime JSON or SQLite state unless you are explicitly working on AO persistence or migrations.
 
 Approved mutation surfaces:
 
 - CLI commands such as `ao task status`
 - AO MCP tools such as `ao.task.update`
-- projectors consuming execution facts
 - pack commands such as `ao pack pin`
 
-## Configuration Precedence
+## Repository Scope
 
-At a high level, AO resolves behavior in this order:
+The repo scope uses the canonical project path to derive a stable identifier:
 
-1. CLI flags and environment variables
-2. Project pack overrides in `.ao/plugins/`
-3. Project-local YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
-4. Installed packs in `~/.ao/packs/`
-5. Bundled kernel workflows and bundled first-party packs
+```text
+<sanitized-repo-name>-<12-hex-sha256-prefix>
+```
 
-This keeps local control in the repository while preserving a stable bundled
-baseline.
+This is what lets AO keep one runtime home for a repository even when you invoke it from linked worktrees.

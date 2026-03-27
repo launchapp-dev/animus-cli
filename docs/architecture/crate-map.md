@@ -1,55 +1,55 @@
 # Crate Map
 
-The AO workspace contains 17 crates organized into seven groups by responsibility.
+The AO workspace contains 17 crates organized by responsibility.
 
 ## Foundation
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [protocol](../../crates/protocol/README.md) | Wire protocol types shared across all crates | Defines IPC messages, configuration schemas, scoped state paths, model routing defaults, and CLI JSON envelope contracts |
-| [orchestrator-logging](../../crates/orchestrator-logging/Cargo.toml) | Shared tracing and logging utilities | Initializes tracing, writes structured JSONL logs, and manages log rotation for runtime processes |
+| [protocol](../../crates/protocol/README.md) | Shared wire and config types | IPC messages, config schemas, scoped runtime paths, CLI JSON envelopes |
 
 ## Core
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [orchestrator-core](../../crates/orchestrator-core/README.md) | Domain logic and state management | ServiceHub trait, service API implementations, workflow state machines, task dispatch policy, execution projections |
-| [orchestrator-config](../../crates/orchestrator-config/README.md) | Workflow and runtime configuration | YAML workflow parsing, workflow config compilation, variable expansion, phase plan resolution |
-| [orchestrator-store](../../crates/orchestrator-store/README.md) | Persistence primitives | Atomic JSON writes (`write_json_atomic`), `read_json_or_default`, scoped project state directories |
+| [orchestrator-core](../../crates/orchestrator-core/README.md) | Domain logic and services | `ServiceHub`, service APIs, workflow lifecycle, task and requirement state mutation |
+| [orchestrator-config](../../crates/orchestrator-config/README.md) | Workflow and runtime configuration | Workflow YAML parsing, pack loading, scaffolding, phase plan resolution |
+| [orchestrator-store](../../crates/orchestrator-store/README.md) | Persistence primitives | Atomic JSON writes, repo-scoped state directory helpers |
+| `orchestrator-logging` | Shared logging support | Structured logging helpers and runtime log plumbing |
 
 ## Runtime
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [orchestrator-daemon-runtime](../../crates/orchestrator-daemon-runtime/README.md) | Daemon tick loop and dispatch engine | Project tick execution, dispatch queue management, process manager for workflow-runner-v2 subprocesses, schedule evaluation, completion reconciliation |
-| [workflow-runner-v2](../../crates/workflow-runner-v2/Cargo.toml) | Standalone workflow execution binary | Phase execution loop, runtime contract construction, IPC client to agent-runner, phase failover classification, merge recovery |
-| [agent-runner](../../crates/agent-runner/README.md) | Standalone daemon managing LLM CLI processes | IPC server (Unix socket / TCP), token-based auth, output parsing (tool calls, artifacts, thinking blocks), environment sanitization, provider abstraction |
+| [orchestrator-daemon-runtime](../../crates/orchestrator-daemon-runtime/README.md) | Daemon scheduling runtime | Queue execution, reactive dispatch, subprocess supervision |
+| `workflow-runner-v2` | Workflow execution runtime | Phase execution, state-machine transitions, checkpoint persistence |
+| [agent-runner](../../crates/agent-runner/README.md) | Agent process runner | IPC server, AI CLI execution, output parsing |
 
 ## CLI
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [orchestrator-cli](../../crates/orchestrator-cli/README.md) | Main `ao` binary (clap-based CLI) | CLI dispatch for 22 top-level commands, JSON envelope output, MCP server (via rmcp), error classification |
+| [orchestrator-cli](../../crates/orchestrator-cli/README.md) | Main `ao` binary | Clap command surface, JSON output, MCP server, operational commands |
 
 ## Web
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [orchestrator-web-api](../../crates/orchestrator-web-api/README.md) | Web API business logic | WebApiService bridging HTTP requests to core service APIs |
-| [orchestrator-web-contracts](../../crates/orchestrator-web-contracts/README.md) | Shared web types | Request/response types shared between web-api and web-server |
-| [orchestrator-web-server](../../crates/orchestrator-web-server/README.md) | Axum web server with embedded static assets | HTTP routing, GraphQL (optional feature), static asset serving, compression |
+| [orchestrator-web-api](../../crates/orchestrator-web-api/README.md) | Web API business logic | HTTP-facing orchestration services |
+| [orchestrator-web-contracts](../../crates/orchestrator-web-contracts/README.md) | Shared web contracts | Request and response types shared between web layers |
+| [orchestrator-web-server](../../crates/orchestrator-web-server/README.md) | Axum web server | HTTP routing, embedded UI delivery, browser entrypoint |
 
 ## Integration
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [orchestrator-providers](../../crates/orchestrator-providers/README.md) | External provider integrations | Git provider abstraction, task/requirements/subject providers; optional Jira, Linear, and GitLab features behind feature flags |
-| [orchestrator-notifications](../../crates/orchestrator-notifications/README.md) | Notification delivery | Webhook-based notifications for daemon and workflow events |
-| [orchestrator-git-ops](../../crates/orchestrator-git-ops/README.md) | Git workflow operations | Branch management, merge operations, PR creation, merge conflict handling for workflow post-success actions |
+| [orchestrator-providers](../../crates/orchestrator-providers/README.md) | Provider integrations | Built-in task, requirement, subject, and git adapters |
+| [orchestrator-notifications](../../crates/orchestrator-notifications/README.md) | Notification delivery | Webhook and runtime notification support |
+| [orchestrator-git-ops](../../crates/orchestrator-git-ops/README.md) | Git automation | Branching, worktree, merge, and PR helper operations |
 
-## LLM
+## Model and Runner Adapters
 
 | Crate | Description | Key Responsibility |
 |-------|-------------|-------------------|
-| [llm-cli-wrapper](../../crates/llm-cli-wrapper/README.md) | Abstraction over AI CLI tools | Unified interface for spawning and interacting with claude, codex, gemini, opencode CLI processes |
-| [oai-runner](../../crates/oai-runner/README.md) | OpenAI-compatible streaming API client | Direct API streaming for OpenAI-compatible endpoints, MCP client integration via rmcp |
+| [llm-cli-wrapper](../../crates/llm-cli-wrapper/README.md) | AI CLI abstraction layer | Claude, Codex, Gemini, and related CLI integration |
+| [oai-runner](../../crates/oai-runner/README.md) | OpenAI-compatible runner | Streaming API execution for OpenAI-compatible endpoints |

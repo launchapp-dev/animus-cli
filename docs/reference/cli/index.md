@@ -7,7 +7,7 @@ Complete reference of every `ao` command, subcommand, and key flag. This tree is
 | Flag | Description |
 |---|---|
 | `--json` | Machine-readable JSON output (`ao.cli.v1` envelope) |
-| `--project-root <PATH>` | Override project root (also reads `PROJECT_ROOT` env) |
+| `--project-root <PATH>` | Override project root resolution for the current command |
 
 ---
 

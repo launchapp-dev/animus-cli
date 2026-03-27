@@ -89,7 +89,6 @@ AO now splits project-local config from scoped runtime state.
 Project-local config in `<project>/.ao/`:
 
 - `config.json`
-- `pm-config.json`
 - `workflows.yaml`
 - `workflows/*.yaml`
 
@@ -97,13 +96,12 @@ Scoped runtime state in `~/.ao/<repo-scope>/`:
 
 - `core-state.json`
 - `resume-config.json`
+- `workflow.db`
+- `config/`
+- `daemon/`
 - `docs/`
-- `requirements/`
-- `tasks/`
-- `index/`
 - `state/`
-- `runs/`
-- `artifacts/`
+- `worktrees/`
 
 Global config in `protocol::Config::global_config_dir()`:
 

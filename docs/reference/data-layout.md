@@ -1,95 +1,107 @@
 # Data Layout
 
-AO stores authored project config under `.ao/` and repo-scoped runtime state
-under `~/.ao/<repo-scope>/`.
+AO splits repository-authored configuration from repo-scoped runtime state.
 
-## Project Layout
+## Project-Local Layout
+
+These files live in the repository:
 
 ```text
 .ao/
 ├── config.json
-├── pm-config.json
-├── plugins/
-├── workflows.yaml
+├── workflows.yaml              # optional single-file workflow source
 ├── workflows/
+│   ├── custom.yaml
+│   ├── standard-workflow.yaml
+│   ├── hotfix-workflow.yaml
+│   └── research-workflow.yaml
+└── plugins/
+    └── <pack-id>/              # optional project pack override root
 ```
 
 Key points:
 
-- `.ao/workflows.yaml` and `.ao/workflows/*.yaml` are project-authored workflow
-  sources
-- `.ao/plugins/` contains project-local pack overrides
-- `.ao/config.json` and `.ao/pm-config.json` hold project configuration
+- `.ao/workflows.yaml` and `.ao/workflows/*.yaml` are the authored workflow sources
+- `.ao/plugins/<pack-id>/` is the project override root for pack content
+- `.ao/config.json` stores repository-local AO config
 
 ## Repo-Scoped Runtime Layout
+
+Mutable runtime state lives outside the repo:
 
 ```text
 ~/.ao/<repo-scope>/
 ├── core-state.json
 ├── resume-config.json
+├── workflow.db
+├── config/
+│   └── state-machines.v1.json
+├── daemon/
+│   └── pm-config.json
 ├── docs/
-├── requirements/
-├── tasks/
-├── index/
+│   ├── architecture.json
+│   ├── vision.json
+│   └── product-vision.md
 ├── state/
 │   ├── pack-selection.v1.json
-│   ├── state-machines.v1.json
+│   ├── schedule-state.json
 │   ├── reviews.json
 │   ├── handoffs.json
 │   ├── history.json
 │   ├── errors.json
 │   ├── qa-results.json
 │   └── qa-review-approvals.json
-├── runs/
-├── artifacts/
-├── logs/
 └── worktrees/
 ```
 
 Key points:
 
-- `~/.ao/<repo-scope>/` holds AO-managed runtime state for a specific
-  repository scope
-- `~/.ao/<repo-scope>/state/pack-selection.v1.json` tracks active pack pins and
-  enablement
-- `~/.ao/<repo-scope>/runs/` and `~/.ao/<repo-scope>/artifacts/` contain
-  execution records and artifacts
-- `~/.ao/<repo-scope>/logs/` stores structured runtime logs
-- `~/.ao/<repo-scope>/worktrees/` stores managed task worktrees
+- `workflow.db` stores persisted workflows, tasks, requirements, and checkpoints
+- `core-state.json` stores the shared runtime snapshot AO loads at startup
+- `config/state-machines.v1.json` stores the effective state-machine document
+- `daemon/pm-config.json` stores persisted daemon settings
+- `worktrees/` stores managed task worktrees for that repository scope
 
-### Installed packs
+## Machine-Wide Layout
 
-```text
-~/.ao/packs/<pack-id>/<version>/
-```
-
-### Global config
+AO also uses machine-wide directories that are not tied to one repository:
 
 ```text
-~/.ao/config.json
+~/.ao/
+├── config.json
+├── credentials.json
+├── daemon-events.jsonl
+├── cli-tracker.json
+└── packs/
+    └── <pack-id>/<version>/
 ```
 
-These stores serve different purposes:
+## Repository Scope Format
 
-- `~/.ao/config.json` is the machine-local user config
-- `~/.ao/packs/` is the machine pack registry
-- `~/.ao/<repo-scope>/...` is repo-scoped runtime state
+`<repo-scope>` is derived from the canonical project path:
+
+```text
+<sanitized-repo-name>-<12-hex-sha256-prefix>
+```
+
+This keeps runtime data stable across linked worktrees while avoiding collisions between repositories with the same basename.
 
 ## Mutation Policy
 
-Do not hand-edit AO state files. Use AO commands or AO MCP tools unless you are
-explicitly working on AO persistence as part of a migration.
+Do not hand-edit AO-managed JSON or SQLite state unless you are explicitly working on AO persistence or migrations.
+
+Use AO commands or AO MCP tools instead.
 
 ## Resolution-Related Paths
 
 | Path | Purpose |
 |---|---|
-| `.ao/plugins/<pack-id>/` | Project-local pack override root |
 | `.ao/workflows.yaml` | Single-file project workflow source |
 | `.ao/workflows/*.yaml` | Multi-file project workflow sources |
-| `~/.ao/<repo-scope>/state/pack-selection.v1.json` | Repo-scoped pack pin/enablement state |
-| `~/.ao/<repo-scope>/state/*.json` | Repo-scoped review, history, error, and QA state |
-| `~/.ao/<repo-scope>/worktrees/` | Managed task worktrees |
+| `.ao/plugins/<pack-id>/` | Project-local pack override root |
+| `~/.ao/<repo-scope>/workflow.db` | Persisted workflows, tasks, requirements, checkpoints |
+| `~/.ao/<repo-scope>/config/state-machines.v1.json` | Repo-scoped state-machine config |
+| `~/.ao/<repo-scope>/state/pack-selection.v1.json` | Repo-scoped pack selection state |
 | `~/.ao/packs/<pack-id>/<version>/` | Machine-installed pack root |
 
-See also: [Configuration](configuration.md), [Workflows](../concepts/workflows.md).
+See also: [Configuration](configuration.md), [State Management](../concepts/state-management.md), [Project Setup](../getting-started/project-setup.md).

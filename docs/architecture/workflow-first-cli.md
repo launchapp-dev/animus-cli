@@ -4,10 +4,10 @@
 
 AO now treats workflow dispatch as the primary execution surface.
 
-- planning commands dispatch canonical workflow refs such as `ao.vision/draft`
-  and `ao.requirement/execute`
+- workflow and requirements surfaces dispatch canonical workflow refs such as
+  `ao.task/standard` and `ao.requirement/execute`
 - task and requirement domain behavior resolves from bundled first-party packs
-  and project/local overrides
+  and project-local overrides
 - legacy `builtin/*` refs remain as compatibility aliases, not as the preferred
   operator-facing surface
 
@@ -42,8 +42,8 @@ This keeps the runtime aligned with the plugin-pack kernel design:
 
 | Command | Canonical Ref |
 |---|---|
-| `ao vision draft` | `ao.vision/draft` |
-| `ao requirements draft` | `ao.requirement/draft` |
+| `ao workflow run ao.vision/draft --title "..." --sync` | `ao.vision/draft` |
+| `ao workflow run ao.requirement/draft --title "..." --sync` | `ao.requirement/draft` |
 | `ao requirements execute --id REQ-001` | `ao.requirement/execute` |
 | `ao workflow run ao.task/standard` | `ao.task/standard` |
 

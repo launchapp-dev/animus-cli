@@ -20,9 +20,9 @@ The compiled defaults route models based on phase type and task complexity:
 Model selection follows a three-level cascade. The first match wins:
 
 ```
-1. phase.runtime.model    (per-phase override in workflow YAML)
-2. agent_profile.model    (agent runtime config)
-3. compiled defaults      (protocol/src/model_routing.rs)
+1. phase/agent YAML override     (project workflow YAML)
+2. resolved agent runtime config (computed from YAML + bundled defaults)
+3. compiled defaults             (protocol/src/model_routing.rs)
 ```
 
 ### Level 1: Per-Phase Override in Workflow YAML
@@ -38,9 +38,25 @@ agents:
 
 This takes highest precedence.
 
-### Level 2: Agent Runtime Config
+### Level 2: Resolved Agent Runtime
 
-The agent runtime config at `.ao/state/agent-runtime-config.v2.json` can set default model and tool for all agents:
+AO resolves agent runtime from the authored workflow YAML under `.ao/workflows.yaml` and `.ao/workflows/*.yaml`, merged with bundled defaults. You can inspect the effective runtime with:
+
+```bash
+ao workflow agent-runtime get
+ao workflow agent-runtime validate
+```
+
+The resolved payload includes the source path and the merged agent definitions. A minimal authored override still looks like this in YAML:
+
+```yaml
+agents:
+  default:
+    model: claude-sonnet-4-6
+    tool: claude
+```
+
+If you prefer to replace the runtime as structured JSON, `ao workflow agent-runtime set` still accepts the compiled schema directly:
 
 ```json
 {
@@ -53,7 +69,7 @@ The agent runtime config at `.ao/state/agent-runtime-config.v2.json` can set def
 }
 ```
 
-Set these fields to `null` to let compiled defaults take over:
+Set these fields to `null` to let compiled defaults take over when using the JSON setter:
 
 ```json
 {
@@ -65,8 +81,6 @@ Set these fields to `null` to let compiled defaults take over:
   }
 }
 ```
-
-A bundled default config ships at `crates/orchestrator-core/config/agent-runtime-config.v2.json`. The state file at `.ao/state/` overrides it.
 
 ### Level 3: Compiled Defaults
 
@@ -100,11 +114,10 @@ Not all tools support repository writes. The write-capable tools are:
 - `opencode`
 - `oai-runner`
 
-The `gemini` tool is not write-capable. AO's `enforce_write_capable_phase_target` logic redirects non-write-capable tools to a claude fallback for implementation phases. For research phases that do not need writes, set the environment variable to bypass this:
-
-```bash
-export AO_ALLOW_NON_EDITING_PHASE_TOOL=true
-```
+The `gemini` tool is not write-capable. AO redirects non-write-capable tools to
+a write-capable fallback for implementation-style phases. Use Gemini on
+read-only or research phases by configuring those phases to use Gemini
+explicitly in workflow YAML or pack content.
 
 ## Fallback Models
 
@@ -119,7 +132,6 @@ When the primary model fails, AO tries fallback models in order. Fallbacks vary 
 
 | Variable | Effect |
 |----------|--------|
-| `AO_ALLOW_NON_EDITING_PHASE_TOOL` | Set to `true` to allow non-write-capable tools (gemini) on all phases |
 | `ANTHROPIC_API_KEY` | Required for claude tool |
 | `OPENAI_API_KEY` | Required for codex tool |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Required for gemini tool |
@@ -142,7 +154,7 @@ ao model roster get
 
 ## Agent Runtime Config Commands
 
-Read, validate, and set the agent runtime config:
+Read, validate, and set the resolved agent runtime:
 
 ```bash
 ao workflow agent-runtime get

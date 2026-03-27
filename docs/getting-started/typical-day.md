@@ -1,69 +1,65 @@
 # A Typical Day Using AO
 
-This is the common end-to-end loop: capture a requirement, turn it into tasks,
-and let AO run the resulting workflows.
+This is the common loop with the current CLI: define work, turn it into tasks, run a workflow, then let the daemon keep going.
 
 ## The Lifecycle
 
 ```mermaid
 flowchart TB
-    IDEA["Your idea"]
-    --> REQUIREMENT["ao requirements create"]
-    --> REVIEW["ao requirements list / get / update"]
+    IDEA["Your Idea"]
+    --> REQ["ao requirements create"]
     --> EXECUTE["ao requirements execute --id REQ-001"]
+    --> TASKS["Tasks materialized in workflow.db"]
+    --> RUN["ao workflow run --task-id TASK-001 --sync"]
     --> DAEMON["ao daemon start --autonomous"]
 
-    DAEMON --> LOOP{"Daemon tick"}
-    LOOP -->|"Dispatch dequeued"| RUNNER["Spawn workflow-runner subprocess"]
-    RUNNER --> PIPELINE["Project workflow or bundled pack workflow"]
-    PIPELINE -->|"pass"| FACTS["Execution facts"]
-    PIPELINE -->|"rework"| PIPELINE
-    FACTS --> PROJECTORS["Projectors update tasks and requirements"]
-    PROJECTORS --> DONE["Task and requirement state updated"]
+    DAEMON --> LOOP{"Ready task?"}
+    LOOP -->|"yes"| WORKFLOW["Spawn workflow runner"]
+    WORKFLOW --> FACTS["Execution facts"]
+    FACTS --> STATE["Tasks, workflows, reviews, outputs"]
 ```
 
 ## Typical Flow
 
-### 1. Capture the requirement
+### 1. Capture a requirement
 
 ```bash
-ao requirements create --title "Add rate limiting" --priority high
-ao requirements list
-ao requirements get --id REQ-001
+ao requirements create \
+  --title "Rate limiting" \
+  --priority must \
+  --acceptance-criterion "Requests above the threshold are delayed or rejected"
 ```
 
-### 2. Refine the scope
-
-```bash
-ao requirements update --id REQ-001 --priority critical
-ao requirements recommendations scan
-```
-
-### 3. Execute the requirement into work
+### 2. Turn the requirement into implementation work
 
 ```bash
 ao requirements execute --id REQ-001
 ```
 
-This creates or updates tasks through AO mutation surfaces and can start the
-corresponding workflows.
+This materializes tasks and any follow-on workflow work associated with the requirement.
 
-### 4. Let AO run
+### 3. Run a task workflow directly
 
 ```bash
+ao task prioritized
+ao workflow run --task-id TASK-001 --sync
+```
+
+### 4. Hand the backlog to the daemon
+
+```bash
+ao task status --id TASK-002 --status ready
 ao daemon start --autonomous
 ```
 
-Project-local workflows usually wrap bundled pack refs such as
-`ao.task/standard`.
+The daemon schedules ready work, supervises runners, and records execution state. Workflow logic still comes from workflow definitions and pack content, not from daemon-specific branches.
 
-### 5. Watch progress
+### 5. Watch the system
 
 ```bash
-ao task stats
-ao workflow list
 ao daemon health
-ao output monitor --run-id <run-id>
+ao workflow list
+ao output tail
 ao status
 ```
 
@@ -71,20 +67,13 @@ ao status
 
 The daemon:
 
-- dequeues `SubjectDispatch` items
-- checks capacity
-- spawns runner subprocesses
-- records execution facts
+- dequeues or discovers ready work
+- applies queue ordering and capacity limits
+- spawns workflow runner subprocesses
+- records runtime state and execution facts
 
-The daemon does not own task semantics, requirement semantics, or pack logic.
+The daemon does not own task semantics or requirement semantics.
 
 ## Why This Matters
 
-That split lets AO support:
-
-- bundled first-party packs such as `ao.task`
-- installed machine packs under `~/.ao/packs/`
-- project workflow overrides in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
-- machine-scoped runtime state under `~/.ao/<repo-scope>/`
-
-without expanding daemon responsibilities.
+That split lets AO keep project-local workflow customization in the repo while keeping mutable runtime data and worktrees under `~/.ao/<repo-scope>/`.

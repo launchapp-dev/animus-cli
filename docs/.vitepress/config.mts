@@ -5,10 +5,10 @@ export default withMermaid(
   defineConfig({
     title: 'AO',
     description: 'Agent Orchestrator — orchestrate AI agent workflows from the command line',
-    base: '/ao-cli/',
+    base: '/ao/',
 
     head: [
-      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/ao-cli/logo.svg' }],
+      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/ao/logo.svg' }],
     ],
 
     lastUpdated: true,
