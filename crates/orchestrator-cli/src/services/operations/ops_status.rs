@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::print_value;
 
-const STATUS_SCHEMA: &str = "ao.status.v1";
+const STATUS_SCHEMA: &str = "ao.status.v2";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
 const RECENT_FAILURES_LIMIT: usize = 3;
 const CI_PROVIDER_GITHUB: &str = "github";
@@ -32,6 +32,10 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_task: Option<NextTaskSlice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attention_items: Vec<AttentionItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +65,43 @@ struct ActiveAgentAssignment {
     workflow_id: String,
     phase_id: String,
     attributed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    id: String,
+    title: String,
+    priority: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+enum AttentionItem {
+    #[serde(rename = "blocked-task")]
+    BlockedTask {
+        task_id: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocked_reason: Option<String>,
+        blocked_at: DateTime<Utc>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_blocked_secs: Option<f64>,
+    },
+    #[serde(rename = "paused-workflow")]
+    PausedWorkflow {
+        workflow_id: String,
+        task_id: String,
+        task_title: String,
+        current_phase: String,
+        required_action: String,
+        waiting_since: DateTime<Utc>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        waiting_secs: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,11 +233,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,12 +247,20 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+    let generated_at = Utc::now();
+
+    let attention_items = build_attention_items(
+        tasks.as_deref().unwrap_or_default(),
+        workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()).unwrap_or_default(),
+        generated_at,
+    );
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
-        generated_at: Utc::now(),
+        generated_at,
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
@@ -228,6 +279,15 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflows_error,
         ),
         ci: ci_slice,
+        next_task: next_task.and_then(|task| {
+            Some(NextTaskSlice {
+                id: task.id.clone(),
+                title: task.title.clone(),
+                priority: task.priority.as_str().to_string(),
+                linked_requirement_ids: task.linked_requirements.clone(),
+            })
+        }),
+        attention_items,
     };
 
     if json {
@@ -306,6 +366,7 @@ fn active_agent_assignments(
     workflows: &[OrchestratorWorkflow],
     tasks: &[OrchestratorTask],
 ) -> Vec<ActiveAgentAssignment> {
+    let task_map: HashMap<&str, &OrchestratorTask> = tasks.iter().map(|task| (task.id.as_str(), task)).collect();
     let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
 
     let mut running: Vec<&OrchestratorWorkflow> =
@@ -316,12 +377,19 @@ fn active_agent_assignments(
     let mut assignments: Vec<ActiveAgentAssignment> = running
         .into_iter()
         .take(attributed_count)
-        .map(|workflow| ActiveAgentAssignment {
-            task_id: workflow.task_id.clone(),
-            task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
-            workflow_id: workflow.id.clone(),
-            phase_id: workflow_active_phase(workflow),
-            attributed: true,
+        .map(|workflow| {
+            let linked_requirement_ids = task_map
+                .get(workflow.task_id.as_str())
+                .map(|task| task.linked_requirements.clone())
+                .unwrap_or_default();
+            ActiveAgentAssignment {
+                task_id: workflow.task_id.clone(),
+                task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
+                workflow_id: workflow.id.clone(),
+                phase_id: workflow_active_phase(workflow),
+                attributed: true,
+                linked_requirement_ids,
+            }
         })
         .collect();
 
@@ -333,6 +401,7 @@ fn active_agent_assignments(
             workflow_id: format!("unknown-{}", placeholder_index + 1),
             phase_id: "unknown".to_string(),
             attributed: false,
+            linked_requirement_ids: Vec::new(),
         });
     }
 
@@ -417,6 +486,57 @@ fn build_recent_failures_slice(
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
+}
+
+fn build_attention_items(
+    tasks: &[OrchestratorTask],
+    workflows: &[OrchestratorWorkflow],
+    generated_at: DateTime<Utc>,
+) -> Vec<AttentionItem> {
+    let mut items = Vec::new();
+
+    for task in tasks {
+        if task.status.is_blocked() {
+            let duration_blocked_secs = task.blocked_at.as_ref().map(|blocked_at| {
+                let blocked_at_utc = blocked_at.with_timezone(&Utc);
+                (generated_at - blocked_at_utc).num_seconds() as f64
+            });
+            items.push(AttentionItem::BlockedTask {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                blocked_reason: task.blocked_reason.clone(),
+                blocked_at: task.blocked_at.unwrap_or_else(|| task.metadata.updated_at.with_timezone(&Utc)),
+                duration_blocked_secs,
+            });
+        }
+    }
+
+    for workflow in workflows {
+        if workflow.status == WorkflowStatus::Paused {
+            if let Some(checkpoint) = workflow.checkpoint_metadata.checkpoints.last() {
+                let waiting_since = checkpoint.timestamp;
+                let waiting_secs = (generated_at - waiting_since).num_seconds() as f64;
+
+                let task_title = tasks
+                    .iter()
+                    .find(|t| t.id == workflow.task_id)
+                    .map(|t| t.title.clone())
+                    .unwrap_or_else(|| "Unknown task".to_string());
+
+                items.push(AttentionItem::PausedWorkflow {
+                    workflow_id: workflow.id.clone(),
+                    task_id: workflow.task_id.clone(),
+                    task_title,
+                    current_phase: workflow.current_phase.clone().unwrap_or_else(|| "unknown".to_string()),
+                    required_action: "phase-approve".to_string(),
+                    waiting_since,
+                    waiting_secs: Some(waiting_secs),
+                });
+            }
+        }
+    }
+
+    items
 }
 
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
@@ -697,6 +817,55 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
+
+    if let Some(next_task) = dashboard.next_task.as_ref() {
+        let _ = writeln!(&mut output, "Next Task");
+        let _ = writeln!(&mut output, "  id: {}", next_task.id);
+        let _ = writeln!(&mut output, "  title: {}", next_task.title);
+        let _ = writeln!(&mut output, "  priority: {}", next_task.priority);
+        let _ = writeln!(&mut output);
+    }
+
+    if !dashboard.attention_items.is_empty() {
+        let _ = writeln!(&mut output, "Attention Items");
+        for item in &dashboard.attention_items {
+            match item {
+                AttentionItem::BlockedTask { task_id, title, blocked_reason, blocked_at, duration_blocked_secs } => {
+                    let _ = writeln!(&mut output, "  - type: blocked-task");
+                    let _ = writeln!(&mut output, "    task_id: {}", task_id);
+                    let _ = writeln!(&mut output, "    title: {}", title);
+                    if let Some(reason) = blocked_reason {
+                        let _ = writeln!(&mut output, "    reason: {}", reason);
+                    }
+                    let _ = writeln!(&mut output, "    blocked_at: {}", blocked_at.to_rfc3339());
+                    if let Some(secs) = duration_blocked_secs {
+                        let _ = writeln!(&mut output, "    duration_blocked_secs: {}", secs);
+                    }
+                }
+                AttentionItem::PausedWorkflow {
+                    workflow_id,
+                    task_id,
+                    task_title,
+                    current_phase,
+                    required_action,
+                    waiting_since,
+                    waiting_secs,
+                } => {
+                    let _ = writeln!(&mut output, "  - type: paused-workflow");
+                    let _ = writeln!(&mut output, "    workflow_id: {}", workflow_id);
+                    let _ = writeln!(&mut output, "    task_id: {}", task_id);
+                    let _ = writeln!(&mut output, "    task_title: {}", task_title);
+                    let _ = writeln!(&mut output, "    current_phase: {}", current_phase);
+                    let _ = writeln!(&mut output, "    required_action: {}", required_action);
+                    let _ = writeln!(&mut output, "    waiting_since: {}", waiting_since.to_rfc3339());
+                    if let Some(secs) = waiting_secs {
+                        let _ = writeln!(&mut output, "    waiting_secs: {}", secs);
+                    }
+                }
+            }
+        }
+        let _ = writeln!(&mut output);
+    }
 
     let _ = writeln!(&mut output, "CI Status");
     let _ = writeln!(&mut output, "  provider: {}", dashboard.ci.provider);
