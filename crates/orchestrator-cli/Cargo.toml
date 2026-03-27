@@ -1,7 +1,8 @@
 [package]
 name = "orchestrator-cli"
-version = "0.2.30"
+version = "0.2.31"
 edition = "2021"
+license = "Elastic-2.0"
 
 [[bin]]
 name = "ao"

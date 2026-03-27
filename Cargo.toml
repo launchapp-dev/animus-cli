@@ -26,6 +26,9 @@ default-members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "Elastic-2.0"
+
 [workspace.dependencies]
 protocol = { path = "crates/protocol" }
 llm-cli-wrapper = { path = "crates/llm-cli-wrapper" }
