@@ -1,0 +1,19 @@
+services:
+  ao:
+    build: .
+    image: ghcr.io/launchapp-dev/ao:latest
+    entrypoint: ["ao"]
+    command: ["daemon", "start", "--autonomous"]
+    volumes:
+      - ao-data:/root/.ao
+      - ./:/workspace
+    environment:
+      # Agent API keys — set these in .env or pass at runtime
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    working_dir: /workspace
+    restart: unless-stopped
+
+volumes:
+  ao-data:

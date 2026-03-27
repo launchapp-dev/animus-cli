@@ -30,7 +30,7 @@ Project configuration and registry-scoped metadata created during setup.
 
 ## Global User Config
 
-### `~/.config/com.launchpad.agent-orchestrator/config.json` on macOS
+### `~/.ao/config.json`
 
 The global AO config stores machine-local user settings such as runner auth and
 optional Claude profile definitions. Use `AO_CONFIG_DIR` to override the global

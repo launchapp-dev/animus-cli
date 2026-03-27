@@ -1,0 +1,10 @@
+target/
+node_modules/
+.ao/
+.git/
+*.log
+mockups/
+memory/
+docs/
+.agents/
+.claude/

@@ -37,20 +37,7 @@ impl Config {
             return override_path;
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("com.launchpad.agent-orchestrator")
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            return dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("com.launchpad.agent-orchestrator");
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("agent-orchestrator")
-        }
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".ao")
     }
 
     pub fn load_global() -> Result<Self> {
