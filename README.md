@@ -1,132 +1,406 @@
-# AO — Agent Orchestrator CLI
+<div align="center">
 
-Rust-only CLI for orchestrating AI agent workflows. Manages tasks, requirements, multi-phase workflows, and concurrent agent execution through a unified command-line interface.
+![header](https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=200&section=header&text=AO&fontSize=90&fontColor=f0f6fc&animation=fadeIn&fontAlignY=35&desc=Autonomous%20Agent%20Orchestrator&descAlignY=55&descSize=22&descColor=8b949e)
+
+<br/>
+
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=20&duration=3000&pause=1500&color=58A6FF&center=true&vCenter=true&multiline=true&repeat=true&random=false&width=700&height=80&lines=Define+your+engineering+team+as+YAML.;Dispatch+tasks+to+AI+agents+across+isolated+worktrees.;Review%2C+merge%2C+and+ship+%E2%80%94+while+you+sleep.)](https://github.com/launchapp-dev/ao-cli)
+
+<br/>
+<br/>
+<br/>
+
+
+<a href="https://github.com/launchapp-dev/ao-cli/releases/latest"><img src="https://img.shields.io/github/v/release/launchapp-dev/ao-cli?style=for-the-badge&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc" alt="Release" /></a>
+&nbsp;
+<img src="https://img.shields.io/badge/rust-100%25-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=rust&logoColor=f0f6fc" alt="Rust" />
+&nbsp;
+<img src="https://img.shields.io/badge/108k_LOC-16_crates-f0f6fc?style=for-the-badge&labelColor=0d1117" alt="Codebase" />
+&nbsp;
+<img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=apple&logoColor=f0f6fc" alt="Platforms" />
+
+</div>
+
+<br/>
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao-cli/main/install.sh | bash
+```
+
+<details>
+<summary><kbd>options</kbd></summary>
+
+```bash
+# Specific version
+AO_VERSION=v0.0.11 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao-cli/main/install.sh | bash
+
+# Custom directory
+AO_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao-cli/main/install.sh | bash
+```
+
+</details>
+
+<details>
+<summary><kbd>prerequisites</kbd></summary>
+
+You need at least one AI coding CLI:
+
+```bash
+npm install -g @anthropic-ai/claude-code    # Claude (recommended)
+npm install -g @openai/codex                # Codex
+npm install -g @google/gemini-cli           # Gemini
+```
+
+</details>
+
+---
+
+## What is AO?
+
+AO turns a single YAML file into an autonomous software delivery pipeline.
+
+You define agents, wire them into phases, compose phases into workflows, schedule everything with cron — and AO's daemon handles the rest: dispatching tasks to AI agents in isolated git worktrees, managing quality gates, and merging the results.
+
+```
+                ┌──────────────────────────────────────────────────┐
+                │               AO Daemon (Rust)                   │
+                │                                                  │
+  ┌────────┐    │    ┌───────────┐    ┌───────────┐    ┌────────┐ │    ┌────────┐
+  │ Tasks  │───▶│───▶│  Dispatch │───▶│  Agents   │───▶│ Phases │─│──▶│  PRs   │
+  │        │    │    │  Queue    │    │           │    │        │ │    │        │
+  │ TASK-1 │    │    │ priority  │    │ Claude    │    │ impl   │ │    │ PR #42 │
+  │ TASK-2 │    │    │ routing   │    │ Codex     │    │ review │ │    │ PR #43 │
+  │ TASK-3 │    │    │ capacity  │    │ Gemini    │    │ test   │ │    │ PR #44 │
+  └────────┘    │    └───────────┘    └───────────┘    └────────┘ │    └────────┘
+                │                                                  │
+                │    Schedules: work-planner (5m), pr-reviewer     │
+                │    (5m), reconciler (5m), PO scans (2-8h)        │
+                └──────────────────────────────────────────────────┘
+```
+
+---
 
 ## Quick Start
 
 ```bash
-# Install (build from source)
-cargo ao-bin-build-release
+cd your-project                          # any git repo
+ao doctor                                # check prerequisites
+ao setup                                 # initialize .ao/
 
-# Or run directly
-cargo run -p orchestrator-cli -- --help
+ao task create --title "Add rate limiting" --type feature --priority high
+ao workflow run --task-id TASK-001        # run once
 
-# Core commands
-ao status                    # Project dashboard
-ao task next                 # Get next task to work on
-ao daemon start              # Start background agent daemon
-ao workflow run --task-id TASK-001  # Run workflow for a task
+ao daemon start --autonomous             # or go fully autonomous
 ```
 
-## Workspace Layout
+---
 
-16-crate Rust workspace:
+## Everything in One YAML
+
+<table>
+<tr>
+<td width="50%">
+
+### Agents
+
+Bind models, tools, MCP servers, and system prompts to named profiles. Route by task complexity.
+
+```yaml
+agents:
+  default:
+    model: claude-sonnet-4-6
+    tool: claude
+    mcp_servers: ["ao", "context7"]
+
+  work-planner:
+    system_prompt: |
+      Scan tasks, check dependencies,
+      enqueue ready work for the daemon.
+    model: claude-sonnet-4-6
+    tool: claude
+```
+
+</td>
+<td width="50%">
+
+### Phases
+
+Reusable execution units. Three modes: **agent** (AI with decision contracts), **command** (shell), **manual** (human gate).
+
+```yaml
+phases:
+  implementation:
+    mode: agent
+    agent: default
+    directive: "Implement production code."
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+
+  push-branch:
+    mode: command
+    command:
+      program: git
+      args: ["push", "-u", "origin", "HEAD"]
+```
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### Workflows
+
+Compose phases into pipelines with skip conditions and post-success hooks.
+
+```yaml
+workflows:
+  - id: standard
+    phases:
+      - requirements
+      - implementation
+      - push-branch
+      - create-pr
+    post_success:
+      merge:
+        strategy: squash
+        auto_merge: true
+        cleanup_worktree: true
+```
+
+</td>
+<td width="50%">
+
+### Schedules
+
+Cron-based autonomous execution. The daemon runs your workflows on a cadence.
+
+```yaml
+schedules:
+  - id: work-planner
+    cron: "*/5 * * * *"
+    workflow_ref: work-planner
+    enabled: true
+
+  - id: pr-reviewer
+    cron: "*/5 * * * *"
+    workflow_ref: pr-reviewer
+    enabled: true
+```
+
+</td>
+</tr>
+</table>
+
+---
+
+## The Full Agent Team
+
+AO doesn't run one agent. It runs an **entire product organization**:
 
 ```
-crates/
-├── orchestrator-cli/            # Main `ao` binary (clap CLI, 24 top-level commands)
-├── orchestrator-core/           # Domain logic, state management, ServiceHub DI
-├── orchestrator-config/         # Configuration management and validation
-├── orchestrator-store/          # Persistent state storage and persistence
-├── orchestrator-web-api/        # Web API business logic
-├── orchestrator-web-server/     # Axum web server + embedded static assets
-├── orchestrator-web-contracts/  # Shared web types
-├── protocol/                    # Wire protocol types shared across all crates
-├── agent-runner/                # Standalone daemon managing LLM CLI processes via IPC
-├── llm-cli-wrapper/            # Abstraction over AI CLI tools (claude, codex, gemini, etc.)
-├── oai-runner/                  # OpenAI-compatible streaming API client
-├── workflow-runner-v2/          # Multi-phase workflow execution engine
-├── orchestrator-daemon-runtime/ # Daemon scheduling and runtime orchestration
-├── orchestrator-providers/      # LLM provider abstraction and routing
-├── orchestrator-git-ops/        # Git operations and worktree management
-└── orchestrator-notifications/  # Notification delivery and subscription management
+  ┌─────────────────────────────────────────────────────────────────┐
+  │                                                                 │
+  │   Planners               Builders              Reviewers        │
+  │   ╭──────────────╮       ╭──────────────╮       ╭──────────────╮│
+  │   │ Work Planner │       │ Claude Eng   │       │ PR Reviewer  ││
+  │   │ Reconciler   │       │ Codex Eng    │       │ PO Reviewer  ││
+  │   │ Triager      │       │ Gemini Eng   │       │ Code Review  ││
+  │   │ Req Refiner  │       │ GLM Eng      │       │              ││
+  │   ╰──────────────╯       ╰──────────────╯       ╰──────────────╯│
+  │                                                                 │
+  │   Product Owners         Architects             Operations      │
+  │   ╭──────────────╮       ╭──────────────╮       ╭──────────────╮│
+  │   │ PO: Web      │       │ Rust Arch    │       │ Sys Monitor  ││
+  │   │ PO: MCP      │       │ Infra Arch   │       │ Release Mgr  ││
+  │   │ PO: Workflow │       │              │       │ Branch Sync  ││
+  │   │ PO: CLI      │       │              │       │ Doc Drift    ││
+  │   │ PO: Runner   │       │              │       │ Wf Optimizer ││
+  │   ╰──────────────╯       ╰──────────────╯       ╰──────────────╯│
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Build & Test
+## Key Concepts
+
+<table>
+<tr>
+<td width="33%">
+
+**Decision Contracts**
+
+Every agent phase returns a typed verdict: `advance`, `rework`, `skip`, or `fail`. Rework loops pass the reviewer's feedback back to the implementer. Configurable `max_rework_attempts` prevents infinite loops.
+
+</td>
+<td width="33%">
+
+**Model Routing**
+
+Route tasks to different models by type and complexity. Low-priority bugfixes go to cheap models. Critical architecture tasks go to Opus. The work-planner agent manages this automatically.
+
+</td>
+<td width="33%">
+
+**Worktree Isolation**
+
+Every task gets its own git worktree. Agents work in parallel on separate branches without conflicts. Post-success hooks handle merge, cleanup, and PR creation.
+
+</td>
+</tr>
+</table>
+
+| Complexity | Type | Model | Why |
+|:---|:---|:---|:---|
+| `low` | bugfix/chore | GLM-5-Turbo | Cheapest option |
+| `medium` | feature | Claude Sonnet | Reliable, fast |
+| `medium` | UI/UX | Gemini 3.1 Pro | Vision + design expertise |
+| `high` | refactor | Codex GPT-5.3 | Strong code understanding |
+| `high` | architecture | Claude Opus | Maximum quality |
+| `critical` | any | Claude Opus | No compromises |
+
+---
+
+## Claude Code Integration
+
+Install [**AO Skills**](https://github.com/launchapp-dev/ao-skills) for deep AO integration inside Claude Code:
 
 ```bash
-cargo ao-bin-check           # Type-check all runtime binaries
-cargo ao-bin-build           # Build all runtime binaries (debug)
-cargo ao-bin-build-release   # Build all runtime binaries (release)
-cargo test --workspace       # Run all tests
-cargo test -p <crate-name>   # Run tests for a specific crate
+git clone https://github.com/launchapp-dev/ao-skills.git ~/ao-skills
+claude --plugin-dir ~/ao-skills
 ```
 
-## Build Footprint
+<table>
+<tr>
+<td width="50%">
 
-Prefer narrow commands while iterating:
+**Slash Commands**
 
-```bash
-cargo ao-bin-check
-cargo test -p orchestrator-cli --test cli_smoke
+| Command | What it does |
+|:---|:---|
+| `/setup-ao` | Initialize AO in your project |
+| `/getting-started` | Install, concepts, first task |
+| `/workflow-authoring` | Write custom YAML workflows |
+| `/pack-authoring` | Build workflow packs |
+| `/mcp-setup` | Connect AI tools via MCP |
+| `/troubleshooting` | Debug common issues |
+
+</td>
+<td width="50%">
+
+**Auto-Loaded References**
+
+| Skill | Coverage |
+|:---|:---|
+| `configuration` | Config files, state layout, model routing |
+| `task-management` | Full task lifecycle via CLI and MCP |
+| `daemon-operations` | Daemon monitoring and troubleshooting |
+| `workflow-patterns` | Patterns from 150+ autonomous PRs |
+| `agent-personas` | PO, architect, auditor agents |
+| `mcp-tools` | Complete `ao.*` tool reference |
+
+</td>
+</tr>
+</table>
+
+---
+
+## CLI
+
+```
+ao task          Create, list, update, prioritize tasks
+ao workflow      Run and manage multi-phase workflows
+ao daemon        Start/stop the autonomous scheduler
+ao queue         Inspect and manage the dispatch queue
+ao agent         Control agent runner processes
+ao output        Stream and inspect agent output
+ao doctor        Health checks and auto-remediation
+ao setup         Interactive project initialization
+ao requirements  Manage product requirements
+ao mcp           Start AO as an MCP server
+ao web           Launch the embedded web dashboard
+ao status        Project overview at a glance
 ```
 
-Workspace-wide debug and integration-test builds accumulate large `target/debug`
-artifacts. The repo now uses leaner dev/test debuginfo settings to keep future
-builds smaller, and includes a cleanup helper:
-
-```bash
-scripts/cleanup-build-targets.sh --report
-scripts/cleanup-build-targets.sh
-scripts/cleanup-build-targets.sh --debug
-scripts/cleanup-build-targets.sh --worktrees --days 7
-```
-
-`ao git worktree prune` remains the right command for pruning managed git
-worktree metadata; the cleanup script above only removes Rust build artifacts.
-
-## Command Overview
-
-See `docs/reference/cli/index.md` for the full command tree with all flags.
-
-| Group | Commands | Purpose |
-|---|---|---|
-| **Core** | `task`, `workflow`, `daemon`, `agent` | Task management, workflow execution, daemon lifecycle, agent runs |
-| **Planning** | `vision`, `requirements`, `architecture` | Project vision, requirements drafting, architecture design |
-| **Operations** | `runner`, `output`, `errors`, `history`, `queue` | Runner health, run output, error tracking, execution history, dispatch queue |
-| **Infrastructure** | `git`, `model`, `skill`, `mcp`, `web` | Git ops, model routing, skill packages, MCP server, web UI |
-| **UX** | `status`, `setup`, `doctor`, `tui` | Dashboard, onboarding, diagnostics, terminal UI |
-| **Review/QA** | `review`, `qa` | Review decisions, QA gate evaluation |
-
-Global flags: `--json` (machine-readable output), `--project-root <PATH>` (override project root).
-
-## Self-Hosting Workflow
-
-AO is built using AO. Task and requirement tracking is done through `ao` commands:
-
-```bash
-ao requirements list                              # View requirements backlog
-ao task prioritized                               # View prioritized tasks
-ao task next                                      # Get next task to work on
-ao task status --id TASK-XXX --status in-progress # Start work
-ao task status --id TASK-XXX --status done        # Complete work
-```
+---
 
 ## Architecture
 
-- **ServiceHub trait** — dependency injection (`FileServiceHub` for production, `InMemoryServiceHub` for tests)
-- **JSON envelope** (`ao.cli.v1`) — all `--json` output uses `{ schema, ok, data/error }` contract
-- **Exit codes** — 1=internal, 2=invalid_input, 3=not_found, 4=conflict, 5=unavailable
-- **Atomic writes** — state persisted via temp file + rename (`write_json_atomic`)
-- **Scoped directories** — runtime state at `~/.ao/<repo-scope>/`
+```
+108k lines of Rust · 16 crates
 
-## Dependency Policy
+orchestrator-cli ·········· 30k    CLI commands and dispatch
+orchestrator-core ·········· 18k   Services, state, config
+orchestrator-config ········ 13k   Workflow YAML compilation
+workflow-runner-v2 ········· 9k    Phase execution engine
+agent-runner ··············· 6k    LLM CLI process management
+llm-cli-wrapper ············ 6k    CLI tool abstraction layer
+orchestrator-web-server ···· 5k    Embedded React dashboard
+protocol ··················· 5k    Shared types, model routing
+orchestrator-daemon ········ 4k    Daemon scheduler runtime
+oai-runner ················· 3k    OpenAI-compatible API client
+orchestrator-providers ····· 3k    Provider abstractions
+orchestrator-web-api ······· 3k    GraphQL API layer
++ 4 supporting crates
+```
 
-Rust-only. Prohibited: `tauri`, `wry`, `tao`, `gtk`, `webkit2gtk`, `webview2` and related desktop shell frameworks.
+```mermaid
+graph LR
+    A[CLI] --> B[Core Services]
+    A --> C[Daemon Runtime]
+    B --> D[Workflow Runner]
+    D --> E[Agent Runner]
+    E --> F[LLM CLI Wrapper]
+    F --> G[claude / codex / gemini]
+    B --> H[Config]
+    H --> I[YAML Compiler]
+    A --> J[Web Server]
+    J --> K[GraphQL API]
+    K --> B
+    C --> D
+    style A fill:#1f6feb,stroke:#1f6feb,color:#fff
+    style C fill:#1f6feb,stroke:#1f6feb,color:#fff
+    style J fill:#1f6feb,stroke:#1f6feb,color:#fff
+```
 
-Enforced by CI: `.github/workflows/rust-only-dependency-policy.yml`
+---
 
-## Release
+## Platforms
 
-CI/CD via `.github/workflows/release.yml` always builds release archives for `ao`, `agent-runner`, `llm-cli-wrapper`, `ao-oai-runner`, `ao-workflow-runner`:
+| Platform | Architecture | |
+|:---|:---|:---|
+| macOS | Apple Silicon (M1+) | `aarch64-apple-darwin` |
+| macOS | Intel | `x86_64-apple-darwin` |
+| Linux | x86_64 | `x86_64-unknown-linux-gnu` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` |
 
-| Runner | Target | Archive |
-|---|---|---|
-| `ubuntu-latest` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| `macos-15-intel` | `x86_64-apple-darwin` | `.tar.gz` |
-| `macos-14` | `aarch64-apple-darwin` | `.tar.gz` |
-| `windows-latest` | `x86_64-pc-windows-msvc` | `.zip` |
+---
 
-- **Tag push** (`v*`) — builds + publishes GitHub Release
-- **Branch push** (`version/**`) — builds preview artifacts only
-- release publish job emits `dist/release-assets/SHA256SUMS.txt` for all archives
+## License
+
+This project is licensed under the [Elastic License 2.0 (ELv2)](LICENSE). You may use, modify, and distribute the software, but you may not provide it to third parties as a hosted or managed service.
+
+---
+
+<div align="center">
+
+**Update**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao-cli/main/install.sh | bash
+```
+
+**Uninstall**
+
+```bash
+rm -f ~/.local/bin/ao ~/.local/bin/agent-runner ~/.local/bin/llm-cli-wrapper
+```
+
+<br/>
+
+<sub>Built with Rust. Powered by AI. Ships code autonomously.</sub>
+
+</div>
+
+![footer](https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=100&section=footer)
