@@ -20,6 +20,7 @@ pub(crate) fn parse_claude_stdout_line(line: &str) -> Vec<SessionEvent> {
         "content_block_start" => parse_claude_content_block_start(&value),
         "content_block_delta" => parse_claude_content_block_delta(&value),
         "rate_limit_event" => vec![SessionEvent::Metadata { metadata: value }],
+        "user" => parse_claude_user_event(&value),
         _ => Vec::new(),
     }
 }
@@ -79,6 +80,67 @@ fn parse_claude_assistant_event(value: &Value) -> Vec<SessionEvent> {
     }
 
     events
+}
+
+fn parse_claude_user_event(value: &Value) -> Vec<SessionEvent> {
+    let content = value
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("content").and_then(Value::as_array));
+
+    let Some(content) = content else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+            continue;
+        }
+
+        let tool_name = resolve_tool_name_from_result(block, value);
+
+        let output = block
+            .get("content")
+            .cloned()
+            .or_else(|| value.pointer("/tool_use_result/content").cloned())
+            .unwrap_or(Value::Null);
+
+        let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+
+        events.push(SessionEvent::ToolResult {
+            tool_name,
+            output,
+            success: !is_error,
+        });
+    }
+    events
+}
+
+fn resolve_tool_name_from_result(block: &Value, root: &Value) -> String {
+    if let Some(items) = block.get("content").and_then(Value::as_array) {
+        for item in items {
+            if item.get("type").and_then(Value::as_str) == Some("tool_reference") {
+                if let Some(name) = item.get("tool_name").and_then(Value::as_str) {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+
+    if let Some(tool) = root.pointer("/tool_use_result/structuredContent/tool").and_then(Value::as_str) {
+        return tool.to_string();
+    }
+
+    if let Some(content) = root.pointer("/tool_use_result/content").and_then(Value::as_str) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(content) {
+            if let Some(tool) = parsed.get("tool").and_then(Value::as_str) {
+                return tool.to_string();
+            }
+        }
+    }
+
+    block.get("tool_use_id").and_then(Value::as_str).unwrap_or("unknown").to_string()
 }
 
 fn parse_claude_result_event(value: &Value) -> Vec<SessionEvent> {
