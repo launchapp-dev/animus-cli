@@ -5,10 +5,10 @@ export default withMermaid(
   defineConfig({
     title: 'AO',
     description: 'Agent Orchestrator — orchestrate AI agent workflows from the command line',
-    base: '/ao/',
+    base: '/ao-cli/',
 
     head: [
-      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/ao/logo.svg' }],
+      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/ao-cli/logo.svg' }],
     ],
 
     lastUpdated: true,
@@ -140,7 +140,7 @@ export default withMermaid(
       },
 
       editLink: {
-        pattern: 'https://github.com/launchapp-dev/ao/edit/main/docs/:path',
+        pattern: 'https://github.com/launchapp-dev/ao-cli/edit/main/docs/:path',
         text: 'Edit this page on GitHub',
       },
 
