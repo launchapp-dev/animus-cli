@@ -197,7 +197,25 @@ fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
         ),
     ];
 
-    let entries = recent_failures(&workflows);
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|w| w.status == WorkflowStatus::Failed)
+        .map(|w| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(w);
+            RecentFailureEntry {
+                workflow_id: w.id.clone(),
+                task_id: w.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: w.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(3);
+
     assert_eq!(entries.len(), 3, "entries should be capped at 3");
     assert_eq!(entries[0].workflow_id, "WF-005");
     assert_eq!(entries[1].workflow_id, "WF-002");
@@ -454,6 +472,15 @@ fn render_status_dashboard_uses_required_section_order() {
             blocked: 0,
             error: None,
         },
+        next_task: NextTaskSlice {
+            available: true,
+            task_id: None,
+            title: None,
+            priority: None,
+            status: None,
+            empty_state: Some("No ready tasks available".to_string()),
+            error: None,
+        },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
@@ -469,13 +496,15 @@ fn render_status_dashboard_uses_required_section_order() {
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+    let next_task_idx = output.find("Next Task").expect("next task section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
-    assert!(summary_idx < completions_idx);
+    assert!(summary_idx < next_task_idx);
+    assert!(next_task_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
 }

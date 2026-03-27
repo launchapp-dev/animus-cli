@@ -29,6 +29,7 @@ struct StatusDashboard {
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
+    next_task: NextTaskSlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
@@ -71,6 +72,23 @@ struct TaskSummarySlice {
     in_progress: usize,
     ready: usize,
     blocked: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    empty_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -192,11 +210,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,6 +224,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
     let dashboard = StatusDashboard {
@@ -222,6 +243,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
+        next_task: build_next_task_slice(next_task.flatten().as_ref(), next_task_error),
         recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
@@ -379,6 +401,29 @@ fn build_task_summary_slice(
     }
 
     TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
+}
+
+fn build_next_task_slice(task: Option<&OrchestratorTask>, error: Option<String>) -> NextTaskSlice {
+    match task {
+        Some(task) => NextTaskSlice {
+            available: true,
+            task_id: Some(task.id.clone()),
+            title: Some(task.title.clone()),
+            priority: Some(format!("{:?}", task.priority)),
+            status: Some(format!("{:?}", task.status)),
+            empty_state: None,
+            error,
+        },
+        None => NextTaskSlice {
+            available: true,
+            task_id: None,
+            title: None,
+            priority: None,
+            status: None,
+            empty_state: Some("No ready tasks available".to_string()),
+            error,
+        },
+    }
 }
 
 fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
@@ -654,6 +699,32 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
     let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
     if let Some(error) = dashboard.task_summary.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Task");
+    if let Some(task_id) = dashboard.next_task.task_id.as_deref() {
+        let _ = writeln!(&mut output, "  task_id: {}", task_id);
+        let _ = writeln!(
+            &mut output,
+            "  title: {}",
+            dashboard.next_task.title.as_deref().unwrap_or("n/a")
+        );
+        let _ = writeln!(
+            &mut output,
+            "  priority: {}",
+            dashboard.next_task.priority.as_deref().unwrap_or("n/a")
+        );
+        let _ = writeln!(
+            &mut output,
+            "  status: {}",
+            dashboard.next_task.status.as_deref().unwrap_or("n/a")
+        );
+    } else if let Some(empty_state) = dashboard.next_task.empty_state.as_deref() {
+        let _ = writeln!(&mut output, "  {}", empty_state);
+    }
+    if let Some(error) = dashboard.next_task.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
