@@ -125,84 +125,34 @@ fn recent_completions_are_sorted_and_limited() {
 }
 
 #[test]
-fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
-    let workflows = vec![
-        make_workflow(
-            "WF-002",
-            "TASK-2",
-            WorkflowStatus::Failed,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-26T10:00:00Z")),
-            Vec::new(),
-            Some("runner timeout"),
-        ),
-        make_workflow(
-            "WF-001",
-            "TASK-1",
-            WorkflowStatus::Failed,
-            Some("qa"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-25T11:00:00Z")),
-            vec![make_phase(
+fn recent_failures_uses_latest_failed_phase_info() {
+    let wf = make_workflow(
+        "WF-003",
+        "TASK-3",
+        WorkflowStatus::Failed,
+        Some("merge"),
+        parse_time("2026-02-20T00:00:00Z"),
+        Some(parse_time("2026-02-24T11:00:00Z")),
+        vec![
+            make_phase(
+                "implementation",
+                WorkflowPhaseStatus::Failed,
+                Some(parse_time("2026-02-24T10:00:00Z")),
+                Some("compile failed"),
+            ),
+            make_phase(
                 "qa",
                 WorkflowPhaseStatus::Failed,
-                Some(parse_time("2026-02-25T11:00:00Z")),
-                Some("qa gate failed"),
-            )],
-            None,
-        ),
-        make_workflow(
-            "WF-003",
-            "TASK-3",
-            WorkflowStatus::Failed,
-            Some("merge"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-24T11:00:00Z")),
-            vec![
-                make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T10:00:00Z")),
-                    Some("compile failed"),
-                ),
-                make_phase(
-                    "qa",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T11:00:00Z")),
-                    Some("tests failed"),
-                ),
-            ],
-            None,
-        ),
-        make_workflow(
-            "WF-004",
-            "TASK-4",
-            WorkflowStatus::Running,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            None,
-            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-            None,
-        ),
-        make_workflow(
-            "WF-005",
-            "TASK-5",
-            WorkflowStatus::Failed,
-            None,
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-27T09:00:00Z")),
-            Vec::new(),
-            Some("unknown failure"),
-        ),
-    ];
+                Some(parse_time("2026-02-24T11:00:00Z")),
+                Some("tests failed"),
+            ),
+        ],
+        None,
+    );
 
-    let entries = recent_failures(&workflows);
-    assert_eq!(entries.len(), 3, "entries should be capped at 3");
-    assert_eq!(entries[0].workflow_id, "WF-005");
-    assert_eq!(entries[1].workflow_id, "WF-002");
-    assert_eq!(entries[1].phase_id, "implementation", "current_phase should be used when no failed phase exists");
-    assert_eq!(entries[2].phase_id, "qa", "latest failed phase should be selected");
+    let (phase_id, _, failure_reason) = latest_failed_phase(&wf);
+    assert_eq!(phase_id, "qa", "latest failed phase should be selected");
+    assert_eq!(failure_reason.as_deref(), Some("tests failed"));
 }
 
 #[test]
@@ -344,6 +294,9 @@ fn task_summary_falls_back_to_task_scan_when_statistics_unavailable() {
     assert_eq!(summary.in_progress, 1);
     assert_eq!(summary.ready, 1);
     assert_eq!(summary.blocked, 2);
+    assert_eq!(summary.blocked_task_ids.len(), 2);
+    assert!(summary.blocked_task_ids.contains(&"TASK-004".to_string()));
+    assert!(summary.blocked_task_ids.contains(&"TASK-005".to_string()));
 }
 
 #[test]
@@ -452,8 +405,11 @@ fn render_status_dashboard_uses_required_section_order() {
             in_progress: 0,
             ready: 0,
             blocked: 0,
+            blocked_task_ids: Vec::new(),
             error: None,
         },
+        next_task: NextTaskSlice { available: true, task_id: None, title: None, error: None },
+        stale_tasks: StaleTasksSlice { available: true, entries: Vec::new(), error: None },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
@@ -469,13 +425,17 @@ fn render_status_dashboard_uses_required_section_order() {
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+    let next_task_idx = output.find("Next Task").expect("next task section should exist");
+    let stale_tasks_idx = output.find("Stale In-Progress").expect("stale in-progress section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
-    assert!(summary_idx < completions_idx);
+    assert!(summary_idx < next_task_idx);
+    assert!(next_task_idx < stale_tasks_idx);
+    assert!(stale_tasks_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
 }

@@ -29,6 +29,8 @@ struct StatusDashboard {
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
+    next_task: NextTaskSlice,
+    stale_tasks: StaleTasksSlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
@@ -71,8 +73,36 @@ struct TaskSummarySlice {
     in_progress: usize,
     ready: usize,
     blocked: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocked_task_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTasksSlice {
+    available: bool,
+    entries: Vec<StaleTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTaskEntry {
+    task_id: String,
+    title: String,
+    stale_since: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,11 +222,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,6 +236,8 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task_opt, next_task_error) = split_result(next_task_result);
+    let next_task = next_task_opt.flatten();
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
     let dashboard = StatusDashboard {
@@ -221,6 +255,12 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             task_stats.as_ref(),
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
+        ),
+        next_task: build_next_task_slice(next_task.as_ref(), next_task_error),
+        stale_tasks: build_stale_tasks_slice(
+            tasks.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+            combine_errors([tasks_error.as_deref(), workflows_error.as_deref()]),
         ),
         recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
         recent_failures: build_recent_failures_slice(
@@ -362,11 +402,17 @@ fn build_task_summary_slice(
             in_progress: statistics.in_progress,
             ready: statistics.by_status.get("ready").copied().unwrap_or(0),
             blocked: statistics.blocked,
+            blocked_task_ids: Vec::new(),
             error,
         };
     }
 
     if let Some(tasks) = tasks {
+        let blocked_task_ids: Vec<String> = tasks
+            .iter()
+            .filter(|task| task.status.is_blocked())
+            .map(|task| task.id.clone())
+            .collect();
         return TaskSummarySlice {
             available: true,
             total: tasks.len(),
@@ -374,11 +420,92 @@ fn build_task_summary_slice(
             in_progress: tasks.iter().filter(|task| task.status == TaskStatus::InProgress).count(),
             ready: tasks.iter().filter(|task| task.status == TaskStatus::Ready).count(),
             blocked: tasks.iter().filter(|task| task.status.is_blocked()).count(),
+            blocked_task_ids,
             error,
         };
     }
 
-    TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
+    TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, blocked_task_ids: Vec::new(), error }
+}
+
+fn build_next_task_slice(next_task: Option<&OrchestratorTask>, error: Option<String>) -> NextTaskSlice {
+    match next_task {
+        Some(task) => NextTaskSlice {
+            available: true,
+            task_id: Some(task.id.clone()),
+            title: Some(task.title.clone()),
+            error,
+        },
+        None => NextTaskSlice {
+            available: true,
+            task_id: None,
+            title: None,
+            error,
+        },
+    }
+}
+
+fn build_stale_tasks_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+    error: Option<String>,
+) -> StaleTasksSlice {
+    if tasks.is_none() {
+        return StaleTasksSlice {
+            available: false,
+            entries: Vec::new(),
+            error,
+        };
+    }
+
+    let tasks = tasks.unwrap();
+    let workflows = workflows.unwrap_or_default();
+    let now = Utc::now();
+    let stale_threshold = chrono::Duration::hours(48);
+
+    let workflow_map: HashMap<&str, &OrchestratorWorkflow> = workflows
+        .iter()
+        .map(|w| (w.task_id.as_str(), w))
+        .collect();
+
+    let mut entries = Vec::new();
+    for task in tasks {
+        if task.status != TaskStatus::InProgress {
+            continue;
+        }
+
+        let last_checkpoint_time = if let Some(workflow) = workflow_map.get(task.id.as_str()) {
+            workflow.checkpoint_metadata.checkpoints.last().map(|cp| cp.timestamp)
+        } else {
+            None
+        };
+
+        let is_stale = if let Some(checkpoint_time) = last_checkpoint_time {
+            now.signed_duration_since(checkpoint_time) > stale_threshold
+        } else {
+            true
+        };
+
+        if is_stale {
+            let stale_since = last_checkpoint_time.or(task.metadata.started_at).unwrap_or(task.metadata.updated_at);
+
+            entries.push(StaleTaskEntry {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                stale_since,
+            });
+        }
+    }
+
+    entries.sort_by(|left, right| {
+        right.stale_since.cmp(&left.stale_since).then_with(|| left.task_id.cmp(&right.task_id))
+    });
+
+    StaleTasksSlice {
+        available: true,
+        entries,
+        error,
+    }
 }
 
 fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
@@ -653,7 +780,43 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "  in_progress: {}", dashboard.task_summary.in_progress);
     let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
     let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
+    if !dashboard.task_summary.blocked_task_ids.is_empty() {
+        let _ = writeln!(&mut output, "  blocked_task_ids: {}", dashboard.task_summary.blocked_task_ids.join(", "));
+    }
     if let Some(error) = dashboard.task_summary.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Task");
+    if let Some(task_id) = dashboard.next_task.task_id.as_deref() {
+        let _ = writeln!(&mut output, "  task_id: {task_id}");
+        if let Some(title) = dashboard.next_task.title.as_deref() {
+            let _ = writeln!(&mut output, "  title: {title}");
+        }
+    } else {
+        let _ = writeln!(&mut output, "  task_id: none");
+    }
+    if let Some(error) = dashboard.next_task.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale In-Progress");
+    if dashboard.stale_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_tasks.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} stale_since={} title={}",
+                entry.task_id,
+                entry.stale_since.to_rfc3339(),
+                entry.title
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_tasks.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
