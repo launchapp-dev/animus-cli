@@ -10,6 +10,29 @@ fn parse_time(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value).expect("timestamp should be valid RFC3339").with_timezone(&Utc)
 }
 
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
+        .map(|workflow| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+            RecentFailureEntry {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: workflow.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(3); // RECENT_FAILURES_LIMIT
+    entries
+}
+
 fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<DateTime<Utc>>) -> OrchestratorTask {
     let now = parse_time("2026-02-01T00:00:00Z");
     OrchestratorTask {
@@ -445,6 +468,14 @@ fn render_status_dashboard_uses_required_section_order() {
             None,
         ),
         active_agents: ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None },
+        next_task: NextTaskSlice {
+            available: false,
+            task_id: None,
+            title: None,
+            priority: None,
+            linked_requirement_ids: Vec::new(),
+            error: None,
+        },
         task_summary: TaskSummarySlice {
             available: true,
             total: 0,
@@ -468,13 +499,15 @@ fn render_status_dashboard_uses_required_section_order() {
     let output = render_status_dashboard(&dashboard);
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
+    let next_task_idx = output.find("Next Task").expect("next task section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
-    assert!(agents_idx < summary_idx);
+    assert!(agents_idx < next_task_idx);
+    assert!(next_task_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);

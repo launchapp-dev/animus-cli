@@ -28,6 +28,7 @@ struct StatusDashboard {
     generated_at: DateTime<Utc>,
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
+    next_task: NextTaskSlice,
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
@@ -61,6 +62,23 @@ struct ActiveAgentAssignment {
     workflow_id: String,
     phase_id: String,
     attributed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,11 +210,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,6 +224,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task_option, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
     let dashboard = StatusDashboard {
@@ -217,6 +238,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), tasks_error.as_deref()]),
         ),
+        next_task: build_next_task_slice(next_task_option.as_ref().and_then(|opt| opt.as_ref()), next_task_error),
         task_summary: build_task_summary_slice(
             task_stats.as_ref(),
             tasks.as_deref(),
@@ -290,6 +312,27 @@ fn daemon_status_label(status: DaemonStatus) -> &'static str {
     }
 }
 
+fn build_next_task_slice(task: Option<&OrchestratorTask>, error: Option<String>) -> NextTaskSlice {
+    match task {
+        Some(task) => NextTaskSlice {
+            available: true,
+            task_id: Some(task.id.clone()),
+            title: Some(task.title.clone()),
+            priority: Some(task.priority.as_str().to_string()),
+            linked_requirement_ids: task.linked_requirements.clone(),
+            error,
+        },
+        None => NextTaskSlice {
+            available: !error.is_some(),
+            task_id: None,
+            title: None,
+            priority: None,
+            linked_requirement_ids: Vec::new(),
+            error,
+        },
+    }
+}
+
 fn build_active_agents_slice(
     daemon_health: Option<&DaemonHealth>,
     workflows: Option<&[OrchestratorWorkflow]>,
@@ -307,6 +350,8 @@ fn active_agent_assignments(
     tasks: &[OrchestratorTask],
 ) -> Vec<ActiveAgentAssignment> {
     let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
+    let task_requirements: HashMap<&str, &Vec<String>> =
+        tasks.iter().map(|task| (task.id.as_str(), &task.linked_requirements)).collect();
 
     let mut running: Vec<&OrchestratorWorkflow> =
         workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Running).collect();
@@ -322,6 +367,10 @@ fn active_agent_assignments(
             workflow_id: workflow.id.clone(),
             phase_id: workflow_active_phase(workflow),
             attributed: true,
+            linked_requirement_ids: task_requirements
+                .get(workflow.task_id.as_str())
+                .map(|reqs| (*reqs).clone())
+                .unwrap_or_default(),
         })
         .collect();
 
@@ -333,6 +382,7 @@ fn active_agent_assignments(
             workflow_id: format!("unknown-{}", placeholder_index + 1),
             phase_id: "unknown".to_string(),
             attributed: false,
+            linked_requirement_ids: Vec::new(),
         });
     }
 
@@ -638,6 +688,24 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.active_agents.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Task");
+    if dashboard.next_task.available && dashboard.next_task.task_id.is_some() {
+        let _ = writeln!(&mut output, "  task_id: {}", dashboard.next_task.task_id.as_deref().unwrap_or("n/a"));
+        let _ = writeln!(&mut output, "  title: {}", dashboard.next_task.title.as_deref().unwrap_or("n/a"));
+        let _ = writeln!(&mut output, "  priority: {}", dashboard.next_task.priority.as_deref().unwrap_or("n/a"));
+        if !dashboard.next_task.linked_requirement_ids.is_empty() {
+            let _ = writeln!(&mut output, "  linked_requirements: {}", dashboard.next_task.linked_requirement_ids.join(", "));
+        } else {
+            let _ = writeln!(&mut output, "  linked_requirements: none");
+        }
+    } else {
+        let _ = writeln!(&mut output, "  none available");
+    }
+    if let Some(error) = dashboard.next_task.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
