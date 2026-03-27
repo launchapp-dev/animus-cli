@@ -12,12 +12,8 @@ agents:
       2. DISPATCH DRAFTS FOR REFINEMENT:
          Call ao.requirements.list with status="draft", limit=10
          For each draft:
-         a. Call ao.requirements.get to check linked_task_ids and description
-            - If linked_task_ids is NOT empty AND the description does NOT
-              contain "REWORK:" or "rework" feedback, this was already refined
-              and approved. SKIP IT — do not re-dispatch for refinement.
-            - If it has linked_task_ids BUT the description contains rework
-              feedback, it was sent back by the reviewer — re-dispatch it.
+         a. Call ao.requirements.get to confirm the current status and title
+            - If status is no longer "draft", SKIP IT
          b. Quick duplicate check: scan titles in ao.requirements.list for obvious overlap
          c. If obvious duplicate of an existing requirement:
             → ao.requirements.update status="deprecated", add note "Duplicate of REQ-XXX" in description
@@ -192,6 +188,20 @@ phases:
       refined requirements to review. Close obvious duplicates. Max 3 dispatches.
     capabilities:
       mutates_state: true
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        refinement_dispatches:
+          type: integer
+          description: Number of draft requirements dispatched to refinement.
+        review_dispatches:
+          type: integer
+          description: Number of refined requirements dispatched to review.
+        skipped_reason:
+          type: string
+          description: Explain why nothing was dispatched when the verdict is skip.
 
   req-refine-single:
     mode: agent
@@ -202,6 +212,24 @@ phases:
       Close the requirement if it's a duplicate, irrelevant, or conflicts with another.
     capabilities:
       mutates_state: true
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        requirement_outcome:
+          type: string
+          description: Final refinement outcome such as refined, implemented, or deprecated.
+        acceptance_criteria_added:
+          type: array
+          description: Acceptance criteria added or clarified during refinement.
+          items:
+            type: string
+        linked_tasks_created:
+          type: array
+          description: Linked task IDs created during this pass.
+          items:
+            type: string
 
   req-review-single:
     mode: agent
@@ -211,6 +239,22 @@ phases:
       linked tasks for work, close it if not worth doing, or send back for rework.
     capabilities:
       mutates_state: true
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        review_outcome:
+          type: string
+          description: Final review outcome such as approved, deprecated, or sent_back_to_draft.
+        review_summary:
+          type: string
+          description: Short summary of the review decision.
+        blocking_gaps:
+          type: array
+          description: Concrete gaps that must be addressed before approval.
+          items:
+            type: string
 
 workflows:
   - id: req-dispatch

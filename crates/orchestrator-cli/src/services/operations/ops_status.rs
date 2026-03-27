@@ -408,10 +408,7 @@ fn recent_completions(tasks: &[OrchestratorTask]) -> Vec<RecentCompletionEntry> 
     entries
 }
 
-fn build_recent_failures_slice(
-    failures: Option<&[RecentFailureEntry]>,
-    error: Option<String>,
-) -> RecentFailuresSlice {
+fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: Option<String>) -> RecentFailuresSlice {
     RecentFailuresSlice {
         available: failures.is_some(),
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
@@ -467,10 +464,8 @@ fn load_recent_failures(project_root: &str, limit: usize) -> Result<Vec<RecentFa
          ORDER BY failed_at DESC
          LIMIT ?1",
     )?;
-    let candidate_ids: Vec<String> = stmt
-        .query_map([candidate_limit], |row| row.get::<_, String>(0))?
-        .filter_map(|row| row.ok())
-        .collect();
+    let candidate_ids: Vec<String> =
+        stmt.query_map([candidate_limit], |row| row.get::<_, String>(0))?.filter_map(|row| row.ok()).collect();
     drop(stmt);
     drop(conn);
 

@@ -25,13 +25,12 @@ phases:
       You are refining existing project requirements.
 
       Steps:
-      1. Read the current vision: `ao vision get --json`
-      2. If dispatch_input includes "requirement_ids", refine only those.
+      1. If dispatch_input includes "requirement_ids", refine only those.
          Otherwise, list all requirements: `ao requirements list --json`
-      3. For each requirement to refine:
+      2. For each requirement to refine:
          - Improve the description with concrete scope
          - Add or improve acceptance criteria
-         - Verify priority alignment with vision
+         - Verify priority alignment with current project needs
          - Check for missing links or dependencies
 
       If dispatch_input includes a "focus" field, prioritize that aspect

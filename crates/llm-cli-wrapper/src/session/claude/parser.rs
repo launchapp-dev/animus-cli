@@ -108,11 +108,7 @@ fn parse_claude_user_event(value: &Value) -> Vec<SessionEvent> {
 
         let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
 
-        events.push(SessionEvent::ToolResult {
-            tool_name,
-            output,
-            success: !is_error,
-        });
+        events.push(SessionEvent::ToolResult { tool_name, output, success: !is_error });
     }
     events
 }

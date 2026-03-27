@@ -159,7 +159,8 @@ impl PlanningServiceApi for FileServiceHub {
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
-        let mut requirements: Vec<_> = crate::workflow::load_all_requirements(&self.project_root)?.into_values().collect();
+        let mut requirements: Vec<_> =
+            crate::workflow::load_all_requirements(&self.project_root)?.into_values().collect();
         planning_shared::sort_requirements(&mut requirements, RequirementQuerySort::Id);
         Ok(requirements)
     }

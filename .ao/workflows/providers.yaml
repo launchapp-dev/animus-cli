@@ -2,7 +2,7 @@ agents:
   kimi-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
-    model: claude-haiku-4-5
+    model: kimi-code/kimi-for-coding
     tool: claude
     tool_profile: sparkcube
   minimax-default:
@@ -152,8 +152,6 @@ workflows:
   - kimi-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -170,8 +168,6 @@ workflows:
   - glm-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -188,8 +184,6 @@ workflows:
   - minimax-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -206,8 +200,6 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -224,8 +216,6 @@ workflows:
   - opus-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -239,8 +229,6 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
   phases:
   - minimax-implementation
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -254,8 +242,6 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast with GLM"
   phases:
   - glm-implementation
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -282,8 +268,6 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:
@@ -300,8 +284,6 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
-  - push-branch
-  - create-pr
   - cleanup
   post_success:
     merge:

@@ -64,7 +64,8 @@ agents:
 
       2. CHECK GATES (all must pass before merge):
          a. CI status: all checks must pass. If pending, emit "skip" verdict.
-         b. Mergeable: must not be "CONFLICTING". If conflicting, emit "rework" verdict.
+         b. Mergeable: must not be "CONFLICTING". If conflicting, enqueue the
+            repair workflow and emit "advance" after dispatching it.
          c. Changed files < 200. If larger, flag for manual review.
 
       3. REVIEW THE DIFF:
@@ -82,9 +83,12 @@ agents:
          a. MERGE: `gh pr merge <number> --squash --delete-branch`
             - Use --squash for clean history
             - Only merge if ALL gates pass and code looks good
+            - Emit "advance" verdict after the merge attempt completes
          b. REWORK: Post a review comment with issues found, then enqueue
             ao.queue.enqueue with task_id and workflow_ref="rework"
+            - Emit "advance" verdict after the follow-up workflow is queued
          c. CLOSE: `gh pr close <number>` if PR is abandoned or duplicate
+            - Emit "advance" verdict after the PR is closed
 
       RULES:
       - Review ONE PR only — the one in your subject
@@ -107,6 +111,20 @@ phases:
       Check queue depth first — skip if queue has >5 pending items.
     capabilities:
       mutates_state: true
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        rebases_dispatched:
+          type: integer
+          description: Number of rebase-and-retry workflows queued.
+        reviews_dispatched:
+          type: integer
+          description: Number of PR review workflows queued.
+        skipped_reason:
+          type: string
+          description: Explain why the sweep skipped dispatching work.
 
   pr-review-single:
     mode: agent
@@ -118,6 +136,22 @@ phases:
       - code-review
     capabilities:
       mutates_state: true
+    decision_contract:
+      min_confidence: 0.7
+      max_risk: medium
+      allow_missing_decision: false
+      fields:
+        action_taken:
+          type: string
+          description: Final action taken for the PR, such as merged, queued_rework, closed, or skipped_pending_ci.
+        review_summary:
+          type: string
+          description: Short summary of the review result.
+        blocking_issues:
+          type: array
+          description: Concrete issues requiring follow-up before the PR can merge.
+          items:
+            type: string
 
 workflows:
   - id: pr-sweep
@@ -135,5 +169,5 @@ workflows:
 schedules:
   - id: pr-sweep
     name: PR Sweep
-    cron: "*/5 * * * *"
+    cron: "*/30 * * * *"
     workflow_ref: pr-sweep

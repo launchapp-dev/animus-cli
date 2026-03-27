@@ -96,16 +96,16 @@ schedules:
 - id: architect-rust
   cron: 10 */4 * * *
   workflow_ref: architect-rust
-  enabled: true
+  enabled: false
 - id: architect-infra
   cron: 30 */6 * * *
   workflow_ref: architect-infra
-  enabled: true
+  enabled: false
 - id: researcher-models
   cron: 45 */4 * * *
   workflow_ref: researcher-models
-  enabled: true
+  enabled: false
 - id: researcher-ecosystem
   cron: 15 */4 * * *
   workflow_ref: researcher-ecosystem
-  enabled: true
+  enabled: false

@@ -98,7 +98,11 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
-    pub fn query_ids(&self, page: ListPageRequest, status: Option<crate::types::WorkflowStatus>) -> Result<(Vec<String>, usize)> {
+    pub fn query_ids(
+        &self,
+        page: ListPageRequest,
+        status: Option<crate::types::WorkflowStatus>,
+    ) -> Result<(Vec<String>, usize)> {
         let conn = self.open_db()?;
 
         let total: usize = match status {
@@ -116,21 +120,22 @@ impl WorkflowStateManager {
             return Ok((Vec::new(), total));
         }
 
-        let sql_with_status =
-            "SELECT id
+        let sql_with_status = "SELECT id
              FROM workflows
              WHERE status = ?1
              ORDER BY COALESCE((SELECT MIN(timestamp) FROM checkpoints WHERE workflow_id = workflows.id), '') DESC,
                       id ASC
              LIMIT ?2 OFFSET ?3";
-        let sql_all =
-            "SELECT id
+        let sql_all = "SELECT id
              FROM workflows
              ORDER BY COALESCE((SELECT MIN(timestamp) FROM checkpoints WHERE workflow_id = workflows.id), '') DESC,
                       id ASC
              LIMIT ?1 OFFSET ?2";
 
-        let mut stmt = conn.prepare(match status { Some(_) => sql_with_status, None => sql_all })?;
+        let mut stmt = conn.prepare(match status {
+            Some(_) => sql_with_status,
+            None => sql_all,
+        })?;
         let ids: Vec<String> = match status {
             Some(status) => stmt
                 .query_map(params![status_str(status), limit as i64, start as i64], |row| row.get::<_, String>(0))?

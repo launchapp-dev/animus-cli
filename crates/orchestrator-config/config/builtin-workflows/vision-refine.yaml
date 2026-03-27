@@ -24,7 +24,9 @@ phases:
     directive: |
       You are refining an existing project vision document.
 
-      First, read the current vision using `ao vision get --json`.
+      First, locate and read the current vision from the generated planning artifacts
+      for this repository (`vision.json` preferred, `product-vision.md` fallback).
+      If no vision artifact exists, stop and explain that there is no saved vision to refine yet.
 
       Then analyze the codebase and project state to identify improvements:
       - Are there missing target users?
