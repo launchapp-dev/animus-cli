@@ -29,6 +29,8 @@ struct StatusDashboard {
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
+    next_task: NextTaskSlice,
+    blocked_tasks: BlockedTasksSlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
@@ -61,6 +63,8 @@ struct ActiveAgentAssignment {
     workflow_id: String,
     phase_id: String,
     attributed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +77,42 @@ struct TaskSummarySlice {
     blocked: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<NextTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskEntry {
+    id: String,
+    title: String,
+    priority: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTasksSlice {
+    available: bool,
+    entries: Vec<BlockedTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTaskEntry {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,11 +232,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,6 +246,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
     let dashboard = StatusDashboard {
@@ -222,6 +265,8 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
+        next_task: build_next_task_slice(next_task.as_ref(), next_task_error),
+        blocked_tasks: build_blocked_tasks_slice(tasks.as_deref(), tasks_error.clone()),
         recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
@@ -306,7 +351,10 @@ fn active_agent_assignments(
     workflows: &[OrchestratorWorkflow],
     tasks: &[OrchestratorTask],
 ) -> Vec<ActiveAgentAssignment> {
-    let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
+    let task_details: HashMap<&str, (&str, &[String])> = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), (task.title.as_str(), task.linked_requirements.as_slice())))
+        .collect();
 
     let mut running: Vec<&OrchestratorWorkflow> =
         workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Running).collect();
@@ -316,12 +364,19 @@ fn active_agent_assignments(
     let mut assignments: Vec<ActiveAgentAssignment> = running
         .into_iter()
         .take(attributed_count)
-        .map(|workflow| ActiveAgentAssignment {
-            task_id: workflow.task_id.clone(),
-            task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
-            workflow_id: workflow.id.clone(),
-            phase_id: workflow_active_phase(workflow),
-            attributed: true,
+        .map(|workflow| {
+            let (task_title, linked_requirements) = task_details
+                .get(workflow.task_id.as_str())
+                .map(|(title, reqs)| (title.to_string(), reqs.to_vec()))
+                .unwrap_or_else(|| ("Unknown task".to_string(), vec![]));
+            ActiveAgentAssignment {
+                task_id: workflow.task_id.clone(),
+                task_title,
+                workflow_id: workflow.id.clone(),
+                phase_id: workflow_active_phase(workflow),
+                attributed: true,
+                linked_requirement_ids: linked_requirements,
+            }
         })
         .collect();
 
@@ -333,6 +388,7 @@ fn active_agent_assignments(
             workflow_id: format!("unknown-{}", placeholder_index + 1),
             phase_id: "unknown".to_string(),
             attributed: false,
+            linked_requirement_ids: vec![],
         });
     }
 
@@ -379,6 +435,36 @@ fn build_task_summary_slice(
     }
 
     TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
+}
+
+fn build_next_task_slice(next_task: Option<&OrchestratorTask>, error: Option<String>) -> NextTaskSlice {
+    let task = next_task.map(|t| NextTaskEntry {
+        id: t.id.clone(),
+        title: t.title.clone(),
+        priority: format!("{:?}", t.priority).to_lowercase(),
+        linked_requirement_ids: t.linked_requirements.clone(),
+    });
+    NextTaskSlice { available: next_task.is_some(), task, error }
+}
+
+fn build_blocked_tasks_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> BlockedTasksSlice {
+    let entries = tasks
+        .map(|all_tasks| {
+            let mut blocked: Vec<BlockedTaskEntry> = all_tasks
+                .iter()
+                .filter(|task| task.status.is_blocked())
+                .map(|task| BlockedTaskEntry {
+                    id: task.id.clone(),
+                    title: task.title.clone(),
+                    blocked_reason: task.blocked_reason.clone(),
+                    linked_requirement_ids: task.linked_requirements.clone(),
+                })
+                .collect();
+            blocked.sort_by(|left, right| left.id.cmp(&right.id));
+            blocked
+        })
+        .unwrap_or_default();
+    BlockedTasksSlice { available: tasks.is_some(), entries, error }
 }
 
 fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
@@ -624,6 +710,55 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     }
     let _ = writeln!(&mut output);
 
+    let _ = writeln!(&mut output, "Task Summary");
+    let _ = writeln!(&mut output, "  total: {}", dashboard.task_summary.total);
+    let _ = writeln!(&mut output, "  done: {}", dashboard.task_summary.done);
+    let _ = writeln!(&mut output, "  in_progress: {}", dashboard.task_summary.in_progress);
+    let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
+    let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
+    if let Some(error) = dashboard.task_summary.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Blocked Tasks");
+    if dashboard.blocked_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.blocked_tasks.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - id={} title={} blocked_reason={}",
+                entry.id,
+                entry.title,
+                entry.blocked_reason.as_deref().unwrap_or("n/a")
+            );
+            if !entry.linked_requirement_ids.is_empty() {
+                let _ = writeln!(&mut output, "    linked_requirement_ids: {}", entry.linked_requirement_ids.join(", "));
+            }
+        }
+    }
+    if let Some(error) = dashboard.blocked_tasks.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Task");
+    if let Some(task) = dashboard.next_task.task.as_ref() {
+        let _ = writeln!(&mut output, "  id: {}", task.id);
+        let _ = writeln!(&mut output, "  title: {}", task.title);
+        let _ = writeln!(&mut output, "  priority: {}", task.priority);
+        if !task.linked_requirement_ids.is_empty() {
+            let _ = writeln!(&mut output, "  linked_requirement_ids: {}", task.linked_requirement_ids.join(", "));
+        }
+    } else {
+        let _ = writeln!(&mut output, "  none");
+    }
+    if let Some(error) = dashboard.next_task.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
     let _ = writeln!(&mut output, "Active Agents");
     let _ = writeln!(&mut output, "  count: {}", dashboard.active_agents.count);
     if dashboard.active_agents.assignments.is_empty() {
@@ -635,20 +770,12 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
                 "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={}",
                 entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed
             );
+            if !entry.linked_requirement_ids.is_empty() {
+                let _ = writeln!(&mut output, "    linked_requirement_ids: {}", entry.linked_requirement_ids.join(", "));
+            }
         }
     }
     if let Some(error) = dashboard.active_agents.error.as_deref() {
-        let _ = writeln!(&mut output, "  error: {error}");
-    }
-    let _ = writeln!(&mut output);
-
-    let _ = writeln!(&mut output, "Task Summary");
-    let _ = writeln!(&mut output, "  total: {}", dashboard.task_summary.total);
-    let _ = writeln!(&mut output, "  done: {}", dashboard.task_summary.done);
-    let _ = writeln!(&mut output, "  in_progress: {}", dashboard.task_summary.in_progress);
-    let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
-    let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
-    if let Some(error) = dashboard.task_summary.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);

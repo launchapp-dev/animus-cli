@@ -454,6 +454,8 @@ fn render_status_dashboard_uses_required_section_order() {
             blocked: 0,
             error: None,
         },
+        next_task: NextTaskSlice { available: false, task: None, error: None },
+        blocked_tasks: BlockedTasksSlice { available: true, entries: Vec::new(), error: None },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
@@ -467,15 +469,211 @@ fn render_status_dashboard_uses_required_section_order() {
 
     let output = render_status_dashboard(&dashboard);
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
-    let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+    let blocked_idx = output.find("Blocked Tasks").expect("blocked tasks section should exist");
+    let next_idx = output.find("Next Task").expect("next task section should exist");
+    let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
-    assert!(daemon_idx < agents_idx);
-    assert!(agents_idx < summary_idx);
-    assert!(summary_idx < completions_idx);
+    assert!(daemon_idx < summary_idx);
+    assert!(summary_idx < blocked_idx);
+    assert!(blocked_idx < next_idx);
+    assert!(next_idx < agents_idx);
+    assert!(agents_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+}
+
+#[test]
+fn build_next_task_slice_populates_entry_from_orchestrator_task() {
+    let task = make_task("TASK-001", "Implement feature", TaskStatus::Ready, None);
+    let mut task_with_reqs = task.clone();
+    task_with_reqs.linked_requirements = vec!["REQ-001".to_string(), "REQ-002".to_string()];
+
+    let slice = build_next_task_slice(Some(&task_with_reqs), None);
+    assert!(slice.available);
+    assert!(slice.error.is_none());
+    let entry = slice.task.expect("task should be present");
+    assert_eq!(entry.id, "TASK-001");
+    assert_eq!(entry.title, "Implement feature");
+    assert_eq!(entry.priority, "medium");
+    assert_eq!(entry.linked_requirement_ids, vec!["REQ-001", "REQ-002"]);
+}
+
+#[test]
+fn build_next_task_slice_returns_null_when_no_task() {
+    let slice = build_next_task_slice(None, Some("no ready tasks".to_string()));
+    assert!(slice.available);
+    assert!(slice.task.is_none());
+    assert_eq!(slice.error.as_deref(), Some("no ready tasks"));
+}
+
+#[test]
+fn build_blocked_tasks_slice_lists_blocked_tasks_with_requirements() {
+    let tasks = vec![
+        make_task("TASK-001", "Blocked by other", TaskStatus::Blocked, None),
+        make_task("TASK-002", "On hold", TaskStatus::OnHold, None),
+        make_task("TASK-003", "Ready", TaskStatus::Ready, None),
+    ];
+    let mut tasks_with_reasons = tasks;
+    tasks_with_reasons[0].blocked_reason = Some("waiting for REQ-001".to_string());
+    tasks_with_reasons[0].linked_requirements = vec!["REQ-001".to_string()];
+    tasks_with_reasons[1].blocked_reason = Some("manual hold".to_string());
+    tasks_with_reasons[1].linked_requirements = vec!["REQ-002".to_string(), "REQ-003".to_string()];
+
+    let slice = build_blocked_tasks_slice(Some(&tasks_with_reasons), None);
+    assert!(slice.available);
+    assert_eq!(slice.entries.len(), 2);
+    assert_eq!(slice.entries[0].id, "TASK-001");
+    assert_eq!(slice.entries[0].blocked_reason.as_deref(), Some("waiting for REQ-001"));
+    assert_eq!(slice.entries[0].linked_requirement_ids, vec!["REQ-001"]);
+    assert_eq!(slice.entries[1].id, "TASK-002");
+    assert_eq!(slice.entries[1].blocked_reason.as_deref(), Some("manual hold"));
+    assert_eq!(slice.entries[1].linked_requirement_ids, vec!["REQ-002", "REQ-003"]);
+}
+
+#[test]
+fn build_blocked_tasks_slice_returns_empty_when_none_blocked() {
+    let tasks = vec![
+        make_task("TASK-001", "Ready", TaskStatus::Ready, None),
+        make_task("TASK-002", "Done", TaskStatus::Done, None),
+    ];
+
+    let slice = build_blocked_tasks_slice(Some(&tasks), None);
+    assert!(slice.available);
+    assert!(slice.entries.is_empty());
+}
+
+#[test]
+fn active_agent_assignments_include_linked_requirement_ids() {
+    let workflows = vec![make_workflow(
+        "WF-001",
+        "TASK-001",
+        WorkflowStatus::Running,
+        Some("implementation"),
+        parse_time("2026-02-20T00:00:00Z"),
+        None,
+        vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
+        None,
+    )];
+    let mut task = make_task("TASK-001", "Implement status", TaskStatus::InProgress, None);
+    task.linked_requirements = vec!["REQ-001".to_string(), "REQ-002".to_string()];
+    let tasks = vec![task];
+
+    let assignments = active_agent_assignments(1, &workflows, &tasks);
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].linked_requirement_ids, vec!["REQ-001", "REQ-002"]);
+}
+
+#[test]
+fn render_status_dashboard_includes_blocked_tasks_section() {
+    let mut task = make_task("TASK-001", "Blocked task", TaskStatus::Blocked, None);
+    task.blocked_reason = Some("waiting for review".to_string());
+    let dashboard = StatusDashboard {
+        schema: STATUS_SCHEMA,
+        project_root: "/tmp/project".to_string(),
+        generated_at: parse_time("2026-02-27T00:00:00Z"),
+        daemon: build_daemon_slice(
+            Some(&DaemonHealth {
+                healthy: true,
+                status: DaemonStatus::Running,
+                runner_connected: true,
+                runner_pid: Some(123),
+                active_agents: 0,
+                pool_size: Some(5),
+                project_root: Some("/tmp/project".to_string()),
+                daemon_pid: None,
+                process_alive: None,
+                pool_utilization_percent: None,
+                queued_tasks: None,
+                total_agents_spawned: None,
+                total_agents_completed: None,
+                total_agents_failed: None,
+            }),
+            None,
+        ),
+        active_agents: ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None },
+        task_summary: TaskSummarySlice {
+            available: true,
+            total: 1,
+            done: 0,
+            in_progress: 0,
+            ready: 0,
+            blocked: 1,
+            error: None,
+        },
+        next_task: NextTaskSlice { available: false, task: None, error: None },
+        blocked_tasks: build_blocked_tasks_slice(Some(&vec![task]), None),
+        recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
+        recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        ci: CiStatusSlice {
+            provider: CI_PROVIDER_GITHUB,
+            available: false,
+            last_run: None,
+            reason: Some("gh CLI is not installed".to_string()),
+            error: None,
+        },
+    };
+
+    let output = render_status_dashboard(&dashboard);
+    assert!(output.contains("Blocked Tasks"));
+    assert!(output.contains("TASK-001"));
+    assert!(output.contains("waiting for review"));
+}
+
+#[test]
+fn render_status_dashboard_includes_next_task_section() {
+    let task = make_task("TASK-001", "Next feature", TaskStatus::Ready, None);
+    let dashboard = StatusDashboard {
+        schema: STATUS_SCHEMA,
+        project_root: "/tmp/project".to_string(),
+        generated_at: parse_time("2026-02-27T00:00:00Z"),
+        daemon: build_daemon_slice(
+            Some(&DaemonHealth {
+                healthy: true,
+                status: DaemonStatus::Running,
+                runner_connected: true,
+                runner_pid: Some(123),
+                active_agents: 0,
+                pool_size: Some(5),
+                project_root: Some("/tmp/project".to_string()),
+                daemon_pid: None,
+                process_alive: None,
+                pool_utilization_percent: None,
+                queued_tasks: None,
+                total_agents_spawned: None,
+                total_agents_completed: None,
+                total_agents_failed: None,
+            }),
+            None,
+        ),
+        active_agents: ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None },
+        task_summary: TaskSummarySlice {
+            available: true,
+            total: 1,
+            done: 0,
+            in_progress: 0,
+            ready: 1,
+            blocked: 0,
+            error: None,
+        },
+        next_task: build_next_task_slice(Some(&task), None),
+        blocked_tasks: BlockedTasksSlice { available: true, entries: Vec::new(), error: None },
+        recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
+        recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        ci: CiStatusSlice {
+            provider: CI_PROVIDER_GITHUB,
+            available: false,
+            last_run: None,
+            reason: Some("gh CLI is not installed".to_string()),
+            error: None,
+        },
+    };
+
+    let output = render_status_dashboard(&dashboard);
+    assert!(output.contains("Next Task"));
+    assert!(output.contains("TASK-001"));
+    assert!(output.contains("Next feature"));
 }
