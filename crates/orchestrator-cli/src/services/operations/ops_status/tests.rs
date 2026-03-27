@@ -454,6 +454,13 @@ fn render_status_dashboard_uses_required_section_order() {
             blocked: 0,
             error: None,
         },
+        now: NowSlice {
+            available: true,
+            next_task: None,
+            blocked_tasks: Vec::new(),
+            stale_tasks: Vec::new(),
+            error: None,
+        },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
@@ -469,13 +476,15 @@ fn render_status_dashboard_uses_required_section_order() {
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+    let now_idx = output.find("Now").expect("now section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
-    assert!(summary_idx < completions_idx);
+    assert!(summary_idx < now_idx);
+    assert!(now_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
 }
