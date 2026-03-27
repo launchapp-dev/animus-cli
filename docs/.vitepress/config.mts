@@ -131,16 +131,16 @@ export default withMermaid(
       ],
 
       socialLinks: [
-        { icon: 'github', link: 'https://github.com/AudioGenius-ai/ao-cli' },
+        { icon: 'github', link: 'https://github.com/launchapp-dev/ao-cli' },
       ],
 
       footer: {
-        message: 'Released under the MIT License.',
-        copyright: 'Copyright 2024-present AudioGenius',
+        message: 'Released under the Elastic License 2.0 (ELv2).',
+        copyright: 'Copyright 2024-present LaunchApp / Sami Shukri',
       },
 
       editLink: {
-        pattern: 'https://github.com/AudioGenius-ai/ao-cli/edit/main/docs/:path',
+        pattern: 'https://github.com/launchapp-dev/ao-cli/edit/main/docs/:path',
         text: 'Edit this page on GitHub',
       },
 
