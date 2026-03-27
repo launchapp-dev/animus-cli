@@ -34,7 +34,7 @@ features:
     linkText: Understand the daemon
   - icon: "\U0001F527"
     title: MCP Tools
-    details: Built-in MCP tools for task management, git operations, workflow control, and state mutations. Agents act through tools, not code.
+    details: 73 built-in MCP tools for task management, git operations, workflow control, and state mutations. Agents act through tools, not code.
     link: /concepts/mcp-tools
     linkText: Explore MCP tools
   - icon: "\U0001F333"
@@ -44,7 +44,7 @@ features:
     linkText: Learn about isolation
   - icon: "\U0001F680"
     title: Built in Rust
-    details: Rust-only workspace with atomic state persistence, async Tokio runtime, and zero desktop dependencies. Fast and reliable.
+    details: 17-crate Rust-only workspace with atomic state persistence, async Tokio runtime, and zero desktop dependencies. Fast and reliable.
     link: /architecture/crate-map
     linkText: See the architecture
 ---
