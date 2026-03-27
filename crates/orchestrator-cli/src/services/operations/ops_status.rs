@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
-    TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
+    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, Priority, ServiceHub,
+    TaskStatistics, TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,8 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    next_work: NextWorkSlice,
+    stale_items: StaleItemsSlice,
     ci: CiStatusSlice,
 }
 
@@ -106,6 +108,38 @@ struct RecentFailureEntry {
     failed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextWorkSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<NextWorkEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextWorkEntry {
+    id: String,
+    title: String,
+    status: String,
+    priority: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleItemsSlice {
+    available: bool,
+    entries: Vec<StaleItemEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleItemEntry {
+    task_id: String,
+    title: String,
+    hours_since_update: u64,
 }
 
 #[derive(Debug)]
@@ -222,10 +256,16 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
-        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
+        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error.clone()),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
-            workflows_error,
+            workflows_error.clone(),
+        ),
+        next_work: build_next_work_slice(tasks.as_deref(), tasks_error.clone()),
+        stale_items: build_stale_items_slice(
+            tasks.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+            tasks_error,
         ),
         ci: ci_slice,
     };
@@ -417,6 +457,104 @@ fn build_recent_failures_slice(
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
+}
+
+fn build_next_work_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> NextWorkSlice {
+    if let Some(task) = next_actionable_task(tasks.unwrap_or_default()) {
+        return NextWorkSlice {
+            available: true,
+            task: Some(NextWorkEntry {
+                id: task.id,
+                title: task.title,
+                status: format!("{:?}", task.status),
+                priority: format!("{:?}", task.priority),
+            }),
+            error,
+        };
+    }
+
+    NextWorkSlice { available: tasks.is_some(), task: None, error }
+}
+
+fn next_actionable_task(tasks: &[OrchestratorTask]) -> Option<OrchestratorTask> {
+    let mut sorted = tasks.to_vec();
+    sort_tasks_by_priority(&mut sorted);
+    sorted.into_iter().find(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::InProgress))
+}
+
+fn sort_tasks_by_priority(tasks: &mut [OrchestratorTask]) {
+    tasks.sort_by(|a, b| {
+        priority_rank(a.priority)
+            .cmp(&priority_rank(b.priority))
+            .then_with(|| b.metadata.updated_at.cmp(&a.metadata.updated_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+fn priority_rank(priority: Priority) -> i32 {
+    match priority {
+        Priority::Critical => 0,
+        Priority::High => 1,
+        Priority::Medium => 2,
+        Priority::Low => 3,
+    }
+}
+
+fn build_stale_items_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+    error: Option<String>,
+) -> StaleItemsSlice {
+    let mut entries = Vec::new();
+
+    if let (Some(task_list), Some(workflow_list)) = (tasks, workflows) {
+        let workflow_by_task: HashMap<String, Vec<&OrchestratorWorkflow>> =
+            workflow_list.iter().fold(HashMap::new(), |mut map, workflow| {
+                map.entry(workflow.task_id.clone()).or_insert_with(Vec::new).push(workflow);
+                map
+            });
+
+        for task in task_list {
+            if task.status != TaskStatus::InProgress {
+                continue;
+            }
+
+            let last_activity = if let Some(task_workflows) = workflow_by_task.get(&task.id) {
+                task_workflows
+                    .iter()
+                    .map(|w| last_workflow_activity_time(w))
+                    .max()
+                    .flatten()
+            } else {
+                None
+            };
+
+            let check_time = last_activity.unwrap_or(task.metadata.updated_at);
+            let now = Utc::now();
+            let duration = now.signed_duration_since(check_time);
+            let hours = duration.num_hours() as u64;
+
+            if hours > 24 {
+                entries.push(StaleItemEntry {
+                    task_id: task.id.clone(),
+                    title: task.title.clone(),
+                    hours_since_update: hours,
+                });
+            }
+        }
+    }
+
+    StaleItemsSlice { available: tasks.is_some() && workflows.is_some(), entries, error }
+}
+
+fn last_workflow_activity_time(workflow: &OrchestratorWorkflow) -> Option<DateTime<Utc>> {
+    workflow
+        .phases
+        .iter()
+        .filter_map(|phase| phase.completed_at.or(phase.started_at))
+        .max()
+        .or(workflow.completed_at)
+        .or_else(|| Some(workflow.started_at))
 }
 
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
@@ -694,6 +832,38 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.recent_failures.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Work");
+    if let Some(task) = dashboard.next_work.task.as_ref() {
+        let _ = writeln!(
+            &mut output,
+            "  - id={} status={} priority={} title={}",
+            task.id, task.status, task.priority, task.title
+        );
+    } else {
+        let _ = writeln!(&mut output, "  entry: none");
+    }
+    if let Some(error) = dashboard.next_work.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale Items");
+    if dashboard.stale_items.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_items.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} hours_since_update={} title={}",
+                entry.task_id, entry.hours_since_update, entry.title
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_items.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
