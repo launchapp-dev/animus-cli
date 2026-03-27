@@ -32,6 +32,8 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_task: Option<NextTaskSlice>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,6 +129,16 @@ struct CiStatusSlice {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    task_id: String,
+    title: String,
+    priority: String,
+    linked_requirement_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_workflow_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct CiRunSummary {
     id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,11 +204,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,7 +218,10 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+
+    let active_workflows = workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice());
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -213,7 +230,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
-            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+            active_workflows,
             tasks.as_deref(),
             combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), tasks_error.as_deref()]),
         ),
@@ -228,6 +245,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflows_error,
         ),
         ci: ci_slice,
+        next_task: build_next_task_slice(next_task, active_workflows, next_task_error),
     };
 
     if json {
@@ -416,6 +434,30 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
     }
 }
 
+fn build_next_task_slice(
+    next_task: Option<OrchestratorTask>,
+    active_workflows: Option<&[OrchestratorWorkflow]>,
+    _error: Option<String>,
+) -> Option<NextTaskSlice> {
+    let task = next_task?;
+
+    let active_workflow_id = active_workflows
+        .and_then(|workflows| {
+            workflows
+                .iter()
+                .find(|workflow| workflow.task_id == task.id && workflow.status == WorkflowStatus::Running)
+                .map(|workflow| workflow.id.clone())
+        });
+
+    Some(NextTaskSlice {
+        task_id: task.id,
+        title: task.title,
+        priority: task.priority.as_str().to_string(),
+        linked_requirement_ids: task.linked_requirements,
+        active_workflow_id,
+    })
+}
+
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
     let failed_phase = workflow
         .phases
@@ -436,6 +478,29 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
     let phase_error = failed_phase.and_then(|phase| phase.error_message.clone());
 
     (phase_id, failed_at, phase_error)
+}
+
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
+        .map(|workflow| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+            RecentFailureEntry {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: workflow.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(RECENT_FAILURES_LIMIT);
+    entries
 }
 
 async fn collect_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
@@ -714,6 +779,22 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     }
     if let Some(error) = dashboard.ci.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "What to do next");
+    if let Some(next_task) = dashboard.next_task.as_ref() {
+        let _ = writeln!(&mut output, "  task_id: {}", next_task.task_id);
+        let _ = writeln!(&mut output, "  title: {}", next_task.title);
+        let _ = writeln!(&mut output, "  priority: {}", next_task.priority);
+        if !next_task.linked_requirement_ids.is_empty() {
+            let _ = writeln!(&mut output, "  linked_requirements: {}", next_task.linked_requirement_ids.join(", "));
+        }
+        if let Some(workflow_id) = next_task.active_workflow_id.as_deref() {
+            let _ = writeln!(&mut output, "  active_workflow_id: {workflow_id}");
+        }
+    } else {
+        let _ = writeln!(&mut output, "  no ready tasks");
     }
 
     output
