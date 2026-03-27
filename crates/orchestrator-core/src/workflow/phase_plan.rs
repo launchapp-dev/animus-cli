@@ -2,13 +2,13 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-pub const STANDARD_WORKFLOW_REF: &str = "ao.task/standard";
-pub const UI_UX_WORKFLOW_REF: &str = "ao.task/ui-ux";
+pub const STANDARD_WORKFLOW_REF: &str = "standard";
+pub const UI_UX_WORKFLOW_REF: &str = "ui-ux-standard";
 pub const REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "ao.requirement/plan";
 pub const REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "ao.requirement/execute";
 
-const LEGACY_STANDARD_WORKFLOW_REF: &str = "standard";
-const LEGACY_UI_UX_WORKFLOW_REF: &str = "ui-ux-standard";
+const PACK_STANDARD_WORKFLOW_REF: &str = "ao.task/standard";
+const PACK_UI_UX_WORKFLOW_REF: &str = "ao.task/ui-ux";
 const LEGACY_REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "requirement-task-generation";
 const LEGACY_REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "requirement-task-generation-run";
 
@@ -41,11 +41,11 @@ fn normalize_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String
     let normalized = requested.to_ascii_lowercase();
 
     match normalized.as_str() {
-        STANDARD_WORKFLOW_REF | LEGACY_STANDARD_WORKFLOW_REF | "builtin/task-standard" => {
+        STANDARD_WORKFLOW_REF | PACK_STANDARD_WORKFLOW_REF | "builtin/task-standard" => {
             Some(STANDARD_WORKFLOW_REF.to_string())
         }
         UI_UX_WORKFLOW_REF
-        | LEGACY_UI_UX_WORKFLOW_REF
+        | PACK_UI_UX_WORKFLOW_REF
         | "builtin/task-ui-ux"
         | "ui-ux"
         | "uiux"
@@ -66,17 +66,21 @@ fn raw_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String> {
     workflow_ref.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
 }
 
-pub fn phase_plan_for_workflow_ref(workflow_ref: Option<&str>) -> Vec<String> {
-    let normalized =
-        normalize_requested_workflow_ref(workflow_ref).unwrap_or_else(|| STANDARD_WORKFLOW_REF.to_string());
+fn fallback_phase_plan_for_workflow_ref(workflow_ref: Option<&str>) -> Option<Vec<String>> {
+    let normalized = normalize_requested_workflow_ref(workflow_ref);
 
-    match normalized.as_str() {
-        STANDARD_WORKFLOW_REF => standard_phase_plan(),
-        UI_UX_WORKFLOW_REF => ui_ux_phase_plan(),
-        REQUIREMENT_TASK_GENERATION_WORKFLOW_REF => requirement_task_generation_phase_plan(),
-        REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF => requirement_task_generation_run_phase_plan(),
-        _ => standard_phase_plan(),
+    match normalized.as_deref() {
+        None => Some(standard_phase_plan()),
+        Some(STANDARD_WORKFLOW_REF) => Some(standard_phase_plan()),
+        Some(UI_UX_WORKFLOW_REF) => Some(ui_ux_phase_plan()),
+        Some(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF) => Some(requirement_task_generation_phase_plan()),
+        Some(REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF) => Some(requirement_task_generation_run_phase_plan()),
+        Some(_) => None,
     }
+}
+
+pub fn phase_plan_for_workflow_ref(workflow_ref: Option<&str>) -> Vec<String> {
+    fallback_phase_plan_for_workflow_ref(workflow_ref).unwrap_or_else(standard_phase_plan)
 }
 
 pub fn resolve_phase_plan_for_workflow_ref(
@@ -104,7 +108,10 @@ pub fn resolve_phase_plan_for_workflow_ref(
     let has_legacy_workflow_config =
         crate::legacy_workflow_config_paths(root).iter().any(|candidate| candidate.exists());
     if !has_yaml_workflows && !has_pack_workflows && !workflow_config_path.exists() && !has_legacy_workflow_config {
-        return Ok(phase_plan_for_workflow_ref(normalized_workflow_ref.as_deref()));
+        let requested = requested_workflow_ref.as_deref().or(normalized_workflow_ref.as_deref()).unwrap_or("<default>");
+        return Err(anyhow!(
+            "workflow '{requested}' is not available until the project defines workflows in .ao/workflows.yaml or .ao/workflows/*.yaml, or installs a pack"
+        ));
     }
 
     let loaded_workflow = crate::load_workflow_config_with_metadata(root)?;
@@ -142,7 +149,16 @@ mod tests {
     use std::fs;
 
     fn ensure_stable_home() {
-        crate::test_env::stable_test_home();
+        let home = crate::test_env::stable_test_home().to_path_buf();
+        let global_config_dir = protocol::Config::global_config_dir();
+        std::fs::create_dir_all(&global_config_dir).expect("create global config dir");
+        std::fs::write(global_config_dir.join("config.json"), "{\n  \"agent_runner_token\": null\n}\n")
+            .expect("write valid global config");
+        let machine_packs_dir = crate::machine_installed_packs_dir();
+        if machine_packs_dir.exists() {
+            std::fs::remove_dir_all(&machine_packs_dir).expect("clear shared machine pack fixtures");
+        }
+        std::env::set_var("HOME", home);
     }
 
     fn write_pack_fixture(root: &std::path::Path, pack_id: &str, version: &str, workflow_id: &str) {
@@ -198,22 +214,23 @@ workflows:
     }
 
     #[test]
-    fn resolve_phase_plan_falls_back_when_workflow_config_is_missing() {
+    fn resolve_phase_plan_errors_when_workflow_config_is_missing() {
         ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
 
-        let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
-            .expect("missing config should use fallback");
-
-        assert_eq!(phases, ui_ux_phase_plan());
+        let error = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
+            .expect_err("missing config should require authored or installed workflows");
+        assert!(error.to_string().contains("is not available until the project defines workflows"));
     }
 
     #[test]
     fn phase_plan_fallback_normalizes_pack_qualified_and_legacy_refs() {
         assert_eq!(phase_plan_for_workflow_ref(Some(STANDARD_WORKFLOW_REF)), standard_phase_plan());
+        assert_eq!(phase_plan_for_workflow_ref(Some(PACK_STANDARD_WORKFLOW_REF)), standard_phase_plan());
         assert_eq!(phase_plan_for_workflow_ref(Some("standard")), standard_phase_plan());
         assert_eq!(phase_plan_for_workflow_ref(Some("builtin/task-standard")), standard_phase_plan());
         assert_eq!(phase_plan_for_workflow_ref(Some(UI_UX_WORKFLOW_REF)), ui_ux_phase_plan());
+        assert_eq!(phase_plan_for_workflow_ref(Some(PACK_UI_UX_WORKFLOW_REF)), ui_ux_phase_plan());
         assert_eq!(phase_plan_for_workflow_ref(Some("ui-ux-standard")), ui_ux_phase_plan());
         assert_eq!(
             phase_plan_for_workflow_ref(Some(REQUIREMENT_TASK_GENERATION_WORKFLOW_REF)),
@@ -334,16 +351,16 @@ workflows:
     }
 
     #[test]
-    fn resolve_phase_plan_uses_canonical_requirement_workflow_refs_from_builtin_config() {
+    fn resolve_phase_plan_requires_pack_install_for_canonical_requirement_workflow_refs() {
         ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
 
-        let phases =
+        let error =
             resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF))
-                .expect("canonical requirement execute workflow should resolve");
-        assert_eq!(phases, requirement_task_generation_run_phase_plan());
+                .expect_err("requirement pack workflow should not resolve until the pack is installed");
+        assert!(error.to_string().contains("workflow 'ao.requirement/execute' not found"));
     }
 
     #[test]
@@ -364,16 +381,16 @@ workflows:
     }
 
     #[test]
-    fn resolve_phase_plan_uses_bundled_pack_workflows_without_project_yaml() {
+    fn resolve_phase_plan_requires_pack_install_for_optional_pack_workflows() {
         ensure_stable_home();
         let temp = tempfile::tempdir().expect("tempdir");
 
-        let quick_fix = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.task/quick-fix"))
-            .expect("bundled quick-fix workflow should resolve from bundled pack config");
-        assert_eq!(quick_fix, vec!["implementation".to_string(), "testing".to_string()]);
+        let quick_fix_error = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.task/quick-fix"))
+            .expect_err("pack workflow should not resolve until the pack is installed");
+        assert!(quick_fix_error.to_string().contains("is not available until the project defines workflows"));
 
-        let review_cycle = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.review/cycle"))
-            .expect("bundled review workflow should resolve from bundled pack config");
-        assert_eq!(review_cycle, vec!["code-review".to_string(), "testing".to_string()]);
+        let review_cycle_error = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ao.review/cycle"))
+            .expect_err("review pack workflow should not resolve until the pack is installed");
+        assert!(review_cycle_error.to_string().contains("is not available until the project defines workflows"));
     }
 }

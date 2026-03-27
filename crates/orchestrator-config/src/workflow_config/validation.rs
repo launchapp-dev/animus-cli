@@ -220,10 +220,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         errors.push(format!("version must be {} (got {})", WORKFLOW_CONFIG_VERSION, config.version));
     }
 
-    if config.default_workflow_ref.trim().is_empty() {
-        errors.push("default_workflow_ref must not be empty".to_string());
-    }
-
     if config.checkpoint_retention.keep_last_per_phase == 0 {
         errors.push("checkpoint_retention.keep_last_per_phase must be greater than zero".to_string());
     }
@@ -245,10 +241,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         if definition.tags.iter().any(|tag| tag.trim().is_empty()) {
             errors.push(format!("phase_catalog['{}'].tags must not contain empty values", phase_id));
         }
-    }
-
-    if config.workflows.is_empty() {
-        errors.push("workflows must include at least one workflow".to_string());
     }
 
     let mut workflow_refs = BTreeMap::<String, usize>::new();
@@ -365,7 +357,12 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         }
     }
 
-    if config.workflows.iter().all(|workflow| !workflow.id.eq_ignore_ascii_case(config.default_workflow_ref.as_str())) {
+    if !config.default_workflow_ref.trim().is_empty()
+        && config
+            .workflows
+            .iter()
+            .all(|workflow| !workflow.id.eq_ignore_ascii_case(config.default_workflow_ref.as_str()))
+    {
         errors.push(format!(
             "default_workflow_ref '{}' must reference an existing workflow",
             config.default_workflow_ref

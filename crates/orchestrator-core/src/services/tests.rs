@@ -242,16 +242,16 @@ async fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
 
     assert_eq!(config.schema.as_str(), "ao.workflow-config.v2");
     assert_eq!(config.version, 2);
-    assert_eq!(config.default_workflow_ref.as_str(), "ao.task/standard");
+    assert_eq!(config.default_workflow_ref.as_str(), "standard-workflow");
     assert_eq!(config.phase_catalog.get("implementation").map(|phase| phase.label.as_str()), Some("Implementation"));
     assert_eq!(
         config
             .workflows
             .iter()
-            .find(|workflow| workflow.id == "ui-ux-standard")
+            .find(|workflow| workflow.id == "standard-workflow")
             .and_then(|workflow| workflow.phases.get(1))
             .map(|phase| phase.phase_id()),
-        Some("ux-research")
+        Some("implementation")
     );
 }
 
@@ -759,6 +759,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             structured_capabilities: None,
             project_overrides: None,
             tool: None,
+            tool_profile: None,
             model: None,
             fallback_models: Vec::new(),
             reasoning_effort: None,
