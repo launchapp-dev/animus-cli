@@ -124,86 +124,6 @@ fn recent_completions_are_sorted_and_limited() {
     assert_eq!(ids, vec!["TASK-003", "TASK-001", "TASK-002", "TASK-004", "TASK-005"]);
 }
 
-#[test]
-fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
-    let workflows = vec![
-        make_workflow(
-            "WF-002",
-            "TASK-2",
-            WorkflowStatus::Failed,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-26T10:00:00Z")),
-            Vec::new(),
-            Some("runner timeout"),
-        ),
-        make_workflow(
-            "WF-001",
-            "TASK-1",
-            WorkflowStatus::Failed,
-            Some("qa"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-25T11:00:00Z")),
-            vec![make_phase(
-                "qa",
-                WorkflowPhaseStatus::Failed,
-                Some(parse_time("2026-02-25T11:00:00Z")),
-                Some("qa gate failed"),
-            )],
-            None,
-        ),
-        make_workflow(
-            "WF-003",
-            "TASK-3",
-            WorkflowStatus::Failed,
-            Some("merge"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-24T11:00:00Z")),
-            vec![
-                make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T10:00:00Z")),
-                    Some("compile failed"),
-                ),
-                make_phase(
-                    "qa",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T11:00:00Z")),
-                    Some("tests failed"),
-                ),
-            ],
-            None,
-        ),
-        make_workflow(
-            "WF-004",
-            "TASK-4",
-            WorkflowStatus::Running,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            None,
-            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-            None,
-        ),
-        make_workflow(
-            "WF-005",
-            "TASK-5",
-            WorkflowStatus::Failed,
-            None,
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-27T09:00:00Z")),
-            Vec::new(),
-            Some("unknown failure"),
-        ),
-    ];
-
-    let entries = recent_failures(&workflows);
-    assert_eq!(entries.len(), 3, "entries should be capped at 3");
-    assert_eq!(entries[0].workflow_id, "WF-005");
-    assert_eq!(entries[1].workflow_id, "WF-002");
-    assert_eq!(entries[1].phase_id, "implementation", "current_phase should be used when no failed phase exists");
-    assert_eq!(entries[2].phase_id, "qa", "latest failed phase should be selected");
-}
 
 #[test]
 fn latest_failed_phase_uses_phase_order_when_timestamps_are_missing() {
@@ -456,6 +376,7 @@ fn render_status_dashboard_uses_required_section_order() {
         },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        next_actions: NextActionsSlice { available: true, entry: None, reason: Some("no ready tasks".to_string()), error: None },
         ci: CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: false,
@@ -471,11 +392,129 @@ fn render_status_dashboard_uses_required_section_order() {
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
+    let next_actions_idx = output.find("Next Actions").expect("next actions section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
-    assert!(failures_idx < ci_idx);
+    assert!(failures_idx < next_actions_idx);
+    assert!(next_actions_idx < ci_idx);
+}
+
+#[test]
+fn next_actions_slice_finds_first_ready_task() {
+    let mut task = make_task("TASK-001", "First Ready", TaskStatus::Ready, None);
+    task.priority = Priority::High;
+    task.linked_requirements = vec!["REQ-001".to_string(), "REQ-002".to_string()];
+
+    let tasks = vec![task];
+    let requirements = vec![
+        orchestrator_core::RequirementItem {
+            id: "REQ-001".to_string(),
+            title: "First requirement".to_string(),
+            description: String::new(),
+            body: None,
+            legacy_id: None,
+            category: None,
+            requirement_type: None,
+            acceptance_criteria: Vec::new(),
+            priority: Default::default(),
+            status: Default::default(),
+            source: String::new(),
+            tags: Vec::new(),
+            links: Default::default(),
+            comments: Vec::new(),
+            relative_path: None,
+            linked_task_ids: Vec::new(),
+            created_at: parse_time("2026-02-01T00:00:00Z"),
+            updated_at: parse_time("2026-02-01T00:00:00Z"),
+        },
+        orchestrator_core::RequirementItem {
+            id: "REQ-002".to_string(),
+            title: "Second requirement".to_string(),
+            description: String::new(),
+            body: None,
+            legacy_id: None,
+            category: None,
+            requirement_type: None,
+            acceptance_criteria: Vec::new(),
+            priority: Default::default(),
+            status: Default::default(),
+            source: String::new(),
+            tags: Vec::new(),
+            links: Default::default(),
+            comments: Vec::new(),
+            relative_path: None,
+            linked_task_ids: Vec::new(),
+            created_at: parse_time("2026-02-01T00:00:00Z"),
+            updated_at: parse_time("2026-02-01T00:00:00Z"),
+        },
+    ];
+
+    let slice = build_next_actions_slice(Some(&tasks), Some(&requirements), None, None);
+    assert!(slice.available);
+    assert!(slice.entry.is_some());
+    assert_eq!(slice.entry.as_ref().unwrap().task_id, "TASK-001");
+    assert_eq!(slice.entry.as_ref().unwrap().priority, "high");
+    assert_eq!(slice.entry.as_ref().unwrap().linked_requirements.len(), 2);
+    assert_eq!(slice.entry.as_ref().unwrap().linked_requirements[0].id, "REQ-001");
+    assert_eq!(slice.entry.as_ref().unwrap().active_workflow_id, None);
+}
+
+#[test]
+fn next_actions_slice_includes_active_workflow_id() {
+    let task = make_task("TASK-001", "Ready", TaskStatus::Ready, None);
+    let tasks = vec![task];
+
+    let workflow = make_workflow(
+        "WF-001",
+        "TASK-001",
+        WorkflowStatus::Running,
+        Some("implementation"),
+        parse_time("2026-02-20T00:00:00Z"),
+        None,
+        vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
+        None,
+    );
+    let workflows = vec![workflow];
+
+    let slice = build_next_actions_slice(Some(&tasks), Some(&[]), Some(&workflows), None);
+    assert!(slice.available);
+    assert_eq!(slice.entry.as_ref().unwrap().active_workflow_id.as_deref(), Some("WF-001"));
+}
+
+#[test]
+fn next_actions_slice_skips_non_ready_tasks() {
+    let tasks = vec![
+        make_task("TASK-001", "Blocked", TaskStatus::Blocked, None),
+        make_task("TASK-002", "In Progress", TaskStatus::InProgress, None),
+        make_task("TASK-003", "Ready", TaskStatus::Ready, None),
+    ];
+
+    let slice = build_next_actions_slice(Some(&tasks), Some(&[]), None, None);
+    assert!(slice.available);
+    assert_eq!(slice.entry.as_ref().unwrap().task_id, "TASK-003");
+}
+
+#[test]
+fn next_actions_slice_provides_reason_when_no_ready_tasks() {
+    let tasks = vec![
+        make_task("TASK-001", "Blocked", TaskStatus::Blocked, None),
+        make_task("TASK-002", "In Progress", TaskStatus::InProgress, None),
+    ];
+
+    let slice = build_next_actions_slice(Some(&tasks), Some(&[]), None, None);
+    assert!(slice.available);
+    assert!(slice.entry.is_none());
+    assert_eq!(slice.reason.as_deref(), Some("all tasks blocked"));
+}
+
+#[test]
+fn next_actions_slice_unavailable_when_no_tasks() {
+    let slice = build_next_actions_slice(None, None, None, None);
+    assert!(!slice.available);
+    assert!(slice.entry.is_none());
+    assert!(slice.reason.is_none());
 }

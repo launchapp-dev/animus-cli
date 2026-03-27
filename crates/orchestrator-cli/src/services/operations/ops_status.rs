@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
-    TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
+    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, RequirementItem, ServiceHub,
+    TaskStatistics, TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +31,7 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    next_actions: NextActionsSlice,
     ci: CiStatusSlice,
 }
 
@@ -106,6 +107,34 @@ struct RecentFailureEntry {
     failed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextActionsSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<NextActionEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextActionEntry {
+    task_id: String,
+    task_title: String,
+    priority: String,
+    #[serde(default)]
+    linked_requirements: Vec<RequirementRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_workflow_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RequirementRef {
+    id: String,
+    title: String,
 }
 
 #[derive(Debug)]
@@ -192,12 +221,16 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let prioritized_service = hub.tasks();
+    let requirements_service = hub.planning();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, prioritized_result, requirements_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
         collect_workflow_status_snapshot(project_root),
+        prioritized_service.list_prioritized(),
+        requirements_service.list_requirements(),
         collect_ci_status(project_root),
     );
 
@@ -205,6 +238,8 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+    let (prioritized_tasks, prioritized_error) = split_result(prioritized_result);
+    let (requirements, requirements_error) = split_result(requirements_result);
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -226,6 +261,12 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
+        ),
+        next_actions: build_next_actions_slice(
+            prioritized_tasks.as_deref(),
+            requirements.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+            combine_errors([prioritized_error.as_deref(), requirements_error.as_deref()]),
         ),
         ci: ci_slice,
     };
@@ -414,6 +455,89 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
+}
+
+fn build_next_actions_slice(
+    prioritized_tasks: Option<&[OrchestratorTask]>,
+    requirements: Option<&[RequirementItem]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+    error: Option<String>,
+) -> NextActionsSlice {
+    let requirements_by_id: HashMap<&str, &str> = requirements
+        .map(|reqs| reqs.iter().map(|req| (req.id.as_str(), req.title.as_str())).collect())
+        .unwrap_or_default();
+
+    let active_workflows_by_task: HashMap<&str, &str> = workflows
+        .map(|wfs| {
+            wfs.iter()
+                .filter(|wf| wf.status == WorkflowStatus::Running)
+                .map(|wf| (wf.task_id.as_str(), wf.id.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(tasks) = prioritized_tasks {
+        for task in tasks {
+            if task.status == TaskStatus::Ready {
+                let linked_requirements = task
+                    .linked_requirements
+                    .iter()
+                    .filter_map(|req_id| {
+                        requirements_by_id.get(req_id.as_str()).map(|&title| RequirementRef {
+                            id: req_id.clone(),
+                            title: title.to_string(),
+                        })
+                    })
+                    .collect();
+
+                let active_workflow_id =
+                    active_workflows_by_task.get(task.id.as_str()).map(|&id| id.to_string());
+
+                return NextActionsSlice {
+                    available: true,
+                    entry: Some(NextActionEntry {
+                        task_id: task.id.clone(),
+                        task_title: task.title.clone(),
+                        priority: task.priority.as_str().to_string(),
+                        linked_requirements,
+                        active_workflow_id,
+                    }),
+                    reason: None,
+                    error,
+                };
+            }
+        }
+
+        let reason = if tasks.is_empty() {
+            "no tasks available"
+        } else {
+            let has_blocked = tasks.iter().any(|task| task.status.is_blocked());
+            let has_in_progress = tasks.iter().any(|task| task.status == TaskStatus::InProgress);
+            let has_done = tasks.iter().any(|task| task.status == TaskStatus::Done);
+            let has_backlog = tasks.iter().any(|task| task.status == TaskStatus::Backlog);
+
+            if has_blocked {
+                "all tasks blocked"
+            } else if !has_in_progress && !has_done && !has_backlog {
+                "no tasks available"
+            } else if tasks.iter().all(|task| task.status == TaskStatus::InProgress) {
+                "all tasks in progress"
+            } else if tasks.iter().all(|task| task.status == TaskStatus::Done) {
+                "all tasks done"
+            } else {
+                "no ready tasks"
+            }
+        };
+
+        return NextActionsSlice {
+            available: true,
+            entry: None,
+            reason: Some(reason.to_string()),
+            error,
+        };
+    }
+
+    NextActionsSlice { available: false, entry: None, reason: None, error }
 }
 
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
@@ -689,6 +813,31 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.recent_failures.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Actions");
+    if let Some(entry) = dashboard.next_actions.entry.as_ref() {
+        let _ = writeln!(
+            &mut output,
+            "  - task_id={} task_title={} priority={}",
+            entry.task_id, entry.task_title, entry.priority
+        );
+        if entry.linked_requirements.is_empty() {
+            let _ = writeln!(&mut output, "    linked_requirements: none");
+        } else {
+            for req in &entry.linked_requirements {
+                let _ = writeln!(&mut output, "      - id={} title={}", req.id, req.title);
+            }
+        }
+        if let Some(workflow_id) = entry.active_workflow_id.as_deref() {
+            let _ = writeln!(&mut output, "    active_workflow_id: {workflow_id}");
+        }
+    } else if let Some(reason) = dashboard.next_actions.reason.as_deref() {
+        let _ = writeln!(&mut output, "  reason: {reason}");
+    }
+    if let Some(error) = dashboard.next_actions.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
