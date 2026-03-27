@@ -10,7 +10,9 @@ pub fn default_workflow_template_files() -> [(&'static str, &'static str); 4] {
     [
         (
             DEFAULT_WORKFLOW_TEMPLATE_FILE_NAME,
-            r#"# Project-local workflow extensions and overrides.
+            r#"default_workflow_ref: standard-workflow
+
+# Project-local workflow extensions and overrides.
 tools_allowlist:
   - cargo
 "#,
@@ -22,7 +24,10 @@ tools_allowlist:
     name: Standard Workflow
     description: Default task delivery workflow for this repository.
     phases:
-      - workflow_ref: ao.task/standard
+      - requirements
+      - implementation
+      - code-review
+      - testing
 "#,
         ),
         (
@@ -32,7 +37,9 @@ tools_allowlist:
     name: Hotfix Workflow
     description: Fast-track workflow for urgent fixes.
     phases:
-      - workflow_ref: ao.task/quick-fix
+      - implementation
+      - code-review
+      - testing
 "#,
         ),
         (
@@ -42,8 +49,8 @@ tools_allowlist:
     name: Research Workflow
     description: Validate scope and produce findings without landing implementation changes.
     phases:
-      - workflow_ref: ao.task/triage
       - requirements
+      - research
 "#,
         ),
     ]

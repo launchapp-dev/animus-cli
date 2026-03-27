@@ -1,6 +1,6 @@
 # Configuration Reference
 
-AO resolves behavior from project YAML, pack layers, scoped runtime state, and environment overrides.
+AO resolves behavior from project YAML, installed pack layers, scoped runtime state, and environment overrides.
 
 ## Project-Local Sources
 
@@ -15,12 +15,12 @@ These YAML files are the editable workflow source of truth for a project.
 Typical uses:
 
 - define repo-specific workflow ids such as `standard-workflow`
-- wrap canonical bundled refs such as `ao.task/standard`
+- define the repository's default workflow explicitly
 - declare project MCP servers, agents, variables, phases, and workflow definitions
 
 ### `.ao/plugins/<pack-id>/`
 
-Project-local pack overrides. Use this when a repository needs to override installed or bundled pack content without changing AO globally.
+Project-local pack overrides. Use this when a repository needs to override installed pack content without changing AO globally.
 
 ## Repo-Scoped Runtime Config
 
@@ -61,23 +61,7 @@ Example:
 }
 ```
 
-## Bundled and Installed Sources
-
-### Bundled workflow refs
-
-Canonical bundled refs include:
-
-- `ao.task/standard`
-- `ao.task/quick-fix`
-- `ao.task/triage`
-- `ao.requirement/draft`
-- `ao.requirement/refine`
-- `ao.requirement/plan`
-- `ao.requirement/execute`
-- `ao.vision/draft`
-- `ao.vision/refine`
-
-Legacy `builtin/*` aliases remain supported where the loader still provides them.
+## Installed Sources
 
 ### Machine-installed packs
 
@@ -105,7 +89,6 @@ Behavior resolves in this order:
 3. project pack overrides in `.ao/plugins/`
 4. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
 5. installed packs in `~/.ao/packs/`
-6. bundled workflow and pack content embedded in AO
 
 ## Environment Variables
 
@@ -119,5 +102,6 @@ Behavior resolves in this order:
 ## Notes
 
 - Project YAML is the authored workflow surface.
+- AO no longer ships bundled workflows; a project must author workflows locally or install a pack.
 - Mutable runtime state lives under `~/.ao/<repo-scope>/`.
 - The daemon schedules and supervises work; workflow and pack content still define behavior.

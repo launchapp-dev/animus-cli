@@ -60,12 +60,11 @@ fn parse_source(raw: Option<&str>) -> Result<Option<PackRegistrySource>> {
     };
 
     let parsed = match raw.to_ascii_lowercase().as_str() {
-        "bundled" => PackRegistrySource::Bundled,
         "installed" => PackRegistrySource::Installed,
         "project_override" | "project-override" | "project" => PackRegistrySource::ProjectOverride,
         _ => {
             return Err(invalid_input_error(format!(
-                "unsupported pack source '{}'; expected bundled, installed, or project_override",
+                "unsupported pack source '{}'; expected installed or project_override",
                 raw
             )))
         }

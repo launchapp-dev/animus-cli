@@ -1251,18 +1251,6 @@ pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<Lo
         let registry = crate::resolve_pack_registry(project_root)?;
         let mut path = loaded_workflow.path.clone();
 
-        for entry in registry.entries_for_source(crate::PackRegistrySource::Bundled) {
-            let Some(pack) = entry.loaded_manifest() else {
-                continue;
-            };
-            if let Some(overlay) = crate::load_pack_agent_runtime_overlay(pack)? {
-                merge_agent_runtime_overlay(&mut config, &overlay);
-                if let Some(pack_root) = entry.pack_root.as_ref() {
-                    path = pack_root.clone();
-                }
-            }
-        }
-
         for entry in registry.entries_for_source(crate::PackRegistrySource::Installed) {
             let Some(pack) = entry.loaded_manifest() else {
                 continue;

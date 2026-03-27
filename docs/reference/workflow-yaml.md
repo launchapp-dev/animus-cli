@@ -1,7 +1,7 @@
 # Workflow YAML Schema Reference
 
 AO workflow YAML is authored in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`.
-Those files are merged with installed and bundled pack overlays to produce the
+Those files are merged with installed pack overlays to produce the
 effective workflow configuration that `workflow-runner` executes. This document
 describes the authored YAML surface.
 
@@ -20,7 +20,7 @@ pipelines:       # Named workflow pipelines (collections of phases)
 ```
 
 All sections are optional. Multiple YAML files in `.ao/workflows/` are merged,
-and project YAML can override or wrap pack-owned workflow refs.
+and project YAML can override installed pack workflows.
 
 ---
 
