@@ -105,6 +105,28 @@ fn make_workflow(
     }
 }
 
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries = Vec::new();
+    for workflow in workflows {
+        if workflow.status != WorkflowStatus::Failed {
+            continue;
+        }
+        let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+        entries.push(RecentFailureEntry {
+            workflow_id: workflow.id.clone(),
+            task_id: workflow.task_id.clone(),
+            phase_id,
+            failed_at,
+            failure_reason: workflow.failure_reason.clone().or(phase_error),
+        });
+    }
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(RECENT_FAILURES_LIMIT);
+    entries
+}
+
 #[test]
 fn recent_completions_are_sorted_and_limited() {
     let tasks = vec![
@@ -456,6 +478,8 @@ fn render_status_dashboard_uses_required_section_order() {
         },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        blocked_items: BlockedItemsSlice { available: true, entries: Vec::new(), error: None },
+        stale_items: StaleItemsSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: false,
@@ -471,11 +495,68 @@ fn render_status_dashboard_uses_required_section_order() {
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
+    let blocked_idx = output.find("Blocked Items").expect("blocked items section should exist");
+    let stale_idx = output.find("Stale Items").expect("stale items section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
-    assert!(failures_idx < ci_idx);
+    assert!(failures_idx < blocked_idx);
+    assert!(blocked_idx < stale_idx);
+    assert!(stale_idx < ci_idx);
+}
+
+#[test]
+fn blocked_items_filters_and_includes_all_required_fields() {
+    let tasks = vec![
+        {
+            let mut task = make_task("TASK-001", "blocked-task", TaskStatus::Blocked, None);
+            task.blocked_reason = Some("waiting for input".to_string());
+            task.blocked_by = Some("TASK-002".to_string());
+            task.linked_requirements = vec!["REQ-001".to_string(), "REQ-002".to_string()];
+            task
+        },
+        make_task("TASK-002", "in-progress-task", TaskStatus::InProgress, None),
+        {
+            let mut task = make_task("TASK-003", "on-hold-task", TaskStatus::OnHold, None);
+            task.blocked_reason = Some("legal review".to_string());
+            task.linked_requirements = vec!["REQ-003".to_string()];
+            task
+        },
+    ];
+
+    let entries = blocked_items(&tasks);
+    assert_eq!(entries.len(), 1, "only blocked (not on-hold) tasks should be included");
+    assert_eq!(entries[0].task_id, "TASK-001");
+    assert_eq!(entries[0].title, "blocked-task");
+    assert_eq!(entries[0].blocked_reason.as_deref(), Some("waiting for input"));
+    assert_eq!(entries[0].blocked_by.as_deref(), Some("TASK-002"));
+    assert_eq!(entries[0].linked_requirement_ids, vec!["REQ-001", "REQ-002"]);
+}
+
+#[test]
+fn stale_items_calculates_hours_stale_and_filters_by_threshold() {
+    let base_time = parse_time("2026-02-27T12:00:00Z");
+    let old_time = parse_time("2026-02-26T10:00:00Z"); // 26 hours before base_time
+    let recent_time = parse_time("2026-02-27T10:00:00Z"); // 2 hours before base_time
+
+    let mut stale_task = make_task("TASK-001", "stale-task", TaskStatus::InProgress, None);
+    stale_task.metadata.updated_at = old_time;
+    stale_task.linked_requirements = vec!["REQ-001".to_string()];
+
+    let mut recent_task = make_task("TASK-002", "recent-task", TaskStatus::InProgress, None);
+    recent_task.metadata.updated_at = recent_time;
+
+    let done_task = make_task("TASK-003", "done-task", TaskStatus::Done, None);
+
+    let tasks = vec![stale_task, recent_task, done_task];
+    let entries = stale_items(&tasks, base_time);
+
+    assert_eq!(entries.len(), 1, "only in-progress tasks older than 24h should be included");
+    assert_eq!(entries[0].task_id, "TASK-001");
+    assert_eq!(entries[0].title, "stale-task");
+    assert!(entries[0].hours_stale >= 24);
+    assert_eq!(entries[0].linked_requirement_ids, vec!["REQ-001"]);
 }
