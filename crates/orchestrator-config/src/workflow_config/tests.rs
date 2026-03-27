@@ -27,46 +27,32 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
     let config = builtin_workflow_config();
     let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
-    assert_eq!(config.default_workflow_ref, "ao.task/standard");
-    assert!(workflow_ids.contains(&"ao.task/standard"));
-    assert!(workflow_ids.contains(&"ao.task/ui-ux"));
-    assert!(workflow_ids.contains(&"ao.task/quick-fix"));
-    assert!(workflow_ids.contains(&"ao.task/gated"));
-    assert!(workflow_ids.contains(&"ao.task/triage"));
-    assert!(workflow_ids.contains(&"ao.task/refine"));
-    assert!(workflow_ids.contains(&"ao.review/cycle"));
-    assert!(workflow_ids.contains(&"ao.requirement/draft"));
-    assert!(workflow_ids.contains(&"ao.requirement/refine"));
-    assert!(workflow_ids.contains(&"ao.requirement/plan"));
-    assert!(workflow_ids.contains(&"ao.requirement/execute"));
+    assert_eq!(config.default_workflow_ref, "standard");
     assert!(workflow_ids.contains(&"ao.vision/draft"));
     assert!(workflow_ids.contains(&"ao.vision/refine"));
     assert!(workflow_ids.contains(&"standard"));
     assert!(workflow_ids.contains(&"ui-ux-standard"));
-    assert!(workflow_ids.contains(&"requirement-task-generation"));
-    assert!(workflow_ids.contains(&"requirement-task-generation-run"));
     assert!(workflow_ids.contains(&"builtin/vision-draft"));
     assert!(workflow_ids.contains(&"builtin/vision-refine"));
-    assert!(workflow_ids.contains(&"builtin/requirements-draft"));
-    assert!(workflow_ids.contains(&"builtin/requirements-refine"));
-    assert!(workflow_ids.contains(&"builtin/requirements-execute"));
-    assert!(workflow_ids.contains(&"builtin/requirement-plan"));
-    assert!(workflow_ids.contains(&"builtin/task-standard"));
-    assert!(workflow_ids.contains(&"builtin/task-ui-ux"));
-    assert!(workflow_ids.contains(&"builtin/review-cycle"));
-    assert!(workflow_ids.contains(&"builtin/task-quick-fix"));
-    assert!(workflow_ids.contains(&"builtin/task-gated"));
-    assert!(workflow_ids.contains(&"builtin/task-triage"));
-    assert!(workflow_ids.contains(&"builtin/task-refine"));
+    assert!(!workflow_ids.contains(&"ao.task/standard"));
+    assert!(!workflow_ids.contains(&"ao.task/ui-ux"));
+    assert!(!workflow_ids.contains(&"ao.task/quick-fix"));
+    assert!(!workflow_ids.contains(&"ao.task/gated"));
+    assert!(!workflow_ids.contains(&"ao.task/triage"));
+    assert!(!workflow_ids.contains(&"ao.task/refine"));
+    assert!(!workflow_ids.contains(&"ao.review/cycle"));
+    assert!(!workflow_ids.contains(&"ao.requirement/draft"));
+    assert!(!workflow_ids.contains(&"ao.requirement/refine"));
+    assert!(!workflow_ids.contains(&"ao.requirement/plan"));
+    assert!(!workflow_ids.contains(&"ao.requirement/execute"));
 }
 
 #[test]
 fn missing_v2_file_reports_actionable_error() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
-    let config = load_workflow_config(temp.path()).expect("bundled pack defaults should load");
-    assert_eq!(config.default_workflow_ref, "ao.task/standard");
-    assert!(config.workflows.iter().any(|workflow| workflow.id == "ao.task/standard"));
+    let error = load_workflow_config(temp.path()).expect_err("missing workflow config should fail");
+    assert!(error.to_string().contains("workflow config is missing"));
 }
 
 #[test]
@@ -2188,6 +2174,7 @@ fn repo_requirements_yaml_parses_requirement_workflows() {
     let config = parse_yaml_workflow_config(yaml).expect("requirements workflow yaml should parse");
     let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
-    assert!(workflow_ids.contains(&"requirement-task-generation"));
-    assert!(workflow_ids.contains(&"requirement-task-generation-run"));
+    assert!(workflow_ids.contains(&"req-dispatch"));
+    assert!(workflow_ids.contains(&"req-refine"));
+    assert!(workflow_ids.contains(&"req-review"));
 }

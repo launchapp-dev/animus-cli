@@ -6,15 +6,12 @@ use anyhow::{anyhow, Context, Result};
 use semver::{Version, VersionReq};
 
 use crate::agent_runtime_config::{AgentRuntimeOverlay, CliToolConfig, PhaseExecutionDefinition};
-use crate::bundled_packs::discover_bundled_pack_manifests;
 use crate::pack_config::{load_pack_manifest, LoadedPackManifest};
 use crate::pack_selection::{load_pack_selection_state, PackSelectionEntry, PackSelectionState};
 use crate::workflow_config::{compile_yaml_sources_with_base, WorkflowConfig};
 
 pub const PROJECT_PACKS_DIR_NAME: &str = "plugins";
 pub const MACHINE_PACKS_DIR_NAME: &str = "packs";
-pub const BUNDLED_BUILTIN_PACK_ID: &str = "builtin";
-pub const BUNDLED_BUILTIN_PACK_VERSION: &str = "builtin";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackRegistrySource {
@@ -44,17 +41,6 @@ pub struct ResolvedPackRegistryEntry {
 }
 
 impl ResolvedPackRegistryEntry {
-    fn bundled_builtin() -> Self {
-        Self {
-            pack_id: BUNDLED_BUILTIN_PACK_ID.to_string(),
-            version: BUNDLED_BUILTIN_PACK_VERSION.to_string(),
-            source: PackRegistrySource::Bundled,
-            pack_root: None,
-            manifest_path: None,
-            loaded_manifest: None,
-        }
-    }
-
     fn from_manifest(source: PackRegistrySource, loaded_manifest: LoadedPackManifest) -> Self {
         Self {
             pack_id: loaded_manifest.manifest.id.clone(),
@@ -84,19 +70,6 @@ pub struct PackInventoryEntry {
 }
 
 impl PackInventoryEntry {
-    fn bundled_builtin(active: bool) -> Self {
-        Self {
-            pack_id: BUNDLED_BUILTIN_PACK_ID.to_string(),
-            version: BUNDLED_BUILTIN_PACK_VERSION.to_string(),
-            source: PackRegistrySource::Bundled,
-            pack_root: None,
-            manifest_path: None,
-            active,
-            selection: None,
-            loaded_manifest: None,
-        }
-    }
-
     fn from_manifest(
         source: PackRegistrySource,
         loaded_manifest: LoadedPackManifest,
@@ -147,7 +120,7 @@ pub struct ResolvedPackRegistry {
 
 impl ResolvedPackRegistry {
     pub fn has_external_packs(&self) -> bool {
-        self.entries.iter().any(|entry| entry.source != PackRegistrySource::Bundled)
+        !self.entries.is_empty()
     }
 
     pub fn has_pack_overlays(&self) -> bool {
@@ -176,7 +149,6 @@ pub fn machine_installed_packs_dir() -> PathBuf {
 
 struct PackRegistryInputs {
     selection_state: PackSelectionState,
-    bundled_packs: Vec<LoadedPackManifest>,
     installed_versions: Vec<LoadedPackManifest>,
     project_overrides: Vec<LoadedPackManifest>,
 }
@@ -184,25 +156,18 @@ struct PackRegistryInputs {
 fn discover_pack_registry_inputs(project_root: &Path) -> Result<PackRegistryInputs> {
     Ok(PackRegistryInputs {
         selection_state: load_pack_selection_state(project_root)?,
-        bundled_packs: discover_bundled_pack_manifests()?,
         installed_versions: discover_installed_pack_versions()?,
         project_overrides: discover_project_override_packs(project_root)?,
     })
 }
 
 fn resolve_pack_registry_from_inputs(inputs: &PackRegistryInputs) -> Result<ResolvedPackRegistry> {
-    let bundled_by_id = map_bundled_packs_by_id(&inputs.bundled_packs)?;
     let installed_by_id = group_installed_packs_by_id(&inputs.installed_versions)?;
     let overrides_by_id = map_project_overrides_by_id(&inputs.project_overrides)?;
 
-    let mut entries = vec![ResolvedPackRegistryEntry::bundled_builtin()];
-    let mut pack_ids = installed_by_id
-        .keys()
-        .chain(bundled_by_id.keys())
-        .chain(overrides_by_id.keys())
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    pack_ids.remove(BUNDLED_BUILTIN_PACK_ID);
+    let pack_ids =
+        installed_by_id.keys().chain(overrides_by_id.keys()).cloned().collect::<std::collections::BTreeSet<_>>();
+    let mut entries = Vec::new();
 
     for pack_id in pack_ids {
         let selection = inputs.selection_state.selection_for(&pack_id);
@@ -213,7 +178,6 @@ fn resolve_pack_registry_from_inputs(inputs: &PackRegistryInputs) -> Result<Reso
         let selected = select_resolved_pack(
             &pack_id,
             selection,
-            bundled_by_id.get(&pack_id).copied(),
             installed_by_id.get(&pack_id).map(Vec::as_slice),
             overrides_by_id.get(&pack_id).copied(),
         )?;
@@ -232,23 +196,8 @@ pub fn resolve_pack_registry(project_root: &Path) -> Result<ResolvedPackRegistry
 pub fn load_pack_inventory(project_root: &Path) -> Result<PackInventory> {
     let inputs = discover_pack_registry_inputs(project_root)?;
     let resolved = resolve_pack_registry_from_inputs(&inputs)?;
-    let PackRegistryInputs { selection_state, bundled_packs, installed_versions, project_overrides } = inputs;
-
-    let mut entries = vec![PackInventoryEntry::bundled_builtin(resolved.resolve(BUNDLED_BUILTIN_PACK_ID).is_some())];
-
-    let mut bundled_packs = bundled_packs;
-    bundled_packs.sort_by(|left, right| {
-        left.manifest
-            .id
-            .cmp(&right.manifest.id)
-            .then_with(|| compare_pack_versions_desc(&left.manifest.version, &right.manifest.version))
-            .then_with(|| left.pack_root.cmp(&right.pack_root))
-    });
-    for pack in bundled_packs {
-        let active = resolved_entry_matches_manifest(&resolved, PackRegistrySource::Bundled, &pack);
-        let selection = selection_state.selection_for(&pack.manifest.id).cloned();
-        entries.push(PackInventoryEntry::from_manifest(PackRegistrySource::Bundled, pack, active, selection));
-    }
+    let PackRegistryInputs { selection_state, installed_versions, project_overrides } = inputs;
+    let mut entries = Vec::new();
 
     let mut installed_versions = installed_versions;
     installed_versions.sort_by(|left, right| {
@@ -402,28 +351,16 @@ fn map_project_overrides_by_id(
     Ok(mapped)
 }
 
-fn map_bundled_packs_by_id(bundled_packs: &[LoadedPackManifest]) -> Result<BTreeMap<String, &LoadedPackManifest>> {
-    let mut mapped = BTreeMap::new();
-    for pack in bundled_packs {
-        let key = pack.manifest.id.to_ascii_lowercase();
-        if mapped.insert(key.clone(), pack).is_some() {
-            return Err(anyhow!("duplicate bundled pack id '{}'", key));
-        }
-    }
-    Ok(mapped)
-}
-
 fn select_resolved_pack(
     pack_id: &str,
     selection: Option<&PackSelectionEntry>,
-    bundled: Option<&LoadedPackManifest>,
     installed: Option<&[&LoadedPackManifest]>,
     project_override: Option<&LoadedPackManifest>,
 ) -> Result<Option<ResolvedPackRegistryEntry>> {
-    let source_order =
-        selection.and_then(|entry| entry.source).map(|source| vec![source.as_registry_source()]).unwrap_or_else(|| {
-            vec![PackRegistrySource::ProjectOverride, PackRegistrySource::Installed, PackRegistrySource::Bundled]
-        });
+    let source_order = selection
+        .and_then(|entry| entry.source)
+        .map(|source| vec![source.as_registry_source()])
+        .unwrap_or_else(|| vec![PackRegistrySource::ProjectOverride, PackRegistrySource::Installed]);
 
     for source in source_order {
         match source {
@@ -452,15 +389,7 @@ fn select_resolved_pack(
                 }
             }
             PackRegistrySource::Bundled => {
-                let Some(pack) = bundled else {
-                    continue;
-                };
-                if version_matches_selection(selection, &pack.manifest.version)? {
-                    return Ok(Some(ResolvedPackRegistryEntry::from_manifest(
-                        PackRegistrySource::Bundled,
-                        pack.clone(),
-                    )));
-                }
+                continue;
             }
         }
     }
@@ -472,6 +401,12 @@ fn select_resolved_pack(
         }
         if let Some(version) = selection.version.as_deref() {
             requirement.push_str(&format!(" version '{}'", version.trim()));
+        }
+        if matches!(selection.source, Some(crate::PackSelectionSource::Bundled)) {
+            requirement.push_str(" cannot be satisfied because AO no longer ships bundled packs");
+            requirement
+                .push_str("; install the pack from an external repository and pin it as installed or project_override");
+            return Err(anyhow!(requirement));
         }
         return Err(anyhow!("{requirement} could not be satisfied"));
     }
@@ -1063,7 +998,7 @@ workflows:
         );
 
         let registry = resolve_pack_registry(project.path()).expect("resolve registry");
-        assert_eq!(registry.entries[0].source, PackRegistrySource::Bundled);
+        assert!(registry.entries.iter().all(|entry| entry.source != PackRegistrySource::Bundled));
 
         let review = registry.resolve("ao.review").expect("ao.review should resolve");
         assert_eq!(review.source, PackRegistrySource::Installed);

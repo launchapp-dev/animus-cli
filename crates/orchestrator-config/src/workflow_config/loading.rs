@@ -3,11 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 
-use super::builtins::{builtin_workflow_config, builtin_workflow_yaml_overlays, bundled_kernel_workflow_config_base};
+use super::builtins::builtin_workflow_config_base;
 use super::types::*;
 use super::validation::validate_workflow_config_with_project_root;
 use super::yaml_compiler::{merge_yaml_into_config, yaml_workflows_dir};
-use super::yaml_parser::parse_yaml_workflow_config_with_base;
 use super::yaml_scaffold::ensure_workflow_yaml_scaffold;
 use super::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
 use crate::{
@@ -66,7 +65,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
 
     if !yaml_sources.is_empty() || registry.has_pack_overlays() {
         validate_active_pack_configuration(&registry)?;
-        let (mut config, mut path) = build_pack_aware_builtin_workflow_config(project_root, &registry)?;
+        let (mut config, mut path) = build_installed_pack_workflow_config_base(project_root)?;
 
         for entry in registry.entries_for_source(PackRegistrySource::Installed) {
             let Some(pack) = entry.loaded_manifest() else {
@@ -122,7 +121,7 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
     match load_workflow_config_with_metadata(project_root) {
         Ok(loaded) => loaded,
         Err(_) => {
-            let config = builtin_workflow_config();
+            let config = runtime_workflow_config_base();
             LoadedWorkflowConfig {
                 metadata: WorkflowConfigMetadata {
                     schema: config.schema.clone(),
@@ -143,32 +142,18 @@ pub fn write_workflow_config(project_root: &Path, config: &WorkflowConfig) -> Re
         .map(|_| ())
 }
 
-fn build_pack_aware_builtin_workflow_config(
-    project_root: &Path,
-    registry: &crate::ResolvedPackRegistry,
-) -> Result<(WorkflowConfig, PathBuf)> {
-    let mut config = bundled_kernel_workflow_config_base();
-    let mut path = workflow_config_path(project_root);
-
-    for (name, yaml) in builtin_workflow_yaml_overlays() {
-        let overlay = parse_yaml_workflow_config_with_base(yaml, &config)
-            .map_err(|error| anyhow!("invalid builtin workflow YAML '{name}': {error}"))?;
-        config = merge_yaml_into_config(config, overlay);
-    }
-
-    for entry in registry.entries_for_source(PackRegistrySource::Bundled) {
-        let Some(pack) = entry.loaded_manifest() else {
-            continue;
-        };
-        if let Some(overlay) = load_pack_workflow_overlay(pack, &config)? {
-            config = merge_yaml_into_config(config, overlay);
-            if let Some(pack_root) = entry.pack_root.as_ref() {
-                path = pack_root.clone();
-            }
-        }
-    }
+fn build_installed_pack_workflow_config_base(project_root: &Path) -> Result<(WorkflowConfig, PathBuf)> {
+    let config = runtime_workflow_config_base();
+    let path = workflow_config_path(project_root);
 
     Ok((config, path))
+}
+
+fn runtime_workflow_config_base() -> WorkflowConfig {
+    let mut config = builtin_workflow_config_base();
+    config.default_workflow_ref.clear();
+    config.workflows.clear();
+    config
 }
 
 pub fn workflow_config_hash(config: &WorkflowConfig) -> String {

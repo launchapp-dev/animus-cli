@@ -33,7 +33,7 @@ Supported but not created by default:
 .ao/plugins/<pack-id>/
 ```
 
-Use the YAML files in `.ao/workflows/` or `.ao/workflows.yaml` to add repository-specific workflows, override metadata, or wrap bundled pack refs such as `ao.task/standard`.
+Use the YAML files in `.ao/workflows/` or `.ao/workflows.yaml` to define repository-specific workflows and defaults. AO does not ship bundled workflows.
 
 ## Repo-Scoped Runtime State
 
@@ -90,7 +90,6 @@ AO resolves workflows from these layers:
 1. project overrides in `.ao/plugins/<pack-id>/`
 2. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
 3. installed packs in `~/.ao/packs/<pack-id>/<version>/`
-4. bundled workflow and pack content embedded in AO
 
 ## Mutation Policy
 

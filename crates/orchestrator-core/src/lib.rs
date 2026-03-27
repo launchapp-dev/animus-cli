@@ -62,8 +62,8 @@ pub use orchestrator_config::{
     PackKind, PackManifest, PackMcp, PackMcpOverlay, PackNativeModule, PackOwnership, PackOwnershipMode,
     PackPermissions, PackRegistrySource, PackRuntime, PackRuntimeCheck, PackRuntimeCheckStatus, PackRuntimeReport,
     PackRuntimeRequirement, PackSchedules, PackSecrets, PackSubjects, PackWorkflows, ResolvedPackRegistry,
-    ResolvedPackRegistryEntry, BUNDLED_BUILTIN_PACK_ID, BUNDLED_BUILTIN_PACK_VERSION, MACHINE_PACKS_DIR_NAME,
-    PACK_MANIFEST_FILE_NAME, PACK_MANIFEST_SCHEMA_ID, PROJECT_PACKS_DIR_NAME,
+    ResolvedPackRegistryEntry, MACHINE_PACKS_DIR_NAME, PACK_MANIFEST_FILE_NAME, PACK_MANIFEST_SCHEMA_ID,
+    PROJECT_PACKS_DIR_NAME,
 };
 pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, cli_capabilities_from_config,
