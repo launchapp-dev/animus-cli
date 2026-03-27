@@ -11,6 +11,16 @@ fn parse_time(value: &str) -> DateTime<Utc> {
 }
 
 fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<DateTime<Utc>>) -> OrchestratorTask {
+    make_task_with_priority(id, title, status, completed_at, Priority::Medium)
+}
+
+fn make_task_with_priority(
+    id: &str,
+    title: &str,
+    status: TaskStatus,
+    completed_at: Option<DateTime<Utc>>,
+    priority: Priority,
+) -> OrchestratorTask {
     let now = parse_time("2026-02-01T00:00:00Z");
     OrchestratorTask {
         id: id.to_string(),
@@ -22,7 +32,7 @@ fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<Dat
         blocked_at: None,
         blocked_phase: None,
         blocked_by: None,
-        priority: Priority::Medium,
+        priority,
         risk: RiskLevel::Medium,
         scope: Scope::Medium,
         complexity: Complexity::Medium,
@@ -463,6 +473,9 @@ fn render_status_dashboard_uses_required_section_order() {
             reason: Some("gh CLI is not installed".to_string()),
             error: None,
         },
+        next_work: None,
+        blocked_items: None,
+        stale_attention: None,
     };
 
     let output = render_status_dashboard(&dashboard);
@@ -478,4 +491,88 @@ fn render_status_dashboard_uses_required_section_order() {
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+}
+
+#[test]
+fn next_work_filters_ready_and_backlog_tasks() {
+    let tasks = vec![
+        make_task("TASK-001", "Ready task", TaskStatus::Ready, None),
+        make_task("TASK-002", "Backlog task", TaskStatus::Backlog, None),
+        make_task("TASK-003", "InProgress task", TaskStatus::InProgress, None),
+        make_task("TASK-004", "Done task", TaskStatus::Done, None),
+    ];
+
+    let slice = build_next_work_slice(Some(&tasks)).expect("slice should be present");
+    assert_eq!(slice.entries.len(), 2);
+    assert!(slice.entries.iter().any(|e| e.task_id == "TASK-001"));
+    assert!(slice.entries.iter().any(|e| e.task_id == "TASK-002"));
+}
+
+#[test]
+fn next_work_sorts_by_priority_then_updated_at() {
+    let tasks = vec![
+        make_task_with_priority("TASK-001", "Low priority", TaskStatus::Ready, None, Priority::Low),
+        make_task_with_priority("TASK-002", "High priority", TaskStatus::Ready, None, Priority::High),
+        make_task_with_priority("TASK-003", "Medium priority", TaskStatus::Ready, None, Priority::Medium),
+    ];
+
+    let slice = build_next_work_slice(Some(&tasks)).expect("slice should be present");
+    assert_eq!(slice.entries[0].task_id, "TASK-002", "high priority should be first");
+    assert_eq!(slice.entries[1].task_id, "TASK-003", "medium priority should be second");
+    assert_eq!(slice.entries[2].task_id, "TASK-001", "low priority should be last");
+}
+
+#[test]
+fn next_work_returns_none_for_empty_list() {
+    let slice = build_next_work_slice(Some(&[]));
+    assert!(slice.is_none());
+}
+
+#[test]
+fn blocked_items_includes_blocked_and_paused_workflows() {
+    let tasks = vec![
+        make_task("TASK-001", "Normal", TaskStatus::Ready, None),
+        make_task("TASK-002", "Blocked", TaskStatus::Blocked, None),
+    ];
+    let workflows = vec![
+        make_workflow(
+            "WF-001",
+            "TASK-001",
+            WorkflowStatus::Paused,
+            None,
+            parse_time("2026-02-20T00:00:00Z"),
+            None,
+            Vec::new(),
+            None,
+        ),
+    ];
+
+    let slice = build_blocked_items_slice(Some(&tasks), Some(&workflows)).expect("slice should be present");
+    assert_eq!(slice.entries.len(), 2);
+    assert!(slice.entries.iter().any(|e| e.id == "TASK-002" && e.item_type == "task"));
+    assert!(slice.entries.iter().any(|e| e.id == "WF-001" && e.item_type == "workflow"));
+}
+
+#[test]
+fn blocked_items_returns_none_when_empty() {
+    let slice = build_blocked_items_slice(Some(&[]), Some(&[]));
+    assert!(slice.is_none());
+}
+
+#[test]
+fn stale_attention_detects_old_backlog_tasks() {
+    let mut old_task = make_task("TASK-001", "Old backlog", TaskStatus::Backlog, None);
+    old_task.metadata.updated_at = parse_time("2026-02-01T00:00:00Z");
+
+    let slice = build_stale_attention_slice(Some(&[old_task]), Some(&[])).expect("slice should be present");
+    assert!(slice.entries.iter().any(|e| e.id == "TASK-001" && e.reason.contains("Untouched")));
+}
+
+#[test]
+fn stale_attention_returns_none_when_empty() {
+    let tasks = vec![
+        make_task("TASK-001", "Recent backlog", TaskStatus::Backlog, None),
+    ];
+    let slice = build_stale_attention_slice(Some(&tasks), Some(&[]));
+    assert!(slice.is_none());
 }

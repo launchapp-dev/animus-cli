@@ -5,7 +5,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orchestrator_core::{
     open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
     TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
@@ -32,6 +32,12 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_work: Option<NextWorkSlice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_items: Option<BlockedItemsSlice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stale_attention: Option<StaleAttentionSlice>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +112,62 @@ struct RecentFailureEntry {
     failed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextWorkSlice {
+    available: bool,
+    entries: Vec<NextWorkEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextWorkEntry {
+    task_id: String,
+    title: String,
+    priority: String,
+    status: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedItemsSlice {
+    available: bool,
+    entries: Vec<BlockedItemEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedItemEntry {
+    id: String,
+    #[serde(rename = "type")]
+    item_type: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocking_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_since: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleAttentionSlice {
+    available: bool,
+    entries: Vec<StaleAttentionEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleAttentionEntry {
+    id: String,
+    #[serde(rename = "type")]
+    item_type: String,
+    title: String,
+    reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stale_since: Option<String>,
 }
 
 #[derive(Debug)]
@@ -228,6 +290,15 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflows_error,
         ),
         ci: ci_slice,
+        next_work: build_next_work_slice(tasks.as_deref()),
+        blocked_items: build_blocked_items_slice(
+            tasks.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+        ),
+        stale_attention: build_stale_attention_slice(
+            tasks.as_deref(),
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+        ),
     };
 
     if json {
@@ -608,6 +679,181 @@ fn parse_gh_run_list(payload: &str) -> Result<Option<CiRunSummary>> {
     }))
 }
 
+fn priority_sort_order(priority: orchestrator_core::Priority) -> u32 {
+    match priority {
+        orchestrator_core::Priority::Critical => 0,
+        orchestrator_core::Priority::High => 1,
+        orchestrator_core::Priority::Medium => 2,
+        orchestrator_core::Priority::Low => 3,
+    }
+}
+
+fn build_next_work_slice(tasks: Option<&[OrchestratorTask]>) -> Option<NextWorkSlice> {
+    let tasks = tasks?;
+    let mut work_items: Vec<(NextWorkEntry, orchestrator_core::Priority)> = tasks
+        .iter()
+        .filter(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::Backlog))
+        .map(|task| {
+            let entry = NextWorkEntry {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                priority: task.priority.as_str().to_string(),
+                status: task.status.to_string(),
+                updated_at: task.metadata.updated_at,
+            };
+            (entry, task.priority)
+        })
+        .collect();
+
+    work_items.sort_by(|left, right| {
+        priority_sort_order(left.1)
+            .cmp(&priority_sort_order(right.1))
+            .then_with(|| left.0.updated_at.cmp(&right.0.updated_at))
+    });
+    work_items.truncate(5);
+
+    let entries = work_items.into_iter().map(|(entry, _)| entry).collect();
+    Some(NextWorkSlice { available: true, entries, error: None })
+}
+
+fn build_blocked_items_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+) -> Option<BlockedItemsSlice> {
+    let mut entries = Vec::new();
+
+    if let Some(tasks) = tasks {
+        for task in tasks {
+            if task.status.is_blocked() {
+                entries.push(BlockedItemEntry {
+                    id: task.id.clone(),
+                    item_type: "task".to_string(),
+                    title: task.title.clone(),
+                    blocking_reason: task.blocked_reason.clone(),
+                    blocked_since: task.blocked_at.as_ref().map(|dt| format_duration_since(dt)),
+                });
+            }
+        }
+    }
+
+    if let Some(workflows) = workflows {
+        for workflow in workflows {
+            if workflow.status == WorkflowStatus::Paused {
+                entries.push(BlockedItemEntry {
+                    id: workflow.id.clone(),
+                    item_type: "workflow".to_string(),
+                    title: format!("Workflow for task {}", workflow.task_id),
+                    blocking_reason: Some("paused".to_string()),
+                    blocked_since: Some(format_duration_since(&workflow.started_at)),
+                });
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    Some(BlockedItemsSlice { available: true, entries, error: None })
+}
+
+fn build_stale_attention_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[OrchestratorWorkflow]>,
+) -> Option<StaleAttentionSlice> {
+    let mut entries = Vec::new();
+    let now = Utc::now();
+
+    let workflows_by_task: HashMap<&str, Vec<&OrchestratorWorkflow>> = workflows
+        .unwrap_or_default()
+        .iter()
+        .fold(HashMap::new(), |mut map, workflow| {
+            map.entry(workflow.task_id.as_str()).or_insert_with(Vec::new).push(workflow);
+            map
+        });
+
+    if let Some(tasks) = tasks {
+        for task in tasks {
+            if task.status == TaskStatus::Backlog {
+                let days_since_update = (now - task.metadata.updated_at).num_days();
+                if days_since_update > 7 {
+                    entries.push(StaleAttentionEntry {
+                        id: task.id.clone(),
+                        item_type: "task".to_string(),
+                        title: task.title.clone(),
+                        reason: format!("Untouched for {}", format_days_since(days_since_update)),
+                        stale_since: Some(format_duration_since(&task.metadata.updated_at)),
+                    });
+                }
+            } else if task.status == TaskStatus::InProgress {
+                if let Some(workflow_list) = workflows_by_task.get(task.id.as_str()) {
+                    let has_recent_activity = workflow_list.iter().any(|w| {
+                        if let Some(completed) = w.completed_at {
+                            (now - completed).num_hours() < 24
+                        } else if let Some(last_phase) = w.phases.last() {
+                            if let Some(completed) = last_phase.completed_at {
+                                (now - completed).num_hours() < 24
+                            } else {
+                                (now - w.started_at).num_hours() < 24
+                            }
+                        } else {
+                            (now - w.started_at).num_hours() < 24
+                        }
+                    });
+                    if !has_recent_activity {
+                        entries.push(StaleAttentionEntry {
+                            id: task.id.clone(),
+                            item_type: "task".to_string(),
+                            title: task.title.clone(),
+                            reason: "No workflow activity for >24h".to_string(),
+                            stale_since: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(workflows) = workflows {
+        for workflow in workflows {
+            if workflow.status == WorkflowStatus::Paused {
+                entries.push(StaleAttentionEntry {
+                    id: workflow.id.clone(),
+                    item_type: "workflow".to_string(),
+                    title: format!("Workflow for task {}", workflow.task_id),
+                    reason: "Awaiting phase approval".to_string(),
+                    stale_since: Some(format_duration_since(&workflow.started_at)),
+                });
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return None;
+    }
+
+    Some(StaleAttentionSlice { available: true, entries, error: None })
+}
+
+fn format_duration_since(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let duration = now - *dt;
+
+    if duration.num_days() > 0 {
+        format!("{} day{} ago", duration.num_days(), if duration.num_days() == 1 { "" } else { "s" })
+    } else if duration.num_hours() > 0 {
+        format!("{} hour{} ago", duration.num_hours(), if duration.num_hours() == 1 { "" } else { "s" })
+    } else if duration.num_minutes() > 0 {
+        format!("{} minute{} ago", duration.num_minutes(), if duration.num_minutes() == 1 { "" } else { "s" })
+    } else {
+        "just now".to_string()
+    }
+}
+
+fn format_days_since(days: i64) -> String {
+    format!("{} day{}", days, if days == 1 { "" } else { "s" })
+}
+
 fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "AO Status Dashboard");
@@ -719,6 +965,68 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     }
     if let Some(error) = dashboard.ci.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    if let Some(next_work) = dashboard.next_work.as_ref() {
+        let _ = writeln!(&mut output, "Next Work");
+        if next_work.entries.is_empty() {
+            let _ = writeln!(&mut output, "  entries: none");
+        } else {
+            for entry in &next_work.entries {
+                let _ = writeln!(
+                    &mut output,
+                    "  - task_id={} priority={} status={} updated_at={} title={}",
+                    entry.task_id, entry.priority, entry.status, entry.updated_at.to_rfc3339(), entry.title
+                );
+            }
+        }
+        if let Some(error) = next_work.error.as_deref() {
+            let _ = writeln!(&mut output, "  error: {error}");
+        }
+        let _ = writeln!(&mut output);
+    }
+
+    if let Some(blocked_items) = dashboard.blocked_items.as_ref() {
+        let _ = writeln!(&mut output, "Blocked Items");
+        if blocked_items.entries.is_empty() {
+            let _ = writeln!(&mut output, "  entries: none");
+        } else {
+            for entry in &blocked_items.entries {
+                let _ = writeln!(
+                    &mut output,
+                    "  - id={} type={} title={} reason={} blocked_since={}",
+                    entry.id,
+                    entry.item_type,
+                    entry.title,
+                    entry.blocking_reason.as_deref().unwrap_or("unknown"),
+                    entry.blocked_since.as_deref().unwrap_or("n/a")
+                );
+            }
+        }
+        if let Some(error) = blocked_items.error.as_deref() {
+            let _ = writeln!(&mut output, "  error: {error}");
+        }
+        let _ = writeln!(&mut output);
+    }
+
+    if let Some(stale_attention) = dashboard.stale_attention.as_ref() {
+        let _ = writeln!(&mut output, "Stale Attention");
+        if stale_attention.entries.is_empty() {
+            let _ = writeln!(&mut output, "  entries: none");
+        } else {
+            for entry in &stale_attention.entries {
+                let _ = writeln!(
+                    &mut output,
+                    "  - id={} type={} title={} reason={} stale_since={}",
+                    entry.id, entry.item_type, entry.title, entry.reason,
+                    entry.stale_since.as_deref().unwrap_or("n/a")
+                );
+            }
+        }
+        if let Some(error) = stale_attention.error.as_deref() {
+            let _ = writeln!(&mut output, "  error: {error}");
+        }
     }
 
     output
