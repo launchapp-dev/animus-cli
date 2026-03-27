@@ -8,7 +8,7 @@ tools_allowlist:
 phase_catalog:
   requirements-draft:
     label: Requirements Draft
-    description: Draft requirements from project vision and codebase analysis.
+    description: Draft requirements from project context and codebase analysis.
     category: planning
     tags: ["planning", "requirements"]
   requirements-refine:
@@ -37,19 +37,19 @@ phases:
     mode: agent
     agent_id: po
     directive: |
-      You are drafting project requirements based on the vision and codebase.
+      You are drafting project requirements from the current project context and codebase.
 
       Steps:
-      1. Read the current vision: `ao vision get --json`
-      2. Read existing requirements: `ao requirements list --json`
-      3. If dispatch_input includes "include_codebase_scan": true, scan the codebase
+      1. Read existing requirements: `ao requirements list --json`
+      2. If dispatch_input includes "include_codebase_scan": true, scan the codebase
          to understand current architecture and identify gaps
-      4. Draft new requirements that bridge the gap between the vision and current state
+      3. Draft new requirements that bridge the gap between the current state
+         and the requested/project context in dispatch_input
 
       For each requirement, use `ao requirements create` with:
       - --title: Clear, actionable title
       - --description: Detailed scope and motivation
-      - --priority: must/should/could based on vision alignment
+      - --priority: must/should/could based on delivery importance
       - --category: usability/runtime/integration/quality/security/release
       - --type: product/functional/non-functional/technical
 
@@ -65,13 +65,12 @@ phases:
       You are refining existing project requirements.
 
       Steps:
-      1. Read the current vision: `ao vision get --json`
-      2. If dispatch_input includes "requirement_ids", refine only those.
+      1. If dispatch_input includes "requirement_ids", refine only those.
          Otherwise, list all requirements: `ao requirements list --json`
-      3. For each requirement to refine:
+      2. For each requirement to refine:
          - Improve the description with concrete scope
          - Add or improve acceptance criteria
-         - Verify priority alignment with vision
+         - Verify priority alignment with current project needs
          - Check for missing links or dependencies
 
       If dispatch_input includes a "focus" field, prioritize that aspect

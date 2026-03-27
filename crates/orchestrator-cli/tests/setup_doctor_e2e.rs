@@ -70,11 +70,27 @@ fn setup_plan_apply_and_idempotent_rerun_are_stable() -> Result<()> {
     let first_apply = harness.run_json_ok(&setup_flags)?;
     assert_eq!(first_apply.pointer("/data/stage").and_then(Value::as_str), Some("apply"));
     assert_eq!(first_apply.pointer("/data/apply/daemon_config_updated").and_then(Value::as_bool), Some(true));
+    assert!(first_apply
+        .pointer("/data/apply/changed_domains")
+        .and_then(Value::as_array)
+        .is_some_and(|domains| domains.iter().any(|value| value.as_str() == Some("project_bootstrap"))));
 
     let second_apply = harness.run_json_ok(&setup_flags)?;
     assert_eq!(second_apply.pointer("/data/apply/daemon_config_updated").and_then(Value::as_bool), Some(false));
+    assert!(second_apply
+        .pointer("/data/apply/unchanged_domains")
+        .and_then(Value::as_array)
+        .is_some_and(|domains| domains.iter().any(|value| value.as_str() == Some("project_bootstrap"))));
 
-    let pm_config_path = harness.project_root().join(".ao").join("pm-config.json");
+    let config_json_path = harness.project_root().join(".ao").join("config.json");
+    assert!(config_json_path.exists(), "setup apply should bootstrap project config");
+    let workflows_dir = harness.project_root().join(".ao").join("workflows");
+    assert!(workflows_dir.join("custom.yaml").exists(), "setup apply should scaffold custom workflow YAML");
+    assert!(
+        workflows_dir.join("standard-workflow.yaml").exists(),
+        "setup apply should scaffold standard workflow YAML"
+    );
+    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
     assert!(pm_config_path.exists(), "setup apply should persist pm-config");
     let pm_config_content = std::fs::read_to_string(pm_config_path)?;
     let pm_config: Value = serde_json::from_str(&pm_config_content)?;

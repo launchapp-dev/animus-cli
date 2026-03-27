@@ -149,11 +149,7 @@ fn workflow_query_can_use_db_page(query: &WorkflowQuery) -> bool {
         && query.filter.workflow_ref.is_none()
         && query.filter.task_id.is_none()
         && query.filter.phase_id.is_none()
-        && query
-            .filter
-            .search_text
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
+        && query.filter.search_text.as_deref().is_none_or(|value| value.trim().is_empty())
 }
 
 #[async_trait]

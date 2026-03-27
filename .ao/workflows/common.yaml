@@ -45,6 +45,28 @@ agents:
     - context7
     - rust-docs
     - sequential-thinking
+  requirements-refiner:
+    system_prompt: |
+      You are a requirements analyst for the ao-cli Rust workspace.
+      Refine task descriptions into well-specified acceptance criteria.
+      Read the task, search the codebase, write concrete criteria, update via ao.task.update.
+    model: claude-sonnet-4-6
+    tool: claude
+    tool_profile: sparkcube
+    mcp_servers:
+    - ao
+    - context7
+    - rust-docs
+  po-reviewer:
+    system_prompt: |
+      You are a Product Owner reviewing completed development work.
+      Verify ALL acceptance criteria are met by the implementation.
+      Use ao.task.checklist-update and ao.task.update to record your findings.
+    model: claude-opus-4-6
+    tool: claude
+    tool_profile: sparkcube
+    mcp_servers:
+    - ao
   triager:
     system_prompt: "You are the AO task triager and dispatcher. You validate tasks and route them to implementation.\n\nSTEP\
       \ 1 \u2014 VALIDATE:\n- Read the task via ao.task.get\n- Check if code already exists: search the codebase for the described\
@@ -55,11 +77,11 @@ agents:
       - IMPLEMENT: proceed to step 3\n\nSTEP 3 \u2014 DISPATCH (only if IMPLEMENT):\nChoose workflow_ref based on task complexity\
       \ and type:\n\n| Complexity | Type        | workflow_ref      | Model                  |\n|------------|-------------|-------------------|------------------------|\n\
       | low        | any         | standard-minimax  | MiniMax M2.7 (cheapest)|\n| medium     | feature     | standard   \
-      \       | Claude Sonnet          |\n| medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |\n| medium\
-      \     | refactor    | standard-kimi    | Kimi K2.5          |\n| medium     | ui-ux       | standard-gemini   |\
-      \ Gemini 3.1 Pro         |\n| high       | feature     | standard          | Claude Sonnet          |\n| high      \
-      \ | bugfix      | standard-kimi    | Kimi K2.5          |\n| high       | refactor    | standard-kimi    | Codex\
-      \ GPT-5.4          |\n| high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |\n| high       | architecture|\
+      \       | Claude Haiku 4.5      |\n| medium     | bugfix      | standard-minimax  | MiniMax M2.7 (fast)    |\n| medium\
+      \     | refactor    | standard-kimi    | Kimi K2.5            |\n| medium     | ui-ux       | standard-gemini   |\
+      \ Gemini 3.1 Pro         |\n| high       | feature     | standard          | Claude Haiku 4.5      |\n| high      \
+      \ | bugfix      | standard-kimi    | Kimi K2.5            |\n| high       | refactor    | standard-kimi    | Kimi\
+      \ K2.5                |\n| high       | ui-ux       | standard-gemini   | Gemini 3.1 Pro         |\n| high       | architecture|\
       \ standard-opus     | Claude Opus            |\n| critical   | any         | standard-opus     | Claude Opus       \
       \     |\n| any        | monitoring  | quick-fix-minimax | MiniMax M2.7           |\n\nCall ao.queue.enqueue with task_id\
       \ and the chosen workflow_ref.\nThen emit phase decision with verdict \"advance\".\n\nRULES:\n- Check ao.queue.list\
@@ -88,8 +110,7 @@ agents:
       \ \"ready\".\n   - If blocked_reason is \"Blocked by status update\" (from failed workflow), set to \"ready\" for retry.\n\
       \   - If task has a merged PR, set to \"done\".\n\n4. CLEAN STALE QUEUE ENTRIES:\n   Call ao.queue.list. For \"assigned\"\
       \ entries older than 30 minutes, call ao.queue.drop.\n\n5. MARK DONE:\n   For tasks with merged PRs (`gh pr list --state\
-      \ merged --head ao/task-XXX`), set to \"done\".\n\n6. PROMOTE BACKLOG (dependency-aware):\n   Call ao.task.list with\
-      \ status \"backlog\". Promote to \"ready\" if all blocked_by deps are done.\n\n7. CANCEL STALE TASKS:\n   For \"ready\"\
+      \ merged --head ao/task-XXX`), set to \"done\".\n\n6. DO NOT PROMOTE BACKLOG TASKS:\n   Tasks in \"backlog\" are waiting for Opus requirement review.\n   Only the req-reviewer (Opus) promotes backlog tasks to \"ready\" after approving the linked requirement.\n   NEVER change backlog tasks to ready.\n\n7. CANCEL STALE TASKS:\n   For \"ready\"\
       \ tasks that have been re-enqueued > 5 times without producing a PR, cancel them.\n   Check by looking at the task's\
       \ consecutive_dispatch_failures field.\n\nDEPENDENCY RULES:\n- Never promote/unblock if blocked_by deps aren't done.\n\
       - Process leaf tasks first.\n"
@@ -316,8 +337,6 @@ phases:
           items:
             type: string
     decision_contract:
-      required_evidence:
-      - files_modified
       min_confidence: 0.7
       max_risk: medium
       allow_missing_decision: false
@@ -417,8 +436,6 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
-      - 1
-      - 128
     output_contract:
       kind: phase_result
       fields:
@@ -439,7 +456,6 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
-      - 1
     output_contract:
       kind: phase_result
       fields:
@@ -459,8 +475,6 @@ phases:
       timeout_secs: 60
       success_exit_codes:
       - 0
-      - 1
-      - 128
     output_contract:
       kind: phase_result
       fields:
@@ -479,8 +493,6 @@ phases:
       timeout_secs: 30
       success_exit_codes:
       - 0
-      - 1
-      - 128
     output_contract:
       kind: phase_result
       fields:
@@ -519,7 +531,7 @@ phases:
       mutates_state: true
   unit-test:
     mode: command
-    directive: Verify the workspace compiles cleanly
+    directive: Run the workspace test suite as a deterministic gate
     output_contract:
       kind: phase_result
       fields:
@@ -528,7 +540,7 @@ phases:
           description: Process exit code returned by the build command.
         failure_summary:
           type: string
-          description: High-level summary of the build failure when verdict is rework.
+          description: High-level summary of the test failure when verdict is rework.
         suggested_fix_focus:
           type: string
           description: Short summary of what the next repair loop should focus on.
@@ -536,14 +548,14 @@ phases:
       cwd_mode: task_root
       program: cargo
       args:
-      - build
+      - test
       - --workspace
       timeout_secs: 600
       success_exit_codes:
       - 0
   lint:
     mode: command
-    directive: Run clippy warnings check
+    directive: Run clippy with warnings denied as a deterministic gate
     output_contract:
       kind: phase_result
       fields:
@@ -560,11 +572,15 @@ phases:
       cwd_mode: task_root
       program: cargo
       args:
-      - check
+      - clippy
       - --workspace
+      - --all-targets
+      - --
+      - -D
+      - warnings
       success_exit_codes:
       - 0
-      timeout_secs: 120
+      timeout_secs: 600
 workflows:
 - id: triage
   name: Task Triage
@@ -597,13 +613,11 @@ workflows:
   - cleanup
 - id: full
   name: Full Lifecycle
-  description: "Triage \u2192 Refine \u2192 Implement \u2192 Push \u2192 PR"
+  description: "Triage \u2192 Refine \u2192 Implement \u2192 Verify \u2192 PR"
   phases:
   - triage
   - refine-requirements
-  - implementation
-  - push-branch
-  - create-pr
+  - workflow_ref: review-cycle
   - cleanup
   post_success:
     merge:
@@ -614,12 +628,25 @@ workflows:
       cleanup_worktree: true
 - id: review-cycle
   name: Review Cycle
-  description: 'Reusable review sequence: unit-test, lint, code-review, manual testing gate'
+  description: Reusable implementation and verification loop with deterministic gates
   phases:
-  - unit-test
-  - lint
-  - code-review
-  - testing
+  - implementation
+  - unit-test:
+      on_verdict:
+        rework:
+          target: implementation
+  - lint:
+      on_verdict:
+        rework:
+          target: implementation
+  - code-review:
+      on_verdict:
+        rework:
+          target: implementation
+  - po-review:
+      on_verdict:
+        rework:
+          target: implementation
 - id: rework
   name: Rework
   description: Address reviewer feedback, push fixes, re-review
@@ -639,11 +666,22 @@ workflows:
   - sync-main
 - id: hotfix
   name: Hotfix
-  description: "Emergency fix \u2192 Push \u2192 PR targeting main"
+  description: "Emergency fix \u2192 Verify \u2192 PR targeting main"
   phases:
   - implementation
-  - push-branch
-  - create-pr
+  - unit-test:
+      on_verdict:
+        rework:
+          target: implementation
+  - lint:
+      on_verdict:
+        rework:
+          target: implementation
+  - code-review:
+      on_verdict:
+        rework:
+          target: implementation
+  - cleanup
   post_success:
     merge:
       strategy: squash
@@ -653,13 +691,12 @@ workflows:
       cleanup_worktree: true
 - id: ao-task-complete
   name: AO Task Complete
-  description: "Triage \u2192 Refine \u2192 Implement \u2192 Push \u2192 PR"
+  description: "Triage \u2192 Refine \u2192 Implement \u2192 Verify \u2192 PR"
   phases:
   - triage
   - refine-requirements
-  - implementation
-  - push-branch
-  - create-pr
+  - workflow_ref: review-cycle
+  - cleanup
   post_success:
     merge:
       strategy: squash
@@ -669,10 +706,10 @@ workflows:
       cleanup_worktree: true
 - id: gated
   name: Gated
-  description: "Implement \u2192 Push \u2192 PR (same as standard)"
+  description: "Requirements \u2192 Implement \u2192 Verify \u2192 Push \u2192 PR"
   phases:
   - requirements
-  - implementation
+  - workflow_ref: review-cycle
   - push-branch
   - create-pr
   - cleanup
@@ -692,3 +729,26 @@ workflows:
   description: Validate task, check if done/duplicate, dispatch to the right implementation workflow
   phases:
   - triage
+- id: work-planner
+  name: Work Planner
+  description: Feed ready tasks into the triage pipeline
+  phases:
+  - work-planning
+- id: task-reconciler
+  name: Task Reconciler
+  description: Detects and fixes task state inconsistencies
+  phases:
+  - task-reconciliation
+schedules:
+- id: work-planner
+  cron: "*/30 * * * *"
+  workflow_ref: work-planner
+  enabled: true
+- id: task-reconciler
+  cron: "*/30 * * * *"
+  workflow_ref: task-reconciler
+  enabled: true
+- id: sync-main
+  cron: "*/30 * * * *"
+  workflow_ref: sync-main
+  enabled: true

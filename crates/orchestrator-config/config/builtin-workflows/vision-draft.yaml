@@ -26,8 +26,9 @@ phases:
       You are drafting a project vision document. Analyze the project's codebase, README,
       existing documentation, and any provided context to produce a comprehensive vision.
 
-      Use `ao vision get` to check if a vision already exists. If it does, inform the user
-      and ask whether to overwrite or refine instead.
+      Check whether a vision already exists by locating the generated planning artifacts
+      for this repository (`vision.json` preferred, `product-vision.md` fallback).
+      If a vision already exists, summarize it and ask whether to overwrite or refine instead.
 
       The vision should include:
       - A clear problem statement

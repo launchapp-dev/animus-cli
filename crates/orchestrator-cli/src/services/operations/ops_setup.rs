@@ -3,8 +3,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use orchestrator_core::{
-    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, DaemonProjectConfig,
-    DaemonProjectConfigPatch, DoctorCheckStatus, DoctorReport,
+    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, write_daemon_project_config,
+    DaemonProjectConfig, DaemonProjectConfigPatch, DoctorCheckStatus, DoctorReport, FileServiceHub,
 };
 use serde::Serialize;
 
@@ -81,12 +81,12 @@ pub(crate) async fn handle_setup(args: SetupArgs, project_root: &str, json: bool
         );
     }
 
-    let patch = DaemonProjectConfigPatch {
-        auto_merge_enabled: Some(desired.auto_merge_enabled),
-        auto_pr_enabled: Some(desired.auto_pr_enabled),
-        auto_commit_before_merge: Some(desired.auto_commit_before_merge),
-    };
-    let (_, daemon_config_updated) = update_daemon_project_config(project_root_path, &patch)?;
+    let bootstrap_needed_before = remediation_needed(&doctor_before, "bootstrap_project_state");
+    let daemon_config_exists_before = daemon_project_config_path(project_root_path).exists();
+
+    FileServiceHub::new(project_root_path)?;
+    let daemon_config_updated =
+        persist_desired_daemon_config(project_root_path, &desired, daemon_config_exists_before)?;
 
     let mut doctor_fix_actions: Vec<DoctorFixAction> = Vec::new();
     if args.doctor_fix {
@@ -99,6 +99,11 @@ pub(crate) async fn handle_setup(args: SetupArgs, project_root: &str, json: bool
 
     let mut changed_domains = Vec::new();
     let mut unchanged_domains = Vec::new();
+    if bootstrap_needed_before {
+        changed_domains.push("project_bootstrap");
+    } else {
+        unchanged_domains.push("project_bootstrap");
+    }
     if daemon_config_updated {
         changed_domains.push("daemon_config");
     } else {
@@ -139,6 +144,29 @@ pub(crate) async fn handle_setup(args: SetupArgs, project_root: &str, json: bool
         }),
         json,
     )
+}
+
+fn persist_desired_daemon_config(
+    project_root: &Path,
+    desired: &DesiredDaemonConfig,
+    daemon_config_exists_before: bool,
+) -> Result<bool> {
+    if !daemon_config_exists_before {
+        let mut config = load_daemon_project_config(project_root)?;
+        config.auto_merge_enabled = desired.auto_merge_enabled;
+        config.auto_pr_enabled = desired.auto_pr_enabled;
+        config.auto_commit_before_merge = desired.auto_commit_before_merge;
+        write_daemon_project_config(project_root, &config)?;
+        return Ok(true);
+    }
+
+    let patch = DaemonProjectConfigPatch {
+        auto_merge_enabled: Some(desired.auto_merge_enabled),
+        auto_pr_enabled: Some(desired.auto_pr_enabled),
+        auto_commit_before_merge: Some(desired.auto_commit_before_merge),
+    };
+    let (_, updated) = update_daemon_project_config(project_root, &patch)?;
+    Ok(updated)
 }
 
 fn resolve_desired_config(
@@ -261,10 +289,17 @@ fn collect_blocked_items(report: &DoctorReport) -> Vec<SetupBlockedItem> {
         .collect()
 }
 
+fn remediation_needed(report: &DoctorReport, remediation_id: &str) -> bool {
+    report.checks.iter().any(|check| {
+        check.remediation.id == remediation_id && check.remediation.available && check.status != DoctorCheckStatus::Ok
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orchestrator_core::{DoctorCheck, DoctorCheckResult, DoctorRemediation};
+    use orchestrator_core::{daemon_project_config_path, DoctorCheck, DoctorCheckResult, DoctorRemediation};
+    use protocol::test_utils::EnvVarGuard;
 
     fn non_interactive_args() -> SetupArgs {
         SetupArgs {
@@ -354,5 +389,21 @@ mod tests {
         assert_eq!(blocked_items.len(), 2);
         assert_eq!(blocked_items[0].check_id, "warn_without_fix");
         assert_eq!(blocked_items[1].check_id, "fail_with_fix");
+    }
+
+    #[test]
+    fn persist_desired_daemon_config_creates_file_when_missing_even_for_default_values() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project-root");
+        std::fs::create_dir_all(&project_root).expect("project root should exist");
+
+        let desired =
+            DesiredDaemonConfig { auto_merge_enabled: false, auto_pr_enabled: false, auto_commit_before_merge: false };
+
+        let updated = persist_desired_daemon_config(&project_root, &desired, false)
+            .expect("persisting missing daemon config should succeed");
+        assert!(updated, "creating the daemon config file should be reported as an update");
+        assert!(daemon_project_config_path(&project_root).exists(), "daemon config should be written");
     }
 }
