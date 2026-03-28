@@ -31,6 +31,7 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    next_action: NextActionSlice,
     ci: CiStatusSlice,
 }
 
@@ -115,6 +116,23 @@ struct WorkflowStatusSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct NextActionSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(default)]
+    linked_requirements: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    linked_workflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct CiStatusSlice {
     provider: &'static str,
     available: bool,
@@ -192,11 +210,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let next_task_service = tasks_service.clone();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, next_task_result, workflow_snapshot_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
+        next_task_service.next_task(),
         collect_workflow_status_snapshot(project_root),
         collect_ci_status(project_root),
     );
@@ -204,7 +224,10 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (daemon_health, daemon_error) = split_result(daemon_result);
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (next_task_opt, next_task_error) = split_result(next_task_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+
+    let next_task = next_task_opt.flatten();
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -227,6 +250,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
         ),
+        next_action: build_next_action_slice(next_task, next_task_error),
         ci: ci_slice,
     };
 
@@ -413,6 +437,29 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         available: failures.is_some(),
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
+    }
+}
+
+fn build_next_action_slice(next_task: Option<OrchestratorTask>, error: Option<String>) -> NextActionSlice {
+    match next_task {
+        Some(task) => NextActionSlice {
+            available: true,
+            task_id: Some(task.id),
+            title: Some(task.title),
+            priority: Some(task.priority.as_str().to_string()),
+            linked_requirements: task.linked_requirements,
+            linked_workflow_id: task.workflow_metadata.workflow_id,
+            error,
+        },
+        None => NextActionSlice {
+            available: false,
+            task_id: None,
+            title: None,
+            priority: None,
+            linked_requirements: Vec::new(),
+            linked_workflow_id: None,
+            error,
+        },
     }
 }
 
@@ -689,6 +736,31 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.recent_failures.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Action");
+    if dashboard.next_action.available {
+        if let Some(task_id) = &dashboard.next_action.task_id {
+            let title_str = dashboard.next_action.title.as_deref().unwrap_or("Unknown");
+            let priority_str = dashboard.next_action.priority.as_deref().unwrap_or("unknown");
+            let _ = writeln!(&mut output, "  task_id: {}", task_id);
+            let _ = writeln!(&mut output, "  title: {}", title_str);
+            let _ = writeln!(&mut output, "  priority: {}", priority_str);
+            if !dashboard.next_action.linked_requirements.is_empty() {
+                let _ = writeln!(&mut output, "  linked_requirements: {}", dashboard.next_action.linked_requirements.join(", "));
+            }
+            if let Some(workflow_id) = &dashboard.next_action.linked_workflow_id {
+                let _ = writeln!(&mut output, "  linked_workflow_id: {}", workflow_id);
+            }
+        } else {
+            let _ = writeln!(&mut output, "  no next action available");
+        }
+    } else {
+        let _ = writeln!(&mut output, "  available: false");
+    }
+    if let Some(error) = dashboard.next_action.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
